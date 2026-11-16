@@ -32,7 +32,7 @@ export function InstallProgressModal({ progress, onClose }: InstallProgressModal
 
           {progress.error && (
             <div className="mt-4 w-full rounded-sm bg-error-soft p-3">
-              <p className="m-0 text-small text-error">{progress.error}</p>
+              <p className="m-0 text-small text-error-text">{progress.error}</p>
             </div>
           )}
         </div>

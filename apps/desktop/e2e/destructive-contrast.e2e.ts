@@ -77,3 +77,35 @@ for (const theme of ["dark", "light"] as const) {
     expect(await textContrast(keepLive)).toBeGreaterThanOrEqual(AA_BODY_TEXT);
   });
 }
+
+for (const theme of ["dark", "light"] as const) {
+  test(`a destructive menu item reaches ${AA_BODY_TEXT}:1 under the pointer and under keyboard focus in ${theme} mode`, async ({
+    page,
+  }) => {
+    await openApp(page);
+    await page.evaluate((value) => {
+      document.documentElement.dataset.theme = value;
+    }, theme);
+    await page
+      .getByRole("button", { name: /^Skills/ })
+      .first()
+      .click();
+    await page
+      .getByRole("grid", { name: "Skills" })
+      .locator('[role="row"][aria-selected]')
+      .first()
+      .click();
+    await page
+      .getByRole("button", { name: /^More actions for / })
+      .first()
+      .click();
+
+    const item = page.locator('[role="menuitem"][data-variant="destructive"]').first();
+    await item.hover();
+    await settled(item);
+    expect(await textContrast(item)).toBeGreaterThanOrEqual(AA_BODY_TEXT);
+    await item.focus();
+    await settled(item);
+    expect(await textContrast(item)).toBeGreaterThanOrEqual(AA_BODY_TEXT);
+  });
+}
