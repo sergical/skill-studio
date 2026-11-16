@@ -5862,7 +5862,7 @@ pub use crate::ops_doctor::doctor;
 pub use crate::ops_install::{install, install_preferences};
 pub use crate::ops_remove::{remove, sweep_quarantine};
 pub use crate::ops_split::split;
-pub use crate::ops_update::{update, update_all, update_split_copies};
+pub use crate::ops_update::{update, update_all, update_all_unbounded, update_split_copies};
 /// Pack read operations shared by CLI and MCP.
 pub use crate::pack::{pack_list, pack_show};
 pub use crate::pack_action::{pack_add, pack_remove, pack_update};

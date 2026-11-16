@@ -206,3 +206,31 @@ fn watch_with_max_seconds_prints_the_snapshot_and_exits_zero() {
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert!(lines[0]["inventory"].is_object(), "{}", lines[0]);
 }
+
+#[test]
+fn watch_with_the_largest_max_seconds_keeps_running_instead_of_panicking() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    let mut child = command(&home)
+        .args([
+            "watch",
+            "--max-seconds",
+            &u64::MAX.to_string(),
+            "--json",
+            "--home",
+        ])
+        .arg(&home)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    let exited = child.try_wait().unwrap();
+    child.kill().ok();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        exited.is_none(),
+        "watch exited with {exited:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

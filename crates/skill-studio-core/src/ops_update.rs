@@ -1357,12 +1357,25 @@ pub fn update_all(
     rt: &Runtime,
     ctx: &OpContext,
     requests: &[UpdateRequest],
+    on_outcome: impl FnMut(&SkillName, &Result<UpdateOutcome, CoreError>),
+) -> Result<UpdateAllOutcome, CoreError> {
+    crate::ops::check_batch_size(requests.len())?;
+    update_all_unbounded(rt, ctx, requests, on_outcome)
+}
+
+/// [`update_all`] without the [`crate::ops::MAX_BATCH_ITEMS`] limit, for a
+/// caller that acts for a person who asked for the whole set: the desktop's
+/// "Update all" and `pack update`. Agent surfaces (CLI, MCP) call
+/// [`update_all`].
+pub fn update_all_unbounded(
+    rt: &Runtime,
+    ctx: &OpContext,
+    requests: &[UpdateRequest],
     mut on_outcome: impl FnMut(&SkillName, &Result<UpdateOutcome, CoreError>),
 ) -> Result<UpdateAllOutcome, CoreError> {
     // Each `update` call files its own `Operation::Update` record as a nested
     // op under this one, so a failed item never fails the batch.
     rt.run(Operation::UpdateAll, ctx, || {
-        crate::ops::check_batch_size(requests.len())?;
         Ok(update_all_body(rt, ctx, requests, &mut on_outcome))
     })
 }

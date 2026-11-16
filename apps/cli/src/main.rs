@@ -2560,8 +2560,9 @@ fn run_watch(
     json: bool,
     time: bool,
 ) -> ExitCode {
-    let deadline =
-        max_seconds.map(|secs| std::time::Instant::now() + std::time::Duration::from_secs(secs));
+    let deadline = max_seconds.and_then(|secs| {
+        std::time::Instant::now().checked_add(std::time::Duration::from_secs(secs))
+    });
     let interrupted = Arc::new(std::sync::atomic::AtomicBool::new(false));
     {
         let interrupted = interrupted.clone();
@@ -2632,6 +2633,9 @@ fn run_watch(
             None => WATCH_POLL_INTERVAL,
         };
         std::thread::sleep(pause);
+        if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+            return ExitCode::SUCCESS;
+        }
     }
 }
 

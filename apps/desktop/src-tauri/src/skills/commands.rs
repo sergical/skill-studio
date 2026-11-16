@@ -1393,7 +1393,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn update_all_over_the_batch_limit_runs_every_skill_in_split_batches() {
+    async fn update_all_over_the_batch_limit_still_runs_every_skill() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         let data_root = tmp.path().join("data");
@@ -2530,8 +2530,8 @@ async fn update_all_with_runtime(
 }
 
 /// The sync body a `spawn_blocking` closure runs for one update-all batch:
-/// build the `Runtime`, then run every request through `ops::update_all`,
-/// at most `MAX_BATCH_ITEMS` per call.
+/// build the `Runtime`, then run every request through
+/// `ops::update_all_unbounded`: a person asked for the whole set.
 /// Shared by `update_all_with_runtime` (test-only, wraps this in its own
 /// `spawn_blocking` since a unit test builds a bare `Runtime` fixture
 /// without an `AppHandle`) and production `update_all_skills` (already
@@ -2553,19 +2553,8 @@ fn run_update_all_sync(
         skill_studio_core::identity::CorrelationId(ulid::Ulid::generate().to_string()),
         cancel,
     );
-    let mut merged = skill_studio_core::dto::UpdateAllOutcome {
-        items: Vec::new(),
-        errors: std::collections::BTreeMap::new(),
-        not_run: Vec::new(),
-    };
-    for batch in requests.chunks(skill_studio_core::ops::MAX_BATCH_ITEMS) {
-        let outcome = skill_studio_core::ops::update_all(&rt, &ctx, batch, &mut on_outcome)
-            .map_err(|err| err.text())?;
-        merged.items.extend(outcome.items);
-        merged.errors.extend(outcome.errors);
-        merged.not_run.extend(outcome.not_run);
-    }
-    Ok(merged)
+    skill_studio_core::ops::update_all_unbounded(&rt, &ctx, requests, &mut on_outcome)
+        .map_err(|err| err.text())
 }
 
 /// Which owners a batch's succeeded items should clear (N1: the review

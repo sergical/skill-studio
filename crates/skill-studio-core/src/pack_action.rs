@@ -468,10 +468,7 @@ fn update_by_scope(
             by_scope.entry(step.scope.clone()).or_default().push(index);
         }
     }
-    let batches = by_scope
-        .values()
-        .flat_map(|indexes| indexes.chunks(crate::ops::MAX_BATCH_ITEMS));
-    for indexes in batches {
+    for indexes in by_scope.into_values() {
         let requests: Vec<UpdateRequest> = indexes
             .iter()
             .map(|&i| UpdateRequest {
@@ -483,10 +480,10 @@ fn update_by_scope(
                 ref_pin: None,
             })
             .collect();
-        let outcome = match crate::ops::update_all(rt, ctx, &requests, |_, _| {}) {
+        let outcome = match crate::ops::update_all_unbounded(rt, ctx, &requests, |_, _| {}) {
             Ok(outcome) => outcome,
             Err(err) => {
-                for &i in indexes {
+                for &i in &indexes {
                     steps[i].state = PackStepState::Failed {
                         code: err.code,
                         reason: err.text(),
@@ -495,7 +492,7 @@ fn update_by_scope(
                 continue;
             }
         };
-        for &i in indexes {
+        for &i in &indexes {
             let name = steps[i].skill.as_str();
             steps[i].state = if let Some(done) = outcome
                 .items
