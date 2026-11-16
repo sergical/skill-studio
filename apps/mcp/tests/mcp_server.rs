@@ -1819,7 +1819,14 @@ async fn doctor_listing_cost_matches_cli_and_warns_or_loses_the_budget_in_one_ad
     .output()
     .unwrap();
     let cli: serde_json::Value = serde_json::from_slice(&cli.stdout).unwrap();
-    assert_eq!(normalize(mcp.clone()), normalize(cli));
+    assert!(cli.get("text_trust").is_none());
+    let mut comparable = mcp.clone();
+    assert!(comparable
+        .as_object_mut()
+        .unwrap()
+        .remove("text_trust")
+        .is_some());
+    assert_eq!(normalize(comparable), normalize(cli));
     let claude = mcp["data"]["listing_cost"]
         .as_array()
         .unwrap()
@@ -1888,7 +1895,14 @@ async fn review_cli_mcp_json_matches_for_set_due_clear_and_unknown_or_one_adapte
         .output()
         .unwrap();
         let cli: serde_json::Value = serde_json::from_slice(&cli.stdout).unwrap();
-        assert_eq!(normalize(mcp), normalize(cli), "{tool}");
+        assert!(cli.get("text_trust").is_none());
+        let mut comparable = mcp;
+        assert!(comparable
+            .as_object_mut()
+            .unwrap()
+            .remove("text_trust")
+            .is_some());
+        assert_eq!(normalize(comparable), normalize(cli), "{tool}");
     }
     client.cancel().await.unwrap();
 }
