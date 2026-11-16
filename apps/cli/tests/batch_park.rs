@@ -291,6 +291,15 @@ fn one_name_mcp_matches_cli_instead_of_returning_a_batch() {
             .clone();
         assert_eq!(cli_result["status"], "ok", "{cli_result}");
         assert_eq!(mcp_result["status"], "ok", "{mcp_result}");
+        assert!(cli_result.get("text_trust").is_none());
+        assert!(mcp_result
+            .as_object_mut()
+            .unwrap()
+            .remove("text_trust")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("untrusted data"));
         for result in [&mut cli_result, &mut mcp_result] {
             for key in ["correlation_id", "event_id", "timings"] {
                 result.as_object_mut().unwrap().remove(key);
