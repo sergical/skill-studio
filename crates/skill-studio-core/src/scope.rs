@@ -422,19 +422,24 @@ impl NormalizedScope {
     /// directory ([`Self::codex_home`]), or the `OpenCode` config root, by
     /// canonical or lexical prefix.
     pub fn contains(&self, path: &Path) -> bool {
-        std::iter::once(&self.home)
-            .chain(self.projects.iter())
-            .chain(self.agent_home_roots.values())
-            .any(|root| path.starts_with(&root.canonical) || path.starts_with(&root.lexical))
-            || path.starts_with(&self.codex_home)
-            || path.starts_with(&self.codex_home_canonical)
-            || [
-                &self.opencode_config_root,
-                &self.opencode_config_root_canonical,
-            ]
-            .into_iter()
-            .flatten()
-            .any(|root| path.starts_with(root))
+        self.root_holding(path).is_some()
+    }
+
+    /// The first scope root that `path` lies under, canonical forms first.
+    pub fn root_holding(&self, path: &Path) -> Option<&Path> {
+        let physical = || {
+            std::iter::once(&self.home)
+                .chain(self.projects.iter())
+                .chain(self.agent_home_roots.values())
+        };
+        physical()
+            .map(|root| root.canonical.as_path())
+            .chain(std::iter::once(self.codex_home_canonical.as_path()))
+            .chain(self.opencode_config_root_canonical.as_deref())
+            .chain(physical().map(|root| root.lexical.as_path()))
+            .chain(std::iter::once(self.codex_home.as_path()))
+            .chain(self.opencode_config_root.as_deref())
+            .find(|root| path.starts_with(root))
     }
 
     /// Rewrites a path for display: `~/...` under the home, absolute
