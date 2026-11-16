@@ -50,7 +50,8 @@
     },
     "ProjectRef": {
       "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-      "type": "string"
+      "type": "string",
+      "x-untrusted": true
     }
   }
 }

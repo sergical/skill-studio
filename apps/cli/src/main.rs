@@ -1246,6 +1246,7 @@ fn error_envelope<T: ops::Outcome>(
             code: err.code,
             message: err.message,
             path: err.path.map(|p| p.display().to_string()),
+            detail: err.detail,
         }],
         correlation_id: CorrelationId(ulid::Ulid::generate().to_string()),
         event_id: None,

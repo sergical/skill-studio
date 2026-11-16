@@ -28,11 +28,13 @@
       "type": "array",
       "items": {
         "type": "string"
-      }
+      },
+      "x-untrusted": true
     },
     "quarantine_path": {
       "description": "Where the Universal folder was moved (quarantine), kept for undo.",
-      "type": "string"
+      "type": "string",
+      "x-untrusted": true
     },
     "update_note": {
       "description": "Plain-language note: `npx skills update` updates only a Universal\ncopy, so these copies no longer get updates from it.",
@@ -59,7 +61,8 @@
     },
     "SkillName": {
       "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-      "type": "string"
+      "type": "string",
+      "x-untrusted": true
     },
     "SplitCopy": {
       "description": "One folder `split` wrote.",
@@ -71,7 +74,8 @@
         },
         "path": {
           "description": "The copy's folder.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         }
       },
       "required": [

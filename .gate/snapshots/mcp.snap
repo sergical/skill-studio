@@ -129,7 +129,8 @@
               "properties": {
                 "project": {
                   "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-                  "type": "string"
+                  "type": "string",
+                  "x-untrusted": true
                 },
                 "scope": {
                   "const": "project",
@@ -146,7 +147,8 @@
         },
         "skill": {
           "description": "The folder name the skill will be installed under, both at\n`.agents/skills/<name>` and, for `Dotagents`/`SkillsSh`, the name the\nCLI is expected to create.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "source": {
           "default": null,
@@ -236,7 +238,8 @@
             },
             "diff": {
               "description": "Unified diff for a person.",
-              "type": "string"
+              "type": "string",
+              "x-untrusted": true
             },
             "expected_fingerprint": {
               "description": "Fingerprint of the current `SKILL.md` bytes.",
@@ -247,11 +250,13 @@
               "type": [
                 "string",
                 "null"
-              ]
+              ],
+              "x-untrusted": true
             },
             "original_content": {
               "description": "Current `SKILL.md` text, for a side-by-side view.",
-              "type": "string"
+              "type": "string",
+              "x-untrusted": true
             },
             "owner_id": {
               "anyOf": [
@@ -317,7 +322,8 @@
             },
             "path": {
               "description": "Absolute path of `SKILL.md`.",
-              "type": "string"
+              "type": "string",
+              "x-untrusted": true
             },
             "proposal_id": {
               "description": "Proposal id.",
@@ -325,7 +331,8 @@
             },
             "proposed_content": {
               "description": "Proposed `SKILL.md` text, for a side-by-side view.",
-              "type": "string"
+              "type": "string",
+              "x-untrusted": true
             },
             "proposed_fingerprint": {
               "description": "Fingerprint of the proposed bytes.",
@@ -333,7 +340,8 @@
             },
             "reason": {
               "description": "Why the repair is proposed, for a person (the spec rule that fails).",
-              "type": "string"
+              "type": "string",
+              "x-untrusted": true
             },
             "scope": {
               "description": "Scope of the deployment's root.",
@@ -356,7 +364,8 @@
                   "properties": {
                     "project": {
                       "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-                      "type": "string"
+                      "type": "string",
+                      "x-untrusted": true
                     },
                     "scope": {
                       "const": "project",
@@ -493,7 +502,8 @@
           "description": "Restrict to these skill names; empty means all.",
           "items": {
             "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "type": "array"
         },
@@ -545,7 +555,8 @@
       "properties": {
         "skill": {
           "description": "Skill to run the doctor checks and repairs for.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         }
       },
       "required": [
@@ -637,7 +648,8 @@
           "anyOf": [
             {
               "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-              "type": "string"
+              "type": "string",
+              "x-untrusted": true
             },
             {
               "type": "null"
@@ -909,7 +921,8 @@
           "anyOf": [
             {
               "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-              "type": "string"
+              "type": "string",
+              "x-untrusted": true
             },
             {
               "type": "null"
@@ -1019,7 +1032,8 @@
           "description": "Restrict to these skill names; empty means all.",
           "items": {
             "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "type": "array"
         },
@@ -1299,7 +1313,8 @@
           "description": "Names to change together. All names are checked before any move.",
           "items": {
             "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "type": [
             "array",
@@ -1449,7 +1464,8 @@
           "description": "Restrict to these skill names; empty means all.",
           "items": {
             "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "type": "array"
         },
@@ -1590,7 +1606,8 @@
           "description": "Restrict to these skill names; empty means all.",
           "items": {
             "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "type": "array"
         },
@@ -1800,7 +1817,8 @@
           "description": "Names to change together. All names are checked before any move.",
           "items": {
             "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "type": [
             "array",
@@ -1904,7 +1922,8 @@
               "properties": {
                 "project": {
                   "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-                  "type": "string"
+                  "type": "string",
+                  "x-untrusted": true
                 },
                 "scope": {
                   "const": "project",
@@ -1921,7 +1940,8 @@
         },
         "skill": {
           "description": "The already-installed skill's folder name.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "source": {
           "default": null,
@@ -2038,7 +2058,8 @@
                     "properties": {
                       "project": {
                         "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-                        "type": "string"
+                        "type": "string",
+                        "x-untrusted": true
                       },
                       "scope": {
                         "const": "project",
@@ -2055,7 +2076,8 @@
               },
               "skill": {
                 "description": "The already-installed skill's folder name.",
-                "type": "string"
+                "type": "string",
+                "x-untrusted": true
               },
               "source": {
                 "default": null,

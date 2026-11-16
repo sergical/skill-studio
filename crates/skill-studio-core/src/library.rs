@@ -84,8 +84,10 @@ pub struct LibraryRow {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub parked: bool,
     /// Installed name.
+    #[schemars(extend("x-untrusted" = true))]
     pub name: String,
     /// Repository from the install ledgers, or null for a non-repository install.
+    #[schemars(extend("x-untrusted" = true))]
     pub source: Option<String>,
     /// Uses in the requested window.
     pub uses: u32,

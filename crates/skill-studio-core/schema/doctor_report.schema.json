@@ -147,7 +147,8 @@
     },
     "ProjectRef": {
       "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-      "type": "string"
+      "type": "string",
+      "x-untrusted": true
     },
     "ListingSkillCost": {
       "description": "One skill's contribution to the listing.",
@@ -155,7 +156,8 @@
       "properties": {
         "name": {
           "description": "Model-visible name.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "estimated_tokens_chars_div_4": {
           "description": "UTF-16 characters (UTF-8 bytes for Codex), divided by four and rounded up.",
@@ -184,11 +186,13 @@
         },
         "path": {
           "description": "Path of the offending entry, when the invariant names one.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "detail": {
           "description": "Message for a person.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         }
       },
       "required": [

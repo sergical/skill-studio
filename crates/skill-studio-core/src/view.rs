@@ -90,6 +90,7 @@ pub fn render<T: Outcome + Serialize>(
                 code: ErrorCode::InvalidRequest,
                 message,
                 path: None,
+                detail: None,
             };
             doc.insert("status".into(), serde_json::to_value(OpStatus::Error)?);
             doc.insert("data".into(), Value::Null);

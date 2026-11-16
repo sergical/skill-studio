@@ -6,7 +6,8 @@
   "properties": {
     "skill": {
       "description": "Installed skill name.",
-      "type": "string"
+      "type": "string",
+      "x-untrusted": true
     },
     "review_date": {
       "description": "None after clear.",

@@ -15,6 +15,7 @@ use crate::ports::Runtime;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ListingSkillCost {
     /// Model-visible name.
+    #[schemars(extend("x-untrusted" = true))]
     pub name: String,
     /// UTF-16 characters (UTF-8 bytes for Codex), divided by four and rounded up.
     pub estimated_tokens_chars_div_4: u64,

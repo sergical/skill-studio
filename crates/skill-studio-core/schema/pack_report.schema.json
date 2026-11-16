@@ -27,7 +27,8 @@
       "properties": {
         "source": {
           "description": "`owner/repo`, git URL, npm package, or `plugin@marketplace`.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "kind": {
           "description": "The tool that installed it.",
@@ -38,14 +39,16 @@
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-untrusted": true
         },
         "ref_pin": {
           "description": "Branch, tag, commit, or plugin version the install is pinned to.",
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-untrusted": true
         },
         "update_commands": {
           "description": "Commands the owning agent runs to update this pack. Skill Studio does not run them.",
@@ -73,7 +76,8 @@
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "x-untrusted": true
         },
         "edited_count": {
           "description": "Skills with local edits.",
@@ -93,7 +97,8 @@
         },
         "summary": {
           "description": "One line for a person or agent.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         }
       },
       "required": [
@@ -171,7 +176,8 @@
     },
     "ProjectRef": {
       "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
-      "type": "string"
+      "type": "string",
+      "x-untrusted": true
     },
     "PackSkill": {
       "description": "One installed skill of a pack, at one scope.",
@@ -179,7 +185,8 @@
       "properties": {
         "name": {
           "description": "Skill name.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "scope": {
           "description": "Global or one project.",
@@ -190,7 +197,8 @@
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-untrusted": true
         },
         "agents": {
           "description": "Agents that load this skill at this scope.",
@@ -290,7 +298,8 @@
             },
             "reason": {
               "description": "Git's own message.",
-              "type": "string"
+              "type": "string",
+              "x-untrusted": true
             }
           },
           "required": [

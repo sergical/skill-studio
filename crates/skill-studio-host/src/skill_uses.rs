@@ -192,11 +192,15 @@ struct IndexedDatabase {
 }
 
 /// History that was unavailable or skipped. A path may identify a root or a file.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub struct UsageObservation {
     /// Root or transcript that could not be fully read.
+    #[schemars(extend("x-untrusted" = true))]
     pub path: PathBuf,
     /// Why history was unavailable.
+    #[schemars(extend("x-untrusted" = true))]
     pub reason: String,
 }
 

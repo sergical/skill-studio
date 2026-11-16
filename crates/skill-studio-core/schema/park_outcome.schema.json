@@ -14,14 +14,16 @@
     },
     "parked_path": {
       "description": "Where the directory now lives, under the parked root.",
-      "type": "string"
+      "type": "string",
+      "x-untrusted": true
     },
     "warnings": {
       "description": "Notes for the caller; never a reason the park failed. An adapter that\nran `park_check` first puts its git warning here.",
       "type": "array",
       "items": {
         "type": "string"
-      }
+      },
+      "x-untrusted": true
     }
   },
   "required": [
