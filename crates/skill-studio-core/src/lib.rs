@@ -61,6 +61,7 @@ mod ops_install;
 mod ops_install_cli;
 pub mod ops_invocation;
 mod ops_park_dotagents;
+pub mod ops_recovery;
 mod ops_remove;
 pub mod ops_split;
 mod ops_update;

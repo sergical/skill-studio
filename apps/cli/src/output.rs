@@ -827,6 +827,15 @@ pub fn write_schemas(out: Option<PathBuf>) -> ExitCode {
         ("pack_action_report", || {
             schemars::schema_for!(skill_studio_core::pack_action::PackActionReport)
         }),
+        ("recovery_report", || {
+            schemars::schema_for!(skill_studio_core::ops_recovery::RecoveryReport)
+        }),
+        ("recovery_drop_request", || {
+            schemars::schema_for!(skill_studio_core::ops_recovery::RecoveryDropRequest)
+        }),
+        ("recovery_drop_outcome", || {
+            schemars::schema_for!(skill_studio_core::ops_recovery::RecoveryDropOutcome)
+        }),
         ("agent_off_request", || {
             schemars::schema_for!(skill_studio_core::dto::AgentOffRequest)
         }),
@@ -1074,6 +1083,52 @@ pub fn print_packs(envelope: &ResultEnvelope<skill_studio_core::pack::PackReport
         }
     }
     println!("{}", report.summary);
+}
+
+pub fn print_recovery(envelope: &ResultEnvelope<skill_studio_core::ops_recovery::RecoveryReport>) {
+    print_errors(envelope);
+    let Some(report) = &envelope.data else {
+        return;
+    };
+    if report.plans.is_empty() {
+        println!("No interrupted writes. Writes are not blocked.");
+        return;
+    }
+    for plan in &report.plans {
+        print_recovery_plan(plan);
+    }
+    println!("Check these paths by hand, then run `skill-studio recovery drop <PLAN_ID>`.");
+}
+
+pub fn print_recovery_drop(
+    envelope: &ResultEnvelope<skill_studio_core::ops_recovery::RecoveryDropOutcome>,
+) {
+    print_errors(envelope);
+    if let Some(outcome) = &envelope.data {
+        println!("Dropped. Event: {}", outcome.event_id.0);
+        print_recovery_plan(&outcome.plan);
+    }
+}
+
+fn print_recovery_plan(plan: &skill_studio_core::ops_recovery::RecoveryPlan) {
+    println!(
+        "{}  {:?}  {}  failed recovery runs: {}",
+        plan.id.0, plan.status, plan.label, plan.recovery_attempts
+    );
+    println!("  root: {}", plan.root.display());
+    if let Some(error) = &plan.recovery_error {
+        println!("  last error: {error}");
+    }
+    for path in &plan.touched_paths {
+        println!("  touched: {}", path.display());
+    }
+    for backup in &plan.backups {
+        println!(
+            "  saved copy of {}: {}",
+            backup.original.display(),
+            backup.saved.display()
+        );
+    }
 }
 
 pub fn print_review_due(envelope: &ResultEnvelope<skill_studio_core::review::ReviewDueReport>) {

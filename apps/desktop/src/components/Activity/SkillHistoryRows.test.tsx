@@ -30,6 +30,7 @@ const kinds = [
   ["restore", "Restored"],
   ["quarantine_prune", "Quarantine pruned"],
   ["split", "Split into agent copies"],
+  ["recovery_plan_dropped", "Recovery plan dropped"],
 ] as const;
 function event(kind: string): SkillEvent {
   return {

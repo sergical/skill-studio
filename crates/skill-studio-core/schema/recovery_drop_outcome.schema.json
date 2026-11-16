@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RecoveryDropOutcome",
+  "description": "Result of `recovery drop`.",
+  "type": "object",
+  "properties": {
+    "event_id": {
+      "description": "The `recovery_plan_dropped` history event.",
+      "$ref": "#/$defs/EventId"
+    },
+    "plan": {
+      "description": "The plan as it is now, with what it may have left on disk.",
+      "$ref": "#/$defs/RecoveryPlan"
+    }
+  },
+  "required": [
+    "event_id",
+    "plan"
+  ],
+  "$defs": {
+    "EventId": {
+      "description": "History event id (ULID string).\n\nInvariant: lexical order equals creation order inside one store.",
+      "type": "string"
+    },
+    "RecoveryPlan": {
+      "description": "One journal plan that recovery has not closed.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The plan's ID, for `recovery drop`. Read from the journal folder name.",
+          "$ref": "#/$defs/PlanId",
+          "x-untrusted": true
+        },
+        "label": {
+          "description": "The write the plan belongs to.",
+          "type": "string",
+          "x-untrusted": true
+        },
+        "created_at": {
+          "description": "When the write began.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "root": {
+          "description": "The folder the write ran under.",
+          "type": "string",
+          "x-untrusted": true
+        },
+        "status": {
+          "description": "`pending` until the next write tries to undo it, `interrupted` after a\nrun failed, `dropped` after `recovery drop`.",
+          "$ref": "#/$defs/PlanStatus"
+        },
+        "recovery_attempts": {
+          "description": "Recovery runs that failed to undo the plan.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "recovery_error": {
+          "description": "What the last failed run hit.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true
+        },
+        "touched_paths": {
+          "description": "Paths the write touched. Each one can hold the old state, the new\nstate, or a half-done change.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-untrusted": true
+        },
+        "backups": {
+          "description": "Saved copies of the files the write changed.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RecoveryBackup"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "created_at",
+        "root",
+        "status",
+        "recovery_attempts",
+        "touched_paths",
+        "backups"
+      ]
+    },
+    "PlanId": {
+      "description": "Journal plan id (ULID string).\n\nInvariant: lexical order equals creation order inside one journal.",
+      "type": "string"
+    },
+    "PlanStatus": {
+      "description": "Lifecycle state of one journal plan.\n\nInvariant: a row starts `Pending` (written before the plan's first step)\nand ends `Done`, `Failed`, `Reversed`, or `Dropped`; `Interrupted` and\n`Reversed` are the only states [`crate::journal::reconcile`] ever writes,\nand only for a row it found still `Pending` at startup - `Reversed` when\nit could undo every recorded step, `Interrupted` when undoing one failed.\nOnly `recovery drop` writes `Dropped`, and only over `Interrupted`.",
+      "oneOf": [
+        {
+          "description": "The manifest and plan are durable; steps have not all run yet.",
+          "type": "string",
+          "const": "pending"
+        },
+        {
+          "description": "Every step ran; the mutation is durable.",
+          "type": "string",
+          "const": "done"
+        },
+        {
+          "description": "Found `Pending` at startup with no step recorded, so there was\nnothing to undo.",
+          "type": "string",
+          "const": "failed"
+        },
+        {
+          "description": "Found `Pending` at startup and every recorded step was undone, in\nreverse order, through [`ScopeFs`].",
+          "type": "string",
+          "const": "reversed"
+        },
+        {
+          "description": "Found `Pending` at startup - the process died mid-plan - and\nundoing at least one recorded step hit an I/O error, so the plan's\non-disk state cannot be trusted as either the pre-plan or the\npost-plan shape.",
+          "type": "string",
+          "const": "interrupted"
+        },
+        {
+          "description": "The person gave up an `Interrupted` plan. Recovery no longer retries\nit, and its files stay as the last attempt left them.",
+          "type": "string",
+          "const": "dropped"
+        }
+      ]
+    },
+    "RecoveryBackup": {
+      "description": "A file a plan saved before it changed it.",
+      "type": "object",
+      "properties": {
+        "original": {
+          "description": "The file the copy came from.",
+          "type": "string",
+          "x-untrusted": true
+        },
+        "saved": {
+          "description": "Where the saved copy is.",
+          "type": "string",
+          "x-untrusted": true
+        }
+      },
+      "required": [
+        "original",
+        "saved"
+      ]
+    }
+  }
+}

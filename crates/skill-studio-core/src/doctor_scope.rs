@@ -739,6 +739,8 @@ mod tests {
                 expired_backups: Vec::new(),
                 steps: Vec::new(),
                 status: crate::ports::PlanStatus::Done,
+                recovery_attempts: 0,
+                recovery_error: None,
             };
             fixture = fixture.dir(&root).file(
                 &format!("{root}/plan.json"),

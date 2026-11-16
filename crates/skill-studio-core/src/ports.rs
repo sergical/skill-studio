@@ -808,10 +808,11 @@ pub trait HistoryStore: Send {
 /// Lifecycle state of one journal plan.
 ///
 /// Invariant: a row starts `Pending` (written before the plan's first step)
-/// and ends `Done`, `Failed`, or `Reversed`; `Interrupted` and `Reversed`
-/// are the only states [`crate::journal::reconcile`] ever writes, and only
-/// for a row it found still `Pending` at startup - `Reversed` when it
-/// could undo every recorded step, `Interrupted` when undoing one failed.
+/// and ends `Done`, `Failed`, `Reversed`, or `Dropped`; `Interrupted` and
+/// `Reversed` are the only states [`crate::journal::reconcile`] ever writes,
+/// and only for a row it found still `Pending` at startup - `Reversed` when
+/// it could undo every recorded step, `Interrupted` when undoing one failed.
+/// Only `recovery drop` writes `Dropped`, and only over `Interrupted`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanStatus {
@@ -830,6 +831,9 @@ pub enum PlanStatus {
     /// on-disk state cannot be trusted as either the pre-plan or the
     /// post-plan shape.
     Interrupted,
+    /// The person gave up an `Interrupted` plan. Recovery no longer retries
+    /// it, and its files stay as the last attempt left them.
+    Dropped,
 }
 
 impl PlanStatus {
@@ -841,10 +845,17 @@ impl PlanStatus {
                 ErrorCode::InvalidRequest,
                 "finish must not set Pending",
             )),
+            (PlanStatus::Pending, PlanStatus::Dropped) => Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                "only an interrupted plan can be dropped",
+            )),
             (PlanStatus::Pending, to) => Ok(to),
             (
                 PlanStatus::Interrupted,
-                PlanStatus::Reversed | PlanStatus::Failed | PlanStatus::Interrupted,
+                PlanStatus::Reversed
+                | PlanStatus::Failed
+                | PlanStatus::Interrupted
+                | PlanStatus::Dropped,
             ) => Ok(to),
             (from, to) => Err(CoreError::new(
                 ErrorCode::InvalidRequest,
@@ -982,6 +993,12 @@ pub struct PlanRecord {
     pub steps: Vec<PlanStep>,
     /// Current status.
     pub status: PlanStatus,
+    /// Recovery runs that failed to undo this plan.
+    #[serde(default)]
+    pub recovery_attempts: u32,
+    /// What the last failed recovery run hit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_error: Option<String>,
 }
 
 /// The crash-safety journal every `fsops` primitive call records against.
@@ -1013,6 +1030,14 @@ pub trait Journal: Send {
         guard: &ExclusiveGuard,
         id: &PlanId,
         status: PlanStatus,
+    ) -> Result<(), CoreError>;
+    /// Marks a plan `Interrupted` after a failed recovery run, counts the
+    /// run, and keeps `error` for the person who must decide what to do.
+    fn record_recovery_failure(
+        &self,
+        guard: &ExclusiveGuard,
+        id: &PlanId,
+        error: &str,
     ) -> Result<(), CoreError>;
     /// Every plan the journal holds, oldest first. Never filtered.
     fn all(&self) -> Result<Vec<PlanRecord>, CoreError>;
@@ -1528,6 +1553,36 @@ fn op_snake_case_name(operation: crate::ops::Operation) -> String {
     }
 }
 
+/// The locks and writable history every write holds, before any recovery.
+///
+/// [`MutationSession`] builds on it; `recovery drop` uses it alone, because
+/// recovery would refuse on the plan it drops. Fields drop in declaration
+/// order, the reverse of [`Self::take`]: keep it when you add one.
+pub(crate) struct WriteHold {
+    pub store: Box<dyn HistoryStore>,
+    pub guard: ExclusiveGuard,
+    pub folder_guard: Box<dyn Send>,
+}
+
+impl WriteHold {
+    pub(crate) fn take(rt: &Runtime, ctx: &OpContext) -> Result<Self, CoreError> {
+        ctx.checkpoint()?;
+        let folder_guard = rt.ports.history.guard_data_folder()?;
+        let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope)?;
+        let Some(store) = rt.ports.history.open(&rt.scope, HistoryAccess::ReadWrite)? else {
+            return Err(CoreError::new(
+                ErrorCode::Unsupported,
+                "this host build has no history store; mutations are not available",
+            ));
+        };
+        Ok(Self {
+            store,
+            guard,
+            folder_guard,
+        })
+    }
+}
+
 /// The state a mutation holds from lease to commit.
 ///
 /// Invariant: `fresh` was built after the exclusive lease was taken, so a
@@ -1563,24 +1618,16 @@ impl MutationSession {
         ctx: &OpContext,
         skills: &[crate::identity::SkillName],
     ) -> Result<Self, CoreError> {
-        ctx.checkpoint()?;
-        let folder_guard = rt.ports.history.guard_data_folder()?;
-        let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope)?;
-        let Some(mut store) = rt.ports.history.open(&rt.scope, HistoryAccess::ReadWrite)? else {
-            return Err(CoreError::new(
-                ErrorCode::Unsupported,
-                "this host build has no history store; mutations are not available",
-            ));
-        };
+        let mut hold = WriteHold::take(rt, ctx)?;
         let recovery = crate::events::recover_interrupted(
-            &guard,
-            store.as_mut(),
+            &hold.guard,
+            hold.store.as_mut(),
             rt.ports.fs.as_ref(),
             rt.ports.sink.as_ref(),
         )?;
-        let reconciliation = crate::journal::reconcile_scope_journal(rt, &guard)?;
-        store.retain_backups(
-            &guard,
+        let reconciliation = crate::journal::reconcile_scope_journal(rt, &hold.guard)?;
+        hold.store.retain_backups(
+            &hold.guard,
             rt.ports.clock.now(),
             crate::backup_retention::BackupRetentionScope::All,
         )?;
@@ -1607,10 +1654,10 @@ impl MutationSession {
             },
         )?;
         Ok(MutationSession {
-            guard,
-            store,
+            guard: hold.guard,
+            store: hold.store,
             fresh,
-            _folder_guard: folder_guard,
+            _folder_guard: hold.folder_guard,
         })
     }
 

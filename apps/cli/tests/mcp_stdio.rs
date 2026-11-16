@@ -296,7 +296,7 @@ fn mcp_history_and_restore_refuse_unfinished_recovery_or_write_over_an_interrupt
         "restore_event",
         &serde_json::json!({"event_id":event.0,"force":true}),
     );
-    assert_eq!(result["errors"][0]["code"], "incomplete", "{result}");
+    assert_eq!(result["errors"][0]["code"], "recovery_pending", "{result}");
     assert!(
         result["errors"][0]["message"]
             .as_str()

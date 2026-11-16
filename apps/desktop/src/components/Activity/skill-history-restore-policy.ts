@@ -53,6 +53,7 @@ const EVENT_LABELS = new Map([
   ["restore", "Restored"],
   ["quarantine_prune", "Quarantine pruned"],
   ["split", "Split into agent copies"],
+  ["recovery_plan_dropped", "Recovery plan dropped"],
   ["distribute_from_shared", "Distributed from Universal"],
 ]);
 
@@ -70,6 +71,8 @@ export function restoreUnavailableReason(event: SkillEvent): string {
       return "Park the skill to reverse this.";
     case "quarantine_prune":
       return "Pruned backups cannot be restored.";
+    case "recovery_plan_dropped":
+      return "A dropped recovery plan cannot be restored.";
     default:
       return "This event has no saved change to restore.";
   }

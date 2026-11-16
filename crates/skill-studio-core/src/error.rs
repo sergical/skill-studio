@@ -43,6 +43,8 @@ pub enum ErrorCode {
     OwnershipChanged,
     /// The event was already reverted by another restore.
     AlreadyReverted,
+    /// An interrupted write is not recovered yet, so no new write ran.
+    RecoveryPending,
     /// The operation finished but some roots could not be read in time.
     Incomplete,
     /// The caller cancelled the operation.
@@ -67,7 +69,8 @@ impl ErrorCode {
             | ErrorCode::StaleProposal
             | ErrorCode::DriftConflict
             | ErrorCode::OwnershipChanged
-            | ErrorCode::AlreadyReverted => 3,
+            | ErrorCode::AlreadyReverted
+            | ErrorCode::RecoveryPending => 3,
             ErrorCode::Incomplete => 4,
             ErrorCode::Cancelled => 130,
         }
@@ -88,6 +91,7 @@ impl ErrorCode {
             ErrorCode::DriftConflict => "drift_conflict",
             ErrorCode::OwnershipChanged => "ownership_changed",
             ErrorCode::AlreadyReverted => "already_reverted",
+            ErrorCode::RecoveryPending => "recovery_pending",
             ErrorCode::Incomplete => "incomplete",
             ErrorCode::Cancelled => "cancelled",
         }
@@ -255,6 +259,7 @@ mod tests {
             ErrorCode::DriftConflict,
             ErrorCode::OwnershipChanged,
             ErrorCode::AlreadyReverted,
+            ErrorCode::RecoveryPending,
             ErrorCode::Incomplete,
             ErrorCode::Cancelled,
         ];
@@ -272,6 +277,7 @@ mod tests {
                 ErrorCode::DriftConflict => "drift_conflict",
                 ErrorCode::OwnershipChanged => "ownership_changed",
                 ErrorCode::AlreadyReverted => "already_reverted",
+                ErrorCode::RecoveryPending => "recovery_pending",
                 ErrorCode::Incomplete => "incomplete",
                 ErrorCode::Cancelled => "cancelled",
             };

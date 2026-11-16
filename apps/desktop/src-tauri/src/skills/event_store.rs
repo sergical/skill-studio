@@ -1177,6 +1177,15 @@ impl skill_studio_core::ports::Journal for EventStore {
         skill_studio_core::ports::Journal::record_step(&self.journal, guard, id, step)
     }
 
+    fn record_recovery_failure(
+        &self,
+        guard: &skill_studio_core::ports::ExclusiveGuard,
+        id: &skill_studio_core::identity::PlanId,
+        error: &str,
+    ) -> Result<(), skill_studio_core::error::CoreError> {
+        skill_studio_core::ports::Journal::record_recovery_failure(&self.journal, guard, id, error)
+    }
+
     fn finish(
         &self,
         guard: &skill_studio_core::ports::ExclusiveGuard,
