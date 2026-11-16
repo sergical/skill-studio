@@ -397,10 +397,9 @@ impl ScopeFs for BoundFs {
         self.dir.open(self.relative(path)?)?.sync_all()
     }
     fn fsops_fsync_dir(&self, path: &Path) -> io::Result<()> {
-        self.dir
-            .open_dir(self.relative(path)?)?
-            .into_std_file()
-            .sync_all()
+        // `open_dir` gives an O_PATH handle on Linux, and fsync on one fails
+        // with EBADF.
+        self.dir.open(self.relative(path)?)?.sync_all()
     }
     fn fsops_create_dir(&self, path: &Path) -> io::Result<()> {
         self.dir.create_dir(self.relative(path)?)
