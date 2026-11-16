@@ -1895,7 +1895,7 @@ export interface ParkOutcome {
  */
 export interface BatchParkRequest {
   /**
-   * Names in the order they will be parked.
+   * Names in the order they will be parked, at most 100.
    */
   skills: SkillName[];
 }

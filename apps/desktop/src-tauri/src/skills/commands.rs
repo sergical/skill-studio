@@ -1392,6 +1392,45 @@ mod tests {
         }
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn update_all_over_the_batch_limit_reports_the_core_refusal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let data_root = tmp.path().join("data");
+        std::fs::create_dir_all(&home).unwrap();
+        let requests = vec![
+            copy_update_request(
+                "fixture",
+                skill_studio_core::identity::RootScope::Global,
+                b"updated",
+            );
+            skill_studio_core::ops::MAX_BATCH_ITEMS + 1
+        ];
+
+        let error = update_all_with_runtime(
+            requests,
+            move || {
+                super::super::core_runtime::build_runtime_write_at_with_search_dirs(
+                    &home,
+                    &data_root,
+                    super::super::core_runtime::process_path_search_dirs(),
+                )
+            },
+            |_, _| {},
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            format!(
+                "This batch has {} skills. One call takes at most {}; split the rest into another call.",
+                skill_studio_core::ops::MAX_BATCH_ITEMS + 1,
+                skill_studio_core::ops::MAX_BATCH_ITEMS
+            )
+        );
+    }
+
     /// `update_all_on_ten_outdated_fixtures_ends_with_ten_journal_entries_and_zero_main_thread_calls_over_one_frame`:
     /// installs ten `Copy` skills for real (so `update_all_with_runtime` has
     /// an existing deployment per skill to swap over), then updates all ten
@@ -2514,12 +2553,9 @@ fn run_update_all_sync(
         skill_studio_core::identity::CorrelationId(ulid::Ulid::generate().to_string()),
         cancel,
     );
-    Ok(skill_studio_core::ops::update_all(
-        &rt,
-        &ctx,
-        requests,
-        &mut on_outcome,
-    ))
+    let result = skill_studio_core::ops::update_all(&rt, &ctx, requests, &mut on_outcome);
+    let envelope = ResultEnvelope::from_result(Operation::UpdateAll, &rt.scope, &ctx, result);
+    super::core_runtime::to_command_result(envelope)
 }
 
 /// Which owners a batch's succeeded items should clear (N1: the review

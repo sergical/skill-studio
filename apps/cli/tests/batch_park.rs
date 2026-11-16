@@ -390,3 +390,56 @@ fn batch_unpark_recreates_a_removed_skills_folder_and_link_instead_of_refusing_i
     assert_eq!(result["status"], "ok", "{result}");
     assert!(link.join("SKILL.md").exists(), "{result}");
 }
+
+#[test]
+fn batches_over_the_size_limit_are_refused_alike_on_cli_and_mcp_before_any_item_runs() {
+    let names: Vec<String> = (0..=skill_studio_core::ops::MAX_BATCH_ITEMS)
+        .map(|i| format!("s{i}"))
+        .collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut messages = Vec::new();
+    for surface in ["park", "unpark", "mcp-park", "mcp-unpark"] {
+        let home = tempfile::tempdir().unwrap();
+        for name in &names {
+            skill(home.path(), name);
+        }
+        let result = match surface {
+            "mcp-park" => park(home.path(), "mcp", &names),
+            "mcp-unpark" => mcp(home.path(), "unpark", &json!({"skills": names}))["result"]
+                ["structuredContent"]
+                .clone(),
+            cli_surface => park(home.path(), cli_surface, &names),
+        };
+        assert_eq!(result["status"], "error", "{surface}: {result}");
+        assert_eq!(result["errors"][0]["code"], "invalid_request", "{surface}");
+        messages.push(result["errors"][0]["message"].clone());
+        assert!(home.path().join(".agents/skills/s0/SKILL.md").exists());
+    }
+    let home = tempfile::tempdir().unwrap();
+    let mut args = vec!["update", "--method", "skills-sh"];
+    for name in &names {
+        args.extend(["--skill", name]);
+    }
+    let requests: Vec<_> = names
+        .iter()
+        .map(|name| json!({"skill": name, "method": "skills_sh", "scope": {"scope": "global"}}))
+        .collect();
+    for result in [
+        cli(home.path(), &args),
+        mcp(home.path(), "update_all", &json!({"requests": requests}))["result"]
+            ["structuredContent"]
+            .clone(),
+    ] {
+        assert_eq!(result["status"], "error", "update: {result}");
+        assert_eq!(result["errors"][0]["code"], "invalid_request", "update");
+        messages.push(result["errors"][0]["message"].clone());
+    }
+    let expected = format!(
+        "This batch has {} skills. One call takes at most {}; split the rest into another call.",
+        names.len(),
+        skill_studio_core::ops::MAX_BATCH_ITEMS
+    );
+    for message in messages {
+        assert_eq!(message, expected);
+    }
+}
