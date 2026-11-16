@@ -33,7 +33,6 @@ const SEED: u64 = 1;
 
 fn scope_for(home: &std::path::Path, project_dirs: &[PathBuf]) -> RuntimeScope {
     let mut scope = RuntimeScope::fixture(home);
-    scope.read_timeout_ms = 10_000;
     scope.projects = ProjectSelection::Explicit {
         paths: project_dirs.iter().map(|d| home.join(d)).collect(),
     };
