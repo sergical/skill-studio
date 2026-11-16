@@ -180,8 +180,6 @@ fn usage_cached_run_keeps_cache_file_instead_of_rewriting_unchanged_history() {
     let run_cached = || {
         test_home::command(env!("CARGO_BIN_EXE_skill-studio"), &home)
             .args(["usage", "--json"])
-            .env("HOME", &home)
-            .env("SKILL_STUDIO_TELEMETRY", "0")
             .output()
             .unwrap()
     };
@@ -242,10 +240,8 @@ fn readonly_queries_answer_without_writes_or_fail_on_chmod_home() {
         }
     }
     let (_dir, home) = home();
-    let warm = Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+    let warm = test_home::command(env!("CARGO_BIN_EXE_skill-studio"), &home)
         .args(["usage", "--json"])
-        .env("HOME", &home)
-        .env("SKILL_STUDIO_TELEMETRY", "0")
         .output()
         .unwrap();
     assert!(warm.status.success());
@@ -266,20 +262,16 @@ fn readonly_queries_answer_without_writes_or_fail_on_chmod_home() {
     let mut outputs: Vec<_> = ["scan", "usage", "invocation"]
         .iter()
         .map(|command| {
-            Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+            test_home::command(env!("CARGO_BIN_EXE_skill-studio"), &home)
                 .args([command, "--json", "--home"])
                 .arg(&home)
-                .env("HOME", &home)
-                .env("SKILL_STUDIO_TELEMETRY", "0")
                 .output()
                 .unwrap()
         })
         .collect();
     outputs.push(
-        Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+        test_home::command(env!("CARGO_BIN_EXE_skill-studio"), &home)
             .args(["usage", "--json"])
-            .env("HOME", &home)
-            .env("SKILL_STUDIO_TELEMETRY", "0")
             .output()
             .unwrap(),
     );
@@ -321,11 +313,10 @@ fn explicit_home_usage_ignores_codex_home_or_counts_foreign_sessions() {
         format!("{line}\n"),
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+    let output = test_home::command(env!("CARGO_BIN_EXE_skill-studio"), &home)
         .args(["usage", "--json", "--harness", "codex", "--home"])
         .arg(&home)
         .env("CODEX_HOME", foreign.path())
-        .env("SKILL_STUDIO_TELEMETRY", "0")
         .output()
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -363,17 +354,16 @@ fn review_due_selected_home_counts_local_sessions_instead_of_ambient_codex_sessi
         format!("{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"local\"}}}}\n{line}\n"),
     )
     .unwrap();
-    let set = Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+    let set = test_home::command(env!("CARGO_BIN_EXE_skill-studio"), &home)
         .args(["review", "set", "gamma", "2000-01-01", "--home"])
         .arg(&home)
         .output()
         .unwrap();
     assert!(set.status.success());
-    let output = Command::new(env!("CARGO_BIN_EXE_skill-studio"))
+    let output = test_home::command(env!("CARGO_BIN_EXE_skill-studio"), &home)
         .args(["review", "due", "--json", "--home"])
         .arg(&home)
         .env("CODEX_HOME", foreign.path())
-        .env("SKILL_STUDIO_TELEMETRY", "0")
         .output()
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
