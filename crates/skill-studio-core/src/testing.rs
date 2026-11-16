@@ -1863,13 +1863,10 @@ pub mod golden {
         }
     }
 
-    /// A fixture-rooted scope with a budget generous enough for golden runs
-    /// reading real disk under CI load. `project` alone registers `home/proj`
-    /// as an explicit project, since fixture scans never run project
-    /// discovery.
+    /// A fixture-rooted scope. `project` alone registers `home/proj` as an
+    /// explicit project, since fixture scans never run project discovery.
     pub fn scope_for(name: &str, home: &Path) -> RuntimeScope {
         let mut scope = RuntimeScope::fixture(home);
-        scope.read_timeout_ms = 10_000;
         if name == "project" {
             scope.projects = ProjectSelection::Explicit {
                 paths: vec![home.join("proj")],

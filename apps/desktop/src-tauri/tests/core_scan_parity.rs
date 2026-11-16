@@ -342,7 +342,6 @@ fn core_scan(
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
     };
     let mut scope = RuntimeScope::fixture(home);
-    scope.read_timeout_ms = 10_000;
     scope.opencode_config_root = Some(opencode_config_root.map_or_else(
         || skill_studio_host::opencode_config_dir_under(home),
         Path::to_path_buf,

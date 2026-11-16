@@ -132,7 +132,6 @@ fn realistic_home(home: &Path) -> Vec<PathBuf> {
 
 fn runtime_for(home: &Path, project_dirs: &[PathBuf]) -> Runtime {
     let mut scope = RuntimeScope::fixture(home);
-    scope.read_timeout_ms = 10_000;
     scope.projects = ProjectSelection::Explicit {
         paths: project_dirs.iter().map(|d| home.join(d)).collect(),
     };

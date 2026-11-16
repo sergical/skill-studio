@@ -62,7 +62,6 @@ fn in_memory_runtime(
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
     };
     let mut scope = RuntimeScope::fixture(Path::new(HOME));
-    scope.read_timeout_ms = 10_000;
     if !projects.is_empty() {
         scope.projects = ProjectSelection::Explicit { paths: projects };
     }

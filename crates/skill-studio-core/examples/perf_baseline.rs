@@ -15,7 +15,6 @@ use skill_studio_host::default_ports;
 
 fn runtime(home: &Path, projects: &[PathBuf]) -> Runtime {
     let mut scope = RuntimeScope::fixture(home);
-    scope.read_timeout_ms = 60_000;
     scope.projects = ProjectSelection::Explicit {
         paths: projects.to_vec(),
     };

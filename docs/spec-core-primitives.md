@@ -93,7 +93,8 @@ RuntimeScope {
   history_binding: Default | Override,       // Override only in Fixture
   cache_root: Option<PathBuf>,
   data_root: Option<PathBuf>,                // forks/, runs/, update-check.json, invocation cache
-  read_timeout_ms: 2000, write_timeout_ms: 10000
+  read_timeout_ms: 2000, write_timeout_ms: 10000,  // lease waits
+  scan_budget_ms: None,                      // scan walk budget; None reads every root
 }
 ```
 

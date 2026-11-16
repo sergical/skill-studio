@@ -41,7 +41,7 @@ def environment(home, projects):
 
 
 def measured_cli(binary, verb, home, projects, env):
-    args = [str(binary), verb, "--fixture", str(home), "--json", "--read-timeout-ms", "60000"]
+    args = [str(binary), verb, "--fixture", str(home), "--json"]
     for project in projects:
         args += ["--project", project]
     timer = ["/usr/bin/time", "-l"] if platform.system() == "Darwin" else ["/usr/bin/time", "-v"]

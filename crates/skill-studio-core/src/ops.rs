@@ -451,8 +451,9 @@ impl<T: Outcome> ResultEnvelope<T> {
 /// Reads every root in scope and returns the inventory.
 ///
 /// Preconditions: shared lease within `read_timeout`. Never creates the
-/// history database, caches, or watchers. Roots that cannot be read inside
-/// the budget are reported in `observations` and make the result `Partial`.
+/// history database, caches, or watchers. Roots that cannot be read, or that
+/// the walk reaches after the scope's `scan_budget`, are reported in
+/// `observations` and make the result `Partial`.
 ///
 /// Walks the catalog's [`RootRole::Own`], [`RootRole::Universal`], and
 /// [`RootRole::Legacy`] roots, plus the parked root
@@ -473,7 +474,7 @@ pub fn scan_for_usage(rt: &Runtime, ctx: &OpContext) -> Result<Inventory, CoreEr
         ctx.checkpoint()?;
         let _folder_guard = rt.ports.history.guard_read_data_folder()?;
         let _guard = acquire_shared(rt.ports.leases.as_ref(), &rt.scope)?;
-        scan_inner_with_budget(rt, ctx, &ScanRequest::default(), Duration::MAX)
+        scan_inner(rt, ctx, &ScanRequest::default())
     })
 }
 
@@ -495,15 +496,7 @@ pub(crate) fn scan_inner(
     ctx: &OpContext,
     req: &ScanRequest,
 ) -> Result<Inventory, CoreError> {
-    scan_inner_with_budget(rt, ctx, req, rt.scope.raw.read_timeout())
-}
-
-fn scan_inner_with_budget(
-    rt: &Runtime,
-    ctx: &OpContext,
-    req: &ScanRequest,
-    budget: Duration,
-) -> Result<Inventory, CoreError> {
+    let budget = rt.scope.raw.scan_budget();
     let start = rt.ports.clock.monotonic();
     let clock = rt.ports.clock.as_ref();
     let mut op_steps = Vec::new();
@@ -7992,6 +7985,14 @@ mod tests {
         }
 
         fn runtime_with(fs: crate::testing::FixtureFs, clock: Arc<dyn Clock>) -> Runtime {
+            runtime_in(&RuntimeScope::fixture("/h"), fs, clock)
+        }
+
+        fn runtime_in(
+            scope: &RuntimeScope,
+            fs: crate::testing::FixtureFs,
+            clock: Arc<dyn Clock>,
+        ) -> Runtime {
             let ports = Ports {
                 fs: Arc::new(fs),
                 clock,
@@ -8006,7 +8007,7 @@ mod tests {
 
                 telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
             };
-            Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap()
+            Runtime::new(scope, ports).unwrap()
         }
 
         pub(super) fn ctx() -> OpContext {
@@ -8244,24 +8245,42 @@ mod tests {
             assert_eq!(inv.skills[0].name.0, "write-tests");
         }
 
-        #[test]
-        fn exceeded_read_budget_marks_inventory_partial() {
-            let fs = FixtureBuilder::new()
+        fn one_skill_fs() -> crate::testing::FixtureFs {
+            FixtureBuilder::new()
                 .dir("/h/.claude/skills/write-tests")
                 .file(
                     "/h/.claude/skills/write-tests/SKILL.md",
                     b"---\nname: write-tests\ndescription: Writes tests.\n---\n",
                 )
-                .build_fs();
-            let rt = runtime_with(fs, Arc::new(SteppingClock::new()));
+                .build_fs()
+        }
+
+        #[test]
+        fn exceeded_scan_budget_marks_inventory_partial() {
+            let mut scope = RuntimeScope::fixture("/h");
+            scope.scan_budget_ms = Some(2_000);
+            let rt = runtime_in(&scope, one_skill_fs(), Arc::new(SteppingClock::new()));
             let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
             assert_eq!(inv.completeness, Completeness::Partial);
             assert!(!inv.observations.is_empty());
         }
 
+        #[test]
+        fn a_scan_slower_than_the_lease_wait_still_reads_every_root() {
+            let rt = runtime_with(one_skill_fs(), Arc::new(SteppingClock::new()));
+            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
+            assert_eq!(
+                inv.completeness,
+                Completeness::Complete,
+                "{:?}",
+                inv.observations
+            );
+            assert_eq!(inv.skills.len(), 1);
+        }
+
         /// A clock that reports zero elapsed time for the first
-        /// `within_budget_calls` reads after `start`, then jumps past the
-        /// default 2s budget on every call after that - lets a test trip the
+        /// `within_budget_calls` reads after `start`, then jumps past a
+        /// 2s scan budget on every call after that - lets a test trip the
         /// budget check at an exact target-group boundary instead of a
         /// guessed call count.
         struct BudgetAfterNClock {
@@ -8348,6 +8367,7 @@ mod tests {
                 .build_fs();
 
             let mut scope = RuntimeScope::fixture("/h");
+            scope.scan_budget_ms = Some(2_000);
             scope.projects = ProjectSelection::Explicit {
                 paths: vec![PathBuf::from("/h/proj")],
             };

@@ -62,6 +62,7 @@ pub(crate) fn home_only_scope(home: &Path, fs: &dyn ScopeFs) -> Result<Normalize
         agent_home_roots: Default::default(),
         read_timeout_ms: DEFAULT_READ_TIMEOUT_MS,
         write_timeout_ms: DEFAULT_WRITE_TIMEOUT_MS,
+        scan_budget_ms: None,
     };
     NormalizedScope::normalize(&raw, fs)
 }

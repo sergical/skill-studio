@@ -101,6 +101,11 @@ pub struct RuntimeScope {
     pub read_timeout_ms: u64,
     /// Exclusive-lease wait budget for write operations, in milliseconds.
     pub write_timeout_ms: u64,
+    /// Wall-clock budget for one scan walk, in milliseconds. A root that the
+    /// walk reaches after the budget is reported unread and makes the
+    /// inventory `Partial`. `None` reads every root.
+    #[serde(default)]
+    pub scan_budget_ms: Option<u64>,
 }
 
 impl RuntimeScope {
@@ -121,6 +126,7 @@ impl RuntimeScope {
             agent_home_roots: Default::default(),
             read_timeout_ms: DEFAULT_READ_TIMEOUT_MS,
             write_timeout_ms: DEFAULT_WRITE_TIMEOUT_MS,
+            scan_budget_ms: None,
         }
     }
 
@@ -143,6 +149,7 @@ impl RuntimeScope {
             agent_home_roots: Default::default(),
             read_timeout_ms: DEFAULT_READ_TIMEOUT_MS,
             write_timeout_ms: DEFAULT_WRITE_TIMEOUT_MS,
+            scan_budget_ms: None,
         }
     }
 
@@ -171,6 +178,12 @@ impl RuntimeScope {
     /// Write wait budget as a duration.
     pub fn write_timeout(&self) -> Duration {
         Duration::from_millis(self.write_timeout_ms)
+    }
+
+    /// Scan walk budget as a duration; [`Duration::MAX`] when unset.
+    pub fn scan_budget(&self) -> Duration {
+        self.scan_budget_ms
+            .map_or(Duration::MAX, Duration::from_millis)
     }
 }
 
