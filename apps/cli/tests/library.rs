@@ -202,7 +202,7 @@ fn library_keeps_partial_tables_and_the_worst_agent_copy() {
     )
     .unwrap();
     let call = || {
-        let cli = headless::cli(root, &["library", "--days", "45", "--read-timeout-ms", "0"]);
+        let cli = headless::cli(root, &["library", "--days", "45"]);
         let mcp = headless::mcp(root, "library", &json!({"days":45}));
         assert_eq!(
             cli["data"], mcp["result"]["structuredContent"]["data"],

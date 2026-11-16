@@ -7962,9 +7962,8 @@ mod tests {
         use std::time::Duration;
 
         /// A clock whose `monotonic()` jumps forward by 3s on every call,
-        /// so a scan that reads it more than once always blows the default
-        /// 2s read budget - used to exercise the partial-completeness path
-        /// without a real clock or a real timeout.
+        /// so a scan that reads it more than once always passes the 2s lease
+        /// wait and any 2s scan budget, without a real clock or timeout.
         struct SteppingClock(AtomicU64);
 
         impl SteppingClock {
@@ -8267,15 +8266,21 @@ mod tests {
 
         #[test]
         fn a_scan_slower_than_the_lease_wait_still_reads_every_root() {
-            let rt = runtime_with(one_skill_fs(), Arc::new(SteppingClock::new()));
-            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
-            assert_eq!(
-                inv.completeness,
-                Completeness::Complete,
-                "{:?}",
-                inv.observations
-            );
-            assert_eq!(inv.skills.len(), 1);
+            let reads: [fn(&Runtime) -> Inventory; 2] = [
+                |rt| scan(rt, &ctx(), &ScanRequest::default()).unwrap(),
+                |rt| scan_for_usage(rt, &ctx()).unwrap(),
+            ];
+            for read in reads {
+                let rt = runtime_with(one_skill_fs(), Arc::new(SteppingClock::new()));
+                let inv = read(&rt);
+                assert_eq!(
+                    inv.completeness,
+                    Completeness::Complete,
+                    "{:?}",
+                    inv.observations
+                );
+                assert_eq!(inv.skills.len(), 1);
+            }
         }
 
         /// A clock that reports zero elapsed time for the first

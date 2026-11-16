@@ -44,8 +44,10 @@ block a PR. Existing required job names are unchanged.
 Lifecycle transitions are in `docs/state-machines.md`; user flows are in
 `docs/flows.md`.
 
-CLI measurements use a 60-second read budget so large fixtures can complete.
-MCP and desktop use their default read budget. The JSON records CLI status,
+CLI, MCP and desktop scans have no time budget by default, so they read every
+root of a large fixture. `read_timeout_ms` limits only the wait for the shared
+lease; `scan_budget_ms` (CLI `--scan-budget-ms`) is the only scan time limit,
+and the runner does not set it. The JSON records CLI status,
 MCP status and skill counts, and every desktop sample's skill count and `scan_partial`. The Markdown summary labels mixed desktop counts or completeness. Check these fields before comparing
 results. A partial scan is not a complete inventory benchmark.
 

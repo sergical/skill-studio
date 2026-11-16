@@ -1086,7 +1086,7 @@
           ]
         },
         {
-          "description": "Rescan with a longer read budget.",
+          "description": "Scan again when the root is readable, or with no scan budget.",
           "type": "object",
           "properties": {
             "action": {
