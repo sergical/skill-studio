@@ -34,6 +34,7 @@ use serde_json::Value;
 use skill_studio_core::events::EventStatus as CoreEventStatus;
 
 use super::skill_md_write::{begin_skill_md_write_transaction, SkillMdWriteTransaction};
+use super::write_lease::WriteLeaseGuard;
 
 /// Opens (creating if absent) the event store DB at `db_path` and ensures
 /// its schema exists.
@@ -613,16 +614,29 @@ impl EventStore {
 
     /// Undoes event `target_id`. Returns the id of the `restore` event
     /// created to do it. See the module header for the drift-guard and
-    /// restore-of-restore design.
+    /// restore-of-restore design. Refuses an event whose undo rewrites
+    /// SKILL.md: that needs [`Self::restore_with_lease`].
     pub fn restore(&self, target_id: &str, force: bool) -> Result<String, String> {
-        self.restore_with_skill_md_transaction_observer(target_id, force, |_| {})
+        self.restore_with_skill_md_transaction_observer(None, target_id, force, |_| {})
+    }
+
+    /// [`Self::restore`] under the caller's write lease, which also lets the
+    /// undo rewrite SKILL.md.
+    pub fn restore_with_lease(
+        &self,
+        lease: &WriteLeaseGuard,
+        target_id: &str,
+        force: bool,
+    ) -> Result<String, String> {
+        self.restore_with_skill_md_transaction_observer(Some(lease), target_id, force, |_| {})
     }
 
     fn restore_with_skill_md_transaction_observer(
         &self,
+        lease: Option<&WriteLeaseGuard>,
         target_id: &str,
         force: bool,
-        observe_transaction: impl FnOnce(Option<&SkillMdWriteTransaction>),
+        observe_transaction: impl FnOnce(Option<&SkillMdWriteTransaction<'_>>),
     ) -> Result<String, String> {
         let target = self
             .get_event(target_id)?
@@ -643,13 +657,15 @@ impl EventStore {
         let inverse: InverseOp = serde_json::from_value(inverse_value)
             .map_err(|e| format!("Failed to parse inverse for {target_id}: {e}"))?;
 
-        let skill_md_transaction = (inverse
-            .destination()
-            .file_name()
-            .and_then(|name| name.to_str())
-            == Some("SKILL.md"))
-        .then(begin_skill_md_write_transaction)
-        .transpose()?;
+        let skill_md_transaction =
+            if inverse.destination().file_name() == Some(std::ffi::OsStr::new("SKILL.md")) {
+                let lease = lease.ok_or_else(|| {
+                    format!("Event {target_id} rewrites SKILL.md; undo it under the write lease")
+                })?;
+                Some(begin_skill_md_write_transaction(lease))
+            } else {
+                None
+            };
         observe_transaction(skill_md_transaction.as_ref());
 
         let restore_id = allocate_id();
@@ -664,7 +680,7 @@ impl EventStore {
             return Err(format!("Event {target_id} was already restored"));
         }
 
-        let result = match self.apply_restore(&restore_id, &target, &inverse, force) {
+        match self.apply_restore(&restore_id, &target, &inverse, force) {
             Ok(()) => Ok(restore_id),
             Err(e) => {
                 let _ = self.conn.execute(
@@ -673,9 +689,7 @@ impl EventStore {
                 );
                 Err(e)
             }
-        };
-        drop(skill_md_transaction);
-        result
+        }
     }
 
     fn apply_restore(
@@ -1499,7 +1513,7 @@ pub struct MaterializedRoot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::skills::skill_md_write::skill_md_write_transaction_is_held;
+    use crate::skills::write_lease::{exclusive_lease_is_held, WriteLease};
     use std::os::unix::fs::symlink;
 
     #[test]
@@ -1911,12 +1925,24 @@ mod tests {
             )
             .unwrap();
         store.finish(&repair_id, EventStatus::Done).unwrap();
+        let unleased = store.restore(&repair_id, false).unwrap_err();
+        assert!(unleased.contains("under the write lease"), "{unleased}");
+        assert_eq!(fs::read(&skill_md).unwrap(), b"repaired frontmatter");
+        let lease_root = tmp.path().join("leases");
+        let lease = WriteLease::with_lease_root(lease_root.clone())
+            .try_acquire(tmp.path())
+            .unwrap();
 
         let undo_id = store
-            .restore_with_skill_md_transaction_observer(&repair_id, false, |transaction| {
-                assert!(transaction.is_some());
-                assert!(skill_md_write_transaction_is_held());
-            })
+            .restore_with_skill_md_transaction_observer(
+                Some(&lease),
+                &repair_id,
+                false,
+                |transaction| {
+                    assert!(transaction.is_some());
+                    assert!(exclusive_lease_is_held(&lease_root, tmp.path()));
+                },
+            )
             .unwrap();
         assert_eq!(fs::read(&skill_md).unwrap(), b"malformed frontmatter");
         assert_eq!(
@@ -1930,10 +1956,15 @@ mod tests {
         );
 
         let redo_id = store
-            .restore_with_skill_md_transaction_observer(&undo_id, false, |transaction| {
-                assert!(transaction.is_some());
-                assert!(skill_md_write_transaction_is_held());
-            })
+            .restore_with_skill_md_transaction_observer(
+                Some(&lease),
+                &undo_id,
+                false,
+                |transaction| {
+                    assert!(transaction.is_some());
+                    assert!(exclusive_lease_is_held(&lease_root, tmp.path()));
+                },
+            )
             .unwrap();
         assert_eq!(fs::read(&skill_md).unwrap(), b"repaired frontmatter");
         assert_eq!(
@@ -1970,7 +2001,7 @@ mod tests {
         store.finish(&ordinary_id, EventStatus::Done).unwrap();
 
         store
-            .restore_with_skill_md_transaction_observer(&ordinary_id, false, |transaction| {
+            .restore_with_skill_md_transaction_observer(None, &ordinary_id, false, |transaction| {
                 assert!(transaction.is_none());
             })
             .unwrap();
@@ -2065,18 +2096,23 @@ mod tests {
         // Drift: someone edits the file after the event.
         fs::write(&file, b"drifted-by-user").unwrap();
 
-        let err = store.restore(&id, false).unwrap_err();
+        let lease = WriteLease::with_lease_root(tmp.path().join("leases"))
+            .try_acquire(tmp.path())
+            .unwrap();
+        let err = store.restore_with_lease(&lease, &id, false).unwrap_err();
         assert!(
             err.contains(&file.display().to_string()),
             "error should name the path: {err}"
         );
         assert_eq!(fs::read(&file).unwrap(), b"drifted-by-user");
 
-        let restore_id = store.restore(&id, true).unwrap();
+        let restore_id = store.restore_with_lease(&lease, &id, true).unwrap();
         assert_eq!(fs::read(&file).unwrap(), b"original");
 
         // The drifted bytes must be recoverable from the restore event's backup.
-        store.restore(&restore_id, false).unwrap();
+        store
+            .restore_with_lease(&lease, &restore_id, false)
+            .unwrap();
         assert_eq!(fs::read(&file).unwrap(), b"drifted-by-user");
     }
 }

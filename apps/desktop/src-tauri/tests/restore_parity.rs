@@ -66,6 +66,7 @@ use skill_studio_lib::event_store::{
     EventStore, InverseOp,
 };
 use skill_studio_lib::skill_frontmatter_repair::propose_colon_scalar_repair;
+use skill_studio_lib::write_lease::WriteLease;
 
 /// A per-harness root with no `.skill-lock.json` entry, so the core
 /// classifies the deployment `Manual`-owned. The core's repair gate
@@ -207,6 +208,18 @@ fn desktop_store(home: &Path) -> EventStore {
     EventStore::open(&home.join("app_data")).unwrap()
 }
 
+/// Undoes `event_id` the way the desktop's undo command does: under the
+/// write lease over `home`, the same lease core writers take.
+fn desktop_restore(
+    store: &EventStore,
+    home: &Path,
+    event_id: &str,
+    force: bool,
+) -> Result<String, String> {
+    let lease = WriteLease::with_lease_root(home.join(".leases")).try_acquire(home)?;
+    store.restore_with_lease(&lease, event_id, force)
+}
+
 /// Applies the one safe deterministic repair to `skill_md` through the
 /// desktop's `EventStore`, byte-for-byte matching
 /// `apply_skill_frontmatter_repair`'s `ApplyFix` branch. Returns the new
@@ -343,7 +356,7 @@ fn repair_apply_then_restore_matches_between_desktop_and_core() {
     assert_eq!(desktop_wire_shape(&row_a), core_wire_shape(dto_b));
 
     // Restore on both.
-    store_a.restore(&repair_id_a, false).unwrap();
+    desktop_restore(&store_a, &home_a, &repair_id_a, false).unwrap();
     let outcome_b = ops::restore_event(
         &rt_b,
         &ctx(),
@@ -374,7 +387,7 @@ fn repair_apply_then_restore_matches_between_desktop_and_core() {
     // on both, and neither writes anything.
     let before_a = snapshot_materialized_tree(&home_a);
     let before_b = snapshot_materialized_tree(&home_b);
-    let err_a = store_a.restore(&repair_id_a, false).unwrap_err();
+    let err_a = desktop_restore(&store_a, &home_a, &repair_id_a, false).unwrap_err();
     assert!(err_a.contains("already restored"), "unexpected: {err_a}");
     let err_b = ops::restore_event(
         &rt_b,
@@ -505,7 +518,7 @@ fn restore_of_an_absent_path_backup_removes_it_on_both() {
 
     // Something now exists where the backup recorded "absent", so both
     // implementations see drift and need force to proceed.
-    store_a.restore(&id_a, true).unwrap();
+    desktop_restore(&store_a, &home_a, &id_a, true).unwrap();
     let outcome_b = ops::restore_event(
         &rt_b,
         &ctx(),
@@ -555,7 +568,7 @@ fn restore_refuses_drift_without_force_and_force_proceeds_on_both() {
     );
 
     // Without force: refused on both, tree unchanged.
-    let err_a = store_a.restore(&repair_id_a, false).unwrap_err();
+    let err_a = desktop_restore(&store_a, &home_a, &repair_id_a, false).unwrap_err();
     assert!(
         err_a.contains(&skill_md_a.display().to_string()),
         "unexpected: {err_a}"
@@ -578,7 +591,7 @@ fn restore_refuses_drift_without_force_and_force_proceeds_on_both() {
     // With force: proceeds on both, and the trees stay identical (both
     // restore the pre-repair bytes and both stash the drifted bytes in the
     // restore event's own backup).
-    let restore_id_a = store_a.restore(&repair_id_a, true).unwrap();
+    let restore_id_a = desktop_restore(&store_a, &home_a, &repair_id_a, true).unwrap();
     let outcome_b = ops::restore_event(
         &rt_b,
         &ctx(),
@@ -595,7 +608,7 @@ fn restore_refuses_drift_without_force_and_force_proceeds_on_both() {
     );
 
     // Restoring the restore itself brings back the drifted bytes, on both.
-    store_a.restore(&restore_id_a, false).unwrap();
+    desktop_restore(&store_a, &home_a, &restore_id_a, false).unwrap();
     let restore_row_b = ops::list_events(&rt_b, &ctx(), &ListEventsRequest::default())
         .unwrap()
         .into_iter()
@@ -653,7 +666,7 @@ fn an_event_recorded_by_the_desktop_restores_through_the_core() {
 
     // `home_desktop`'s copy is restored the desktop's way - the baseline
     // this test compares the core's restore against.
-    store_desktop.restore(&id_desktop, false).unwrap();
+    desktop_restore(&store_desktop, &home_desktop, &id_desktop, false).unwrap();
 
     // `home_cross`'s copy is restored through the core, pointed straight at
     // the desktop's own `app_data/events.sqlite3` and `app_data/backups/`

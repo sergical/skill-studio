@@ -104,7 +104,6 @@ impl WriteLease {
     /// Builds a lease provider rooted at `lease_root` instead of the real
     /// machine's data directory, so a test can hold a lease without
     /// touching it.
-    #[cfg(test)]
     pub fn with_lease_root(lease_root: std::path::PathBuf) -> Self {
         WriteLease {
             lease: FileLease::new(lease_root),
@@ -201,6 +200,21 @@ impl WriteLease {
                 None => e.message,
             })
     }
+}
+
+/// Whether another holder, such as a core writer, could not take the
+/// exclusive lease over `root` right now.
+#[cfg(test)]
+pub(crate) fn exclusive_lease_is_held(lease_root: &Path, root: &Path) -> bool {
+    FileLease::new(lease_root.to_path_buf())
+        .acquire(
+            &[LeaseKey {
+                canonical_root: root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
+            }],
+            LeaseMode::Exclusive,
+            Duration::ZERO,
+        )
+        .is_err()
 }
 
 /// Lets a test learn that a rebuild thread has reached the point just before

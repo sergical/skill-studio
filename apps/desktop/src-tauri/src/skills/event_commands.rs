@@ -386,7 +386,7 @@ pub fn restore_event_with_runtime(
 
     let write_lease = super::write_lease::WriteLease::default();
     let retention_guard = write_lease.try_acquire(home)?;
-    store.restore(event_id, force)?;
+    store.restore_with_lease(&retention_guard, event_id, force)?;
     store.retain_backups(retention_guard.as_exclusive_guard());
     if target.kind == "explode_shared_dir" {
         if let Some(root) = target.payload.get("root").and_then(|v| v.as_str()) {

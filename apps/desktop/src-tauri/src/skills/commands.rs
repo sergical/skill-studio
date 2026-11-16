@@ -182,6 +182,7 @@ pub async fn get_installed_skills(
 mod tests {
     use super::super::skill_md_write::write_skill_md;
     use super::super::skill_process::CommandRunner;
+    use super::super::write_lease::WriteLease;
     use super::*;
     use std::sync::atomic::Ordering;
 
@@ -731,8 +732,11 @@ mod tests {
         let skill_md = tmp.path().join("SKILL.md");
         std::fs::write(&skill_md, "on disk now").unwrap();
 
-        let err =
-            write_skill_md_compare_and_swap(&skill_md, "stale copy", "new content").unwrap_err();
+        let lease = WriteLease::with_lease_root(tmp.path().join("leases"))
+            .try_acquire(tmp.path())
+            .unwrap();
+        let err = write_skill_md_compare_and_swap(&lease, &skill_md, "stale copy", "new content")
+            .unwrap_err();
         assert!(err.contains("changed on disk since it was loaded"));
         assert_eq!(std::fs::read_to_string(&skill_md).unwrap(), "on disk now");
     }
@@ -743,7 +747,10 @@ mod tests {
         let skill_md = tmp.path().join("SKILL.md");
         std::fs::write(&skill_md, "on disk now").unwrap();
 
-        write_skill_md_compare_and_swap(&skill_md, "on disk now", "new content").unwrap();
+        let lease = WriteLease::with_lease_root(tmp.path().join("leases"))
+            .try_acquire(tmp.path())
+            .unwrap();
+        write_skill_md_compare_and_swap(&lease, &skill_md, "on disk now", "new content").unwrap();
         assert_eq!(std::fs::read_to_string(&skill_md).unwrap(), "new content");
     }
 
@@ -805,14 +812,24 @@ mod tests {
         std::fs::write(&skill_md, "loaded").unwrap();
         let snapshot = fixture_snapshot(&dep_dir, None);
         let path = skill_md.to_string_lossy().to_string();
+        let write_lease = WriteLease::with_lease_root(tmp.path().join("leases"));
 
-        write_skill_md_if_unchanged_for_snapshot(Some(&snapshot), &path, "loaded", "edit one")
-            .unwrap();
+        write_skill_md_if_unchanged_for_snapshot(
+            &write_lease,
+            tmp.path(),
+            Some(&snapshot),
+            &path,
+            "loaded",
+            "edit one",
+        )
+        .unwrap();
         assert_eq!(std::fs::read_to_string(&skill_md).unwrap(), "edit one");
 
         std::fs::write(&skill_md, "someone else \u{2603} edited").unwrap();
         let before = std::fs::read(&skill_md).unwrap();
         let err = write_skill_md_if_unchanged_for_snapshot(
+            &write_lease,
+            tmp.path(),
             Some(&snapshot),
             &path,
             "edit one",
@@ -824,19 +841,31 @@ mod tests {
         assert_eq!(std::fs::read(&skill_md).unwrap(), before);
     }
 
+    /// Flow: two saves of the same SKILL.md start from the same baseline.
+    /// Expectation: the second waits for the first save's lease and then
+    /// refuses, so the first save's text stays on disk.
+    /// A failure here means two saves interleave and one edit is lost.
     #[test]
     fn concurrent_compare_and_swap_allows_only_one_matching_write() {
         use std::sync::{mpsc, Arc};
 
         let tmp = tempfile::tempdir().unwrap();
+        let home = Arc::new(tmp.path().to_path_buf());
+        let lease_root = tmp.path().join("leases");
         let skill_md = Arc::new(tmp.path().join("SKILL.md"));
         std::fs::write(skill_md.as_ref(), "shared baseline").unwrap();
 
         let first_path = Arc::clone(&skill_md);
+        let first_home = Arc::clone(&home);
+        let first_lease_root = lease_root.clone();
         let (first_compared_tx, first_compared_rx) = mpsc::channel();
         let (release_first_tx, release_first_rx) = mpsc::channel();
         let first = std::thread::spawn(move || {
+            let lease = WriteLease::with_lease_root(first_lease_root)
+                .try_acquire(&first_home)
+                .unwrap();
             super::super::skill_md_write::write_skill_md_compare_and_swap_with(
+                &lease,
                 &first_path,
                 "shared baseline",
                 "first write",
@@ -848,22 +877,77 @@ mod tests {
         });
 
         first_compared_rx.recv().unwrap();
-        let lock_was_held_across_compare =
-            super::super::skill_md_write::skill_md_write_transaction_is_held();
+        let lease_was_held_across_compare =
+            super::super::write_lease::exclusive_lease_is_held(&lease_root, &home);
         let second_path = Arc::clone(&skill_md);
+        let second_home = Arc::clone(&home);
         let second = std::thread::spawn(move || {
-            write_skill_md_compare_and_swap(&second_path, "shared baseline", "second write")
+            let lease = WriteLease::with_lease_root_and_wait(
+                lease_root,
+                std::time::Duration::from_secs(10),
+            )
+            .try_acquire(&second_home)?;
+            write_skill_md_compare_and_swap(&lease, &second_path, "shared baseline", "second write")
         });
         release_first_tx.send(()).unwrap();
 
         let results = [first.join().unwrap(), second.join().unwrap()];
-        assert!(lock_was_held_across_compare);
+        assert!(lease_was_held_across_compare);
         assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
         assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
         assert_eq!(
             std::fs::read_to_string(skill_md.as_ref()).unwrap(),
             "first write"
         );
+    }
+
+    /// Flow: the CLI or MCP runs a core write, such as `ops_invocation`,
+    /// over the home while the editor saves a SKILL.md there.
+    /// Expectation: the desktop save waits for the core lease, then refuses
+    /// and leaves the file byte for byte as the core writer left it.
+    /// A failure here means the desktop writes SKILL.md while a core writer
+    /// holds the lease, so the two writes can interleave and one is lost.
+    #[test]
+    fn desktop_skill_md_save_refuses_while_a_core_writer_holds_the_lease() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let data = tmp.path().join("data");
+        let dep_dir = home.join(".claude/skills/foo");
+        std::fs::create_dir_all(&dep_dir).unwrap();
+        let skill_md = dep_dir.join("SKILL.md");
+        std::fs::write(&skill_md, "loaded").unwrap();
+        let snapshot = fixture_snapshot(&dep_dir, None);
+        let rt = super::super::core_runtime::build_runtime_write_at_with_search_dirs(
+            &home,
+            &data,
+            vec![],
+        )
+        .unwrap();
+        let core_writer =
+            skill_studio_core::ports::acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope)
+                .unwrap();
+        std::fs::write(&skill_md, "core write in progress").unwrap();
+
+        let result = write_skill_md_if_unchanged_for_snapshot(
+            &WriteLease::with_lease_root_and_wait(
+                data.join("leases"),
+                std::time::Duration::from_millis(200),
+            ),
+            &home,
+            Some(&snapshot),
+            &skill_md.to_string_lossy(),
+            "core write in progress",
+            "desktop edit",
+        );
+
+        assert_eq!(
+            std::fs::read_to_string(&skill_md).unwrap(),
+            "core write in progress",
+            "the desktop wrote SKILL.md while a core writer held the lease"
+        );
+        let error = result.unwrap_err();
+        assert!(error.contains("Another write is in progress"), "{error}");
+        drop(core_writer);
     }
 
     #[test]
@@ -2042,15 +2126,20 @@ fn validate_skill_md_write(
 }
 
 /// The body of `write_installed_skill_md_if_unchanged`, over an
-/// already-read snapshot.
+/// already-read snapshot. Holds the write lease over `home` from the first
+/// read to the replace, so a core or CLI write to the same scope waits for
+/// it or this save refuses.
 fn write_skill_md_if_unchanged_for_snapshot(
+    write_lease: &super::write_lease::WriteLease,
+    home: &Path,
     snapshot: Option<&skill_refresh::SkillSnapshot>,
     path: &str,
     expected_content: &str,
     content: &str,
 ) -> Result<(), String> {
+    let lease = write_lease.try_acquire(home)?;
     let canonical = validate_skill_md_write(path, content, snapshot)?;
-    write_skill_md_compare_and_swap(&canonical, expected_content, content)
+    write_skill_md_compare_and_swap(&lease, &canonical, expected_content, content)
 }
 
 /// Write `content` to an installed skill's `SKILL.md`, for the detail
@@ -2078,7 +2167,10 @@ pub async fn write_installed_skill_md_if_unchanged(
         move || {
             let refresh_state = app.state::<SkillRefreshState>();
             let snapshot = refresh_state.snapshot.read().ok().and_then(|g| g.clone());
+            let home = dirs::home_dir().ok_or("Could not find home directory")?;
             write_skill_md_if_unchanged_for_snapshot(
+                &super::write_lease::WriteLease::default(),
+                &home,
                 snapshot.as_ref(),
                 &path,
                 &expected_content,
