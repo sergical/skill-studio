@@ -751,9 +751,7 @@ fn unpark_without_a_journal_row_returns_an_opencode_copy_to_its_own_folder() {
     write_skill(&live, "foo");
     let rt = runtime(&home, &[]);
     park_copy_at(&rt, "foo", &live);
-    let marker = home
-        .join(PARKED_ROOT_RELATIVE)
-        .join("open-code/.origin/foo");
+    let marker = home.join(PARKED_ROOT_RELATIVE).join("opencode/.origin/foo");
     assert_eq!(
         std::fs::read_to_string(marker).unwrap().lines().next(),
         Some(".config/opencode/skills")

@@ -96,7 +96,7 @@ export const AGENT_SETUPS: readonly AgentSetup[] = [
     check: "cursor-agent mcp list",
   },
   {
-    id: "open-code",
+    id: "opencode",
     name: "OpenCode",
     command: addCommand("opencode mcp add --global"),
   },

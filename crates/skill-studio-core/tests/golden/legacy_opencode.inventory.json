@@ -14,10 +14,10 @@
             },
             "kind": {
               "kind": "legacy",
-              "harness": "open-code"
+              "harness": "opencode"
             }
           },
-          "harness": "open-code",
+          "harness": "opencode",
           "path": "$HOME/.config/opencode/skill/delta",
           "destination": "per_harness",
           "backing": "independent",
@@ -76,10 +76,10 @@
             },
             "kind": {
               "kind": "harness",
-              "harness": "open-code"
+              "harness": "opencode"
             }
           },
-          "harness": "open-code",
+          "harness": "opencode",
           "path": "$HOME/.config/opencode/skills/epsilon",
           "destination": "per_harness",
           "backing": "independent",

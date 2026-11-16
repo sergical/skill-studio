@@ -25,7 +25,7 @@ const CONNECTABLE_AGENTS: readonly string[] = [
   "claude-code",
   "codex",
   "cursor",
-  "open-code",
+  "opencode",
   "pi",
   "grok-build",
 ] satisfies AgentId[];

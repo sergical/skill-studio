@@ -12,7 +12,7 @@ import type { ScopeGroup } from "./skill-location-status";
 export const SPLIT_HARNESSES: AgentId[] = [
   "claude-code",
   "codex",
-  "open-code",
+  "opencode",
   "pi",
   "cursor",
   "grok-build",

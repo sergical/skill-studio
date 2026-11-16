@@ -2131,7 +2131,7 @@ pub(crate) fn apply_skill_snapshot_overlays(
         skill_studio_host::codex_home(home).join("config.toml"),
     );
     let opencode_config_file = config_file(
-        "open-code",
+        "opencode",
         skill_studio_core::opencode_config::opencode_json_path(&opencode_config_dir),
     );
     let claude_config_file = config_file(
@@ -2197,7 +2197,7 @@ pub(crate) fn apply_skill_snapshot_overlays(
                         .push(codex_config_file.clone());
                 }
                 if opencode_rules.is_denied(&skill.name) {
-                    deployment.disabled_readers.push("open-code".to_string());
+                    deployment.disabled_readers.push("opencode".to_string());
                     deployment
                         .disabling_config_files
                         .push(opencode_config_file.clone());
@@ -5336,7 +5336,7 @@ resolved_commit = "old"
         skill.deployments[0].agent = "Codex".to_string();
         skill.deployments[0].disabled = true;
         skill.deployments[0].disabled_by = Some(super::super::skill_dto::DisabledBy::CodexConfig);
-        skill.deployments[0].disabled_readers = vec!["open-code".to_string()];
+        skill.deployments[0].disabled_readers = vec!["opencode".to_string()];
         skill.deployments[0].codex_implicit_invocation = Some(true);
 
         apply_skill_snapshot_overlays(

@@ -1019,7 +1019,7 @@ fn a_fixture_scan_reads_opencode_config_under_the_fixture_even_with_xdg_config_h
         .expect("skills array")
         .iter()
         .flat_map(|skill| skill["deployments"].as_array().unwrap())
-        .filter(|deployment| deployment["harness"] == "open-code")
+        .filter(|deployment| deployment["harness"] == "opencode")
         .collect::<Vec<_>>();
     assert!(
         !deployments.is_empty(),

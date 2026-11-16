@@ -52,7 +52,7 @@ fn connect_commands(harness: &str, home: &Path) -> Option<ConnectCommands> {
                 true,
             ),
             "codex" => ("codex", "Codex", &[], false),
-            "open-code" => ("opencode", "OpenCode", &["--global"], false),
+            "opencode" | "open-code" => ("opencode", "OpenCode", &["--global"], false),
             "pi" => ("pi", "pi", &[], false),
             "grok-build" => ("grok", "Grok Build", &[], true),
             "cursor" => {
@@ -122,11 +122,7 @@ pub fn connected_agents(rt: &Runtime) -> Result<Vec<String>, String> {
                 && entry.kind == "mcp_server"
                 && entry.name.as_deref() == Some(SERVER_NAME)
         })
-        // `extras` names OpenCode by its config folder; the harness report and `connect_agent` use the agent id.
-        .map(|entry| match entry.harness.as_str() {
-            "opencode" => "open-code".to_string(),
-            _ => entry.harness,
-        })
+        .map(|entry| entry.harness)
         .collect();
     agents.dedup();
     Ok(agents)
@@ -281,7 +277,7 @@ mod tests {
         let agents = connected_agents(&runtime(home.path(), spawner(None))).unwrap();
 
         // OpenCode comes back under the harness report's id, so its Settings row shows Connected.
-        assert_eq!(agents, vec!["claude-code", "codex", "open-code"]);
+        assert_eq!(agents, vec!["claude-code", "codex", "opencode"]);
     }
 
     #[test]

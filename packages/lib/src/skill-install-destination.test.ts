@@ -15,7 +15,7 @@ import {
 } from "./skill-install-destination";
 import type { AgentId } from "./skill-types";
 
-const ALL: readonly AgentId[] = ["claude-code", "codex", "open-code", "pi", "cursor", "grok-build"];
+const ALL: readonly AgentId[] = ["claude-code", "codex", "opencode", "pi", "cursor", "grok-build"];
 
 describe("Destination rows", () => {
   it("add skill: names the shared folder per scope, else the Universal row shows the wrong path", () => {
@@ -28,7 +28,7 @@ describe("Destination rows", () => {
     expect(folders).toEqual({
       "claude-code": { global: "~/.claude/skills", project: ".claude/skills" },
       codex: { global: "~/.codex/skills", project: ".codex/skills" },
-      "open-code": { global: "~/.config/opencode/skills", project: ".opencode/skills" },
+      opencode: { global: "~/.config/opencode/skills", project: ".opencode/skills" },
       pi: { global: "~/.pi/agent/skills", project: ".pi/skills" },
       cursor: { global: "~/.cursor/skills", project: ".cursor/skills" },
       "grok-build": { global: "~/.grok/skills", project: ".grok/skills" },
@@ -61,14 +61,14 @@ describe("Universal ticked: locked rows", () => {
     ALL.filter((id) => installHarnessLocked(id, claudeReadsShared, true));
 
   it("add skill: locks every harness that reads the shared folder, else an unticked box would hide nothing", () => {
-    expect(lockedAt(false)).toEqual(["codex", "open-code", "pi", "cursor", "grok-build"]);
+    expect(lockedAt(false)).toEqual(["codex", "opencode", "pi", "cursor", "grok-build"]);
   });
 
   it("add skill: also locks Claude Code when its folder points at the shared folder, else the box promises a link it cannot make", () => {
     expect(lockedAt(true)).toEqual([
       "claude-code",
       "codex",
-      "open-code",
+      "opencode",
       "pi",
       "cursor",
       "grok-build",
@@ -110,7 +110,7 @@ describe("Universal ticked: ticks", () => {
     expect(chosenInstallHarnesses(ALL, ["claude-code"], false, true)).toEqual([
       "claude-code",
       "codex",
-      "open-code",
+      "opencode",
       "pi",
       "cursor",
       "grok-build",
@@ -122,7 +122,7 @@ describe("Universal unticked: ticks", () => {
   it("add skill: keeps the Claude Code tick and clears every harness that reads the shared folder, else a harness gets a copy the user never asked for", () => {
     expect(harnessesKeptWithoutUniversal(ALL)).toEqual(["claude-code"]);
     expect(
-      harnessesKeptWithoutUniversal(["codex", "open-code", "pi", "cursor", "grok-build"]),
+      harnessesKeptWithoutUniversal(["codex", "opencode", "pi", "cursor", "grok-build"]),
     ).toEqual([]);
   });
 
@@ -150,7 +150,7 @@ describe("Install request", () => {
     ).toEqual({
       method: "skills-sh",
       destination: "universal",
-      agents: ["claude-code", "codex", "open-code", "cursor"],
+      agents: ["claude-code", "codex", "opencode", "cursor"],
       link_mode: "link",
     });
   });

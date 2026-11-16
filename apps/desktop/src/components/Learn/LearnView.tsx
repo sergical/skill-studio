@@ -194,7 +194,7 @@ export function LearnView({ section }: LearnViewProps) {
                 <tr>
                   <td className="border-b border-border-subtle px-2 py-1.5 text-left align-top whitespace-nowrap text-text-primary">
                     <span className="inline-flex items-center gap-1">
-                      <HarnessIcon harness="open-code" size={13} /> OpenCode
+                      <HarnessIcon harness="opencode" size={13} /> OpenCode
                     </span>
                   </td>
                   <td className="border-b border-border-subtle px-2 py-1.5 text-left align-top">

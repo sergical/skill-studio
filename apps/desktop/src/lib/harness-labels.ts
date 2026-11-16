@@ -7,6 +7,6 @@
 export const HARNESS_LABELS = [
   ["claude-code", "Claude Code"],
   ["codex", "Codex"],
-  ["open-code", "OpenCode"],
+  ["opencode", "OpenCode"],
   ["pi", "pi"],
 ] satisfies [string, string][];

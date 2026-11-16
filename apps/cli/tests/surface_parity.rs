@@ -105,7 +105,7 @@ fn opencode_alias_installs_with_the_canonical_agent_id_or_names_the_surface() {
             assert_eq!(result["status"], "ok", "{surface} {spelling}: {result}");
             let results = result["data"]["harness_results"].as_array().unwrap();
             assert_eq!(
-                results[0]["harness"], "open-code",
+                results[0]["harness"], "opencode",
                 "{surface} {spelling}: {result}"
             );
         }
@@ -150,7 +150,7 @@ fn capabilities_accepts_both_opencode_spellings_and_returns_the_same_agent_id() 
         for result in [from_cli, from_mcp] {
             assert_eq!(result["status"], "ok", "{spelling}: {result}");
             assert_eq!(
-                result["data"]["harnesses"][0]["harness"], "open-code",
+                result["data"]["harnesses"][0]["harness"], "opencode",
                 "{spelling}: {result}"
             );
         }

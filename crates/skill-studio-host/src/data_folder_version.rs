@@ -142,12 +142,36 @@ fn private_coordination_root(base: &Path, uid: u32) -> io::Result<std::path::Pat
 }
 
 fn coordination_lock(folder: &Path) -> io::Result<std::fs::File> {
+    open_coordination_lock(folder, true)
+}
+
+fn open_coordination_lock(folder: &Path, create: bool) -> io::Result<std::fs::File> {
     // CLI and desktop must use the same lock inode even when TMPDIR differs.
-    let root = private_coordination_root(Path::new("/tmp"), rustix::process::geteuid().as_raw())?;
+    let uid = rustix::process::geteuid().as_raw();
+    let root = if create {
+        private_coordination_root(Path::new("/tmp"), uid)?
+    } else {
+        Path::new("/tmp").join(format!("skill-studio-data-locks-{uid}"))
+    };
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let metadata = std::fs::symlink_metadata(&root)?;
+    if !metadata.is_dir()
+        || metadata.uid() != uid
+        || metadata.permissions().mode() & 0o7777 != 0o700
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Invalid coordination folder",
+        ));
+    }
     let key = skill_studio_core::identity::sha256_hex(folder.as_os_str().as_encoded_bytes());
     rustix::fs::open(
         root.join(key),
-        rustix::fs::OFlags::RDWR | rustix::fs::OFlags::CREATE | rustix::fs::OFlags::CLOEXEC,
+        if create {
+            rustix::fs::OFlags::RDWR | rustix::fs::OFlags::CREATE | rustix::fs::OFlags::CLOEXEC
+        } else {
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC
+        },
         rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
     )
     .map(std::fs::File::from)
@@ -195,7 +219,13 @@ pub fn guard_read_data_folder(folder: &Path) -> Result<DataFolderGuard, String> 
         check_compatible(version, CURRENT_DATA_VERSION).map_err(newer_data_folder_message)
     };
     validate()?;
-    let lock = coordination_lock(&folder).map_err(|error| error.to_string())?;
+    let lock = match open_coordination_lock(&folder, false) {
+        Ok(lock) => lock,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(DataFolderGuard { _locks: Vec::new() })
+        }
+        Err(error) => return Err(error.to_string()),
+    };
     wait_for_lock(&lock, false, &mut || {})?;
     validate()?;
     Ok(DataFolderGuard { _locks: vec![lock] })
@@ -477,6 +507,7 @@ mod tests {
     #[test]
     fn write_after_short_scan_waits_and_migrates_or_reports_a_false_lock_error() {
         let dir = tempfile::tempdir().unwrap();
+        drop(coordination_lock(&folder_identity(dir.path()).unwrap()).unwrap());
         let mut reader = Some(guard_read_data_folder(dir.path()).unwrap());
         let mut retried = false;
         let writer = lock_data_folders_with_retry(
@@ -501,6 +532,7 @@ mod tests {
         use std::io::{BufRead, Write};
         use std::process::{Command, Stdio};
         let dir = tempfile::tempdir().unwrap();
+        drop(coordination_lock(&folder_identity(dir.path()).unwrap()).unwrap());
         let reader = guard_read_data_folder(dir.path()).unwrap();
         let mut child = Command::new("/bin/sh")
             .args(["-c", "echo ready; read release"])
@@ -527,6 +559,7 @@ mod tests {
         use std::os::unix::{net::UnixStream, process::CommandExt};
         use std::process::Command;
         let dir = tempfile::tempdir().unwrap();
+        drop(coordination_lock(&folder_identity(dir.path()).unwrap()).unwrap());
         let reader = guard_read_data_folder(dir.path()).unwrap();
         let (mut parent, mut child_pipe) = UnixStream::pair().unwrap();
         let spawning = std::thread::spawn(move || {

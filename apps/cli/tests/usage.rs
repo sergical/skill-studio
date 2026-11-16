@@ -180,8 +180,6 @@ fn usage_cached_run_keeps_cache_file_instead_of_rewriting_unchanged_history() {
     let run_cached = || {
         test_home::command(env!("CARGO_BIN_EXE_skill-studio"), &home)
             .args(["usage", "--json"])
-            .env("HOME", &home)
-            .env("SKILL_STUDIO_TELEMETRY", "0")
             .output()
             .unwrap()
     };
@@ -212,5 +210,174 @@ fn usage_cached_run_keeps_cache_file_instead_of_rewriting_unchanged_history() {
     assert_eq!(
         std::fs::metadata(&cache).unwrap().modified().unwrap(),
         std::time::SystemTime::UNIX_EPOCH
+    );
+}
+
+/// Flow: queries read a chmod-protected home. Expect answers and unchanged bytes.
+/// Failure means a read path still creates a lease or cache.
+#[cfg(unix)]
+#[test]
+fn readonly_queries_answer_without_writes_or_fail_on_chmod_home() {
+    use std::os::unix::fs::PermissionsExt;
+    fn tree(path: &Path, entries: &mut Vec<(PathBuf, Vec<u8>)>) {
+        entries.push((
+            path.to_path_buf(),
+            if path.is_file() {
+                std::fs::read(path).unwrap()
+            } else {
+                Vec::new()
+            },
+        ));
+        if path.is_dir() {
+            let mut children: Vec<_> = std::fs::read_dir(path)
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .collect();
+            children.sort();
+            for child in children {
+                tree(&child, entries);
+            }
+        }
+    }
+    let (_dir, home) = home();
+    let warm = test_home::command(env!("CARGO_BIN_EXE_skill-studio"), &home)
+        .args(["usage", "--json"])
+        .output()
+        .unwrap();
+    assert!(warm.status.success());
+    std::fs::write(
+        home.join(".claude/projects/-work/session.jsonl"),
+        claude_skill_line("gamma", &days_ago(1)),
+    )
+    .unwrap();
+    let mut before = Vec::new();
+    tree(&home, &mut before);
+    for (path, _) in before.iter().rev() {
+        std::fs::set_permissions(
+            path,
+            std::fs::Permissions::from_mode(if path.is_dir() { 0o555 } else { 0o444 }),
+        )
+        .unwrap();
+    }
+    let mut outputs: Vec<_> = ["scan", "usage", "invocation"]
+        .iter()
+        .map(|command| {
+            test_home::command(env!("CARGO_BIN_EXE_skill-studio"), &home)
+                .args([command, "--json", "--home"])
+                .arg(&home)
+                .output()
+                .unwrap()
+        })
+        .collect();
+    outputs.push(
+        test_home::command(env!("CARGO_BIN_EXE_skill-studio"), &home)
+            .args(["usage", "--json"])
+            .output()
+            .unwrap(),
+    );
+    let mut after = Vec::new();
+    tree(&home, &mut after);
+    for (path, _) in &before {
+        std::fs::set_permissions(
+            path,
+            std::fs::Permissions::from_mode(if path.is_dir() { 0o755 } else { 0o644 }),
+        )
+        .unwrap();
+    }
+    for output in outputs {
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    assert_eq!(before, after);
+}
+
+/// Flow: usage with --home and a foreign `CODEX_HOME`. Expect only selected-home uses.
+/// Failure means the usage reader re-resolves an ambient home.
+#[test]
+fn explicit_home_usage_ignores_codex_home_or_counts_foreign_sessions() {
+    let (_dir, home) = home();
+    let foreign = tempfile::tempdir().unwrap();
+    std::fs::create_dir(foreign.path().join("sessions")).unwrap();
+    let line = serde_json::json!({"type":"response_item", "timestamp":days_ago(1), "payload":{"type":"function_call", "namespace":"skills", "name":"read", "arguments":"{\"package\":\"skill://root/gamma\"}"}});
+    std::fs::write(
+        foreign.path().join("sessions/foreign.jsonl"),
+        format!("{line}\n{line}\n"),
+    )
+    .unwrap();
+    std::fs::create_dir_all(home.join(".codex/sessions")).unwrap();
+    std::fs::write(
+        home.join(".codex/sessions/local.jsonl"),
+        format!("{line}\n"),
+    )
+    .unwrap();
+    let output = test_home::command(env!("CARGO_BIN_EXE_skill-studio"), &home)
+        .args(["usage", "--json", "--harness", "codex", "--home"])
+        .arg(&home)
+        .env("CODEX_HOME", foreign.path())
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        json["data"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["total_uses"] == u64::from(r["skill"] == "gamma")),
+        "{json}"
+    );
+}
+
+#[test]
+fn review_due_selected_home_counts_local_sessions_instead_of_ambient_codex_sessions() {
+    let (_dir, home) = home();
+    let foreign = tempfile::tempdir().unwrap();
+    std::fs::create_dir(foreign.path().join("sessions")).unwrap();
+    let line = serde_json::json!({"type":"response_item", "timestamp":days_ago(1), "payload":{"type":"function_call", "namespace":"skills", "name":"read", "arguments":"{\"package\":\"skill://root/gamma\"}"}});
+    std::fs::write(
+        foreign.path().join("sessions/foreign.jsonl"),
+        format!(
+            "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"foreign\"}}}}\n{line}\n{line}\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        foreign.path().join("sessions/another-foreign.jsonl"),
+        format!("{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"foreign-two\"}}}}\n{line}\n"),
+    )
+    .unwrap();
+    std::fs::create_dir_all(home.join(".codex/sessions")).unwrap();
+    std::fs::write(
+        home.join(".codex/sessions/local.jsonl"),
+        format!("{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"local\"}}}}\n{line}\n"),
+    )
+    .unwrap();
+    let set = test_home::command(env!("CARGO_BIN_EXE_skill-studio"), &home)
+        .args(["review", "set", "gamma", "2000-01-01", "--home"])
+        .arg(&home)
+        .output()
+        .unwrap();
+    assert!(set.status.success());
+    let due = |codex_home: Option<&Path>| {
+        let mut command = test_home::command(env!("CARGO_BIN_EXE_skill-studio"), &home);
+        command
+            .args(["review", "due", "--json", "--home"])
+            .arg(&home);
+        if let Some(codex_home) = codex_home {
+            command.env("CODEX_HOME", codex_home);
+        }
+        let output = command.output().unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(json["data"]["rows"].as_array().unwrap().len(), 1, "{json}");
+        json["data"]["rows"][0]["sessions"].as_u64().unwrap()
+    };
+    let local = due(None);
+    assert!(local > 0, "the local Codex session must count");
+    assert_eq!(
+        due(Some(foreign.path())),
+        local,
+        "an ambient CODEX_HOME added foreign sessions to the selected home"
     );
 }

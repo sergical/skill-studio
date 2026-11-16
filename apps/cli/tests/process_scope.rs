@@ -436,3 +436,31 @@ fn empty_outdated_preserves_absent_and_unversioned_history_without_gh_or_migrate
         }
     }
 }
+
+#[test]
+fn scan_selected_home_excludes_foreign_codex_projects_instead_of_leaking_ambient_config() {
+    let home = tempfile::tempdir().unwrap();
+    let foreign = tempfile::tempdir().unwrap();
+    let project = foreign.path().join("foreign-project");
+    std::fs::create_dir_all(project.join(".agents/skills/leaked")).unwrap();
+    std::fs::write(
+        project.join(".agents/skills/leaked/SKILL.md"),
+        "---\nname: leaked\ndescription: test\n---\n",
+    )
+    .unwrap();
+    std::fs::write(
+        foreign.path().join("config.toml"),
+        format!(
+            "[projects.\"{}\"]\ntrust_level = \"trusted\"\n",
+            project.display()
+        ),
+    )
+    .unwrap();
+    let result = cli_with_env(
+        home.path(),
+        &["scan"],
+        &[("CODEX_HOME".into(), foreign.path().display().to_string())],
+    );
+    assert_eq!(result["status"], "ok", "{result}");
+    assert!(!result.to_string().contains("leaked"), "{result}");
+}

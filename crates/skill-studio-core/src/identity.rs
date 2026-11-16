@@ -12,11 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, ErrorCode};
 
-/// Kebab-case harness identifier, for example `claude-code` or `open-code`.
+/// Kebab-case harness identifier, for example `claude-code` or `opencode`.
 ///
-/// Invariant: the string is the serde wire name used by the desktop app
-/// today. `open-code` is canonical; `opencode` is only a CLI binary name and
-/// is never stored in an `AgentId`.
+/// Legacy spellings are normalized at input boundaries.
 //
 // `#[schemars(rename)]`: the desktop's own `agents::AgentId` (a closed
 // kebab-string enum) is a structurally different type with the same short
@@ -43,7 +41,7 @@ impl AgentId {
     /// `OpenAI` Codex CLI.
     pub const CODEX: &'static str = "codex";
     /// `OpenCode`.
-    pub const OPEN_CODE: &'static str = "open-code";
+    pub const OPEN_CODE: &'static str = "opencode";
     /// pi coding agent.
     pub const PI: &'static str = "pi";
     /// Cursor.
@@ -61,7 +59,14 @@ impl AgentId {
             && !raw.starts_with('-')
             && !raw.ends_with('-');
         if ok {
-            Ok(AgentId(raw.to_string()))
+            Ok(AgentId(
+                if raw == "open-code" {
+                    Self::OPEN_CODE
+                } else {
+                    raw
+                }
+                .to_string(),
+            ))
         } else {
             Err(CoreError::new(
                 ErrorCode::InvalidRequest,
@@ -87,7 +92,7 @@ impl AgentId {
         let squashed: String = raw
             .to_ascii_lowercase()
             .chars()
-            .filter(|c| *c != '-' && *c != '_')
+            .filter(|c| *c != '-' && *c != '_' && *c != ' ')
             .collect();
         for canonical in [
             Self::CLAUDE_CODE,
@@ -99,7 +104,7 @@ impl AgentId {
         ] {
             let canonical_squashed: String = canonical
                 .chars()
-                .filter(|c| *c != '-' && *c != '_')
+                .filter(|c| *c != '-' && *c != '_' && *c != ' ')
                 .collect();
             if squashed == canonical_squashed {
                 return Ok(AgentId(canonical.to_string()));
@@ -117,7 +122,14 @@ impl fmt::Display for AgentId {
 
 impl From<&'static str> for AgentId {
     fn from(id: &'static str) -> Self {
-        AgentId(id.to_string())
+        AgentId(
+            if id == "open-code" {
+                Self::OPEN_CODE
+            } else {
+                id
+            }
+            .to_string(),
+        )
     }
 }
 
@@ -652,5 +664,22 @@ mod tests {
         let typed = Fingerprint::of_bytes(b"abc");
         let bare = Fingerprint::parse(&typed.as_str()[Fingerprint::PREFIX.len()..]).unwrap();
         assert_eq!(typed, bare);
+    }
+}
+
+#[cfg(test)]
+mod legacy_agent_flows {
+    /// Flow: decode old event harnesses. Expect canonical ids; failure breaks events.
+    #[test]
+    fn events_read_display_names_as_ids_or_reject_legacy_rows() {
+        let id: super::AgentId = serde_json::from_str("\"Claude Code\"").unwrap();
+        assert_eq!(id.as_str(), "claude-code");
+    }
+
+    /// Flow: decode old `OpenCode` output. Expect opencode; failure emits two ids.
+    #[test]
+    fn opencode_output_is_canonical_or_keeps_the_old_hyphen() {
+        let id: super::AgentId = serde_json::from_str("\"open-code\"").unwrap();
+        assert_eq!(serde_json::to_string(&id).unwrap(), "\"opencode\"");
     }
 }

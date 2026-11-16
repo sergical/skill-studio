@@ -1882,10 +1882,7 @@ mod tests {
             .filter(|facts| facts.reads_universal_root.is_yes())
             .map(|f| f.id.as_str().to_string())
             .collect();
-        assert_eq!(
-            readers,
-            ["codex", "open-code", "pi", "cursor", "grok-build"]
-        );
+        assert_eq!(readers, ["codex", "opencode", "pi", "cursor", "grok-build"]);
         let cursor = catalog.get(&AgentId::from(AgentId::CURSOR)).unwrap();
         let cursor_report = CapabilityReport::from_facts(cursor, None);
         assert!(cursor_report

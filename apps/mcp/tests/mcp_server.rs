@@ -1938,3 +1938,62 @@ async fn library_reads_without_changing_the_fixture_home() {
     assert_eq!(result["status"], "ok", "{result}");
     assert_eq!(before, complete_folder_tree(&home));
 }
+
+/// Flow: MCP queries a protected explicit home with foreign `CODEX_HOME`.
+/// Expect answers from that home and unchanged files; failure writes or leaks scope.
+#[cfg(unix)]
+#[tokio::test]
+async fn readonly_mcp_queries_use_selected_home_or_write_and_read_foreign_history() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let foreign = dir.path().join("foreign");
+    std::fs::create_dir_all(home.join(".agents/skills/gamma")).unwrap();
+    std::fs::write(
+        home.join(".agents/skills/gamma/SKILL.md"),
+        "---\nname: gamma\ndescription: fixture\n---\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(foreign.join("sessions")).unwrap();
+    let line = serde_json::json!({"type":"response_item", "payload":{"type":"function_call", "namespace":"skills", "name":"read", "arguments":"{\"package\":\"skill://root/gamma\"}"}});
+    std::fs::write(foreign.join("sessions/foreign.jsonl"), format!("{line}\n")).unwrap();
+    let before = complete_folder_tree(&home);
+    for (path, _, _) in before.iter().rev() {
+        let path = home.join(path);
+        std::fs::set_permissions(
+            &path,
+            std::fs::Permissions::from_mode(if path.is_dir() { 0o555 } else { 0o444 }),
+        )
+        .unwrap();
+    }
+    let (client, _) = connect(&[
+        ("SKILL_STUDIO_HOME", home.to_str().unwrap()),
+        ("HOME", home.to_str().unwrap()),
+        ("CODEX_HOME", foreign.to_str().unwrap()),
+        ("SKILL_STUDIO_TELEMETRY", "0"),
+    ])
+    .await;
+    let mut results = Vec::new();
+    for tool in ["scan", "skill_usage", "invocation"] {
+        results.push(call_tool(&client, tool, serde_json::json!({})).await);
+    }
+    client.cancel().await.ok();
+    let after = complete_folder_tree(&home);
+    for (path, _, _) in &before {
+        let path = home.join(path);
+        std::fs::set_permissions(
+            &path,
+            std::fs::Permissions::from_mode(if path.is_dir() { 0o755 } else { 0o644 }),
+        )
+        .unwrap();
+    }
+    assert_eq!(before, after);
+    for result in &results {
+        assert_eq!(result["status"], "ok", "{result}");
+    }
+    assert_eq!(
+        results[1]["data"]["rows"][0]["total_uses"], 0,
+        "{}",
+        results[1]
+    );
+}

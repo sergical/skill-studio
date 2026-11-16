@@ -14,7 +14,7 @@ import type { AgentId, Deployment, InstalledSkill } from "./skill-types";
 /** The five first-class agents that read the shared `.agents/skills` root natively. */
 export const AGENTS_READING_SHARED_ROOT: readonly AgentId[] = [
   "codex",
-  "open-code",
+  "opencode",
   "pi",
   "cursor",
   "grok-build",
@@ -35,7 +35,7 @@ export function agentIdFromDeploymentLabel(label: string): AgentId | "shared" | 
     case "Codex":
       return "codex";
     case "OpenCode":
-      return "open-code";
+      return "opencode";
     case "pi":
       return "pi";
     case "Cursor":
@@ -58,7 +58,7 @@ export function deploymentLabelFromAgentId(id: string): string {
       return "Claude Code";
     case "codex":
       return "Codex";
-    case "open-code":
+    case "opencode":
       return "OpenCode";
     case "pi":
       return "pi";
@@ -385,7 +385,7 @@ export type AgentMatrixLabel = (typeof AGENT_MATRIX_LABELS)[number];
 const AGENT_MATRIX_AGENT_IDS = {
   "Claude Code": "claude-code",
   Codex: "codex",
-  OpenCode: "open-code",
+  OpenCode: "opencode",
   pi: "pi",
   Cursor: "cursor",
   "Grok Build": "grok-build",

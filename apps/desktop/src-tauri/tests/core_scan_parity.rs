@@ -84,16 +84,15 @@ use skill_studio_lib::skill_fork_registry::read_fork_registry;
 use skill_studio_lib::skill_refresh::{build_snapshot, BuildPaths};
 
 /// One agent used by these fixtures, mapped from the desktop's display-name
-/// `Deployment.agent` to a core-style `harness` id (`AgentId`'s invariant:
-/// `open-code` is the shared wire name; `opencode` is only its CLI binary
-/// name, never a harness id). `None` covers the universal-root
+/// `Deployment.agent` to a core-style `harness` id. `opencode` is both the
+/// wire id and CLI name. `None` covers the universal-root
 /// compatibility label `"shared"` and the parked-root label `"parked"`
 /// (both harnessless roots in core, matching `RootRef::harness == None`).
 fn harness_id_for_agent_label(agent: &str) -> Option<&'static str> {
     match agent {
         "Claude Code" => Some("claude-code"),
         "Codex" => Some("codex"),
-        "OpenCode" => Some("open-code"),
+        "OpenCode" => Some("opencode"),
         "shared" | "parked" => None,
         other => panic!("fixture used an agent this parity test doesn't map: {other}"),
     }

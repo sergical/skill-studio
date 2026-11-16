@@ -71,7 +71,7 @@ function renderIcon(harness: AgentId | "shared", size: number) {
           />
         </svg>
       );
-    case "open-code":
+    case "opencode":
       // https://github.com/lobehub/lobe-icons/blob/master/packages/static-svg/icons/opencode-mark.svg
       // MIT, lobe-icons
       return (
