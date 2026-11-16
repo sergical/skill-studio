@@ -16,6 +16,7 @@ import { HomeView } from "./components/Home/HomeView";
 import { SettingsView } from "./components/Settings/SettingsView";
 import { LearnView } from "./components/Learn/LearnView";
 import { SkillsView } from "./components/SkillList/SkillsView";
+import { PacksView } from "./components/Packs/PacksView";
 import { PluginSkillsView } from "./components/SkillList/PluginSkillsView";
 import { SkillPage } from "./components/SkillDetail/SkillPage";
 import { useAppShortcuts } from "./hooks/useAppShortcuts";
@@ -245,6 +246,9 @@ function App() {
       break;
     case "settings":
       main = <SettingsView snapshot={snapshot} />;
+      break;
+    case "packs":
+      main = <PacksView snapshotRevision={snapshot?.revision} />;
       break;
     case "skill": {
       // Opened from Learn or Settings: neither keeps a list worth reviving, so the

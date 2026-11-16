@@ -413,6 +413,11 @@ pub fn run() {
             skills::skill_add_operation::cancel_add_skill_operation,
             skills::skill_add_operation::confirm_add_skill_trust,
             skills::github_skill_listing::list_github_skills,
+            // Packs
+            skills::skill_pack::pack_list,
+            skills::skill_pack::pack_add,
+            skills::skill_pack::pack_update,
+            skills::skill_pack::pack_remove,
             // Park (disable globally) / per-harness disable / invocation policy
             skills::skill_local_edits::skill_local_edits,
             skills::skill_park::park_skill,

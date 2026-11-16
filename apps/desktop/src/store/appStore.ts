@@ -49,6 +49,7 @@ export type ActiveView =
   | { kind: "home" }
   | { kind: "skills" }
   | { kind: "plugins" }
+  | { kind: "packs" }
   | { kind: "activity" }
   | { kind: "learn"; section?: LearnSection }
   | { kind: "settings" }

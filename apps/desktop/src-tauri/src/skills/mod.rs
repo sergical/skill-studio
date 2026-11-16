@@ -41,6 +41,7 @@ pub mod skill_materialize;
 pub mod skill_mcp_connect;
 pub mod skill_md_write;
 pub mod skill_ownership;
+pub mod skill_pack;
 pub mod skill_park;
 pub(crate) mod skill_path_validation;
 pub mod skill_plugin_lifecycle;

@@ -130,6 +130,30 @@ export type FrontmatterRepairKind =
 export type InvocationConflictChoice = "user-only" | "model-only";
 export type FrontmatterRepairApplyMode = "apply-fix" | "fix-installed-copy" | "fork-and-fix";
 /**
+ * Where a root lives.
+ */
+export type RootScope =
+  | {
+      scope: "global";
+    }
+  | {
+      scope: "project";
+      project: ProjectRef;
+    };
+/**
+ * Absolute path of a tracked project directory.
+ *
+ * Invariant: the path is canonical inside a [`crate::scope::NormalizedScope`].
+ * Wire values are the lexical path the caller gave.
+ */
+export type ProjectRef = string;
+/**
+ * Kebab-case harness identifier, for example `claude-code` or `opencode`.
+ *
+ * Legacy spellings are normalized at input boundaries.
+ */
+export type AgentIdentity = string;
+/**
  * How a skill use started.
  */
 export type SkillTrigger = "user" | "agent" | "file_read";
@@ -137,12 +161,6 @@ export type SkillTrigger = "user" | "agent" | "file_read";
  * Where a [`ProjectFolder`] came from - decides which action the row offers.
  */
 export type ProjectFolderSource = "discovered" | "added";
-/**
- * Kebab-case harness identifier, for example `claude-code` or `opencode`.
- *
- * Legacy spellings are normalized at input boundaries.
- */
-export type AgentIdentity = string;
 /**
  * One repair `fix_skill` applied.
  */
@@ -162,13 +180,6 @@ export type FixApplied = {
    */
   event_id: string;
 };
-/**
- * Absolute path of a tracked project directory.
- *
- * Invariant: the path is canonical inside a [`crate::scope::NormalizedScope`].
- * Wire values are the lexical path the caller gave.
- */
-export type ProjectRef = string;
 
 /**
  * Flat list of declarations. Trust and enable settings are not evaluated.
@@ -1236,6 +1247,307 @@ export interface PackMember {
   path: string;
 }
 /**
+ * Input for `pack_list`.
+ */
+export interface PackListRequest {
+  /**
+   * Only this tracked project. Absent: the home and every tracked project.
+   */
+  project_path: string | null;
+  /**
+   * Ask each git source for its newest commit and skills. Off by default:
+   * without it the call reads local files only.
+   */
+  remote: boolean;
+}
+/**
+ * Result of `pack_list` and `pack_show`.
+ */
+export interface PackReport {
+  /**
+   * Packs by kind, source, and pin.
+   */
+  packs: Pack[];
+  /**
+   * One line for a person or agent.
+   */
+  summary: string;
+}
+/**
+ * One source that ships installed skills.
+ */
+export interface Pack {
+  /**
+   * `owner/repo`, git URL, npm package, or `plugin@marketplace`.
+   */
+  source: string;
+  /**
+   * The tool that installed it.
+   */
+  kind: "skills_sh" | "npm" | "dotagents" | "plugin";
+  /**
+   * Git URL the remote check uses.
+   */
+  git_url: string | null;
+  /**
+   * Branch, tag, commit, or plugin version the install is pinned to.
+   */
+  ref_pin: string | null;
+  /**
+   * Commands the owning agent runs to update this pack. Skill Studio does not run them.
+   */
+  update_commands: string[];
+  /**
+   * Scopes with at least one skill of this pack.
+   */
+  scopes: RootScope[];
+  /**
+   * Installed skills, by scope and name.
+   */
+  skills: PackSkill[];
+  /**
+   * Upstream skills that are not installed. Empty without a remote check.
+   */
+  new_upstream: string[];
+  /**
+   * Skills with local edits.
+   */
+  edited_count: number;
+  /**
+   * Skills behind upstream.
+   */
+  behind_count: number;
+  /**
+   * Remote check result.
+   */
+  remote:
+    | {
+        state: "not_checked";
+      }
+    | {
+        state: "no_git_source";
+      }
+    | {
+        state: "pinned_to_commit";
+      }
+    | {
+        state: "checked";
+        /**
+         * Upstream commit the check compared against.
+         */
+        commit: string;
+      }
+    | {
+        state: "failed";
+        /**
+         * Git's own message.
+         */
+        reason: string;
+      };
+  /**
+   * One line for a person or agent.
+   */
+  summary: string;
+}
+/**
+ * One installed skill of a pack, at one scope.
+ */
+export interface PackSkill {
+  /**
+   * Skill name.
+   */
+  name: string;
+  /**
+   * Where a root lives.
+   */
+  scope:
+    | {
+        scope: "global";
+      }
+    | {
+        scope: "project";
+        project: ProjectRef;
+      };
+  /**
+   * Installed folder, when one is on disk.
+   */
+  path: string | null;
+  /**
+   * Agents that load this skill at this scope.
+   */
+  agents: string[];
+  /**
+   * The folder differs from the hash its lock recorded. Absent: no hash to compare.
+   */
+  edited: boolean | null;
+  /**
+   * Upstream has a different version. Absent: no remote check, or upstream lacks the skill.
+   */
+  behind: boolean | null;
+}
+/**
+ * Input for `pack_add`.
+ */
+export interface PackAddRequest {
+  /**
+   * Git source as `npx skills add` takes it: `owner/repo` or a git URL.
+   */
+  source: string;
+  /**
+   * Skills to install. Empty: every skill of the pack that is not
+   * installed yet, which needs git access to list them.
+   */
+  skills: string[];
+  /**
+   * Branch, tag, or commit to pin the pack to.
+   */
+  ref_pin: string | null;
+  /**
+   * Agents to install for, in the `skills` CLI's `--agent` spelling.
+   * Empty: the shared `.agents/skills` folder only.
+   */
+  harnesses: AgentIdentity[];
+  /**
+   * Install into this tracked project. Absent: the home.
+   */
+  project_path: string | null;
+  /**
+   * Return the plan and change nothing.
+   */
+  dry_run: boolean;
+}
+/**
+ * Input for `pack_update`. Give `source` or `all`, not both.
+ */
+export interface PackUpdateRequest {
+  /**
+   * Pack source as `pack_list` reports it.
+   */
+  source: string | null;
+  /**
+   * Update every installed pack.
+   */
+  all: boolean;
+  /**
+   * Only this tracked project. Absent: the home and every tracked project.
+   */
+  project_path: string | null;
+  /**
+   * Return the plan and change nothing.
+   */
+  dry_run: boolean;
+}
+/**
+ * Input for `pack_remove`.
+ */
+export interface PackRemoveRequest {
+  /**
+   * Pack source as `pack_list` reports it.
+   */
+  source: string;
+  /**
+   * Only this tracked project. Absent: the home and every tracked project.
+   */
+  project_path: string | null;
+  /**
+   * Return the plan and change nothing.
+   */
+  dry_run: boolean;
+}
+/**
+ * Result of `pack_add`, `pack_update`, and `pack_remove`.
+ */
+export interface PackActionReport {
+  /**
+   * The call changed nothing.
+   */
+  dry_run: boolean;
+  /**
+   * One step per skill.
+   */
+  steps: PackStep[];
+  /**
+   * One line for a person or agent.
+   */
+  summary: string;
+}
+/**
+ * One skill in a pack action.
+ */
+export interface PackStep {
+  /**
+   * Pack source.
+   */
+  source: string;
+  /**
+   * Skill name.
+   */
+  skill: string;
+  /**
+   * Where a root lives.
+   */
+  scope:
+    | {
+        scope: "global";
+      }
+    | {
+        scope: "project";
+        project: ProjectRef;
+      };
+  /**
+   * What the step does.
+   */
+  action: "install" | "update" | "remove";
+  /**
+   * Where the step is.
+   */
+  state:
+    | {
+        state: "planned";
+      }
+    | {
+        state: "done";
+        /**
+         * History event id (ULID string).
+         *
+         * Invariant: lexical order equals creation order inside one store.
+         */
+        event_id: string;
+      }
+    | {
+        state: "skipped";
+        /**
+         * Why, in one sentence.
+         */
+        reason: string;
+      }
+    | {
+        state: "failed";
+        /**
+         * Stable code of the failure.
+         */
+        code:
+          | "invalid_request"
+          | "invalid_scope"
+          | "ambiguous_target"
+          | "unsupported"
+          | "backup_expired"
+          | "execution_failed"
+          | "io"
+          | "scope_busy"
+          | "stale_proposal"
+          | "drift_conflict"
+          | "ownership_changed"
+          | "already_reverted"
+          | "incomplete"
+          | "cancelled";
+        /**
+         * The per-skill op's message.
+         */
+        reason: string;
+      };
+}
+/**
  * One recorded skill use from a harness's own session history.
  */
 export interface SkillInvocation {
@@ -1985,7 +2297,7 @@ export interface ListingCost {
    */
   harness: string;
   /**
-   * Project sessions include global skills. Identity rules depend on the harness.
+   * Where a root lives.
    */
   scope:
     | {

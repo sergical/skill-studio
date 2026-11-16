@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import {
   Activity as ActivityIcon,
   BookOpen,
+  Boxes,
   Layers,
   LayoutDashboard,
   Moon,
@@ -87,7 +88,7 @@ interface SidebarNavItemsProps {
   replaceSkillListFilter: (patch: Partial<SkillListFilter>) => void;
 }
 
-/** The three places: Home, Skills (with an optional Plugins place beside it), Activity. */
+/** The places: Home, Skills (with an optional Plugins place beside it), Packs, Activity. */
 function SidebarNavItems({
   anchorView,
   skillsActive,
@@ -139,6 +140,15 @@ function SidebarNavItems({
           </span>
         </Button>
       )}
+      <Button
+        variant="ghost"
+        className={itemClass(anchorView.kind === "packs")}
+        aria-current={anchorView.kind === "packs" ? "page" : undefined}
+        onClick={() => setActiveView({ kind: "packs" })}
+      >
+        <Boxes size={14} />
+        <span className="min-w-0 truncate">Packs</span>
+      </Button>
       <Button
         variant="ghost"
         className={itemClass(anchorView.kind === "activity")}
