@@ -88,7 +88,8 @@ head commit:
 - The proof card shows this head.
 
 The owner does not approve. Add the label after the last push, because a new
-push has no approval.
+push has no approval. A **show** PR needs no label: it merges when the
+review and CI pass.
 
 A workflow on any branch also posts as `github-actions[bot]`, and the status
 writer chooses the run URL. The run checks stop a copied URL: a run of another

@@ -422,9 +422,13 @@ case. If you implement each case as written, you get fixes on top of fixes:
 the Park chain #485, #487 and #491 reached 11,000 lines and was closed.
 The shared guard proposed in #531 was not built; #531 was also closed. Before you write code for an issue:
 
-1. Write the user need in one sentence. Write the smallest change that meets
-   it. If the issue asks for more than the need (for example byte-exact
-   output), implement the need and say why in the PR.
+1. Write the user need in one sentence. Find the cause of the problem and fix
+   it there. The test: will the next feature need another exception for the
+   same problem? The next agent copies the code it finds, so a workaround
+   spreads. A small diff can be the right root-cause fix, and a large diff can
+   avoid the cause. Keep each commit to one vertical slice. If the issue asks
+   for more than the need (for example byte-exact output), implement the need
+   and say why in the PR.
 2. Check that the approach follows the rules in
    `docs/agent-skill-conventions.md`. The main rule: the tool that owns a file
    writes it. Skill Studio runs `npx skills` and `npx @sentry/dotagents`. It
@@ -435,6 +439,12 @@ The shared guard proposed in #531 was not built; #531 was also closed. Before yo
 4. A rare race or a rare layout becomes a follow-up issue, not part of the PR.
 5. If the change grows past about 500 lines, or a fix needs a fix, stop and
    write a design note in the issue before you continue.
+
+## Merge gate freeze (until 2026-11-22)
+
+The merge gate (`scripts/gate/**`, `.gate/**` and the `gate-*` workflows) is
+frozen. Change it only to fix a merge that is broken now, and say which merge
+in the PR. Write each other gate idea as an issue for after the freeze.
 
 ## Reference docs
 
