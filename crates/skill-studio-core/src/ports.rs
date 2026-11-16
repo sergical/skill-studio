@@ -68,15 +68,31 @@ pub(crate) fn is_skill_shaped_entry(entry: &DirEntryFacts) -> bool {
 ///
 /// Invariant: only [`confine`] builds one. Every write helper takes a
 /// `ScopedPath`, so the core cannot write outside the home and the projects.
+/// A real adapter writes through [`Self::root`] and [`Self::in_root`], not
+/// through [`Self::as_path`], so a folder swapped for a link after
+/// [`confine`] cannot move the write out of the root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopedPath {
     path: PathBuf,
+    root: PathBuf,
+    in_root: PathBuf,
 }
 
 impl ScopedPath {
     /// The confined path.
     pub fn as_path(&self) -> &Path {
         &self.path
+    }
+
+    /// The scope root that holds the path's canonical parent.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// The path relative to [`Self::root`], through the canonical parent
+    /// that [`confine`] saw.
+    pub fn in_root(&self) -> &Path {
+        &self.in_root
     }
 }
 
@@ -105,13 +121,22 @@ pub fn confine(
     let parent_canonical = fs
         .canonicalize(parent)
         .map_err(|e| CoreError::io(parent, e))?;
-    if scope.contains(path) && scope.contains(&parent_canonical) {
-        Ok(ScopedPath {
-            path: path.to_path_buf(),
-        })
-    } else {
-        Err(CoreError::new(ErrorCode::InvalidRequest, "path lies outside the scope").at(path))
-    }
+    let root = scope
+        .root_holding(&parent_canonical)
+        .filter(|_| scope.contains(path))
+        .ok_or_else(|| {
+            CoreError::new(ErrorCode::InvalidRequest, "path lies outside the scope").at(path)
+        })?;
+    let parent_in_root = parent_canonical.strip_prefix(root).unwrap_or(Path::new(""));
+    let in_root = match path.file_name() {
+        Some(leaf) => parent_in_root.join(leaf),
+        None => parent_in_root.to_path_buf(),
+    };
+    Ok(ScopedPath {
+        path: path.to_path_buf(),
+        root: root.to_path_buf(),
+        in_root,
+    })
 }
 
 /// [`confine`] for a file about to be rewritten in place: when `path` is a
@@ -306,6 +331,9 @@ impl ScopeFs for ScopedReads<'_> {
     fn fsops_exchange(&self, a: &Path, b: &Path) -> std::io::Result<()> {
         self.inner.fsops_exchange(a, b)
     }
+    fn fsops_bind_root(&self, root: &Path) -> std::io::Result<Option<Box<dyn ScopeFs + '_>>> {
+        self.inner.fsops_bind_root(root)
+    }
 }
 
 /// One opened file and its length from the same handle.
@@ -441,6 +469,13 @@ pub trait ScopeFs: Send + Sync {
     /// filesystem showing either the pre-swap or the post-swap pairing,
     /// never a folder that exists at neither or both names.
     fn fsops_exchange(&self, a: &Path, b: &Path) -> std::io::Result<()>;
+    /// A view whose `fsops_*` writes stay inside `root`, even when a folder
+    /// under it becomes a link after [`crate::fsops::Root::confine`] checked
+    /// it. A write that would leave `root` fails. [`crate::fsops::Root`]
+    /// sends its writes here. `None` sends them to `self`: only for an
+    /// in-memory fake, or a test wrapper that must see each write. A
+    /// wrapper over a real filesystem forwards this to its inner one.
+    fn fsops_bind_root(&self, root: &Path) -> std::io::Result<Option<Box<dyn ScopeFs + '_>>>;
 }
 
 /// Finds the projects a scope covers under [`ProjectSelection::Discover`].

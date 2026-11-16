@@ -834,6 +834,9 @@ impl ScopeFs for FixtureFs {
         state.insert_subtree(sub_b, b, a);
         Ok(())
     }
+    fn fsops_bind_root(&self, _root: &Path) -> std::io::Result<Option<Box<dyn ScopeFs + '_>>> {
+        Ok(None)
+    }
 }
 
 /// Wraps another [`ScopeFs`], failing exactly one `write_atomic` call and
@@ -1325,6 +1328,9 @@ impl ScopeFs for FailingFs {
             ));
         }
         self.inner.fsops_exchange(a, b)
+    }
+    fn fsops_bind_root(&self, _root: &Path) -> std::io::Result<Option<Box<dyn ScopeFs + '_>>> {
+        Ok(None)
     }
 }
 
@@ -2096,6 +2102,9 @@ impl ScopeFs for CrashFs {
     }
     fn fsops_exchange(&self, a: &Path, b: &Path) -> std::io::Result<()> {
         self.mutate(|| self.inner.fsops_exchange(a, b))
+    }
+    fn fsops_bind_root(&self, _root: &Path) -> std::io::Result<Option<Box<dyn ScopeFs + '_>>> {
+        Ok(None)
     }
 }
 

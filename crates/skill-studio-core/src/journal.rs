@@ -76,7 +76,11 @@ impl FsJournal {
         Ok(())
     }
 
-    fn checked_backup_path(&self, id: &PlanId, relative: &str) -> Result<PathBuf, CoreError> {
+    fn checked_backup_path(
+        &self,
+        id: &PlanId,
+        relative: &str,
+    ) -> Result<(Root<'_>, PathBuf), CoreError> {
         Self::validate_id(id)?;
         if relative.is_empty()
             || Path::new(relative)
@@ -94,8 +98,10 @@ impl FsJournal {
             .join(&id.0)
             .join("backups")
             .join(relative);
-        root.confine(&path)
-            .map_err(|error| CoreError::new(ErrorCode::InvalidRequest, error.to_string()))
+        let path = root
+            .confine(&path)
+            .map_err(|error| CoreError::new(ErrorCode::InvalidRequest, error.to_string()))?;
+        Ok((root, path))
     }
 
     fn confine_journal_path(&self, path: &Path) -> std::io::Result<()> {
@@ -126,8 +132,9 @@ impl FsJournal {
         self.plan_dir(id).join("backups").join(relative)
     }
 
-    /// Creates `path` and every missing ancestor under `root`, fsyncing each
-    /// one it creates. A no-op when `path` already exists.
+    /// Creates `path` and every missing ancestor, fsyncing each one it
+    /// creates. Only for the journal root itself: folders under it go
+    /// through [`Root::create_dirs`].
     fn ensure_dir(&self, path: &Path) -> std::io::Result<()> {
         if self.fs.symlink_metadata(path).is_ok() {
             return Ok(());
@@ -154,25 +161,28 @@ impl FsJournal {
     /// only ever shows a complete write - the same durability
     /// `fsops::write_file` gives a caller's own files.
     fn write_through_tmp(&self, path: &Path, tmp: &Path, bytes: &[u8]) -> std::io::Result<()> {
-        let parent = path.parent().unwrap_or(path);
-        match self.fs.symlink_metadata(&self.root) {
-            Ok(_) => {
-                self.confine_journal_path(path)?;
-                self.confine_journal_path(tmp)?;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
+        let relative = |path: &Path| {
+            path.strip_prefix(&self.root)
+                .map(Path::to_path_buf)
+                .map_err(std::io::Error::other)
+        };
+        let (path, tmp) = (relative(path)?, relative(tmp)?);
+        self.ensure_dir(&self.root)?;
+        let root =
+            Root::open(self.fs.as_ref(), self.root.clone()).map_err(std::io::Error::other)?;
+        let parent = root
+            .create_dirs(path.parent().unwrap_or(Path::new("")))
+            .map_err(std::io::Error::other)?;
+        let path = root.confine(&path).map_err(std::io::Error::other)?;
+        let tmp = root.confine(&tmp).map_err(std::io::Error::other)?;
+        let writer = root.writer();
+        if self.fs.symlink_metadata(&tmp).is_ok() {
+            writer.fsops_remove_file(&tmp)?;
         }
-        self.ensure_dir(parent)?;
-        self.confine_journal_path(path)?;
-        self.confine_journal_path(tmp)?;
-        if self.fs.symlink_metadata(tmp).is_ok() {
-            self.fs.fsops_remove_file(tmp)?;
-        }
-        self.fs.fsops_write_new_file(tmp, bytes)?;
-        self.fs.fsops_fsync_file(tmp)?;
-        self.fs.fsops_rename(tmp, path)?;
-        self.fs.fsops_fsync_dir(parent)
+        writer.fsops_write_new_file(&tmp, bytes)?;
+        writer.fsops_fsync_file(&tmp)?;
+        writer.fsops_rename(&tmp, &path)?;
+        writer.fsops_fsync_dir(&parent)
     }
 
     /// Writes JSON `bytes` to `path` durably - see [`Self::write_through_tmp`].
@@ -350,7 +360,7 @@ impl Journal for FsJournal {
             }
             PlanStatus::Done | PlanStatus::Failed | PlanStatus::Reversed => {}
         }
-        let path = self.checked_backup_path(id, relative)?;
+        let (root, path) = self.checked_backup_path(id, relative)?;
         if !record
             .backups
             .iter()
@@ -365,13 +375,13 @@ impl Journal for FsJournal {
             record.expired_backups.push(relative.to_owned());
             self.write_record(&record)?;
         }
-        match self.fs.fsops_remove_file(&path) {
+        match root.writer().fsops_remove_file(&path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(CoreError::io(&path, error)),
         }
         if let Some(parent) = path.parent() {
-            self.fs
+            root.writer()
                 .fsops_fsync_dir(parent)
                 .map_err(|error| CoreError::io(parent, error))?;
         }
@@ -391,7 +401,7 @@ impl Journal for FsJournal {
                 "Backup exceeds the 64 MiB limit; write refused before changing the target.",
             ));
         }
-        let path = self.checked_backup_path(id, relative)?;
+        let (_, path) = self.checked_backup_path(id, relative)?;
         self.write_bytes(&path, bytes)
             .map_err(|e| CoreError::io(path, e))
     }
@@ -405,7 +415,7 @@ impl Journal for FsJournal {
                 crate::backup_retention::BACKUP_EXPIRED_REASON,
             ));
         }
-        let path = self.checked_backup_path(id, relative)?;
+        let (_, path) = self.checked_backup_path(id, relative)?;
         let facts = self
             .fs
             .symlink_metadata(&path)
@@ -871,6 +881,7 @@ fn reverse_steps(
 ) -> std::io::Result<()> {
     let root =
         Root::open(fs, plan.root.clone()).map_err(|e| std::io::Error::other(e.to_string()))?;
+    let fs = root.writer();
     for step in plan.steps.iter().rev() {
         for path in step_paths(step) {
             confine_to_root(&root, &plan.root, path)?;

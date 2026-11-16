@@ -2370,6 +2370,9 @@ impl ScopeFs for EditIgnoreOnConfigWrite {
     fn fsops_exchange(&self, a: &Path, b: &Path) -> std::io::Result<()> {
         self.inner.fsops_exchange(a, b)
     }
+    fn fsops_bind_root(&self, _root: &Path) -> std::io::Result<Option<Box<dyn ScopeFs + '_>>> {
+        Ok(None)
+    }
 }
 
 #[test]
