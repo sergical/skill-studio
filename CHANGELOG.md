@@ -22,7 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Turn a shared skill off for one agent (confirm, split, park). Park works for any copy and is the only off switch.
 - Settings → Connect your agents adds the MCP server to Claude Code, Codex, Cursor, OpenCode, pi and Grok Build, and has a setup prompt to paste into any agent. The homepage and the MCP docs have the same prompt; the docs and `llms.txt` list the setup for VS Code, Gemini CLI and Claude Desktop too.
 - Packs: `skill-studio pack list|show|add|update|remove` on the CLI, and `pack_list`, `pack_show`, `pack_add`, `pack_update` and `pack_remove` on MCP. A pack is one source that ships skills: a git repo, an npm package, a dotagents source or a plugin. Each change plans first, and `--dry-run` returns only the plan. Update and remove skip plugin packs, npm packs and skills with local edits, and say why.
-- `skill-studio library` (MCP `skill_library`) gives each skill's folder, agents, source, invocation mode and use count in one call. Usage, review and library counts now agree: a resumed or forked session counts once, and a sub-agent log is its own session.
+- `skill-studio library` (MCP `library`) gives each skill's folder, agents, source, invocation mode and use count in one call. Usage, review and library counts now agree: a resumed or forked session counts once, and a sub-agent log is its own session.
 
 ### Changed
 
