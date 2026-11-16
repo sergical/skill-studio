@@ -83,7 +83,7 @@ fn doctor_listing_cost_warns_and_names_top_skills_or_counts_manual_and_parked_sk
         .as_str()
         .unwrap()
         .ends_with(".claude/settings.json"));
-    for harness in ["open-code", "pi"] {
+    for harness in ["opencode", "pi"] {
         assert_eq!(
             rows.iter().find(|r| r["harness"] == harness).unwrap()["listed_skills"],
             0

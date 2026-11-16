@@ -65,7 +65,7 @@ describe("properties rail Harnesses popover", () => {
     const skill = universalOnlySkill();
     const entries = railHarnessEntries(skill, buildScopeGroups(skill));
 
-    for (const harness of ["codex", "open-code"] as const) {
+    for (const harness of ["codex", "opencode"] as const) {
       const entry = entries.find((e) => e.harness === harness);
       expect(entry, `the rail does not list ${harness} for a Universal-only skill`).toBeDefined();
       expect(entry!.row?.kind).toBe("reader");

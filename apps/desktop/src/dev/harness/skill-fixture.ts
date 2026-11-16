@@ -971,7 +971,7 @@ const INVOCATION_PROJECTS = [
 ];
 
 type FixtureTrigger = "user" | "agent" | "file_read";
-type FixtureHarness = "claude-code" | "codex" | "open-code" | "pi" | "cursor" | "grok-build";
+type FixtureHarness = "claude-code" | "codex" | "opencode" | "pi" | "cursor" | "grok-build";
 
 const DAY_COUNT = 364;
 
@@ -1044,7 +1044,7 @@ const HARNESS_PLANS: HarnessPlan[] = [
     weight: (daysAgo) => (daysAgo > 240 ? 0 : daysAgo < 60 ? 1 : 0.4),
   },
   {
-    id: "open-code",
+    id: "opencode",
     perYear: 780,
     mix: [
       ["agent", 0.85],

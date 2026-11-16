@@ -561,11 +561,13 @@ const CODEX_WALK_DEPTH: u32 = 4;
 /// (Codex was never installed, or has archived nothing yet); any other
 /// failure to list a directory marks the listing incomplete.
 fn list_codex_rollouts(home: &Path) -> SourceListing {
+    list_codex_rollouts_at(&codex_root(home))
+}
+
+fn list_codex_rollouts_at(root: &Path) -> SourceListing {
     let mut files = Vec::new();
     let mut listed_dirs = BTreeSet::new();
     let mut incomplete = false;
-
-    let root = codex_root(home);
     for top in ["sessions", "archived_sessions"] {
         walk_jsonl_files(
             &root.join(top),
@@ -1174,6 +1176,8 @@ pub fn is_skill_use_change_with_databases(home: &Path, path: &Path, databases: &
 /// override).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SkillInvocationIndex {
+    #[serde(skip)]
+    codex_home: Option<PathBuf>,
     #[serde(default)]
     reader_version: u32,
     files: BTreeMap<PathBuf, IndexedTranscript>,
@@ -1188,6 +1192,7 @@ pub struct SkillInvocationIndex {
 impl Default for SkillInvocationIndex {
     fn default() -> Self {
         Self {
+            codex_home: None,
             reader_version: 6,
             files: BTreeMap::new(),
             databases: BTreeMap::new(),
@@ -1197,13 +1202,39 @@ impl Default for SkillInvocationIndex {
     }
 }
 
+const RESOLVED_CODEX: UseSource = UseSource {
+    harness: AgentId::CODEX,
+    root: Path::to_path_buf,
+    reader: UseReader::Transcripts {
+        list: list_codex_rollouts_at,
+        parse: parse_codex_uses_with_file,
+    },
+    watch: &[
+        SourceWatch {
+            dir: |root| root.join("sessions"),
+            recursive: true,
+            accepts: any_path,
+        },
+        SourceWatch {
+            dir: |root| root.join("archived_sessions"),
+            recursive: true,
+            accepts: any_path,
+        },
+    ],
+};
+
 impl SkillInvocationIndex {
+    pub(crate) fn set_codex_home(&mut self, root: PathBuf) {
+        self.codex_home = Some(root);
+    }
+
     /// A test-only index with small per-file/per-run budgets, so a backlog
     /// that spans multiple `refresh` passes can be exercised without
     /// generating megabytes of fixture data.
     #[cfg(test)]
     fn with_budgets(file_bytes: u64, run_bytes: u64) -> Self {
         Self {
+            codex_home: None,
             reader_version: 6,
             files: BTreeMap::new(),
             databases: BTreeMap::new(),
@@ -1286,7 +1317,12 @@ impl SkillInvocationIndex {
     /// Reports missing, disabled, or unreadable roots and cached file diagnostics.
     pub fn observations(&self, home: &Path, sources: &DiscoverySources) -> Vec<UsageObservation> {
         let mut out = Vec::new();
+        let codex_home = self.codex_home.clone();
         for source in SOURCES {
+            let (source, home) = match &codex_home {
+                Some(root) if source.harness == AgentId::CODEX => (&RESOLVED_CODEX, root.as_path()),
+                _ => (source, home),
+            };
             let roots = if source.watch.is_empty() {
                 opencode_watch_dirs(home, &opencode_databases(home))
             } else {
@@ -1343,7 +1379,12 @@ impl SkillInvocationIndex {
         let mut report = SkillUseRefreshReport::default();
         let mut run_budget = self.run_budget;
 
+        let codex_home = self.codex_home.clone();
         for source in SOURCES {
+            let (source, home) = match &codex_home {
+                Some(root) if source.harness == AgentId::CODEX => (&RESOLVED_CODEX, root.as_path()),
+                _ => (source, home),
+            };
             if !sources.is_enabled(source.harness) {
                 continue;
             }

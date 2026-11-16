@@ -35,7 +35,7 @@ export const INSTALL_HARNESSES = [
     readsSharedFolder: true,
   },
   {
-    id: "open-code",
+    id: "opencode",
     label: "OpenCode",
     folder: { global: "~/.config/opencode/skills", project: ".opencode/skills" },
     linksIntoOwnFolder: false,

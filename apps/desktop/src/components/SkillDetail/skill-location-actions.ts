@@ -94,7 +94,7 @@ function materializeHarnessLabel(harness: AgentId): string {
       return "Claude Code";
     case "codex":
       return "Codex";
-    case "open-code":
+    case "opencode":
       return "OpenCode";
     case "pi":
       return "pi";

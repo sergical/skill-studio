@@ -106,13 +106,13 @@ it("an agent whose CLI is not on PATH offers its add command to copy instead of 
     value: { writeText: async (text: string) => void written.push(text) },
   });
   useAppStore.getState().setHarnessDetection({
-    report: { harnesses: [row("open-code", "OpenCode", false)] },
+    report: { harnesses: [row("opencode", "OpenCode", false)] },
   });
   const card = await renderCard();
   try {
     expect(card.text()).toContain("OpenCodeNot on PATH");
     await card.click("Copy command");
-    expect(written).toEqual([agentSetup("open-code")?.command]);
+    expect(written).toEqual([agentSetup("opencode")?.command]);
   } finally {
     await card.cleanup();
   }

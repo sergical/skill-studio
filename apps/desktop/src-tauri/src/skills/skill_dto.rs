@@ -23,7 +23,7 @@ use super::SourceKind;
 /// never writes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct DisablingConfigFile {
-    /// Agent id as in `AgentId`: `"codex"`, `"open-code"` or `"claude-code"`.
+    /// Agent id as in `AgentId`: `"codex"`, `"opencode"` or `"claude-code"`.
     pub agent: String,
     pub path: String,
 }
@@ -227,7 +227,7 @@ pub struct Deployment {
     pub disabled_by: Option<DisabledBy>,
     /// For a shared-root deployment (`agent == "shared"`) only: agent ids among
     /// the native shared-root readers whose own mechanism disables this skill
-    /// (Codex config / `OpenCode` permission deny) - `"codex"`, `"open-code"`.
+    /// (Codex config / `OpenCode` permission deny) - `"codex"`, `"opencode"`.
     /// Always empty for other deployments.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disabled_readers: Vec<String>,

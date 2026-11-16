@@ -380,7 +380,7 @@ enum Command {
         #[arg(long, value_enum, default_value_t = AddMethod::SkillsSh)]
         method: AddMethod,
         /// Agent to install for. Repeat for more than one: universal (the
-        /// shared folder), claude-code, codex, open-code (alias opencode), cursor, pi or
+        /// shared folder), claude-code, codex, opencode (alias open-code), cursor, pi or
         /// grok-build. Default: universal.
         #[arg(long = "agent", alias = "harness", value_name = "AGENT")]
         harnesses: Vec<String>,
@@ -2311,6 +2311,7 @@ fn run_usage(
                 step_start,
             ));
             let step_start = clock.monotonic();
+            usage.set_codex_home(rt.scope.codex_home.clone());
             let report = usage.report_filtered(
                 &rt.scope.home.canonical,
                 &inventory,

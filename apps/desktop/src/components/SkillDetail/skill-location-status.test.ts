@@ -240,7 +240,7 @@ describe("buildScopeGroups", () => {
       path: `/home/.${agentLabel.toLowerCase()}/skills/find-bugs`,
       disabling_config_files: [
         { agent: "codex", path: "/Users/dev/.codex/config.toml" },
-        { agent: "open-code", path: "/Users/dev/.config/opencode/opencode.json" },
+        { agent: "opencode", path: "/Users/dev/.config/opencode/opencode.json" },
         { agent: "claude-code", path: "/Users/dev/.claude/settings.json" },
       ],
     });
@@ -504,7 +504,7 @@ describe("buildScopeGroups", () => {
   it("leaves_the_folder_dot_empty_when_only_agent_settings_hide_the_skill_or_names_the_dot_it_shows", () => {
     // Agent settings are read-only here. Only the shared-folder switch or a
     // park makes a folder all-off, so settings-hidden rows do not roll up.
-    const shared = fixtureDeployment({ disabled_readers: ["open-code"] });
+    const shared = fixtureDeployment({ disabled_readers: ["opencode"] });
     const claude = fixtureDeployment({
       agent: "Claude Code",
       is_symlink: true,

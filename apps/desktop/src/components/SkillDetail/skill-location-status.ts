@@ -254,7 +254,7 @@ function readerLabel(agent: AgentId): string {
   switch (agent) {
     case "codex":
       return "Codex";
-    case "open-code":
+    case "opencode":
       return "OpenCode";
     case "pi":
       return "pi";
@@ -347,7 +347,7 @@ function offCondition(deployment: Deployment): Condition {
     case "codex-config":
       return hiddenBySetting("codex", "Codex", "switched off in", deployment);
     case "opencode-permission":
-      return hiddenBySetting("open-code", "OpenCode", "denied in", deployment);
+      return hiddenBySetting("opencode", "OpenCode", "denied in", deployment);
     case "claude-skill-overrides":
       return hiddenBySetting("claude-code", "Claude Code", "switched off in", deployment);
     case "claude-link-removed":
@@ -380,7 +380,7 @@ function offCondition(deployment: Deployment): Condition {
 function readerOffCondition(agent: AgentId, sharedDeployment: Deployment): Condition {
   return agent === "codex"
     ? hiddenBySetting("codex", "Codex", "switched off in", sharedDeployment)
-    : hiddenBySetting("open-code", "OpenCode", "denied in", sharedDeployment);
+    : hiddenBySetting("opencode", "OpenCode", "denied in", sharedDeployment);
 }
 
 /** A global Universal skill Claude Code cannot see: `~/.claude/skills` is a real folder (or missing) with no entry for it. */
@@ -691,7 +691,7 @@ export function buildScopeGroups(skill: InstalledSkill): ScopeGroup[] {
           sharedDeployment != null &&
           isGlobal &&
           disabledForReader &&
-          (agent === "codex" || agent === "open-code");
+          (agent === "codex" || agent === "opencode");
         const conditions: Condition[] = hiddenBySetting
           ? [readerOffCondition(agent, sharedDeployment)]
           : [];
@@ -796,7 +796,7 @@ export function siblingRows(group: ScopeGroup): LocationRow[] {
 /** `AGENTS_READING_SHARED_ROOT`, in its documented order. */
 const AGENTS_READING_SHARED_ROOT_ORDER: AgentId[] = [
   "codex",
-  "open-code",
+  "opencode",
   "pi",
   "cursor",
   "grok-build",

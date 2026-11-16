@@ -1265,7 +1265,7 @@ fn row_from(row: &rusqlite::Row) -> rusqlite::Result<EventRecord> {
         )
     })?;
     let harness = harness
-        .map(|h| AgentId::parse(&h))
+        .map(|h| AgentId::parse_harness(&h))
         .transpose()
         .map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(
@@ -1487,6 +1487,18 @@ mod tests {
         let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope).unwrap();
         drop(guard);
         crate::lock_data_folders(&[&history]).unwrap();
+    }
+
+    /// Flow: events reads legacy display names. Expect canonical ids; failure rejects old history.
+    #[test]
+    fn events_read_legacy_display_names_or_fail_to_list_history() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_SQL).unwrap();
+        conn.execute("INSERT INTO events (id,ts,kind,skill,harness,payload,status) VALUES ('legacy','2026-01-01T00:00:00Z','install','alpha','Claude Code','{}','done')", []).unwrap();
+        let row = conn
+            .query_row("SELECT * FROM events", [], row_from)
+            .unwrap();
+        assert_eq!(row.harness.unwrap().as_str(), "claude-code");
     }
 
     fn scope_for(home: &Path) -> NormalizedScope {
