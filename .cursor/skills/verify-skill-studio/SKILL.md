@@ -16,4 +16,4 @@ Inspect transcripts and screenshots. Record what you actually saw, including
 failures and blocked checks. Append your scenarios to `.gate/out/verify.json`
 using the same fields and evidence kinds. Evidence paths are relative to that
 manifest. Never mark an unrun check as passed. Paste the manifest summary into
-the PR body. Keep evidence out of Git. Do not merge or enable auto-merge.
+the PR body. Keep evidence out of Git. Do not merge by hand.

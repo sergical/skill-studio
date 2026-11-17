@@ -1,9 +1,9 @@
 name: Trusted merge risk
 on:
-  # The job needs a write token to post the status. It runs only base-branch
-  # code and fetches the PR head as git objects for the diff.
+  # The job needs a write token to post the status and label. It runs only
+  # base-branch code and fetches the PR head as git objects for the diff.
   pull_request_target: # zizmor: ignore[dangerous-triggers]
-    types: [opened, synchronize, reopened, edited, labeled, unlabeled, ready_for_review]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
 permissions:
   contents: read
 concurrency:
@@ -15,7 +15,7 @@ jobs:
     permissions:
       contents: read
       statuses: write
-      actions: read
+      pull-requests: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -23,25 +23,26 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Test and classify
+      - name: Classify and label
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           auth=$(printf "x-access-token:%s" "$GH_TOKEN" | base64 -w0)
           git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "refs/pull/$PR_NUMBER/head" --no-tags
-          APPROVED=false
-          if [ -f scripts/gate/approval.py ]; then
-            APPROVED=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/statuses?per_page=100" | jq 'add' | python3 scripts/gate/approval.py)
-          fi
           # Classify with the base branch code and policy, never the PR code.
           scripts/gate/gate risk --base "$BASE_SHA" --head "$HEAD_SHA" --author "$AUTHOR" --json > risk.json
           tier=$(jq -r .tier risk.json)
-          state=success
-          if [ "$tier" = stop ] && [ "$APPROVED" != true ]; then state=failure; fi
-          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f context=gate/risk -f state="$state" -f description="Risk: $tier; approved: $APPROVED"
-          test "$state" = success
+          reasons=$(jq -r '[.reasons[] | select(.tier == "stop") | .rule] | unique | join(", ")' risk.json)
+          if [ "$tier" = stop ]; then
+            # Pending, not failure: the PR cannot merge by itself, and no
+            # failure email goes out. The owner merges it.
+            gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels" -f "labels[]=risk:owner" > /dev/null
+            gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f context=gate/risk -f state=pending -f description="Owner merges: ${reasons:0:120}"
+          else
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels/risk%3Aowner" > /dev/null 2>&1 || true
+            gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f context=gate/risk -f state=success -f description="Risk: $tier"
+          fi

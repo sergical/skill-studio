@@ -1,11 +1,8 @@
-"""Intent, exact-commit review proof, and PR cards."""
+"""Intent and exact-commit review proof."""
 import json
 from pathlib import Path
 import re
-import tomllib
-from gate import classify, gh, git, run, state_path, read_at, TIERS
-
-START, END = '<!-- gate:card -->', '<!-- /gate:card -->'
+from gate import gh, git, state_path
 
 
 def local_state():
@@ -51,82 +48,6 @@ def review(args, cfg):
     print(json.dumps(record, indent=2))
 
 
-def cell(value):
-    return str(value).replace('|', '\\|').replace('\n', ' ').replace('<', '&lt;').replace('>', '&gt;')
-
-
-def replace_card(body, card):
-    if START in body or END in body:
-        if body.count(START) != 1 or body.count(END) != 1 or body.index(START) > body.index(END):
-            raise ValueError('Malformed gate card markers')
-        return body[:body.index(START)] + card + body[body.index(END) + len(END):]
-    return body.rstrip() + '\n\n' + card + '\n'
-
-
-def card(args, cfg):
-    pr = json.loads(run('gh', 'pr', 'view', '--json', 'number,body,headRefOid,baseRefOid,author,title,statusCheckRollup'))
-    sha = git('rev-parse', 'HEAD')
-    if pr['headRefOid'] != sha:
-        raise ValueError('Push the local head before writing its card')
-    base = git('merge-base', pr['baseRefOid'], sha)
-    policy = read_at(base, '.gate/config.toml')
-    risk = classify(tomllib.loads(policy) if policy else cfg, base, sha, author=pr['author']['login'])
-    raised_path = state_path().with_suffix('.risk.json')
-    raised = json.loads(raised_path.read_text()) if raised_path.exists() else {}
-    if raised.get('head') == sha:
-        for reason in raised['reasons']:
-            if reason['rule'] == 'manual':
-                risk['reasons'].append(reason)
-                risk['tier'] = max(risk['tier'], reason['tier'], key=TIERS.index)
-    statuses = gh(f"repos/{cfg['repository']}/commits/{sha}/status")['statuses']
-    states = {s['context']: s['state'] for s in reversed(statuses)}
-    for check in pr['statusCheckRollup']:
-        name = check.get('name') or check.get('context')
-        states[name] = (check.get('conclusion') or check.get('status') or check.get('state') or 'pending').lower()
-    verify_path = Path('.gate/out/verify.json')
-    verify = json.loads(verify_path.read_text()) if verify_path.exists() else None
-    review_path = state_path().with_suffix('.review.json')
-    record = json.loads(review_path.read_text()) if review_path.exists() else {}
-    if record.get('head') != sha:
-        record = {}
-    lines = [START, f"| Intent | {cell(local_state().get('intent', 'not recorded'))} |", '| :-- | :-- |', f"| Result | {cell(args.result or pr['title'])} |", f'| Head | `{sha}` |', f"| Tier | **{risk['tier']}** |", f"| Reasons | {cell('; '.join(r['rule'] + ': ' + r.get('reason', ', '.join(r.get('files', []))) for r in risk['reasons']) or 'no rule matched')} |", f"| Review | {cell(record.get('reviewer', 'unknown'))}: {cell(record.get('verdict', states.get('gate/review', 'not run')))} |", '', '| Check | Status |', '| :-- | :-- |']
-    names = [cfg['check'], *cfg.get('ci_jobs', []), *states, 'gate/risk', 'gate/review', 'gate/approved']
-    for name in dict.fromkeys(names):
-        state = states.get(name, 'not reported')
-        mark = '✅' if state == 'success' else '❌' if state in ['failure', 'error', 'cancelled', 'timed_out'] else '⏳'
-        lines.append(f'| {cell(name)} | {mark} {cell(state)} |')
-    scenarios = verify.get('scenarios', []) if verify else []
-    stale = bool(verify and verify.get('head') and verify['head'] != sha)
-    if stale:
-        scenarios = []
-    status = 'not run' if not scenarios else 'pass' if all(s['status'] == 'pass' for s in scenarios) else 'fail'
-    if stale:
-        status = 'not run (stale head)'
-    elif scenarios and not verify.get('head'):
-        status = 'unbound evidence; reported ' + status
-    lines += [f'| verify | {status} |']
-    if scenarios:
-        lines += ['', '| Scenario | Intent | Status | Evidence | Notes |', '| :-- | :-- | :-- | :-- | :-- |']
-        for scenario in scenarios:
-            evidence = []
-            for entry in scenario['evidence']:
-                path = entry['path']
-                if Path(path).is_absolute() or re.match(r'^[A-Za-z]:', path):
-                    raise ValueError('Evidence paths must be repo-relative or HTTPS URLs')
-                # Local paths cannot be viewed by a reviewer on GitHub.
-                if path.startswith('https://') and not re.fullmatch(r'https://[^\s()<>|"\\]+', path):
-                    raise ValueError('Invalid HTTPS evidence URL')
-                if path.startswith('https://'):
-                    evidence.append(f"![{cell(entry['kind'])}]({path})" if entry['kind'] == 'screenshot' else f"[{cell(entry['kind'])}]({path})")
-                else:
-                    evidence.append(f"{cell(entry['kind'])}: `{cell(path)}` (local; upload for PR viewing)")
-            lines.append('| ' + ' | '.join([cell(scenario['name']), cell(scenario['intent']), cell(scenario['status']), '<br>'.join(evidence), cell(scenario.get('notes', ''))]) + ' |')
-    lines.append(END)
-    body = replace_card(pr['body'], '\n'.join(lines))
-    gh(f"repos/{cfg['repository']}/pulls/{pr['number']}", 'PATCH', {'body': body})
-    print('Proof card updated')
-
-
 def arguments(sub):
     parser = sub.add_parser('start')
     parser.add_argument('intent', nargs='?')
@@ -136,5 +57,3 @@ def arguments(sub):
     parser.add_argument('--verdict', choices=['pass', 'fail'], required=True)
     parser.add_argument('--reviewer', required=True)
     parser.add_argument('--findings', required=True)
-    parser = sub.add_parser('card')
-    parser.add_argument('--result')

@@ -1,0 +1,15 @@
+#!/bin/sh
+# Runs the CI checks before a push. `pnpm install` turns it on.
+# Rust tests and contract snapshots run only when Rust changed.
+set -e
+changed=$(git diff --name-only "$(git merge-base origin/main HEAD)")
+if printf '%s\n' "$changed" | grep -Eq '\.rs$|(^|/)Cargo\.(toml|lock)$|^crates/skill-studio-core/schema/'; then
+  pnpm run check
+  cargo build --workspace --all-features --bins
+  scripts/gate/gate snapshots
+else
+  pnpm run check:fast
+fi
+if printf '%s\n' "$changed" | grep -q '^\.github/workflows/' && command -v uvx > /dev/null; then
+  uvx zizmor@1.32.0 --offline --min-severity medium --min-confidence medium .github/workflows
+fi
