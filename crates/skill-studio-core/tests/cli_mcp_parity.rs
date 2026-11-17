@@ -30,6 +30,12 @@ const EXCLUSIONS: &[Exclusion] = &[
                   fetches a skill's files yet",
     },
     Exclusion {
+        name: "update_all_unbounded",
+        reason: "`update_all` without the batch limit, for a set that comes from saved state \
+                  (the desktop's \"Update all\", `pack update`); a request that lists its own \
+                  skills calls `update_all`",
+    },
+    Exclusion {
         name: "skill_content_hash",
         reason: "a hashing helper `scan`/`diagnose` call internally, not a request/outcome op",
     },

@@ -6862,7 +6862,7 @@
     "description": "Request wrapper for `ops::update_all` - the op itself takes a plain\n`&[UpdateRequest]`; this only exists so an MCP tool has one schema to\ndeclare instead of an array-of-objects root schema.",
     "properties": {
       "requests": {
-        "description": "One request per skill to refresh, each its own journal entry.",
+        "description": "One request per skill to refresh, each its own journal entry; at most 100.",
         "items": {
           "$ref": "#/$defs/UpdateRequest"
         },

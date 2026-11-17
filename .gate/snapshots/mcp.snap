@@ -1310,7 +1310,7 @@
           "description": "One copy to change. Cannot be used with skills."
         },
         "skills": {
-          "description": "Names to change together. All names are checked before any move.",
+          "description": "Up to 100 names to change together. All names are checked before any move.",
           "items": {
             "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
             "type": "string",
@@ -1873,7 +1873,7 @@
           "description": "One copy to change. Cannot be used with skills."
         },
         "skills": {
-          "description": "Names to change together. All names are checked before any move.",
+          "description": "Up to 100 names to change together. All names are checked before any move.",
           "items": {
             "description": "Lexical skill name: the directory name that holds `SKILL.md`.\n\nInvariant: two deployments with the same `SkillName` are the same skill,\neven when their bytes differ. A symlink alias with another name is another\nskill.",
             "type": "string",
@@ -2025,7 +2025,7 @@
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
         "requests": {
-          "description": "One request per skill to refresh, each its own journal entry.",
+          "description": "One request per skill to refresh, each its own journal entry; at most 100.",
           "items": {
             "description": "Request to refresh one already-installed skill in place, via\n`ops::update`. Reuses [`InstallMethod`]: `Copy` re-stages fresh `files`\nand swaps them in, quarantining the previous tree; `Dotagents`/`SkillsSh`\nre-run the same CLI `install` shelled out to, in place over the existing\ndestination.",
             "properties": {

@@ -736,7 +736,7 @@ pub struct ParkRequest {
 /// Skills to park after all names pass validation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct BatchParkRequest {
-    /// Names in the order they will be parked.
+    /// Names in the order they will be parked, at most 100.
     pub skills: Vec<SkillName>,
 }
 
@@ -1267,7 +1267,7 @@ pub struct UpdateAllOutcome {
 /// declare instead of an array-of-objects root schema.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct UpdateAllRequest {
-    /// One request per skill to refresh, each its own journal entry.
+    /// One request per skill to refresh, each its own journal entry; at most 100.
     pub requests: Vec<UpdateRequest>,
 }
 

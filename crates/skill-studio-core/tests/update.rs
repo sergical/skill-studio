@@ -706,7 +706,8 @@ fn update_all_runs_each_skill_as_its_own_journal_entry_or_names_the_missing_row(
     let mut seen = Vec::new();
     let result = ops::update_all(&rt, &ctx(), &requests, |skill, outcome| {
         seen.push((skill.0.clone(), outcome.is_ok()));
-    });
+    })
+    .unwrap();
     assert_eq!(seen.len(), 3, "on_outcome must fire once per skill");
     assert!(seen.iter().all(|(_, ok)| *ok));
     assert_eq!(result.items.len(), 3);
@@ -2102,7 +2103,7 @@ fn update_all_runs_one_dotagents_install_per_scope_and_shares_its_event_or_names
         cli_request("other", InstallMethod::Dotagents),
     ];
     let mut seen = 0;
-    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| seen += 1);
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| seen += 1).unwrap();
 
     assert_eq!(seen, 2, "on_outcome must fire for the covered skill too");
     assert_eq!(spawner.recorded.lock().unwrap().len(), 1);
@@ -2132,7 +2133,7 @@ fn update_all_runs_a_pinned_dotagents_skill_on_its_own_or_skips_the_new_ref() {
     let mut pinned = cli_request("delta", InstallMethod::Dotagents);
     pinned.ref_pin = Some("bbb".to_string());
     let requests = vec![cli_request("other", InstallMethod::Dotagents), pinned];
-    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {}).unwrap();
 
     assert_eq!(spawner.recorded.lock().unwrap().len(), 2);
     assert!(result.errors.is_empty(), "{:?}", result.errors);
@@ -2163,7 +2164,7 @@ fn update_all_refuses_a_parked_dotagents_skill_after_an_install_or_runs_the_cli_
         cli_request("delta", InstallMethod::Dotagents),
         cli_request("other", InstallMethod::Dotagents),
     ];
-    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {}).unwrap();
 
     assert!(result.items[0].outcome.is_some());
     assert!(result.items[1].outcome.is_none());
@@ -2195,7 +2196,7 @@ fn update_all_reports_an_undeclared_dotagents_folder_as_an_error_after_a_declare
         cli_request("delta", InstallMethod::Dotagents),
         cli_request("stray", InstallMethod::Dotagents),
     ];
-    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {}).unwrap();
 
     assert!(result.items[0].outcome.is_some());
     assert!(result.items[1].outcome.is_none());
@@ -2232,7 +2233,7 @@ fn update_all_shares_the_latest_dotagents_install_event_with_a_later_covered_ski
         pinned,
         cli_request("gamma", InstallMethod::Dotagents),
     ];
-    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {}).unwrap();
 
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     assert_eq!(spawner.recorded.lock().unwrap().len(), 2);
@@ -2264,7 +2265,7 @@ fn update_all_runs_a_new_dotagents_install_after_another_method_wrote_the_scope(
         copy_request("beta", "v3"),
         cli_request("beta", InstallMethod::Dotagents),
     ];
-    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {}).unwrap();
 
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     assert_eq!(spawner.recorded.lock().unwrap().len(), 2);
@@ -2299,7 +2300,8 @@ fn update_all_runs_its_own_dotagents_install_for_a_folder_changed_after_the_shar
         if skill.0 == "alpha" {
             std::fs::write(beta.join("SKILL.md"), "edited after the install").unwrap();
         }
-    });
+    })
+    .unwrap();
 
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     assert_eq!(spawner.recorded.lock().unwrap().len(), 2);
@@ -2334,7 +2336,8 @@ fn update_all_runs_its_own_dotagents_install_after_agents_toml_changed() {
             let text = std::fs::read_to_string(&toml).unwrap();
             std::fs::write(&toml, format!("{text}\n# beta moved to a new ref\n")).unwrap();
         }
-    });
+    })
+    .unwrap();
 
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     assert_eq!(spawner.recorded.lock().unwrap().len(), 2);
@@ -2396,7 +2399,7 @@ fn update_all_snapshots_the_dotagents_install_before_its_lease_is_released() {
         cli_request("alpha", InstallMethod::Dotagents),
         cli_request("beta", InstallMethod::Dotagents),
     ];
-    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {}).unwrap();
 
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     assert_eq!(spawner.recorded.lock().unwrap().len(), 2);
@@ -2458,7 +2461,7 @@ fn update_all_takes_dotagents_coverage_from_agents_toml_read_under_the_lease() {
         cli_request("alpha", InstallMethod::Dotagents),
         cli_request("beta", InstallMethod::Dotagents),
     ];
-    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {}).unwrap();
 
     assert!(result.items[0].outcome.is_some());
     assert!(
@@ -2516,7 +2519,7 @@ fn update_all_checks_dotagents_coverage_under_the_scope_lease() {
         cli_request("alpha", InstallMethod::Dotagents),
         cli_request("beta", InstallMethod::Dotagents),
     ];
-    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {}).unwrap();
 
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     assert_eq!(spawner.recorded.lock().unwrap().len(), 1);
@@ -2564,7 +2567,7 @@ fn update_all_runs_one_dotagents_install_in_each_scope() {
     let mut in_project = cli_request("delta", InstallMethod::Dotagents);
     in_project.scope = RootScope::Project(skill_studio_core::identity::ProjectRef(project.clone()));
     let requests = vec![cli_request("delta", InstallMethod::Dotagents), in_project];
-    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {}).unwrap();
 
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     assert_eq!(spawner.recorded.lock().unwrap().len(), 2);
@@ -2593,7 +2596,7 @@ fn undoing_the_shared_dotagents_event_restores_the_covered_skill_folder() {
         cli_request("delta", InstallMethod::Dotagents),
         cli_request("other", InstallMethod::Dotagents),
     ];
-    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {});
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {}).unwrap();
     let other = home.join(UNIVERSAL_ROOT_RELATIVE).join("other/SKILL.md");
     assert!(std::fs::read_to_string(&other)
         .unwrap()
@@ -2674,7 +2677,8 @@ fn update_all_stops_after_the_running_request_and_reports_the_rest_as_not_run_or
         .map(|name| cli_request(name, InstallMethod::SkillsSh))
         .collect();
     let mut seen = Vec::new();
-    let result = ops::update_all(&rt, &ctx, &requests, |skill, _| seen.push(skill.0.clone()));
+    let result =
+        ops::update_all(&rt, &ctx, &requests, |skill, _| seen.push(skill.0.clone())).unwrap();
 
     assert_eq!(spawner.inner.recorded.lock().unwrap().len(), 1);
     assert_eq!(seen, vec!["one"]);
@@ -2727,7 +2731,7 @@ fn update_all_reports_skills_a_finished_dotagents_install_covered_after_cancel_o
         cli_request("delta", InstallMethod::Dotagents),
         cli_request("other", InstallMethod::Dotagents),
     ];
-    let result = ops::update_all(&rt, &ctx, &requests, |_, _| {});
+    let result = ops::update_all(&rt, &ctx, &requests, |_, _| {}).unwrap();
 
     assert_eq!(spawner.inner.recorded.lock().unwrap().len(), 1);
     assert!(result.not_run.is_empty(), "{:?}", result.not_run);
@@ -3046,4 +3050,24 @@ fn recorded_skills_update_and_undo_match_both_revisions_or_leave_a_file_link_or_
         );
     }
     std::fs::remove_dir_all(home).unwrap();
+}
+
+/// `update_all_over_the_batch_limit_runs_no_item`: a batch one past
+/// `MAX_BATCH_ITEMS` is refused as a whole. Fails when the CLI runs even once.
+#[test]
+fn update_all_over_the_batch_limit_runs_no_item() {
+    let home = unique_temp_dir("update_all_over_limit");
+    std::fs::create_dir_all(&home).unwrap();
+    seed_installed_skill(&home, "alpha", "v1");
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+    let requests = vec![cli_request("alpha", InstallMethod::SkillsSh); ops::MAX_BATCH_ITEMS + 1];
+
+    let mut seen = 0;
+    let error = ops::update_all(&rt, &ctx(), &requests, |_, _| seen += 1).unwrap_err();
+
+    assert_eq!(error.code, ErrorCode::InvalidRequest);
+    assert_eq!(seen, 0);
+    assert!(spawner.recorded.lock().unwrap().is_empty());
+    std::fs::remove_dir_all(&home).ok();
 }

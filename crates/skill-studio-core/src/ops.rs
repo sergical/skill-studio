@@ -58,6 +58,23 @@ pub const DEFAULT_EVENT_LIMIT: u32 = 200;
 /// an unreadable root entry rather than truncated.
 pub const SKILL_MD_MAX_BYTES: u64 = 2 * 1024 * 1024;
 
+/// Most items one `update_all`, `park_batch` or `unpark_batch` call takes.
+/// A larger batch is refused before any item runs.
+pub const MAX_BATCH_ITEMS: usize = 100;
+
+/// Refuses a batch of `len` items when it is over [`MAX_BATCH_ITEMS`].
+pub(crate) fn check_batch_size(len: usize) -> Result<(), CoreError> {
+    if len > MAX_BATCH_ITEMS {
+        return Err(CoreError::new(
+            ErrorCode::InvalidRequest,
+            format!(
+                "This batch has {len} skills. One call takes at most {MAX_BATCH_ITEMS}; split the rest into another call."
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Largest number of files `content_fingerprint` will hash per deployment.
 const MAX_FOLDER_FILES: usize = 2_000;
 /// Largest total bytes `content_fingerprint` will read per deployment.
@@ -5851,7 +5868,7 @@ pub use crate::ops_install::{install, install_preferences};
 pub use crate::ops_recovery::{recovery_drop, recovery_list};
 pub use crate::ops_remove::{remove, sweep_quarantine};
 pub use crate::ops_split::split;
-pub use crate::ops_update::{update, update_all, update_split_copies};
+pub use crate::ops_update::{update, update_all, update_all_unbounded, update_split_copies};
 /// Pack read operations shared by CLI and MCP.
 pub use crate::pack::{pack_list, pack_show};
 pub use crate::pack_action::{pack_add, pack_remove, pack_update};
@@ -5951,6 +5968,7 @@ pub fn resolve_batch_names(
             "Pass at least one skill name.",
         ));
     }
+    check_batch_size(names.len())?;
     let inventory = scan(
         rt,
         ctx,
@@ -8915,7 +8933,7 @@ mod tests {
                     ref_pin: None,
                 },
             ];
-            crate::ops_update::update_all(&rt, &ctx, &requests, |_, _| {});
+            crate::ops_update::update_all(&rt, &ctx, &requests, |_, _| {}).unwrap();
 
             let records = telemetry.records();
             assert_eq!(

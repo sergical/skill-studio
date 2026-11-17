@@ -599,7 +599,7 @@ enum Command {
     },
     /// Stream one JSON line per revision change: an initial line with the
     /// current revision and inventory, then one line per change, until
-    /// interrupted.
+    /// interrupted or `--max-seconds` passes.
     #[command(hide = true)]
     Watch {
         #[command(flatten)]
@@ -608,6 +608,10 @@ enum Command {
         /// equals this one.
         #[arg(long)]
         since: Option<u64>,
+        /// Stop after this many seconds and exit 0. Leave it out to watch
+        /// until Ctrl-C.
+        #[arg(long, value_name = "SECONDS")]
+        max_seconds: Option<u64>,
         #[arg(long)]
         json: bool,
     },
@@ -1112,7 +1116,12 @@ fn main() -> ExitCode {
         ),
         Command::Schema { out } => output::write_schemas(out),
         Command::Health { timing_log, json } => run_health(timing_log, json),
-        Command::Watch { scope, since, json } => run_watch(&scope, since, json, time),
+        Command::Watch {
+            scope,
+            since,
+            max_seconds,
+            json,
+        } => run_watch(&scope, since, max_seconds, json, time),
     }
 }
 
@@ -1903,7 +1912,7 @@ fn run_update(args: UpdateArgs<'_>, time: bool) -> ExitCode {
         return finish(&envelope, json, time, output::print_update_outcome_table);
     }
     let outcome = ops::update_all(&rt, &ctx, &requests, |_, _| {});
-    let envelope = ResultEnvelope::from_result(Operation::UpdateAll, &rt.scope, &ctx, Ok(outcome));
+    let envelope = ResultEnvelope::from_result(Operation::UpdateAll, &rt.scope, &ctx, outcome);
     finish(
         &envelope,
         json,
@@ -2578,7 +2587,16 @@ struct WatchLine<'a> {
     inventory: &'a Inventory,
 }
 
-fn run_watch(scope: &ScopeArgs, since: Option<u64>, json: bool, time: bool) -> ExitCode {
+fn run_watch(
+    scope: &ScopeArgs,
+    since: Option<u64>,
+    max_seconds: Option<u64>,
+    json: bool,
+    time: bool,
+) -> ExitCode {
+    let deadline = max_seconds.and_then(|secs| {
+        std::time::Instant::now().checked_add(std::time::Duration::from_secs(secs))
+    });
     let interrupted = Arc::new(std::sync::atomic::AtomicBool::new(false));
     {
         let interrupted = interrupted.clone();
@@ -2638,7 +2656,20 @@ fn run_watch(scope: &ScopeArgs, since: Option<u64>, json: bool, time: bool) -> E
         if interrupted.load(std::sync::atomic::Ordering::SeqCst) {
             return ExitCode::from(130);
         }
-        std::thread::sleep(WATCH_POLL_INTERVAL);
+        let pause = match deadline {
+            Some(deadline) => {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                if left.is_zero() {
+                    return ExitCode::SUCCESS;
+                }
+                left.min(WATCH_POLL_INTERVAL)
+            }
+            None => WATCH_POLL_INTERVAL,
+        };
+        std::thread::sleep(pause);
+        if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+            return ExitCode::SUCCESS;
+        }
     }
 }
 

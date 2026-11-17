@@ -29,7 +29,7 @@
 struct SkillSelectionRequest {
     /// One copy to change. Cannot be used with skills.
     deployment_id: Option<skill_studio_core::identity::DeploymentId>,
-    /// Names to change together. All names are checked before any move.
+    /// Up to 100 names to change together. All names are checked before any move.
     skills: Option<Vec<skill_studio_core::identity::SkillName>>,
 }
 
@@ -1100,7 +1100,7 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Update several installed skills from their sources. Each update has its own event_id. Undo one with restore_event.",
+        description = "Update up to 100 installed skills from their sources. Each update has its own event_id. Undo one with restore_event.",
         annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn update_all(
@@ -1109,7 +1109,7 @@ impl SkillStudioServer {
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
         run_op(Operation::UpdateAll, true, &context, |rt, ctx| {
-            Ok(ops::update_all(rt, ctx, &req.requests, |_, _| {}))
+            ops::update_all(rt, ctx, &req.requests, |_, _| {})
         })
         .await
     }
@@ -1160,7 +1160,7 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Turn skills off for every agent by moving them aside. Pass skills as a list of names, or deployment_id for one copy. All names are checked before any move. Each result has an event_id. Undo with unpark.",
+        description = "Turn skills off for every agent by moving them aside. Pass skills as a list of up to 100 names, or deployment_id for one copy. All names are checked before any move. Each result has an event_id. Undo with unpark.",
         annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn park(
@@ -1247,7 +1247,7 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Turn parked skills back on for every agent. Pass skills as a list of names, or deployment_id for one copy. All names are checked before any move. Undo with park.",
+        description = "Turn parked skills back on for every agent. Pass skills as a list of up to 100 names, or deployment_id for one copy. All names are checked before any move. Undo with park.",
         annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn unpark(

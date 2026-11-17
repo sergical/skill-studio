@@ -1345,7 +1345,8 @@ fn update_one_split_copy(
     )?))
 }
 
-/// Runs [`update`] once per entry in `requests`, each its own journal row
+/// Refuses more than [`crate::ops::MAX_BATCH_ITEMS`] requests before any runs.
+/// Otherwise runs [`update`] once per entry in `requests`, each its own journal row
 /// (`update`'s own lease/journal shape, taken and released per call - no
 /// batch-wide lease), calling `on_outcome` as each one finishes so a caller
 /// (the desktop's "update all") can update its list in place without
@@ -1356,18 +1357,28 @@ pub fn update_all(
     rt: &Runtime,
     ctx: &OpContext,
     requests: &[UpdateRequest],
+    on_outcome: impl FnMut(&SkillName, &Result<UpdateOutcome, CoreError>),
+) -> Result<UpdateAllOutcome, CoreError> {
+    crate::ops::check_batch_size(requests.len())?;
+    update_all_unbounded(rt, ctx, requests, on_outcome)
+}
+
+/// [`update_all`] without the [`crate::ops::MAX_BATCH_ITEMS`] limit, for a
+/// caller whose set comes from saved state, not from the request: the
+/// desktop's "Update all" (the outdated list) and `pack update` (the pack
+/// file, on every surface). A request that lists its own skills calls
+/// [`update_all`].
+pub fn update_all_unbounded(
+    rt: &Runtime,
+    ctx: &OpContext,
+    requests: &[UpdateRequest],
     mut on_outcome: impl FnMut(&SkillName, &Result<UpdateOutcome, CoreError>),
-) -> UpdateAllOutcome {
-    // Infallible: each `update` call already files its own `Operation::Update`
-    // record (`Ok` or `Err`) as a nested op under this one, so this batch's
-    // own record only needs to exist - it always reports `Ok`, with its
-    // timing filed by `update_all_body` itself, spanning the whole loop.
-    match rt.run(Operation::UpdateAll, ctx, || {
+) -> Result<UpdateAllOutcome, CoreError> {
+    // Each `update` call files its own `Operation::Update` record as a nested
+    // op under this one, so a failed item never fails the batch.
+    rt.run(Operation::UpdateAll, ctx, || {
         Ok(update_all_body(rt, ctx, requests, &mut on_outcome))
-    }) {
-        Ok(outcome) => outcome,
-        Err(_) => unreachable!("update_all_body never returns Err"),
-    }
+    })
 }
 
 /// A successful `dotagents install` in one scope, and the tree hashes of the

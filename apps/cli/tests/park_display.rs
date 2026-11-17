@@ -171,3 +171,66 @@ fn cli_copy_update_after_split_points_to_the_skill_page_or_fails_the_display_gol
         &json!({"message":result["errors"][0]["message"]}),
     );
 }
+
+#[test]
+fn watch_with_max_seconds_prints_the_snapshot_and_exits_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    let mut child = command(&home)
+        .args(["watch", "--max-seconds", "1", "--json", "--home"])
+        .arg(&home)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_mins(1);
+    while child.try_wait().unwrap().is_none() {
+        if std::time::Instant::now() > deadline {
+            child.kill().ok();
+            panic!("watch --max-seconds 1 was still running after one minute");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{:?}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lines: Vec<Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0]["inventory"].is_object(), "{}", lines[0]);
+}
+
+#[test]
+fn watch_with_the_largest_max_seconds_keeps_running_instead_of_panicking() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    let mut child = command(&home)
+        .args([
+            "watch",
+            "--max-seconds",
+            &u64::MAX.to_string(),
+            "--json",
+            "--home",
+        ])
+        .arg(&home)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    let exited = child.try_wait().unwrap();
+    child.kill().ok();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        exited.is_none(),
+        "watch exited with {exited:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

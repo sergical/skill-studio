@@ -480,7 +480,18 @@ fn update_by_scope(
                 ref_pin: None,
             })
             .collect();
-        let outcome = crate::ops::update_all(rt, ctx, &requests, |_, _| {});
+        let outcome = match crate::ops::update_all_unbounded(rt, ctx, &requests, |_, _| {}) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                for &i in &indexes {
+                    steps[i].state = PackStepState::Failed {
+                        code: err.code,
+                        reason: err.text(),
+                    };
+                }
+                continue;
+            }
+        };
         for &i in &indexes {
             let name = steps[i].skill.as_str();
             steps[i].state = if let Some(done) = outcome

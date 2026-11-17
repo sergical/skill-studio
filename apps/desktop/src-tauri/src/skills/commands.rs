@@ -1476,6 +1476,44 @@ mod tests {
         }
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn update_all_over_the_batch_limit_still_runs_every_skill() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let data_root = tmp.path().join("data");
+        std::fs::create_dir_all(&home).unwrap();
+        let requests = vec![
+            copy_update_request(
+                "fixture",
+                skill_studio_core::identity::RootScope::Global,
+                b"updated",
+            );
+            skill_studio_core::ops::MAX_BATCH_ITEMS + 1
+        ];
+
+        let reported = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = reported.clone();
+        let outcome = update_all_with_runtime(
+            requests,
+            move || {
+                super::super::core_runtime::build_runtime_write_at_with_search_dirs(
+                    &home,
+                    &data_root,
+                    super::super::core_runtime::process_path_search_dirs(),
+                )
+            },
+            move |_, _| {
+                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            },
+        )
+        .await
+        .unwrap();
+
+        let total = skill_studio_core::ops::MAX_BATCH_ITEMS + 1;
+        assert_eq!(outcome.items.len(), total);
+        assert_eq!(reported.load(std::sync::atomic::Ordering::Relaxed), total);
+    }
+
     /// `update_all_on_ten_outdated_fixtures_ends_with_ten_journal_entries_and_zero_main_thread_calls_over_one_frame`:
     /// installs ten `Copy` skills for real (so `update_all_with_runtime` has
     /// an existing deployment per skill to swap over), then updates all ten
@@ -2584,7 +2622,8 @@ async fn update_all_with_runtime(
 }
 
 /// The sync body a `spawn_blocking` closure runs for one update-all batch:
-/// build the `Runtime`, then run every request through `ops::update_all`.
+/// build the `Runtime`, then run every request through
+/// `ops::update_all_unbounded`: a person asked for the whole set.
 /// Shared by `update_all_with_runtime` (test-only, wraps this in its own
 /// `spawn_blocking` since a unit test builds a bare `Runtime` fixture
 /// without an `AppHandle`) and production `update_all_skills` (already
@@ -2606,12 +2645,8 @@ fn run_update_all_sync(
         skill_studio_core::identity::CorrelationId(ulid::Ulid::generate().to_string()),
         cancel,
     );
-    Ok(skill_studio_core::ops::update_all(
-        &rt,
-        &ctx,
-        requests,
-        &mut on_outcome,
-    ))
+    skill_studio_core::ops::update_all_unbounded(&rt, &ctx, requests, &mut on_outcome)
+        .map_err(|err| err.text())
 }
 
 /// Which owners a batch's succeeded items should clear (N1: the review
