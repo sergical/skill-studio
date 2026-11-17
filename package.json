@@ -5,7 +5,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "prepare": "git config core.hooksPath .githooks || true",
+    "prepare": "git config --worktree core.hooksPath .githooks || true",
     "dev": "pnpm --filter skill-studio run dev",
     "dev:marketing": "pnpm --filter @skill-studio/marketing run dev",
     "dev:server": "pnpm --filter @skill-studio/server run dev",

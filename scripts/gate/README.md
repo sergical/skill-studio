@@ -70,7 +70,7 @@ review. Run review-status only after the review is complete.
 
 ## Workflows and metrics
 
-`gate-risk.yml` runs the `risk` job on `pull_request_target`. GitHub uses base-branch YAML for this event. The job checks out the base SHA without stored credentials. It fetches the PR head as git objects and runs only base-branch scripts. For a stop tier it adds the `risk:owner` label and posts `gate/risk = pending` with the rules that matched. Otherwise it removes that label and posts `gate/risk = success`. It never posts failure, so the risk check sends no failure email.
+`gate-risk.yml` runs the `risk` job on `pull_request_target`, only for PRs to the default branch. GitHub uses base-branch YAML for this event. The job checks out the base SHA without stored credentials. It fetches the PR head as git objects and runs only base-branch scripts. For a stop tier it adds the `risk:owner` label and posts `gate/risk = pending` with the rules that matched. Otherwise it removes that label and posts `gate/risk = success`. It never posts failure, so the risk check sends no failure email.
 
 `gate.yml` runs `unit` and `contracts` on `pull_request` with read access only. These checks run PR code. They do not control the risk job. Both are required checks in the ruleset.
 

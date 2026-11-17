@@ -455,7 +455,8 @@ The shared guard proposed in #531 was not built; #531 was also closed. Before yo
    failing check.
 5. `gate/risk` adds the `risk:owner` label and stays pending for: a release, a
    version change, deploy or secret files, a new dependency, a change to
-   `package.json` scripts, workflows or `.gate/`, and policy files. The rules
+   `package.json` scripts, workflows, `.githooks/`, `.gate/` or `deny.toml`, and
+   policy files. The rules
    are in `.gate/config.toml`. The owner merges these PRs. Start your reply
    with `Needs you: #<number> <the one decision>`, then stop. Do not wait for
    the merge, use `--admin`, or remove the label.

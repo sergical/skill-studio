@@ -54,12 +54,14 @@ paths = [
   "scripts/gate/gate",
   "scripts/gate/gate.py",
   ".github/workflows/**",
+  ".githooks/**",
+  "deny.toml",
 ]
 
 [[rules]]
 id = "deploy-secrets"
 tier = "stop"
-paths = ["apps/server/wrangler.jsonc", "**/deploy-server.yml", "**/.env*", ".env*"]
+paths = ["**/wrangler.jsonc", "**/wrangler.toml", "**/deploy-server.yml", "**/.env*", ".env*"]
 
 [[rules]]
 id = "public-contract"
