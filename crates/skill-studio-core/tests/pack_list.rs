@@ -8,6 +8,7 @@ use skill_studio_core::pack::{
     skills_cli_folder_hash, Pack, PackKind, PackListRequest, PackRemote, PackReport,
     PackShowRequest, RemotePack, RemoteState, SKILLS_CLI_STATE_ROOT,
 };
+use skill_studio_core::pack_action::PackRemoveRequest;
 use skill_studio_core::ports::{CancelToken, Ports, Runtime};
 use skill_studio_core::scope::ProjectSelection;
 use skill_studio_core::testing::golden::{ctx, scope_for};
@@ -46,7 +47,10 @@ fn runtime() -> Runtime {
         "/home/proj/.agents/skills/from-npm",
         "/home/proj/.agents/skills/over-ssh",
         "/home/proj/.agents/skills/dotty",
+        "/home/proj/.agents/skills/adopted",
+        "/home/proj/.agents/skills/local-one",
         "/home/proj/.agents/plugins/tools/skills/hammer",
+        "/home/proj/.agents/plugins/local-tools/skills/wrench",
         "/home/.claude/plugins/cache/vendor-1/plugin-1/1.0.0/skills/plugged",
     ] {
         fixture = skill(fixture, folder);
@@ -55,7 +59,8 @@ fn runtime() -> Runtime {
         r#"{{"version":1,"skills":{{
             "pinned":{{"source":"owner/pinned","sourceType":"github","ref":"v1.2","skillPath":"skills/pinned/SKILL.md","computedHash":"{clean}"}},
             "from-npm":{{"source":"node_modules/@acme/skills","sourceType":"node_modules","via":"@acme/skills","computedHash":"{clean}"}},
-            "over-ssh":{{"source":"git@github.com:Owner/repo.git","sourceType":"git","sourceUrl":"git@github.com:Owner/repo.git","skillPath":"skills/over-ssh/SKILL.md","computedHash":"{clean}"}}
+            "over-ssh":{{"source":"git@github.com:Owner/repo.git","sourceType":"git","sourceUrl":"git@github.com:Owner/repo.git","skillPath":"skills/over-ssh/SKILL.md","computedHash":"{clean}"}},
+            "local-one":{{"source":"vendor/local-one","sourceType":"local","computedHash":"{clean}"}}
         }}}}"#,
         clean = clean_hash()
     );
@@ -71,11 +76,11 @@ fn runtime() -> Runtime {
         .file("/home/proj/skills-lock.json", project_lock.as_bytes())
         .file(
             "/home/proj/agents.toml",
-            b"[[skills]]\nname = \"*\"\nsource = \"dot/pack\"\nref = \"v2\"\n\n[[plugins]]\nname = \"tools\"\nsource = \"dot/tools\"\ntargets = [\"claude-code\"]\n",
+            b"[[skills]]\nname = \"*\"\nsource = \"dot/pack\"\nref = \"v2\"\n\n[[plugins]]\nname = \"tools\"\nsource = \"dot/tools\"\ntargets = [\"claude-code\"]\n\n[[plugins]]\nname = \"local-tools\"\nsource = \"path:../local-tools\"\n",
         )
         .file(
             "/home/proj/agents.lock",
-            b"[skills.dotty]\nsource = \"dot/pack\"\nresolved_url = \"https://gitlab.example.com/dot/pack.git\"\nresolved_path = \"skills/dotty\"\n",
+            b"[skills.dotty]\nsource = \"dot/pack\"\nresolved_url = \"https://gitlab.example.com/dot/pack.git\"\nresolved_path = \"skills/dotty\"\n\n[skills.adopted]\nsource = \"path:skills/adopted\"\n",
         )
         .file(
             "/home/.claude/plugins/cache/vendor-1/plugin-1/1.0.0/.claude-plugin/plugin.json",
@@ -254,4 +259,37 @@ fn pack_list_joins_two_spellings_of_one_repo_into_one_pack_or_checks_it_twice() 
     .unwrap();
     assert_eq!(shown.packs.len(), 1);
     assert_eq!(shown.packs[0].skills.len(), 2);
+}
+
+/// A dotagents `path:` skill or plugin and a skills.sh `local` install come
+/// from a folder on this machine and have no upstream: they are not packs, so the list
+/// leaves them out and Remove finds no pack to delete them through.
+#[test]
+fn pack_list_leaves_out_local_folder_sources_or_offers_update_and_remove_for_them() {
+    let report = list(None);
+    let sources: Vec<_> = report.packs.iter().map(|p| p.source.as_str()).collect();
+    assert!(
+        report.packs.iter().all(|p| p
+            .skills
+            .iter()
+            .all(|s| !["adopted", "local-one", "wrench"].contains(&s.name.as_str()))),
+        "{sources:?}"
+    );
+    for source in [
+        "path:skills/adopted",
+        "vendor/local-one",
+        "path:../local-tools",
+    ] {
+        let err = ops::pack_remove(
+            &runtime(),
+            &ctx(),
+            &PackRemoveRequest {
+                source: source.into(),
+                project_path: None,
+                dry_run: true,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, ErrorCode::AmbiguousTarget, "{source}: {err:?}");
+    }
 }
