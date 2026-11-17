@@ -1147,13 +1147,13 @@ interface PackSkill {
   name: string;
   scope: string;
   edited?: boolean;
+  behind?: boolean;
 }
 
 interface MockPack {
   source: string;
   kind: "skills.sh" | "dotagents" | "Plugin";
   skills: readonly PackSkill[];
-  behind: number;
   newUpstream: readonly string[];
   /** Set for plugin packs: the agent, not Skill Studio, updates and removes them. */
   updateCommand?: string;
@@ -1179,43 +1179,43 @@ const initialPacks: readonly MockPack[] = [
     kind: "skills.sh",
     skills: [
       { name: "add-customer-story", scope: "Global" },
-      { name: "commit", scope: "Global", edited: true },
+      { name: "commit", scope: "Global", edited: true, behind: true },
       { name: "new-branch", scope: "agent-studio" },
-      { name: "prepare-videos", scope: "Global" },
+      { name: "prepare-videos", scope: "Global", behind: true },
     ],
-    behind: 2,
     newUpstream: [],
   },
   {
     source: "getsentry/skills",
-    kind: "dotagents",
+    kind: "skills.sh",
     skills: [
       { name: "backport-pr", scope: "Global" },
       { name: "code-review", scope: "Global" },
     ],
-    behind: 0,
     newUpstream: ["sentry-workflow"],
   },
   {
     source: "figma@claude-plugins-official",
     kind: "Plugin",
     skills: pluginGroups[1].skills.map(([name]) => ({ name, scope: "Global" })),
-    behind: 0,
     newUpstream: [],
     updateCommand: "claude plugin update figma@claude-plugins-official",
   },
 ];
 
 const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "" : "s"}`;
+const countSkills = (packs: readonly MockPack[], want: (skill: PackSkill) => boolean | undefined) =>
+  packs.reduce((sum, pack) => sum + pack.skills.filter(want).length, 0);
 
 function packSummary(pack: MockPack, checked: boolean) {
-  const edited = pack.skills.filter((skill) => skill.edited).length;
+  const edited = countSkills([pack], (skill) => skill.edited);
+  const behind = countSkills([pack], (skill) => skill.behind);
   const parts = [plural(pack.skills.length, "skill")];
   if (edited > 0) parts.push(`${edited} edited locally`);
   if (!checked) parts.push("upstream not checked");
   else if (pack.updateCommand) parts.push("no git source to check");
-  else if (pack.behind === 0 && pack.newUpstream.length === 0) parts.push("up to date");
-  else parts.push(`${pack.behind} behind upstream`);
+  else if (behind === 0 && pack.newUpstream.length === 0) parts.push("up to date");
+  else parts.push(`${behind} behind upstream`);
   if (checked && pack.newUpstream.length > 0) {
     parts.push(`new upstream: ${pack.newUpstream.join(", ")}`);
   }
@@ -1223,12 +1223,17 @@ function packSummary(pack: MockPack, checked: boolean) {
 }
 
 function reportSummary(packs: readonly MockPack[], checked: boolean) {
-  const skillCount = packs.reduce((sum, pack) => sum + pack.skills.length, 0);
-  const edited = packs.reduce((sum, pack) => sum + pack.skills.filter((s) => s.edited).length, 0);
-  const parts = [plural(packs.length, "pack"), plural(skillCount, "skill")];
+  const edited = countSkills(packs, (skill) => skill.edited);
+  const parts = [
+    plural(packs.length, "pack"),
+    plural(
+      countSkills(packs, () => true),
+      "skill",
+    ),
+  ];
   if (edited > 0) parts.push(`${edited} edited locally`);
   if (!checked) return [...parts, "upstream not checked (pass remote to check)"].join(", ");
-  const behind = packs.reduce((sum, pack) => sum + pack.behind, 0);
+  const behind = countSkills(packs, (skill) => skill.behind);
   const fresh = packs.reduce((sum, pack) => sum + pack.newUpstream.length, 0);
   return [...parts, `${behind} behind upstream`, `${fresh} new upstream`].join(", ");
 }
@@ -1240,9 +1245,16 @@ function ownerReason(pack: MockPack, action: "update" | "remove") {
     : "A plugin. Remove it in the agent.";
 }
 
+/** Each step's skip reason, as the core plans it; `null` when the step will run. */
 function planSteps(packs: readonly MockPack[], intent: PackIntent): PackStep[] {
   if (intent.kind === "add") {
-    return intent.skills.map((skill) => ({ skill, scope: "Global", skip: null }));
+    const installed = (name: string) =>
+      packs.some((pack) => pack.skills.some((s) => s.name === name && s.scope === "Global"));
+    return intent.skills.map((skill) => ({
+      skill,
+      scope: "Global",
+      skip: installed(skill) ? "already installed here" : null,
+    }));
   }
   return packs
     .filter((pack) => intent.source === null || pack.source === intent.source)
@@ -1261,33 +1273,41 @@ function planSteps(packs: readonly MockPack[], intent: PackIntent): PackStep[] {
     );
 }
 
-function applyPackIntent(packs: readonly MockPack[], intent: PackIntent): MockPack[] {
+/** Applies the steps that ran. Pack additions install through skills.sh, as in the core. */
+function applyPackPlan(
+  packs: readonly MockPack[],
+  intent: PackIntent,
+  steps: readonly PackStep[],
+): MockPack[] {
+  const run = steps.filter((step) => step.skip === null);
+  const ran = new Set(run.map((step) => `${step.skill}:${step.scope}`));
+  const didRun = (skill: PackSkill) => ran.has(`${skill.name}:${skill.scope}`);
   if (intent.kind === "add") {
-    const added = intent.skills.map((name) => ({ name, scope: "Global" }));
-    if (!packs.some((pack) => pack.source === intent.source)) {
-      return [
-        ...packs,
-        { source: intent.source, kind: "skills.sh", skills: added, behind: 0, newUpstream: [] },
-      ];
-    }
-    return packs.map((pack) =>
+    const added = run.map((step) => ({ name: step.skill, scope: step.scope }));
+    const owner = (pack: MockPack) => pack.source === intent.source && pack.kind === "skills.sh";
+    const withNew = packs.some(owner)
+      ? packs.map((pack) => (owner(pack) ? { ...pack, skills: [...pack.skills, ...added] } : pack))
+      : [
+          ...packs,
+          { source: intent.source, kind: "skills.sh" as const, skills: added, newUpstream: [] },
+        ];
+    return withNew.map((pack) =>
       pack.source === intent.source
         ? {
             ...pack,
-            skills: [...pack.skills, ...added],
-            newUpstream: pack.newUpstream.filter((name) => !intent.skills.includes(name)),
+            newUpstream: pack.newUpstream.filter((name) => !added.some((s) => s.name === name)),
           }
         : pack,
     );
   }
-  const touched = (pack: MockPack) =>
-    !pack.updateCommand && (intent.source === null || pack.source === intent.source);
-  if (intent.kind === "update") {
-    return packs.map((pack) => (touched(pack) ? { ...pack, behind: 0 } : pack));
-  }
+  const touched = (pack: MockPack) => intent.source === null || pack.source === intent.source;
   return packs.flatMap((pack) => {
     if (!touched(pack)) return [pack];
-    const kept = pack.skills.filter((skill) => skill.edited);
+    if (intent.kind === "update") {
+      const skills = pack.skills.map((s) => (didRun(s) ? { ...s, behind: false } : s));
+      return [{ ...pack, skills }];
+    }
+    const kept = pack.skills.filter((skill) => !didRun(skill));
     return kept.length > 0 ? [{ ...pack, skills: kept }] : [];
   });
 }
@@ -1487,7 +1507,11 @@ function PacksScreen() {
           <p {...stylex.props(styles.packSummary)}>{reportSummary(packs, checked)}</p>
           <ul aria-label="Packs" {...stylex.props(styles.pluginCard, styles.packList)}>
             {packs.map((pack) => (
-              <li key={pack.source} aria-label={pack.source} {...stylex.props(styles.packRow)}>
+              <li
+                key={`${pack.kind}:${pack.source}`}
+                aria-label={pack.source}
+                {...stylex.props(styles.packRow)}
+              >
                 <span {...stylex.props(styles.pluginSkill, styles.truncate)}>{pack.source}</span>
                 <small {...stylex.props(styles.faint, styles.hideBelowNarrow)}>{pack.kind}</small>
                 <span {...stylex.props(styles.pluginDescription, styles.hideBelowNarrow)}>
@@ -1526,7 +1550,7 @@ function PacksScreen() {
         <PackPlanDialog
           intent={plan.intent}
           steps={plan.steps}
-          onConfirm={() => setPacks((current) => applyPackIntent(current, plan.intent))}
+          onConfirm={() => setPacks((current) => applyPackPlan(current, plan.intent, plan.steps))}
           onClose={() => {
             setPlan(null);
             setAddSource("");
