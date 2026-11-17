@@ -56,7 +56,7 @@ const jobs: ReadonlyArray<Job> = [
     byHandCost: "One folder per agent. Miss one and that agent keeps the old version.",
     withStudio: [
       { text: "Updates on Home lists each skill that has a new version." },
-      { text: "Click Pull latest, or Update all." },
+      { text: "Click Update, or Update all." },
       { text: "Warnings shows each copy that still differs. Compare the copies side by side." },
     ],
     command: "skill-studio outdated",
@@ -65,7 +65,7 @@ const jobs: ReadonlyArray<Job> = [
     id: "share",
     icon: Users,
     label: "A teammate asks for your setup",
-    blurb: "Know where each skill came from.",
+    blurb: "Share one repo, not a list.",
     byHand: [
       {
         text: "Read the lock file to find the repo of each skill.",
@@ -77,15 +77,15 @@ const jobs: ReadonlyArray<Job> = [
     ],
     byHandCost: "The lock file knows only one installer. Your own skills are not in it.",
     withStudio: [
+      { text: "Put your skills in a git repo, such as acme-labs/review-skills." },
       {
-        text: "Each skill shows its source: a repo such as acme-labs/review-skills, a plugin, or a folder you made.",
+        text: "Your teammate pastes the repo in Packs and clicks Add pack. Each change shows its plan before it runs.",
       },
       {
-        text: "Add skills to a project with dotagents. Commit agents.toml, and your team gets the same skills.",
+        text: "Check upstream finds new versions and new skills. Update skips each skill your teammate edited, and says why.",
       },
     ],
-    command:
-      "skill-studio add acme-labs/review-skills --name sql-review --method dotagents --project-path .",
+    command: "skill-studio pack add acme-labs/review-skills",
   },
   {
     id: "broken",
