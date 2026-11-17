@@ -95,8 +95,10 @@ uses the same exit status. `--json` never prompts and never colors.
 
 ### Bounded answers
 
-`scan`, `diagnose`, `library`, `usage`, `outdated`, `invocation` and
-`pack list|show` return their main list in pages. Without view flags, the
+`scan`, `diagnose`, `library`, `usage`, `outdated`, `invocation`,
+`conflicts`, `doctor`, `extras` and `pack list|show` return their main list
+in pages. The main list of `doctor` is `violations`; `listing_cost` gets the
+space that is left. Without view flags, the
 lists keep the rows that fit in a 32 KB answer, `page` included, main list
 first. When a list loses rows, the envelope gets a top-level `page`:
 

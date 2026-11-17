@@ -1023,12 +1023,17 @@ impl SkillStudioServer {
     )]
     async fn diagnose_conflict(
         &self,
-        Parameters(req): Parameters<DiagnoseConflictRequest>,
+        Parameters(Viewed { request: req, view }): Parameters<Viewed<DiagnoseConflictRequest>>,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
-        run_op(Operation::DiagnoseConflict, false, &context, |rt, ctx| {
-            ops::diagnose_conflict(rt, ctx, &req)
-        })
+        run_op_viewed(
+            Operation::DiagnoseConflict,
+            false,
+            None,
+            &view,
+            &context,
+            |rt, ctx| ops::diagnose_conflict(rt, ctx, &req),
+        )
         .await
     }
 
@@ -1038,12 +1043,17 @@ impl SkillStudioServer {
     )]
     async fn extras(
         &self,
-        Parameters(req): Parameters<ExtrasRequest>,
+        Parameters(Viewed { request: req, view }): Parameters<Viewed<ExtrasRequest>>,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
-        run_op(Operation::Extras, false, &context, |rt, ctx| {
-            ops::extras(rt, ctx, &req)
-        })
+        run_op_viewed(
+            Operation::Extras,
+            false,
+            None,
+            &view,
+            &context,
+            |rt, ctx| ops::extras(rt, ctx, &req),
+        )
         .await
     }
 
@@ -1053,12 +1063,17 @@ impl SkillStudioServer {
     )]
     async fn doctor(
         &self,
-        Parameters(req): Parameters<DoctorRequest>,
+        Parameters(Viewed { request: req, view }): Parameters<Viewed<DoctorRequest>>,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
-        run_op(Operation::Doctor, false, &context, |rt, ctx| {
-            ops::doctor(rt, ctx, &req)
-        })
+        run_op_viewed(
+            Operation::Doctor,
+            false,
+            None,
+            &view,
+            &context,
+            |rt, ctx| ops::doctor(rt, ctx, &req),
+        )
         .await
     }
 

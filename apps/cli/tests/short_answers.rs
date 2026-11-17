@@ -319,3 +319,115 @@ fn invocation_tools_take_the_view_that_pages_their_answer() {
         assert_eq!(envelope["page"]["returned"], 0, "{tool}: {envelope}");
     }
 }
+
+/// Flow: `doctor`, `conflicts` and `extras` with no view arguments, then
+/// with the cursor they hand out, on the CLI and MCP, over a home with 100
+/// skills whose Claude Code and Codex copies differ, 300 MCP servers, and
+/// 20 projects.
+/// Expectation: each envelope fits the 32 KB answer budget, its `page` cuts
+/// the big list, and the cursor returns the next rows on both surfaces.
+/// Failure means one call can fill an agent's context (295 KB `doctor`,
+/// 343 KB `conflicts` and 140 KB `extras` on a real home).
+#[test]
+fn doctor_conflicts_and_extras_answers_stay_bounded() {
+    let home = tempfile::tempdir().unwrap();
+    for i in 0..100 {
+        for (root, body) in [
+            (".claude/skills", "Claude body."),
+            (".codex/skills", "Codex body."),
+        ] {
+            write_skill(&home.path().join(root), &format!("skill-{i:03}"), body);
+        }
+    }
+    let servers: serde_json::Map<_, _> = (0..300)
+        .map(|i| (format!("server-{i:03}"), json!({"command": "server"})))
+        .collect();
+    std::fs::write(
+        home.path().join(".claude.json"),
+        json!({"mcpServers": servers}).to_string(),
+    )
+    .unwrap();
+    let projects: Vec<String> = (0..20)
+        .map(|i| {
+            let project = home.path().join(format!("work/project-{i:02}"));
+            write_skill(
+                &project.join(".claude/skills"),
+                &format!("local-{i:02}"),
+                "Body.",
+            );
+            project.to_str().unwrap().to_owned()
+        })
+        .collect();
+    let project_env = [("SKILL_STUDIO_PROJECT".to_owned(), projects.join(":"))];
+
+    for (command, tool, list) in [
+        ("doctor", "doctor", "/listing_cost"),
+        ("conflicts", "diagnose_conflict", "/conflicts"),
+        ("extras", "extras", "/entries"),
+    ] {
+        let call = |surface: &str, cursor: Option<&str>| {
+            if surface == "mcp" {
+                let arguments =
+                    cursor.map_or_else(|| json!({}), |cursor| json!({"cursor": cursor}));
+                let mcp = headless::mcp_with_env(home.path(), tool, &arguments, &project_env);
+                return mcp["result"]["structuredContent"].clone();
+            }
+            let mut args = vec![command];
+            for project in &projects {
+                args.extend(["--project", project.as_str()]);
+            }
+            args.extend(
+                cursor
+                    .map(|cursor| ["--cursor", cursor])
+                    .into_iter()
+                    .flatten(),
+            );
+            headless::cli(home.path(), &args)
+        };
+        let cut = |envelope: &serde_json::Value| {
+            let page = &envelope["page"];
+            std::iter::once(page)
+                .chain(page["also"].as_array().into_iter().flatten())
+                .find(|page| page["list"] == list)
+                .unwrap_or_else(|| panic!("{command}: {page}"))
+                .clone()
+        };
+
+        let mut totals = Vec::new();
+        for surface in ["cli", "mcp"] {
+            let first = call(surface, None);
+            let bytes = first.to_string().len();
+            assert!(
+                bytes <= skill_studio_core::view::ANSWER_BYTES,
+                "{surface} {command}: {bytes} bytes"
+            );
+            let first_rows = first.pointer(&format!("/data{list}")).unwrap().clone();
+            let first = cut(&first);
+            assert!(
+                first["returned"].as_u64() < first["total"].as_u64(),
+                "{surface} {command}: {first}"
+            );
+            let next = call(surface, first["next_cursor"].as_str());
+            let next_rows = next.pointer(&format!("/data{list}")).unwrap();
+            assert!(
+                next_rows
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|row| !first_rows.as_array().unwrap().contains(row)),
+                "{surface} {command}: the cursor repeated rows of the first page"
+            );
+            if command == "doctor" {
+                assert_eq!(next["data"]["violations"], json!([]), "{surface}: {next}");
+            }
+            let next = cut(&next);
+            assert_eq!(next["total"], first["total"], "{surface} {command}: {next}");
+            assert!(
+                next["returned"].as_u64() > Some(0),
+                "{surface} {command}: {next}"
+            );
+            totals.push(first["total"].clone());
+        }
+        assert_eq!(totals[0], totals[1], "{command}");
+    }
+}
