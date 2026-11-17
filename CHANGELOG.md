@@ -33,6 +33,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Desktop: red text on red tints (destructive buttons, badges, menu items, error boxes) has its own color and reaches at least 4.75:1 in light and dark mode. In v0.2.0 the dark-mode text was 3.9:1.
 - Desktop: ⌘, and ⌘N no longer open another page while an alert dialog is open.
 - `extras` and Settings → Connect your agents list every OpenCode MCP server when `opencode.json` holds both the V1 `mcp.<name>` and the V2 `mcp.servers.<name>` shape. `opencode mcp add` writes that mix into a V1 config, and before this fix the V1 servers went missing.
+- `pack add --agent <name>` (MCP `pack_add` `harnesses`) also writes the shared `~/.agents/skills` copy. Before, naming an agent left no shared copy, so a later `pack update` or `pack remove` could not find the skills.
+- `pack list` and the other pack commands (MCP `pack_list`) leave out skills that come from a folder on this computer: a dotagents `path:` skill or plugin, or a skills.sh install with `sourceType: "local"`. These have no upstream. Before, each one showed as a pack, and `pack remove` on a folder that dotagents adopted deleted its only copy.
 
 ## v0.2.0
 
