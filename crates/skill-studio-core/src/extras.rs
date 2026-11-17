@@ -318,3 +318,42 @@ impl Reader<'_> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::FixtureBuilder;
+
+    fn mcp_names(config: &Value, mcp_key: &str) -> Vec<String> {
+        let fs = FixtureBuilder::new().build_fs();
+        let mut entries = Vec::new();
+        Reader {
+            fs: &fs,
+            harness: "opencode",
+            project: None,
+            entries: &mut entries,
+        }
+        .names(Path::new("opencode.json"), config, mcp_key, false);
+        entries.into_iter().filter_map(|e| e.name).collect()
+    }
+
+    #[test]
+    fn opencode_mcp_lists_v1_and_v2_servers_without_the_v2_keys() {
+        let config = serde_json::json!({"mcp": {
+            "polylane": {}, "blender": {}, "timeout": {},
+            "servers": {"skill-studio": {}, "blender": {}}
+        }});
+        assert_eq!(
+            mcp_names(&config, "mcp"),
+            ["blender", "polylane", "skill-studio"]
+        );
+    }
+
+    #[test]
+    fn other_mcp_keys_keep_servers_and_timeout_as_server_names() {
+        let config = serde_json::json!({"mcpServers": {
+            "servers": {"nested": {}}, "timeout": {}
+        }});
+        assert_eq!(mcp_names(&config, "mcpServers"), ["servers", "timeout"]);
+    }
+}
