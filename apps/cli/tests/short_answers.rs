@@ -321,7 +321,7 @@ fn invocation_tools_take_the_view_that_pages_their_answer() {
 }
 
 /// Flow: `doctor`, `conflicts` and `extras` with no view arguments, then
-/// with the cursor they hand out, on the CLI and MCP, over a home with 100
+/// with the cursor they hand out, on the CLI and MCP, over a home with 300
 /// skills whose Claude Code and Codex copies differ, 300 MCP servers, and
 /// 20 projects.
 /// Expectation: each envelope fits the 32 KB answer budget, its `page` cuts
@@ -331,7 +331,7 @@ fn invocation_tools_take_the_view_that_pages_their_answer() {
 #[test]
 fn doctor_conflicts_and_extras_answers_stay_bounded() {
     let home = tempfile::tempdir().unwrap();
-    for i in 0..100 {
+    for i in 0..300 {
         for (root, body) in [
             (".claude/skills", "Claude body."),
             (".codex/skills", "Codex body."),
