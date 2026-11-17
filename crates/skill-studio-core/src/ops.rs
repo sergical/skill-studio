@@ -247,7 +247,9 @@ impl Outcome for Diagnosis {
     }
 }
 
-impl Outcome for crate::extras::ExtrasReport {}
+impl Outcome for crate::extras::ExtrasReport {
+    const LISTS: &'static [&'static str] = &["/entries"];
+}
 impl Outcome for Capabilities {}
 impl Outcome for HarnessReport {}
 impl Outcome for FrontmatterRepairPreview {}
@@ -342,11 +344,15 @@ impl Outcome for crate::dto::FixSkillOutcome {
     }
 }
 impl Outcome for crate::dto::ConflictReport {
+    const LISTS: &'static [&'static str] = &["/conflicts"];
+
     fn found_issues(&self) -> bool {
         !self.conflicts.is_empty()
     }
 }
 impl Outcome for crate::dto::DoctorReport {
+    const LISTS: &'static [&'static str] = &["/violations", "/listing_cost"];
+
     fn found_issues(&self) -> bool {
         !self.violations.is_empty() || self.listing_cost.iter().any(|row| row.warning.is_some())
     }

@@ -528,7 +528,42 @@
   {
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "properties": {},
+      "properties": {
+        "count_by": {
+          "default": null,
+          "description": "Count the rows of the whole main list by this field. A list field\ncounts each item.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cursor": {
+          "default": null,
+          "description": "A `next_cursor` from `page` or `page.also` of an earlier call with the\nsame filters. It continues that one list; the other lists return only\ntotals.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fields": {
+          "default": [],
+          "description": "Row fields to keep. Empty keeps every field.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "limit": {
+          "default": null,
+          "description": "Rows to return from the main list. `0` returns only `page` (totals\nand `counts`). Without it, rows until the answer is 32 KB.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "name": "diagnose_conflict"
@@ -536,7 +571,42 @@
   {
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "properties": {},
+      "properties": {
+        "count_by": {
+          "default": null,
+          "description": "Count the rows of the whole main list by this field. A list field\ncounts each item.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cursor": {
+          "default": null,
+          "description": "A `next_cursor` from `page` or `page.also` of an earlier call with the\nsame filters. It continues that one list; the other lists return only\ntotals.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fields": {
+          "default": [],
+          "description": "Row fields to keep. Empty keeps every field.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "limit": {
+          "default": null,
+          "description": "Rows to return from the main list. `0` returns only `page` (totals\nand `counts`). Without it, rows until the answer is 32 KB.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "name": "doctor"
@@ -544,7 +614,42 @@
   {
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "properties": {},
+      "properties": {
+        "count_by": {
+          "default": null,
+          "description": "Count the rows of the whole main list by this field. A list field\ncounts each item.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cursor": {
+          "default": null,
+          "description": "A `next_cursor` from `page` or `page.also` of an earlier call with the\nsame filters. It continues that one list; the other lists return only\ntotals.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fields": {
+          "default": [],
+          "description": "Row fields to keep. Empty keeps every field.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "limit": {
+          "default": null,
+          "description": "Rows to return from the main list. `0` returns only `page` (totals\nand `counts`). Without it, rows until the answer is 32 KB.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "name": "extras"

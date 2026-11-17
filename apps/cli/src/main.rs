@@ -181,6 +181,8 @@ enum Command {
     Conflicts {
         #[command(flatten)]
         scope: ScopeArgs,
+        #[command(flatten)]
+        view: ViewArgs,
         /// Print the result as JSON.
         #[arg(long)]
         json: bool,
@@ -478,6 +480,8 @@ enum Command {
     Extras {
         #[command(flatten)]
         scope: ScopeArgs,
+        #[command(flatten)]
+        view: ViewArgs,
         #[arg(long)]
         json: bool,
     },
@@ -485,6 +489,8 @@ enum Command {
     Doctor {
         #[command(flatten)]
         scope: ScopeArgs,
+        #[command(flatten)]
+        view: ViewArgs,
         #[arg(long)]
         json: bool,
     },
@@ -1005,8 +1011,10 @@ fn main() -> ExitCode {
             project_path,
             json,
         } => run_install_preferences(&scope, project_path, json, time),
-        Command::Conflicts { scope, json } => run_diagnose_conflict(&scope, json, time),
-        Command::Extras { scope, json } => run_extras(&scope, json, time),
+        Command::Conflicts { scope, view, json } => {
+            run_diagnose_conflict(&scope, &view.into(), json, time)
+        }
+        Command::Extras { scope, view, json } => run_extras(&scope, &view.into(), json, time),
         Command::Invocation {
             scope,
             mismatches: true,
@@ -1036,7 +1044,7 @@ fn main() -> ExitCode {
             json,
             time,
         ),
-        Command::Doctor { scope, json } => run_doctor(&scope, json, time),
+        Command::Doctor { scope, view, json } => run_doctor(&scope, &view.into(), json, time),
         Command::TurnOff {
             scope,
             target,
@@ -1736,7 +1744,12 @@ fn run_install_preferences(
     )
 }
 
-fn run_diagnose_conflict(scope: &ScopeArgs, json: bool, time: bool) -> ExitCode {
+fn run_diagnose_conflict(
+    scope: &ScopeArgs,
+    view: &ViewRequest,
+    json: bool,
+    time: bool,
+) -> ExitCode {
     let rt = match build_runtime::<skill_studio_core::dto::ConflictReport>(
         scope,
         Operation::DiagnoseConflict,
@@ -1753,10 +1766,16 @@ fn run_diagnose_conflict(scope: &ScopeArgs, json: bool, time: bool) -> ExitCode 
     );
     let envelope =
         ResultEnvelope::from_result(Operation::DiagnoseConflict, &rt.scope, &ctx, result);
-    finish(&envelope, json, time, output::print_conflict_report_table)
+    finish_view(
+        &envelope,
+        view,
+        json,
+        time,
+        output::print_conflict_report_table,
+    )
 }
 
-fn run_doctor(scope: &ScopeArgs, json: bool, time: bool) -> ExitCode {
+fn run_doctor(scope: &ScopeArgs, view: &ViewRequest, json: bool, time: bool) -> ExitCode {
     let rt =
         match build_runtime::<skill_studio_core::dto::DoctorReport>(scope, Operation::Doctor, json)
         {
@@ -1766,7 +1785,13 @@ fn run_doctor(scope: &ScopeArgs, json: bool, time: bool) -> ExitCode {
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let result = ops::doctor(&rt, &ctx, &skill_studio_core::dto::DoctorRequest::default());
     let envelope = ResultEnvelope::from_result(Operation::Doctor, &rt.scope, &ctx, result);
-    finish(&envelope, json, time, output::print_doctor_report_table)
+    finish_view(
+        &envelope,
+        view,
+        json,
+        time,
+        output::print_doctor_report_table,
+    )
 }
 
 /// Reads every regular file under `dir` (recursively) into an
@@ -2703,6 +2728,12 @@ fn finish<T: serde::Serialize + ops::Outcome>(
     time: bool,
     print_table: impl FnOnce(&ResultEnvelope<T>),
 ) -> ExitCode {
+    const {
+        assert!(
+            T::LISTS.is_empty(),
+            "a result with lists to page needs ViewArgs and finish_view, or its cursor cannot be sent back"
+        );
+    }
     finish_view(envelope, &ViewRequest::default(), json, time, print_table)
 }
 
@@ -2802,7 +2833,7 @@ fn run_turn_off(
     })
 }
 
-fn run_extras(scope: &ScopeArgs, json: bool, time: bool) -> ExitCode {
+fn run_extras(scope: &ScopeArgs, view: &ViewRequest, json: bool, time: bool) -> ExitCode {
     let rt = match build_runtime::<skill_studio_core::extras::ExtrasReport>(
         scope,
         Operation::Extras,
@@ -2818,7 +2849,7 @@ fn run_extras(scope: &ScopeArgs, json: bool, time: bool) -> ExitCode {
         &skill_studio_core::extras::ExtrasRequest::default(),
     );
     let envelope = ResultEnvelope::from_result(Operation::Extras, &rt.scope, &ctx, result);
-    finish(&envelope, json, time, output::print_extras_table)
+    finish_view(&envelope, view, json, time, output::print_extras_table)
 }
 
 fn run_invocation(
