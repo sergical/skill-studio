@@ -1,4 +1,5 @@
 //! Names and source paths of non-skill agent configuration. No config values leave this module.
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use schemars::JsonSchema;
@@ -7,6 +8,10 @@ use serde_json::Value;
 
 use crate::ports::{OpContext, Runtime, ScopeFs, ScopedReads};
 use crate::{ops::Operation, CoreError};
+
+/// Keys of `OpenCode`'s V2 `mcp` object that are not server names
+/// (<https://opencode.ai/config.json>, `properties.mcp.properties`).
+const OPENCODE_V2_MCP_KEYS: [&str; 2] = ["servers", "timeout"];
 
 /// Empty input. The runtime scope selects the home and projects.
 #[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
@@ -233,16 +238,23 @@ impl Reader<'_> {
     }
 
     fn names(&mut self, path: &Path, value: &Value, mcp_key: &str, hooks: bool) {
-        let servers = value.get(mcp_key);
-        // OpenCode V2 nests server names under `mcp.servers`; V1 lists them under `mcp`.
-        let servers = match mcp_key {
-            "mcp" => servers.and_then(|m| m.get("servers")).or(servers),
-            _ => servers,
-        };
-        if let Some(servers) = servers.and_then(Value::as_object) {
-            for name in servers.keys() {
-                self.push(path, "mcp_server", Some(name), 1, "found");
-            }
+        let servers = value.get(mcp_key).and_then(Value::as_object);
+        let mut names: BTreeSet<&str> = servers
+            .into_iter()
+            .flat_map(|m| m.keys())
+            .map(String::as_str)
+            .collect();
+        if mcp_key == "mcp" {
+            // OpenCode reads V1 `mcp.<name>` and V2 `mcp.servers.<name>` in one file;
+            // `opencode mcp add` writes V2 next to V1 entries.
+            names.retain(|name| !OPENCODE_V2_MCP_KEYS.contains(name));
+            let v2 = servers
+                .and_then(|m| m.get("servers"))
+                .and_then(Value::as_object);
+            names.extend(v2.into_iter().flat_map(|m| m.keys()).map(String::as_str));
+        }
+        for name in names {
+            self.push(path, "mcp_server", Some(name), 1, "found");
         }
         if hooks {
             if let Some(events) = value.get("hooks").and_then(Value::as_object) {
@@ -304,5 +316,44 @@ impl Reader<'_> {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(_) => self.push(path, "config", None, 0, "unreadable"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::FixtureBuilder;
+
+    fn mcp_names(config: &Value, mcp_key: &str) -> Vec<String> {
+        let fs = FixtureBuilder::new().build_fs();
+        let mut entries = Vec::new();
+        Reader {
+            fs: &fs,
+            harness: "opencode",
+            project: None,
+            entries: &mut entries,
+        }
+        .names(Path::new("opencode.json"), config, mcp_key, false);
+        entries.into_iter().filter_map(|e| e.name).collect()
+    }
+
+    #[test]
+    fn opencode_mcp_lists_v1_and_v2_servers_without_the_v2_keys() {
+        let config = serde_json::json!({"mcp": {
+            "polylane": {}, "blender": {}, "timeout": {},
+            "servers": {"skill-studio": {}, "blender": {}}
+        }});
+        assert_eq!(
+            mcp_names(&config, "mcp"),
+            ["blender", "polylane", "skill-studio"]
+        );
+    }
+
+    #[test]
+    fn other_mcp_keys_keep_servers_and_timeout_as_server_names() {
+        let config = serde_json::json!({"mcpServers": {
+            "servers": {"nested": {}}, "timeout": {}
+        }});
+        assert_eq!(mcp_names(&config, "mcpServers"), ["servers", "timeout"]);
     }
 }

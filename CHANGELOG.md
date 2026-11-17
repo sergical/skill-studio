@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed
+
+- `extras` and Settings → Connect your agents list every OpenCode MCP server when `opencode.json` holds both the V1 `mcp.<name>` and the V2 `mcp.servers.<name>` shape. `opencode mcp add` writes that mix into a V1 config, and before this fix the V1 servers went missing.
+
 ## v0.2.0
 
 ### Added
