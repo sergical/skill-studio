@@ -75,3 +75,33 @@ test("every Home row action, including Compare and Resolve, shows its whole labe
   );
   expect(actions.filter((action) => !action.fits).map((action) => action.label)).toEqual([]);
 });
+
+test("Park on an idle Home row takes the skill out of Who can invoke and the idle prompt cost", async ({
+  page,
+}) => {
+  const invoke = page.getByRole("group", { name: "Who can invoke" });
+  const idle = page
+    .getByRole("group", { name: "Prompt cost" })
+    .getByRole("button", { name: /skills not used in 30 days/ });
+  // "12 you or the model", "3 model only", "4 you only": the three segments add up to the total.
+  const invokeTotal = async () =>
+    (await invoke.getByRole("button").allTextContents())
+      .map((text) => Number.parseInt(text, 10))
+      .reduce((sum, count) => sum + count, 0);
+  const idleCount = async () =>
+    Number((await idle.textContent())?.match(/(\d+) skills not used/)?.[1]);
+  const invokeBefore = await invokeTotal();
+  const idleBefore = await idleCount();
+  expect(idleBefore).toBeGreaterThan(0);
+
+  // The idle segment shows the group; its first rows are the skills the model can invoke.
+  await idle.click();
+  await page
+    .locator('[data-group="unused"]')
+    .getByRole("button", { name: "Park", exact: true })
+    .first()
+    .click();
+
+  await expect.poll(idleCount).toBe(idleBefore - 1);
+  expect(await invokeTotal()).toBe(invokeBefore - 1);
+});

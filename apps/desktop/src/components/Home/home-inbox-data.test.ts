@@ -15,7 +15,9 @@ import type {
   UpdateAllOutcome,
   UpdateOutcome,
 } from "@skill-studio/lib";
+import { buildHarnessSnapshot } from "../../dev/harness/skill-fixture";
 import {
+  computeHomeGroups,
   homeRowState,
   issueDeploymentPath,
   updateAllFailureMessage,
@@ -185,6 +187,50 @@ function failAll(items: UpdateAllItem["skill"][]): UpdateAllOutcome {
     not_run: [],
   };
 }
+
+describe("computeHomeGroups", () => {
+  it("parked_skills_leave_who_can_invoke_prompt_cost_and_the_unused_group_or_home_counts_skills_no_agent_reads", () => {
+    // The scan keeps a parked skill in the snapshot, with `parked` set and every copy in the parked scope.
+    const parkedSkill = (name: string, overrides: Partial<InstalledSkill>) =>
+      fixtureSkill({
+        name,
+        parked: true,
+        parked_at: "2026-11-01T00:00:00Z",
+        deployments: [
+          fixtureDeployment({
+            agent: "parked",
+            scope: "parked",
+            path: `/home/.agents/skills-parked/universal/${name}`,
+          }),
+        ],
+        ...overrides,
+      });
+    const base = buildHarnessSnapshot();
+    const usedIn30Days = (skill: string) => ({ ...base.invocations[0], skill, last_30_days: 3 });
+    const groups = computeHomeGroups({
+      ...base,
+      skills: [
+        fixtureSkill({ name: "live-used", invocation: "both", description_tokens: 10 }),
+        fixtureSkill({ name: "live-idle", invocation: "model-only", description_tokens: 20 }),
+        fixtureSkill({ name: "live-manual", invocation: "user-only", description_tokens: 40 }),
+        parkedSkill("parked-used", { invocation: "both", description_tokens: 100 }),
+        parkedSkill("parked-idle", { invocation: "model-only", description_tokens: 200 }),
+        parkedSkill("parked-manual", { invocation: "user-only", description_tokens: 400 }),
+      ],
+      invocations: [usedIn30Days("live-used"), usedIn30Days("parked-used")],
+    });
+
+    expect(groups.inv).toEqual({ both: 1, modelOnly: 1, userOnly: 1 });
+    expect(groups.cost).toEqual({
+      totalTokens: 30,
+      usedTokens: 10,
+      usedCount: 1,
+      idleTokens: 20,
+      idleCount: 1,
+    });
+    expect(groups.unused.map((skill) => skill.name)).toEqual(["live-idle", "live-manual"]);
+  });
+});
 
 describe("updateAllOutdatedSkills", () => {
   it("update_all_sends_one_request_for_every_outdated_owner_or_names_the_extra_call", async () => {
