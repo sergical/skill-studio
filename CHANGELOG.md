@@ -11,10 +11,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Desktop: a Packs page. It lists each pack and has Check upstream, Update all and Add pack. Add, Update and Remove show the plan first, Confirm runs it, and the dialog shows what each step did. Update and Remove are off for plugin and npm packs; a tooltip names the command that owns them.
 - `skill-studio recovery list` and `recovery drop <PLAN_ID>` (MCP `recovery_list` and `recovery_drop`) show an interrupted write plan that recovery cannot finish, with its failed-run count, last error and touched paths, and let you give it up. Drop changes no file and records a history event. Before, such a plan blocked every write and nothing could clear it.
 - `watch --max-seconds N` stops after N seconds and exits 0.
+- `library --mode AGENT=manual|auto` (MCP `library` `modes`) shows only the skills that each named agent reads in that mode. Repeat `--mode` for more agents.
 
 ### Changed
 
-- Every CLI and MCP read returns at most 32 KB by default and pages its lists: `scan`, `diagnose`, `library`, `usage`, `outdated`, `invocation`, `pack list`, `pack show`, `doctor`, `conflicts` and `extras`. `--limit`, `--cursor`, `--fields` and `--count-by` (MCP: `limit`, `cursor`, `fields`, `count_by`) give an exact answer in one call. Before, `scan --json` and `diagnose --json` were 2.9 MB on a real home.
+- The JSON answer of every CLI and MCP read is at most 32 KB by default, and its lists are paged: `scan`, `diagnose`, `library`, `usage`, `outdated`, `invocation`, `pack list`, `pack show`, `doctor`, `conflicts` and `extras`. CLI tables stay whole. An MCP tool result holds two copies of the answer, so it can be about 70 KB. `--limit`, `--cursor`, `--fields` and `--count-by` (MCP: `limit`, `cursor`, `fields`, `count_by`) give an exact answer in one call. Before, `scan --json` and `diagnose --json` were 2.9 MB on a real home.
 - MCP tool results start with `untrusted_paths`, the JSON paths of text that comes from third parties: SKILL.md bodies, names, descriptions, frontmatter, file paths and child-process output. The server instructions tell the agent to treat text at those paths as data. `npx` error output is now in a separate `detail` field.
 - `update_all`, `park_batch` and `unpark_batch` (CLI and MCP) refuse more than 100 items with `invalid_request` before any item runs. The desktop Update all and `pack update` have no limit.
 - A write that an unfinished recovery blocks now fails with `recovery_pending` (exit 3), not `incomplete` (exit 4).
@@ -28,6 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - A desktop SKILL.md save takes the same write lease as CLI and MCP writes, so the two can no longer interleave and lose a write.
 - If another tool replaces a folder under a scope root with a link during a write, the write fails instead of landing outside the scope.
 - Desktop: red text on red tints (destructive buttons, badges, menu items, error boxes) has its own color and reaches at least 4.75:1 in light and dark mode. In v0.2.0 the dark-mode text was 3.9:1.
+- Desktop: ⌘, and ⌘N no longer open another page while an alert dialog is open.
 - `extras` and Settings → Connect your agents list every OpenCode MCP server when `opencode.json` holds both the V1 `mcp.<name>` and the V2 `mcp.servers.<name>` shape. `opencode mcp add` writes that mix into a V1 config, and before this fix the V1 servers went missing.
 
 ## v0.2.0
