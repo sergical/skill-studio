@@ -67,6 +67,8 @@ fn restore_waits_for_successful_recovery_or_writes_over_an_interrupted_plan() {
                         staged: sentinel.clone(),
                     }],
                     status: PlanStatus::Pending,
+                    recovery_attempts: 0,
+                    recovery_error: None,
                 },
             )
             .unwrap();
@@ -80,7 +82,7 @@ fn restore_waits_for_successful_recovery_or_writes_over_an_interrupted_plan() {
         },
     )
     .unwrap_err();
-    assert_eq!(error.code, skill_studio_core::ErrorCode::Incomplete);
+    assert_eq!(error.code, skill_studio_core::ErrorCode::RecoveryPending);
     assert!(error.message.contains("Recovery"), "{error}");
     assert!(
         !path.exists(),

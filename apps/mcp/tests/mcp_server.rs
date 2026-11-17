@@ -1184,6 +1184,7 @@ const READ_TOOLS: &[&str] = &[
     "invocation_mismatches",
     "pack_list",
     "pack_show",
+    "recovery_list",
 ];
 const WRITE_TOOLS: &[&str] = &[
     "invocation",
@@ -1203,13 +1204,14 @@ const WRITE_TOOLS: &[&str] = &[
     "pack_add",
     "pack_update",
     "pack_remove",
+    "recovery_drop",
 ];
 
 /// Flow: list tools with the default environment.
 /// Expectation: exactly the read and write tools above; each read tool has
 /// `readOnlyHint: true`; each write tool has `readOnlyHint: false` and a
-/// description that says how to undo it; only `remove` and `pack_remove`
-/// are destructive.
+/// description that says how to undo it; only `remove`, `pack_remove` and
+/// `recovery_drop` are destructive.
 /// A failure here means a client may auto-approve a write, warn on a read,
 /// or show an agent a write with no way back.
 #[tokio::test]
@@ -1278,7 +1280,7 @@ async fn tools_list_publishes_hints_and_an_undo_for_every_write() {
             );
             assert_eq!(
                 annotations.destructive_hint,
-                Some(matches!(name, "remove" | "pack_remove")),
+                Some(matches!(name, "remove" | "pack_remove" | "recovery_drop")),
                 "{name}'s destructive hint"
             );
         }
@@ -2060,6 +2062,18 @@ async fn third_party_text_is_labelled_in_tool_results_and_instructions() {
     let diagnose = call_tool(&client, "diagnose", serde_json::json!({})).await;
     let diagnose_paths = untrusted(&diagnose);
     assert!(diagnose_paths.iter().any(|p| p == "data.issues[].skill"));
+    let recovery = call_tool(&client, "recovery_list", serde_json::json!({})).await;
+    let recovery_paths = untrusted(&recovery);
+    for path in [
+        "data.plans[].id",
+        "data.plans[].label",
+        "data.plans[].touched_paths",
+    ] {
+        assert!(
+            recovery_paths.iter().any(|p| p == path),
+            "{path} not in {recovery_paths:?}"
+        );
+    }
     for own in [&scan_paths, &diagnose_paths] {
         assert!(!own.iter().any(|p| p.contains("next_action")), "{own:?}");
     }

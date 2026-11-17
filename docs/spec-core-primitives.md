@@ -320,6 +320,7 @@ when phase 1 and 2 primitives are enough).
 | `drift_conflict`    | Live bytes differ from the recorded fingerprint                         | 3    |
 | `ownership_changed` | Owner id or kind changed since the preview                              | 3    |
 | `already_reverted`  | Another restore claimed the event                                       | 3    |
+| `recovery_pending`  | An interrupted write is not undone; no new write ran                    | 3    |
 | `incomplete`        | A root was not read; result is partial                                  | 4    |
 | `cancelled`         | The caller cancelled                                                    | 130  |
 

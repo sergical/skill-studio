@@ -147,14 +147,14 @@ bare. Every invocation carries a fresh ULID `correlation_id`.
 
 ### Exit statuses
 
-| Exit | Meaning                                                                                                                                                |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 0    | `status: "ok"`, no issues (`scan`, or `diagnose` with no issues).                                                                                      |
-| 1    | `status: "ok"`, but the result has a problem: `diagnose` (`Warning` or above), `conflicts`, `doctor`, `fix` (unrepaired items) or `update` (errors).   |
-| 2    | `status: "error"`, a request- or scope-shaped error (`invalid_request`, `invalid_scope`, `ambiguous_target`, `unsupported`, `execution_failed`, `io`). |
-| 3    | `status: "error"`, a concurrency conflict (`scope_busy`, `stale_proposal`, `drift_conflict`, `ownership_changed`, `already_reverted`).                 |
-| 4    | `status: "partial"` — some scope roots could not be read; see `data.observations`.                                                                     |
-| 130  | `status: "error"`, `code: "cancelled"`.                                                                                                                |
+| Exit | Meaning                                                                                                                                                    |
+| ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0    | `status: "ok"`, no issues (`scan`, or `diagnose` with no issues).                                                                                          |
+| 1    | `status: "ok"`, but the result has a problem: `diagnose` (`Warning` or above), `conflicts`, `doctor`, `fix` (unrepaired items) or `update` (errors).       |
+| 2    | `status: "error"`, a request- or scope-shaped error (`invalid_request`, `invalid_scope`, `ambiguous_target`, `unsupported`, `execution_failed`, `io`).     |
+| 3    | `status: "error"`, a concurrency conflict (`scope_busy`, `stale_proposal`, `drift_conflict`, `ownership_changed`, `already_reverted`, `recovery_pending`). |
+| 4    | `status: "partial"` — some scope roots could not be read; see `data.observations`.                                                                         |
+| 130  | `status: "error"`, `code: "cancelled"`.                                                                                                                    |
 
 The mapping is exact: it is `ErrorCode::exit_status()` in the core, tested
 there and exercised end-to-end in `apps/cli/tests/envelope.rs`.

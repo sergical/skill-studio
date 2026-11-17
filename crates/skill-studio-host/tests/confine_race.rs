@@ -221,6 +221,14 @@ impl<F: Fn() + Send> Journal for SwapOnBackupRead<F> {
     ) -> Result<(), CoreError> {
         self.inner.finish(guard, id, status)
     }
+    fn record_recovery_failure(
+        &self,
+        guard: &ExclusiveGuard,
+        id: &PlanId,
+        error: &str,
+    ) -> Result<(), CoreError> {
+        self.inner.record_recovery_failure(guard, id, error)
+    }
     fn all(&self) -> Result<Vec<PlanRecord>, CoreError> {
         self.inner.all()
     }

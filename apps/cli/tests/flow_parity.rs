@@ -2,6 +2,9 @@
 
 #[path = "support/headless.rs"]
 mod headless;
+#[allow(dead_code)]
+#[path = "support/undo_fixtures.rs"]
+mod undo_fixtures;
 
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -34,8 +37,19 @@ impl Fixture {
         dir
     }
     fn call(&self, args: &[&str], tool: &str, operation: &str, input: &Value) -> Value {
+        let result = self.raw(args, tool, operation, input);
+        assert!(
+            matches!(result["status"].as_str(), Some("ok" | "issues_found")),
+            "{operation}: {result}"
+        );
+        assert_eq!(result["operation"], operation, "{result}");
+        assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
+        assert!(!result["data"].is_null(), "{result}");
+        result
+    }
+    fn raw(&self, args: &[&str], tool: &str, operation: &str, input: &Value) -> Value {
         let env = [("PATH".to_string(), "/usr/bin:/bin".to_string())];
-        let result = match self.surface {
+        match self.surface {
             Surface::Cli if operation == "scan" => headless::cli(self.home.path(), args),
             Surface::Cli => headless::cli_with_env(self.home.path(), args, &env),
             Surface::Mcp => {
@@ -51,15 +65,7 @@ impl Fixture {
                 );
                 rpc["result"]["structuredContent"].clone()
             }
-        };
-        assert!(
-            matches!(result["status"].as_str(), Some("ok" | "issues_found")),
-            "{operation}: {result}"
-        );
-        assert_eq!(result["operation"], operation, "{result}");
-        assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
-        assert!(!result["data"].is_null(), "{result}");
-        result
+        }
     }
     fn install(&self, name: &str) -> Value {
         let source = self.source(name, "Original");
@@ -289,6 +295,70 @@ fn exercise(flow: &str, surface: Surface) {
                 Fixture::md("gamma", "Original")
             );
         }
+        "Stuck recovery" => {
+            let foreign = tempfile::tempdir().unwrap();
+            std::fs::write(foreign.path().join("sentinel"), b"foreign bytes stay").unwrap();
+            undo_fixtures::stuck_plan(f.home.path(), foreign.path());
+            let id = f.deployment("universal");
+            let remove = |expect_ok: bool| {
+                let args = ["remove", "--id", id.as_str()];
+                let input = json!({"deployment_id":id});
+                if expect_ok {
+                    f.call(&args, "remove", "remove", &input)
+                } else {
+                    f.raw(&args, "remove", "remove", &input)
+                }
+            };
+            let blocked = remove(false);
+            assert_eq!(
+                blocked["errors"][0]["code"], "recovery_pending",
+                "{blocked}"
+            );
+            let message = blocked["errors"][0]["message"].as_str().unwrap();
+            assert!(message.contains("unrecoverable-fixture"), "{message}");
+            assert!(message.contains("failed recovery runs: 1"), "{message}");
+            assert!(f.path("gamma").exists());
+
+            let listed = f.call(
+                &["recovery", "list"],
+                "recovery_list",
+                "recovery_list",
+                &json!({}),
+            );
+            let plan = &listed["data"]["plans"][0];
+            assert_eq!(plan["id"], "unrecoverable-fixture", "{listed}");
+            assert_eq!(plan["status"], "interrupted");
+            assert_eq!(plan["recovery_attempts"], 1);
+            let sentinel = foreign.path().join("sentinel");
+            assert_eq!(plan["touched_paths"][0], sentinel.to_str().unwrap());
+
+            let dropped = f.call(
+                &["recovery", "drop", "unrecoverable-fixture"],
+                "recovery_drop",
+                "recovery_drop",
+                &json!({"plan_id":"unrecoverable-fixture"}),
+            );
+            assert_eq!(dropped["data"]["plan"]["status"], "dropped", "{dropped}");
+            let events = f.call(&["events"], "list_events", "list_events", &json!({}));
+            let event = events["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["kind"] == "recovery_plan_dropped")
+                .unwrap_or_else(|| panic!("no drop event: {events}"));
+            assert_eq!(event["id"], dropped["event_id"]);
+            let after = f.call(
+                &["recovery", "list"],
+                "recovery_list",
+                "recovery_list",
+                &json!({}),
+            );
+            assert_eq!(after["data"]["plans"], json!([]), "{after}");
+
+            remove(true);
+            assert!(!f.path("gamma").exists());
+            assert_eq!(std::fs::read(&sentinel).unwrap(), b"foreign bytes stay");
+        }
         "Invocation policy" => {
             let result = f.call(
                 &["invocation", "gamma", "--manual"],
@@ -400,6 +470,7 @@ executable_coverage! {
     "Fix" => (cli_fix_repairs_yaml_or_names_the_still_broken_header, mcp_fix_repairs_yaml_or_names_the_still_broken_header),
     "Undo from Activity" => (cli_activity_undo_restores_gamma_or_names_the_missing_bytes, mcp_activity_undo_restores_gamma_or_names_the_missing_bytes),
     "Frontmatter repair" => (cli_repair_applies_preview_or_names_the_unchanged_header, mcp_repair_applies_preview_or_names_the_unchanged_header),
+    "Stuck recovery" => (cli_recovery_drop_unblocks_writes_or_names_the_stuck_plan, mcp_recovery_drop_unblocks_writes_or_names_the_stuck_plan),
 }
 
 #[test]

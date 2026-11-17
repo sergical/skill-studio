@@ -127,8 +127,7 @@ impl FsJournal {
         self.plan_dir(id).join("plan.json")
     }
 
-    #[cfg(test)]
-    fn backup_path(&self, id: &PlanId, relative: &str) -> PathBuf {
+    pub(crate) fn backup_path(&self, id: &PlanId, relative: &str) -> PathBuf {
         self.plan_dir(id).join("backups").join(relative)
     }
 
@@ -288,6 +287,20 @@ impl Journal for FsJournal {
         Ok(())
     }
 
+    fn record_recovery_failure(
+        &self,
+        _guard: &ExclusiveGuard,
+        id: &PlanId,
+        error: &str,
+    ) -> Result<(), CoreError> {
+        Self::validate_id(id)?;
+        let mut record: PlanRecord = self.read_json(&self.plan_path(id))?;
+        record.status = record.status.settle(PlanStatus::Interrupted)?;
+        record.recovery_attempts = record.recovery_attempts.saturating_add(1);
+        record.recovery_error = Some(error.to_owned());
+        self.write_record(&record)
+    }
+
     fn visit(&self, visit: &mut dyn FnMut(PlanRecord)) -> Result<(), CoreError> {
         let plans_dir = self.root.join("plans");
         let mut failure = None;
@@ -358,7 +371,7 @@ impl Journal for FsJournal {
                     "recovery still needs this plan's backups",
                 ))
             }
-            PlanStatus::Done | PlanStatus::Failed | PlanStatus::Reversed => {}
+            PlanStatus::Done | PlanStatus::Failed | PlanStatus::Reversed | PlanStatus::Dropped => {}
         }
         let (root, path) = self.checked_backup_path(id, relative)?;
         if !record
@@ -466,6 +479,8 @@ impl<'a> PlanWriter<'a> {
             expired_backups: Vec::new(),
             steps: Vec::new(),
             status: PlanStatus::Pending,
+            recovery_attempts: 0,
+            recovery_error: None,
         };
         journal.begin(guard, &record)?;
         Ok(PlanWriter { journal, guard, id })
@@ -632,6 +647,10 @@ fn backup_relative_name(path: &Path) -> String {
 pub struct InterruptedPlan {
     /// The plan's id.
     pub id: PlanId,
+    /// The plan's label.
+    pub label: String,
+    /// Failed recovery runs, this one included.
+    pub attempts: u32,
     /// What went wrong undoing it.
     pub error: String,
 }
@@ -686,42 +705,40 @@ pub fn reconcile(
                 .iter()
                 .any(|key| root.starts_with(&key.canonical_root))
         });
-        let (status, reversal_error) = if !owned {
-            (
-                PlanStatus::Interrupted,
-                Some(format!(
-                    "{}: recovery root is not covered by the held write lease",
-                    plan.root.display()
-                )),
-            )
+        let outcome = if !owned {
+            Err(format!(
+                "{}: recovery root is not covered by the held write lease",
+                plan.root.display()
+            ))
         } else if plan.steps.is_empty() {
-            (PlanStatus::Failed, None)
+            Ok(PlanStatus::Failed)
         } else {
-            match reverse_steps(journal, &plan, fs) {
-                Ok(()) => (PlanStatus::Reversed, None),
-                Err(error) => (PlanStatus::Interrupted, Some(error.to_string())),
-            }
+            reverse_steps(journal, &plan, fs)
+                .map(|()| PlanStatus::Reversed)
+                .map_err(|error| error.to_string())
         };
-        if let Err(error) = journal.finish(guard, &plan.id, status) {
+        let settled = match &outcome {
+            Ok(status) => journal.finish(guard, &plan.id, *status),
+            Err(error) => journal.record_recovery_failure(guard, &plan.id, error),
+        };
+        if let Err(error) = settled {
             report.interrupted.push(InterruptedPlan {
+                attempts: plan.recovery_attempts,
+                label: plan.label,
                 id: plan.id,
                 error: error.to_string(),
             });
             continue;
         }
-        match status {
-            PlanStatus::Reversed => report.reversed.push(plan.id),
-            PlanStatus::Failed => report.resolved_without_steps.push(plan.id),
-            PlanStatus::Interrupted => report.interrupted.push(InterruptedPlan {
+        match outcome {
+            Ok(PlanStatus::Reversed) => report.reversed.push(plan.id),
+            Ok(_) => report.resolved_without_steps.push(plan.id),
+            Err(error) => report.interrupted.push(InterruptedPlan {
+                attempts: plan.recovery_attempts.saturating_add(1),
+                label: plan.label,
                 id: plan.id,
-                error: reversal_error.unwrap_or_else(|| "recovery did not finish".into()),
+                error,
             }),
-            PlanStatus::Pending | PlanStatus::Done => {
-                return Err(CoreError::new(
-                    ErrorCode::InvalidRequest,
-                    "invalid recovery settlement",
-                ))
-            }
         }
     }
     Ok(report)
@@ -741,12 +758,21 @@ pub fn reconcile_scope_journal(
         let plans = report
             .interrupted
             .iter()
-            .map(|plan| plan.id.0.as_str())
+            .map(|plan| {
+                format!(
+                    "{} ({}, failed recovery runs: {}): {}",
+                    plan.id.0, plan.label, plan.attempts, plan.error
+                )
+            })
             .collect::<Vec<_>>()
-            .join(", ");
+            .join("; ");
         return Err(CoreError::new(
-            ErrorCode::Incomplete,
-            format!("Recovery did not finish for plans: {plans}. No new write ran."),
+            ErrorCode::RecoveryPending,
+            format!(
+                "Recovery did not finish for plans: {plans}. No new write ran. \
+                 Run `recovery list` to see what each plan may have left on disk, \
+                 then `recovery drop <plan-id>` to give it up."
+            ),
         ));
     }
     trim_backups(&journal, guard, rt.ports.clock.now())?;
@@ -756,7 +782,7 @@ pub fn reconcile_scope_journal(
 /// Every path inside `step` that reversal would write to - what
 /// [`reverse_steps`] confines under the plan's root before touching
 /// anything for that step.
-fn step_paths(step: &PlanStep) -> Vec<&Path> {
+pub(crate) fn step_paths(step: &PlanStep) -> Vec<&Path> {
     match step {
         PlanStep::Stage { staged } => vec![staged],
         PlanStep::Swap {
@@ -1228,7 +1254,7 @@ pub fn trim_backups(
     for plan in &plans {
         match plan.status {
             PlanStatus::Pending | PlanStatus::Interrupted => continue,
-            PlanStatus::Done | PlanStatus::Failed | PlanStatus::Reversed => {}
+            PlanStatus::Done | PlanStatus::Failed | PlanStatus::Reversed | PlanStatus::Dropped => {}
         }
         for backup in &plan.backups {
             if !guard
@@ -1911,6 +1937,50 @@ mod tests {
     }
 
     #[test]
+    fn each_failed_recovery_run_counts_and_keeps_its_error_until_the_plan_is_dropped() {
+        let fs: Arc<dyn ScopeFs> = Arc::new(
+            FixtureBuilder::new()
+                .dir("/journal")
+                .dir("/root")
+                .dir("/elsewhere")
+                .build_fs(),
+        );
+        let journal = journal_over(fs.clone());
+        let guard = guard(&FakeLease::default());
+        let id = PlanId("stuck".into());
+        let plan = PlanWriter::begin(
+            &journal,
+            &guard,
+            id.clone(),
+            Utc::now(),
+            "stuck write",
+            PathBuf::from("/elsewhere"),
+            Vec::new(),
+        )
+        .unwrap();
+        plan.record_stage(Path::new("/elsewhere/staged")).unwrap();
+
+        for run in 1..=2 {
+            let report = reconcile(&journal, &guard, fs.as_ref()).unwrap();
+            assert_eq!(report.interrupted.len(), 1);
+            assert_eq!(report.interrupted[0].attempts, run);
+            assert_eq!(report.interrupted[0].label, "stuck write");
+            let stored = journal.all().unwrap().remove(0);
+            assert_eq!(stored.status, PlanStatus::Interrupted);
+            assert_eq!(stored.recovery_attempts, run);
+            assert!(stored
+                .recovery_error
+                .as_deref()
+                .is_some_and(|error| error.contains("not covered by the held write lease")));
+        }
+
+        journal.finish(&guard, &id, PlanStatus::Dropped).unwrap();
+        let report = reconcile(&journal, &guard, fs.as_ref()).unwrap();
+        assert!(report.interrupted.is_empty());
+        assert_eq!(journal.all().unwrap()[0].status, PlanStatus::Dropped);
+    }
+
+    #[test]
     fn every_plan_transition_follows_recovery_rules_or_reopens_a_completed_plan() {
         use PlanStatus::*;
         let legal = [
@@ -1921,9 +1991,11 @@ mod tests {
             (Interrupted, Interrupted),
             (Interrupted, Failed),
             (Interrupted, Reversed),
+            (Interrupted, Dropped),
         ];
-        for from in [Pending, Done, Failed, Reversed, Interrupted] {
-            for to in [Pending, Done, Failed, Reversed, Interrupted] {
+        let all = [Pending, Done, Failed, Reversed, Interrupted, Dropped];
+        for from in all {
+            for to in all {
                 let result = from.settle(to);
                 assert_eq!(
                     result.is_ok(),
