@@ -4889,7 +4889,7 @@
       },
       "harnesses": {
         "default": [],
-        "description": "Agents to install for, in the `skills` CLI's `--agent` spelling.\nEmpty: the shared `.agents/skills` folder only.",
+        "description": "Agents to link, in the `skills` CLI's `--agent` spelling. Every skill\nalso gets the shared `.agents/skills` copy that update and remove use.\nEmpty: the shared copy only.",
         "items": {
           "$ref": "#/$defs/AgentIdentity"
         },

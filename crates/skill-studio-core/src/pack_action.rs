@@ -18,6 +18,7 @@ use crate::identity::{
     AgentId, BackingRelationship, DeploymentId, EventId, RootKind, RootScope, SkillDestination,
     SkillName,
 };
+use crate::install_targets::UNIVERSAL_TARGET;
 use crate::ops::{OpStatus, Operation, Outcome};
 use crate::pack::{self, Pack, PackKind, PackRemote, PackSkill};
 use crate::ports::{OpContext, Runtime};
@@ -34,8 +35,9 @@ pub struct PackAddRequest {
     /// Branch, tag, or commit to pin the pack to.
     #[serde(default)]
     pub ref_pin: Option<String>,
-    /// Agents to install for, in the `skills` CLI's `--agent` spelling.
-    /// Empty: the shared `.agents/skills` folder only.
+    /// Agents to link, in the `skills` CLI's `--agent` spelling. Every skill
+    /// also gets the shared `.agents/skills` copy that update and remove use.
+    /// Empty: the shared copy only.
     #[serde(default)]
     pub harnesses: Vec<AgentId>,
     /// Install into this tracked project. Absent: the home.
@@ -202,6 +204,9 @@ pub fn pack_add(
                 }
             })
             .collect();
+        let harnesses: Vec<AgentId> = std::iter::once(AgentId::from(UNIVERSAL_TARGET))
+            .chain(req.harnesses.iter().cloned())
+            .collect();
         let source = match &req.ref_pin {
             Some(git_ref) => format!("{}#{git_ref}", req.source),
             None => req.source.clone(),
@@ -215,7 +220,7 @@ pub fn pack_add(
                         skill: SkillName(step.skill.clone()),
                         method: InstallMethod::SkillsSh,
                         scope: step.scope.clone(),
-                        harnesses: req.harnesses.clone(),
+                        harnesses: harnesses.clone(),
                         link_mode: InstallLinkMode::Link,
                         destination: SkillDestination::Universal,
                         files: Vec::new(),

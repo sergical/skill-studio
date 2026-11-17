@@ -86,6 +86,29 @@ test("Check upstream offers the pack's new skills, and adding them installs them
   await expect(row.getByRole("button", { name: "Add 1 new" })).toHaveCount(0);
 });
 
+test("a pack's added skill reaches Claude Code, not only the shared folder", async ({ page }) => {
+  const row = packRow(page, "getsentry/skills");
+  await page.getByRole("button", { name: "Check upstream" }).click();
+  await row.getByRole("button", { name: "Add 1 new" }).click();
+  const dialog = page.getByRole("alertdialog");
+  await dialog.getByRole("button", { name: "Add 1 skill" }).click();
+  await expect(dialog.getByRole("status")).toHaveText("Installed 1 skill; 0 skipped; 0 failed.");
+  await dialog.getByRole("button", { name: "Close" }).click();
+
+  await page
+    .getByRole("button", { name: /^Skills/ })
+    .first()
+    .click();
+  await page.getByRole("textbox", { name: "Filter skills" }).fill("sentry-setup-logging");
+  const skillRow = page
+    .getByRole("grid", { name: "Skills" })
+    .getByRole("row")
+    .filter({ hasText: "sentry-setup-logging" });
+  await expect(
+    skillRow.getByRole("img", { name: "Claude Code · link to the Universal folder" }),
+  ).toBeVisible();
+});
+
 test("removing a pack asks first, and Confirm removes its skills and drops the row", async ({
   page,
 }) => {

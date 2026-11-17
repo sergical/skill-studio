@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use skill_studio_core::dto::ListEventsRequest;
 use skill_studio_core::harness::HarnessCatalog;
+use skill_studio_core::identity::AgentId;
 use skill_studio_core::pack::{PackRemote, RemotePack, RemoteSkill};
 use skill_studio_core::pack_action::{
     PackActionReport, PackAddRequest, PackRemoveRequest, PackStepState, PackUpdateRequest,
@@ -244,6 +245,34 @@ fn pack_add_installs_each_skill_from_the_pinned_source_with_its_own_undo_event()
         };
         assert!(installs.iter().any(|e| &e.id == event_id), "{event_id:?}");
     }
+    std::fs::remove_dir_all(&home).ok();
+}
+
+#[test]
+fn pack_add_keeps_the_shared_copy_when_agents_are_named_or_update_and_remove_find_no_copy() {
+    let home = home("pack_add_agents");
+    let cli = FakeSkillsCli::new(&home);
+    let rt = runtime(&home, cli.clone());
+    let request = PackAddRequest {
+        harnesses: vec![AgentId::from(AgentId::CLAUDE_CODE)],
+        ..add(&["alpha"], None, false)
+    };
+
+    let report = ops::pack_add(&rt, &ctx(), &request, None).unwrap();
+
+    assert_eq!(states(&report), [("alpha".into(), "done")]);
+    let calls = cli.calls();
+    let agents: Vec<&str> = calls[0]
+        .windows(2)
+        .filter(|w| w[0] == "--agent")
+        .map(|w| w[1].as_str())
+        .collect();
+    assert_eq!(agents, ["universal", "claude-code"], "{calls:?}");
+    let link = home.join(".claude/skills/alpha");
+    assert!(
+        std::fs::symlink_metadata(&link).is_ok_and(|m| m.file_type().is_symlink()),
+        "{link:?} is not a link to the shared copy"
+    );
     std::fs::remove_dir_all(&home).ok();
 }
 

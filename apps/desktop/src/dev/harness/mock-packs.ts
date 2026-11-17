@@ -192,11 +192,42 @@ export function mockPackChange(
   return { report: report(dryRun, action, steps), next: { ...snapshot, skills } };
 }
 
+/** The shared copy, plus the Claude Code link `npx skills add --agent
+ * claude-code` makes. The other first-class agents read the shared folder. */
+function packAddDeployments(name: string, harnesses: string[]) {
+  const shared = `${HARNESS_HOME}/.agents/skills/${name}`;
+  const rows = [
+    deployment({
+      agent: "shared",
+      scope: "global",
+      path: shared,
+      owner_kind: "skills-sh",
+      content_hash: `${name}-v1`,
+    }),
+  ];
+  if (harnesses.includes("claude-code")) {
+    rows.push(
+      deployment({
+        agent: "Claude Code",
+        scope: "global",
+        path: `${HARNESS_HOME}/.claude/skills/${name}`,
+        is_symlink: true,
+        symlink_target: shared,
+        resolved_path: shared,
+        owner_kind: "skills-sh",
+        content_hash: `${name}-v1`,
+      }),
+    );
+  }
+  return rows;
+}
+
 /** `pack_add` on `snapshot`: installs `skills`, or every upstream skill not installed yet. */
 export function mockPackAdd(
   snapshot: SkillSnapshot,
   source: string,
   names: string[],
+  harnesses: string[],
   dryRun: boolean,
 ): MockPackResult {
   const installed = new Set(snapshot.skills.map((s) => s.name));
@@ -222,15 +253,7 @@ export function mockPackAdd(
           source_url: `https://github.com/${source}`,
           source_kind: "skills-sh",
           description: `Installed from the ${source} pack.`,
-          deployments: [
-            deployment({
-              agent: "shared",
-              scope: "global",
-              path: `${HARNESS_HOME}/.agents/skills/${name}`,
-              owner_kind: "skills-sh",
-              content_hash: `${name}-v1`,
-            }),
-          ],
+          deployments: packAddDeployments(name, harnesses),
         }),
       );
   return {

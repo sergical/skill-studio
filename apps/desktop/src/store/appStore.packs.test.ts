@@ -10,15 +10,28 @@ import { useAppStore } from "./appStore";
 
 afterEach(() => {
   clearMocks();
+  useAppStore.getState().setHarnessDetection({ choice: null });
 });
+
+function mockPackAdd(calls: unknown[], detected: string[]) {
+  mockIPC((command, args) => {
+    if (command === "get_add_method_defaults") {
+      return {
+        dotagents_installed: true,
+        has_skill_lock: true,
+        installed_harnesses: detected,
+        claude_reads_shared_folder: false,
+      };
+    }
+    if (command !== "pack_add") return null;
+    calls.push(args);
+    return { dry_run: false, steps: [], summary: "" };
+  });
+}
 
 it("adding a pinned pack's new skills sends the pack's pin, so they install from the ref the list checked", async () => {
   const calls: unknown[] = [];
-  mockIPC((command, args) => {
-    if (command !== "pack_add") return null;
-    calls.push(args);
-    return { dry_run: true, steps: [], summary: "" };
-  });
+  mockPackAdd(calls, []);
 
   await useAppStore
     .getState()
@@ -35,6 +48,27 @@ it("adding a pinned pack's new skills sends the pack's pin, so they install from
         ref_pin: "develop",
         dry_run: true,
       }),
+    },
+  ]);
+});
+
+it("adding a pack installs for the agents the Add Skill sheet ticks, else Claude Code never sees the pack", async () => {
+  const calls: unknown[] = [];
+  mockPackAdd(calls, ["codex", "pi"]);
+  useAppStore.getState().setHarnessDetection({
+    choice: { kept: ["cursor"], search_project_folders: false, saved_at: "2026-11-17T00:00:00Z" },
+  });
+
+  await useAppStore
+    .getState()
+    .runPackAction(
+      { kind: "add", source: "acme/skills", skills: ["new-skill"], refPin: null },
+      false,
+    );
+
+  expect(calls).toEqual([
+    {
+      request: expect.objectContaining({ harnesses: ["claude-code", "codex", "cursor"] }),
     },
   ]);
 });

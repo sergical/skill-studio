@@ -1403,8 +1403,9 @@ export interface PackAddRequest {
    */
   ref_pin: string | null;
   /**
-   * Agents to install for, in the `skills` CLI's `--agent` spelling.
-   * Empty: the shared `.agents/skills` folder only.
+   * Agents to link, in the `skills` CLI's `--agent` spelling. Every skill
+   * also gets the shared `.agents/skills` copy that update and remove use.
+   * Empty: the shared copy only.
    */
   harnesses: AgentIdentity[];
   /**
