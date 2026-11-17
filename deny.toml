@@ -74,7 +74,7 @@ ignore = [
   # advisory names no safe upgrade. Retry `cargo update` and `cargo deny check`
   # on the next tauri bump, and drop the entry once the fix lands upstream.
   { id = "RUSTSEC-2024-0370", reason = "proc-macro-error is unmaintained; transitive via tauri's macro deps, no upgrade path yet" },
-  # chrono is unmaintained (2026-11-17) and the advisory names no safe
+  # chrono is unmaintained (advisory dated 2026-09-14), with no safe
   # upgrade. rmcp and schemars also depend on it, so replacing our own uses
   # with jiff or time would not remove it. Drop the entry when both move off.
   { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained; transitive via rmcp and schemars, no upgrade path yet" },
