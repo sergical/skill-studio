@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   chosenInstallHarnesses,
+  defaultSharedInstallAgents,
   harnessesKeptWithoutUniversal,
   installDestinationError,
   installDestinationFields,
@@ -169,6 +170,24 @@ describe("Install request", () => {
       agents: ["codex", "pi"],
       link_mode: "copy",
     });
+  });
+
+  it("pack add: sends the agents the Add Skill sheet ticks by default, Claude Code included, else a pack lands only in .agents/skills", () => {
+    const detected: AgentId[] = ["codex", "cursor"];
+    const kept = ["opencode", "pi"];
+    const sheet = installDestinationFields({
+      chosen: chosenInstallHarnesses(offeredInstallHarnesses(detected, kept), null, false, true),
+      method: "skills-sh",
+      universal: true,
+    }).agents;
+    expect(defaultSharedInstallAgents(detected, kept)).toEqual(sheet);
+    expect(defaultSharedInstallAgents(detected, kept)).toEqual([
+      "claude-code",
+      "codex",
+      "opencode",
+      "cursor",
+    ]);
+    expect(defaultSharedInstallAgents([], [])).toEqual(["claude-code"]);
   });
 });
 

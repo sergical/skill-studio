@@ -205,3 +205,18 @@ export function installDestinationFields(input: {
     link_mode: "link",
   };
 }
+
+/** The `--agent` set of an install into the shared folder that has no picks
+ * of its own: the harnesses the Add Skill sheet ticks before the user
+ * changes one. Pack add uses it, so a pack reaches the same agents as one
+ * skill added from the sheet, Claude Code included. */
+export function defaultSharedInstallAgents(
+  detected: readonly AgentId[],
+  kept: readonly string[],
+): AgentId[] {
+  return installDestinationFields({
+    chosen: offeredInstallHarnesses(detected, kept),
+    method: "skills-sh",
+    universal: true,
+  }).agents;
+}

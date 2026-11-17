@@ -530,12 +530,18 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
         }
         case "pack_add": {
           const request = z
-            .object({ source: z.string(), skills: z.array(z.string()), dry_run: z.boolean() })
+            .object({
+              source: z.string(),
+              skills: z.array(z.string()),
+              harnesses: z.array(z.string()),
+              dry_run: z.boolean(),
+            })
             .parse(payload.request);
           const { report, next } = mockPackAdd(
             currentSnapshot,
             request.source,
             request.skills,
+            request.harnesses,
             request.dry_run,
           );
           if (!request.dry_run) await publish(next);

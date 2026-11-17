@@ -4,7 +4,12 @@
 // ============================================================================
 
 import { create } from "zustand";
-import { defaultSkillListFilter, isProjectPattern, isProjectScope } from "@skill-studio/lib";
+import {
+  defaultSharedInstallAgents,
+  defaultSkillListFilter,
+  isProjectPattern,
+  isProjectScope,
+} from "@skill-studio/lib";
 import type { SkillListFilter, HarnessReport, HarnessesChoice } from "@skill-studio/lib";
 import { ALL_ACTIVITY, USAGE_WINDOWS } from "@skill-studio/lib";
 import type { ActivityFilter, UsageWindow } from "@skill-studio/lib";
@@ -13,6 +18,7 @@ import type { PackActionReport, PackReport } from "@skill-studio/lib";
 import { addToast } from "../lib/toast";
 import {
   checkSkillUpdatesNow,
+  getAddMethodDefaults,
   invokeErrorMessage,
   packAdd,
   packList,
@@ -86,7 +92,14 @@ export type PackIntent =
   | { kind: "remove"; source: string }
   | { kind: "add"; source: string; skills: string[]; refPin: string | null };
 
-function packActionCall(intent: PackIntent, dryRun: boolean): Promise<PackActionReport> {
+/** `kept` is the saved agent choice. Pack add installs for the same agents
+ * the Add Skill sheet ticks by default; with no agents, `npx skills` writes
+ * only `.agents/skills`, which Claude Code does not read. */
+async function packActionCall(
+  intent: PackIntent,
+  dryRun: boolean,
+  kept: readonly string[],
+): Promise<PackActionReport> {
   switch (intent.kind) {
     case "update":
       return packUpdate({
@@ -97,15 +110,17 @@ function packActionCall(intent: PackIntent, dryRun: boolean): Promise<PackAction
       });
     case "remove":
       return packRemove({ source: intent.source, project_path: null, dry_run: dryRun });
-    case "add":
+    case "add": {
+      const defaults = await getAddMethodDefaults(null);
       return packAdd({
         source: intent.source,
         skills: intent.skills,
         ref_pin: intent.refPin,
-        harnesses: [],
+        harnesses: defaultSharedInstallAgents(defaults.installed_harnesses, kept),
         project_path: null,
         dry_run: dryRun,
       });
+    }
   }
 }
 
@@ -511,7 +526,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   checkSkillUpdates: checkSkillUpdatesNow,
 
   listPacks: (remote) => withCommandMessage(packList(remote)),
-  runPackAction: (intent, dryRun) => withCommandMessage(packActionCall(intent, dryRun)),
+  runPackAction: (intent, dryRun) =>
+    withCommandMessage(packActionCall(intent, dryRun, get().harnessDetection.choice?.kept ?? [])),
 
   addSkillSheet: { open: false },
   openAddSkillSheet: (prefill) => set({ addSkillSheet: { open: true, prefill } }),
