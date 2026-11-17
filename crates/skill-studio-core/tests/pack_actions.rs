@@ -32,7 +32,8 @@ struct FakeSkillsCli {
     home: PathBuf,
     calls: Mutex<Vec<Vec<String>>>,
     fail_updates: AtomicBool,
-    fail_auth: AtomicBool,
+    /// When set, `add` exits 1 and prints this skills diagnostic code.
+    fail_auth: Mutex<Option<&'static str>>,
 }
 
 impl FakeSkillsCli {
@@ -41,7 +42,7 @@ impl FakeSkillsCli {
             home: home.to_path_buf(),
             calls: Mutex::new(Vec::new()),
             fail_updates: AtomicBool::new(false),
-            fail_auth: AtomicBool::new(false),
+            fail_auth: Mutex::new(None),
         })
     }
 
@@ -63,11 +64,11 @@ impl ProcessSpawner for FakeSkillsCli {
         };
         let cwd = spec.cwd.clone().unwrap_or_else(|| self.home.clone());
         let mut status = 0;
-        if self.fail_auth.load(Ordering::SeqCst) {
-            // skills@1.8.1 prints this on stdout when git cannot read the source.
+        if let Some(code) = *self.fail_auth.lock().unwrap() {
+            // skills@1.8.1 prints its diagnostic code on stdout.
             return Ok(ProcessOutput {
                 status: Some(1),
-                stdout: "Failed to clone repository\n[SKILLS_GIT_AUTH_FAILED] Authentication failed for https://github.com/owner/pack.git.\n".to_string(),
+                stdout: format!("Failed to clone repository\n[{code}] Access denied.\n"),
                 stderr: String::new(),
                 timed_out: false,
             });
@@ -531,15 +532,17 @@ fn pack_add_names_an_unreadable_pack_or_missing_git_in_one_sentence() {
 fn pack_add_step_says_no_access_when_the_skills_cli_cannot_read_the_pack() {
     let home = home("pack_add_cli_no_access");
     let cli = FakeSkillsCli::new(&home);
-    cli.fail_auth.store(true, Ordering::SeqCst);
     let rt = runtime(&home, cli.clone());
 
-    let report = ops::pack_add(&rt, &ctx(), &add(&["alpha"], Some("v1"), false), None).unwrap();
+    for code in ["SKILLS_GIT_AUTH_FAILED", "SKILLS_GIT_SAML_SSO_BLOCKED"] {
+        *cli.fail_auth.lock().unwrap() = Some(code);
+        let report = ops::pack_add(&rt, &ctx(), &add(&["alpha"], Some("v1"), false), None).unwrap();
 
-    let PackStepState::Failed { reason, .. } = &report.steps[0].state else {
-        panic!("{:?}", report.steps[0].state)
-    };
-    assert_eq!(reason, &install_tools::no_access("owner/pack"));
+        let PackStepState::Failed { reason, .. } = &report.steps[0].state else {
+            panic!("{code}: {:?}", report.steps[0].state)
+        };
+        assert_eq!(reason, &install_tools::no_access("owner/pack"), "{code}");
+    }
     std::fs::remove_dir_all(&home).ok();
 }
 

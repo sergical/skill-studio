@@ -154,12 +154,16 @@ mod tests {
     fn add_pack_without_node_shows_the_install_node_sentence_or_plans_steps_that_fail() {
         let home = tempfile::tempdir().expect("temp home");
         let _opencode_home = crate::skills::test_support::OpencodeHomeGuard::new(home.path());
-        let rt = super::super::core_runtime::build_runtime_write_at_with_search_dirs(
+        let mut rt = super::super::core_runtime::build_runtime_write_at_with_search_dirs(
             home.path(),
             &home.path().join(".skill-studio"),
-            vec!["/usr/bin".into(), "/bin".into()],
+            Vec::new(),
         )
         .expect("desktop runtime");
+        // A Mac with no Node.js: no folder holds `npx`.
+        rt.ports.tools = Some(std::sync::Arc::new(
+            skill_studio_host::PathToolLookup::with_search_dirs(Vec::new()),
+        ));
         let request = PackAddRequest {
             source: "acme/team-skills".to_string(),
             dry_run: true,

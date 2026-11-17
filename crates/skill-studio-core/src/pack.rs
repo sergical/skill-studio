@@ -210,6 +210,8 @@ impl RemoteError {
         } else if has(&[
             "repository not found",
             "could not read username",
+            "could not read password",
+            "saml sso",
             "authentication failed",
             "permission denied (publickey)",
             "returned error: 403",
@@ -1066,6 +1068,9 @@ mod tests {
             "ERROR: Repository not found.\nfatal: Could not read from remote repository.\n\n\
              Please make sure you have the correct access rights\nand the repository exists.",
             "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+            "fatal: could not read Password for 'https://me@github.com': terminal prompts disabled",
+            "remote: The 'acme' organization has enabled or enforced SAML SSO. To access\n\
+             remote: this repository, you must re-authorize the OAuth Application.",
         ];
         for stderr in no_access {
             assert_eq!(

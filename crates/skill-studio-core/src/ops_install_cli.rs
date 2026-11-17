@@ -191,8 +191,10 @@ pub(crate) fn install_via_cli(
         timeout_ms: 120_000,
     };
     let output = spawner.run(&spec, ctx.cancel.as_ref())?;
-    // skills prints this code, on stdout, when git cannot read the source.
-    if output.status != Some(0) && output.stdout.contains("[SKILLS_GIT_AUTH_FAILED]") {
+    // skills prints one of these codes, on stdout, when access is denied or
+    // the repository does not exist.
+    let no_access = ["[SKILLS_GIT_AUTH_FAILED]", "[SKILLS_GIT_SAML_SSO_BLOCKED]"];
+    if output.status != Some(0) && no_access.iter().any(|code| output.stdout.contains(code)) {
         let repo = source.split_once('#').map_or(source, |(repo, _)| repo);
         return Err(CoreError::new(
             ErrorCode::Io,

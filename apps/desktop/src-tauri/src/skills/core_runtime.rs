@@ -145,9 +145,13 @@ pub fn build_runtime_write_at_with_search_dirs(
     // `ops::install_preferences`'s detection and `ops_install_cli`'s method
     // pick, and `ports.spawner` gets the same directories so the `npx`
     // process it actually spawns (`ops::install`/`update`/`remove`'s
-    // `Dotagents`/`SkillsSh` methods) can find itself and `node` too.
+    // `Dotagents`/`SkillsSh` methods) can find itself and `node` too. The
+    // spawner also appends this process's own `PATH`, so the lookup searches
+    // that full list: the Node check must not refuse an `npx` the spawn finds.
     ports.tools = Some(Arc::new(
-        skill_studio_host::PathToolLookup::with_search_dirs(search_dirs.clone()),
+        skill_studio_host::PathToolLookup::with_search_dirs(
+            std::env::split_paths(&skill_studio_host::child_path(&search_dirs)).collect(),
+        ),
     ));
     ports.spawner = Some(Arc::new(skill_studio_host::RealProcessSpawner::for_home(
         home,
@@ -189,6 +193,34 @@ pub fn to_command_result<T: Outcome>(envelope: ResultEnvelope<T>) -> Result<T, S
             .errors
             .first()
             .map_or_else(|| "operation failed".to_string(), ToString::to_string)),
+    }
+}
+
+#[cfg(test)]
+mod tool_lookup_tests {
+    use super::*;
+    use skill_studio_core::ports::ToolLookup;
+
+    /// The spawner runs `npx` from the login-shell folders and then this
+    /// process's own `PATH`. Fails if the tool lookup skips that `PATH`, so
+    /// the Node check refuses an `npx` the spawn would find.
+    #[test]
+    fn the_tool_lookup_searches_the_inherited_path_like_the_spawner_or_refuses_a_working_npx() {
+        let home = tempfile::tempdir().expect("temp home");
+        let _opencode_home = crate::skills::test_support::OpencodeHomeGuard::new(home.path());
+        let rt = build_runtime_write_at_with_search_dirs(
+            home.path(),
+            &home.path().join(".skill-studio"),
+            Vec::new(),
+        )
+        .expect("desktop runtime");
+        let tools = rt.ports.tools.as_ref().expect("tool lookup");
+        let spawner_finds = skill_studio_host::PathToolLookup::with_search_dirs(
+            std::env::split_paths(&skill_studio_host::child_path(&[])).collect(),
+        )
+        .find_binary("sh");
+        assert!(spawner_finds.is_some(), "the test PATH has no sh");
+        assert_eq!(tools.find_binary("sh"), spawner_finds);
     }
 }
 
