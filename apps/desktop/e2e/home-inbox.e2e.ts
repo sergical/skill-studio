@@ -1,4 +1,6 @@
 import { expect, test } from "@playwright/test";
+import type { InstalledSkill } from "@skill-studio/lib";
+import { HARNESS_HOME } from "../src/dev/harness/skill-fixture";
 import { openApp, reinstallParkedSkill } from "./app-harness";
 
 test.beforeEach(async ({ page }) => {
@@ -104,4 +106,46 @@ test("Park on an idle Home row takes the skill out of Who can invoke and the idl
 
   await expect.poll(idleCount).toBe(idleBefore - 1);
   expect(await invokeTotal()).toBe(invokeBefore - 1);
+});
+
+test("a row parked on Home stays selectable at its parked path, and Show all counts the skills still on", async ({
+  page,
+}) => {
+  await page
+    .getByRole("group", { name: "Prompt cost" })
+    .getByRole("button", { name: /skills not used in 30 days/ })
+    .click();
+  const group = page.locator('[data-group="unused"]');
+  const first = group.locator('[role="row"][aria-selected]').first();
+  const name = (await first.locator('[role="gridcell"]:nth-child(2) span.truncate').textContent())!;
+  const row = group
+    .locator('[role="row"][aria-selected]')
+    .filter({ has: page.getByRole("checkbox", { name: `Select ${name}`, exact: true }) });
+  await row.getByRole("button", { name: "Park", exact: true }).click();
+  await expect(row.getByText("Parked", { exact: true })).toBeVisible();
+
+  const header = await group.locator("[data-group-header]").getAttribute("aria-label");
+  const stillOn = header?.match(/(\d+) skills?$/)?.[1];
+  await expect(group.getByRole("button", { name: /^Show all/ })).toHaveText(`Show all ${stillOn}`);
+
+  // The real park moves the folder; the harness mock leaves the path as it was.
+  await page.evaluate(
+    ([skillName, parkedPath]) =>
+      window.__harness?.updateSkill(skillName, (skill: InstalledSkill) => ({
+        ...skill,
+        deployments: skill.deployments.map((copy) => ({
+          ...copy,
+          agent: "parked",
+          scope: "parked",
+          path: parkedPath,
+        })),
+      })),
+    [name, `${HARNESS_HOME}/.agents/skills-parked/universal/${name}`] as const,
+  );
+  await row.focus();
+  await page.keyboard.press("x");
+
+  // The selection bar shows only when the checked row matches a skill in the snapshot.
+  await expect(row).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("button", { name: "Cancel", exact: true })).toBeVisible();
 });
