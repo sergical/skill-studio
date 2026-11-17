@@ -185,6 +185,52 @@ pub struct RemotePack {
     pub skills: Vec<RemoteSkill>,
 }
 
+/// Why a git source could not be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteError {
+    /// Git cannot run on this computer.
+    GitMissing,
+    /// The source is private or does not exist for this user's git login.
+    NoAccess,
+    /// Any other failure, in git's own words.
+    Failed(String),
+}
+
+impl RemoteError {
+    /// Classifies a failed git run by its stderr: `None` when the text names
+    /// neither a missing git nor a refused or unknown repository.
+    pub fn from_git_stderr(stderr: &str) -> Option<RemoteError> {
+        let text = stderr.to_ascii_lowercase();
+        let has = |needles: &[&str]| needles.iter().any(|needle| text.contains(needle));
+        if has(&[
+            "no developer tools were found",
+            "invalid active developer path",
+        ]) {
+            Some(RemoteError::GitMissing)
+        } else if has(&[
+            "repository not found",
+            "could not read username",
+            "authentication failed",
+            "permission denied (publickey)",
+            "returned error: 403",
+        ]) || (text.contains("repository '") && text.contains("' not found"))
+        {
+            Some(RemoteError::NoAccess)
+        } else {
+            None
+        }
+    }
+
+    /// One sentence for a person, naming `source` as they typed it.
+    pub fn text(&self, source: &str) -> String {
+        match self {
+            RemoteError::GitMissing => crate::install_tools::GIT_MISSING.to_string(),
+            RemoteError::NoAccess => crate::install_tools::no_access(source),
+            RemoteError::Failed(reason) => format!("could not read {source}: {reason}"),
+        }
+    }
+}
+
 /// Reads one git source. The host runs git with the user's credentials.
 pub trait PackRemote {
     /// Newest commit of `git_ref` (default branch when absent) and its skills.
@@ -193,7 +239,7 @@ pub trait PackRemote {
         url: &str,
         git_ref: Option<&str>,
         cancel: &dyn CancelToken,
-    ) -> Result<RemotePack, String>;
+    ) -> Result<RemotePack, RemoteError>;
 }
 
 /// Lists every installed pack.
@@ -740,9 +786,16 @@ fn pack(
         (None, _) => Err(RemoteState::NotChecked),
         (Some(_), None) => Err(RemoteState::NoGitSource),
         (Some(_), Some(_)) if pinned => Err(RemoteState::PinnedToCommit),
-        (Some(remote), Some(url)) => remote
-            .fetch(url, key.ref_pin.as_deref(), cancel)
-            .map_err(|reason| RemoteState::Failed { reason }),
+        (Some(remote), Some(url)) => {
+            remote
+                .fetch(url, key.ref_pin.as_deref(), cancel)
+                .map_err(|err| RemoteState::Failed {
+                    reason: match err {
+                        RemoteError::Failed(reason) => reason,
+                        known => known.text(&key.source),
+                    },
+                })
+        }
     };
     let mut matched = BTreeSet::new();
     let mut skills = Vec::new();
@@ -999,7 +1052,45 @@ fn collect_files(
 
 #[cfg(test)]
 mod tests {
-    use super::{source_identity, PackKind};
+    use super::{source_identity, PackKind, RemoteError};
+
+    /// Stderr captured from git 2.50 on macOS on 2026-11-17, and the text
+    /// the Xcode git stub prints on a Mac without the command line tools.
+    /// Fails if a refused repository or a missing git falls through to raw
+    /// git text, or an unrelated failure is mistaken for either.
+    #[test]
+    fn git_stderr_names_no_access_or_missing_git_or_leaves_other_failures_alone() {
+        let no_access = [
+            "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+            "remote: Repository not found.\nfatal: repository 'https://github.com/a/b.git/' not found",
+            "ERROR: Repository not found.\nfatal: Could not read from remote repository.\n\n\
+             Please make sure you have the correct access rights\nand the repository exists.",
+            "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+        ];
+        for stderr in no_access {
+            assert_eq!(
+                RemoteError::from_git_stderr(stderr),
+                Some(RemoteError::NoAccess),
+                "{stderr}"
+            );
+        }
+        let stub = "xcode-select: note: No developer tools were found, requesting install.\n\
+                    If developer tools are located at a non-default location on disk, use \
+                    `sudo xcode-select --switch path/to/Xcode.app` to specify the Xcode that you \
+                    wish to use for command line developer tools, and cancel the installation \
+                    dialog.\nSee `man xcode-select` for more details.";
+        assert_eq!(
+            RemoteError::from_git_stderr(stub),
+            Some(RemoteError::GitMissing)
+        );
+        for other in [
+            "fatal: unable to access 'https://x/': Could not resolve host: x",
+            "ssh: Could not resolve hostname github.com: nodename nor servname provided\n\
+             fatal: Could not read from remote repository.",
+        ] {
+            assert_eq!(RemoteError::from_git_stderr(other), None, "{other}");
+        }
+    }
 
     #[test]
     fn source_identity_joins_only_spellings_of_one_repo_or_merges_distinct_packs() {

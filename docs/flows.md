@@ -193,6 +193,14 @@ default: Claude Code, every detected agent and every agent kept in Settings
 (`defaultSharedInstallAgents`). `pack update` refreshes each skill in place,
 so it keeps the agents the skill already reaches.
 
+Before the plan, each pack action and each single install, update or remove
+that runs `npx` checks that `npx` is on `PATH`
+(`crates/skill-studio-core/src/install_tools.rs`). If one is missing, the call
+stops with one sentence that says to install Node.js. A git source that git
+cannot read, or a missing git, also gives one sentence, not git's own output.
+Pack add does not fall back to Copy: a Copy install is untracked, so the pack
+would not show in Packs and could not update.
+
 The desktop Packs page calls the same core operations. Each Update, Remove
 and Add opens a dialog that runs the dry run first and lists every step with
 its skip reason. Confirm runs the action, and the dialog then shows what each

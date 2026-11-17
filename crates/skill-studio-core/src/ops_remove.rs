@@ -326,6 +326,7 @@ fn remove_via_cli(
             "this host build has no process spawner; dotagents/skills.sh removal is not available",
         )
     })?;
+    crate::install_tools::require_node(rt)?;
     let (args, cwd) = remove_cli_args_and_cwd(owner_kind, name, scope, &rt.scope.home.lexical);
     let spec = ProcessSpec {
         program: "npx".to_string(),
