@@ -1307,8 +1307,11 @@ function applyPackPlan(
       const skills = pack.skills.map((s) => (didRun(s) ? { ...s, behind: false } : s));
       return [{ ...pack, skills }];
     }
+    // Upstream still ships the removed skills, so the next check lists them as new.
     const kept = pack.skills.filter((skill) => !didRun(skill));
-    return kept.length > 0 ? [{ ...pack, skills: kept }] : [];
+    const removed = pack.skills.filter(didRun).map((skill) => skill.name);
+    const newUpstream = [...new Set([...pack.newUpstream, ...removed])].sort();
+    return kept.length > 0 ? [{ ...pack, skills: kept, newUpstream }] : [];
   });
 }
 

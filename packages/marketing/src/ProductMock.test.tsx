@@ -57,8 +57,9 @@ describe("ProductMock Packs page", () => {
     await user.click(within(dialog).getByRole("button", { name: "Remove 3 skills" }));
     await user.click(screen.getByRole("button", { name: "Close" }));
     expect(screen.getByRole("listitem", { name: "sergical/skills" }).textContent).toContain(
-      "1 skill, 1 edited locally, 1 behind upstream",
+      "1 skill, 1 edited locally, 1 behind upstream, new upstream: add-customer-story, new-branch, prepare-videos",
     );
+    expect(screen.getByRole("button", { name: "Add 3 new" })).toBeTruthy();
   });
 
   it("skips skills that are already installed when the same pack is added again", async () => {
