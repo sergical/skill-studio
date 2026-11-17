@@ -209,6 +209,37 @@ fn extras_lists_opencode_hidden_project_servers_instead_of_missing_the_config() 
 }
 
 #[test]
+fn extras_lists_opencode_v1_and_v2_servers_from_one_file_instead_of_dropping_v1_names() {
+    let home = tempfile::tempdir().unwrap();
+    // `opencode mcp add --global skill-studio -- npx -y skill-studio@latest mcp`
+    // (OpenCode 2.3.0) on a V1 config writes `servers` next to the V1 names.
+    write(
+        home.path(),
+        ".config/opencode/opencode.json",
+        r#"{"mcp":{
+            "polylane":{"type":"remote","url":"PRIVATE_VALUE"},
+            "blender":{"enabled":true,"type":"local","command":["PRIVATE_VALUE"]},
+            "timeout":{"startup":30000},
+            "servers":{
+                "skill-studio":{"type":"local","command":["npx","-y","skill-studio@latest","mcp"]},
+                "blender":{"type":"local","command":["PRIVATE_VALUE"]}
+            }
+        }}"#,
+    );
+    let report = headless::cli(home.path(), &["extras"]);
+    let mut names: Vec<&str> = report["data"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["harness"] == "opencode" && r["kind"] == "mcp_server")
+        .map(|r| r["name"].as_str().unwrap())
+        .collect();
+    names.sort_unstable();
+    assert_eq!(names, ["blender", "polylane", "skill-studio"]);
+    assert!(!report.to_string().contains("PRIVATE_VALUE"));
+}
+
+#[test]
 fn extras_lists_grok_claude_rules_at_both_scopes_instead_of_missing_compatible_names() {
     let home = tempfile::tempdir().unwrap();
     for dir in [".grok", "project"] {
