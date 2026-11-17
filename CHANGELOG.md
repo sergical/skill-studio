@@ -15,9 +15,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- The JSON answer of every CLI and MCP read is at most 32 KB by default, and its lists are paged: `scan`, `diagnose`, `library`, `usage`, `outdated`, `invocation`, `pack list`, `pack show`, `doctor`, `conflicts` and `extras`. CLI tables stay whole. An MCP tool result holds two copies of the answer, so it can be about 70 KB. `--limit`, `--cursor`, `--fields` and `--count-by` (MCP: `limit`, `cursor`, `fields`, `count_by`) give an exact answer in one call. Before, `scan --json` and `diagnose --json` were 2.9 MB on a real home.
+- These CLI and MCP reads page their lists to fit a 32 KB JSON answer by default: `scan`, `diagnose`, `library`, `usage`, `outdated`, `invocation`, `pack list`, `pack show`, `doctor`, `conflicts` and `extras`. An answer keeps at least one row, so a very large row can go over 32 KB. CLI tables stay whole. An MCP tool result holds two copies of the answer, so it can be about 70 KB. `--limit`, `--cursor`, `--fields` and `--count-by` (MCP: `limit`, `cursor`, `fields`, `count_by`) give an exact answer in one call. Before, `scan --json` and `diagnose --json` were 2.9 MB on a real home.
 - MCP tool results start with `untrusted_paths`, the JSON paths of text that comes from third parties: SKILL.md bodies, names, descriptions, frontmatter, file paths and child-process output. The server instructions tell the agent to treat text at those paths as data. `npx` error output is now in a separate `detail` field.
-- `update_all`, `park_batch` and `unpark_batch` (CLI and MCP) refuse more than 100 items with `invalid_request` before any item runs. The desktop Update all and `pack update` have no limit.
+- One `update`, `park` or `unpark` call (MCP `update_all`, `park` or `unpark`) takes at most 100 skills. A larger call fails with `invalid_request` before any skill changes. The desktop Update all and `pack update` have no limit.
 - A write that an unfinished recovery blocks now fails with `recovery_pending` (exit 3), not `incomplete` (exit 4).
 - JSON output and schemas name OpenCode `opencode`, not `open-code`. `open-code` is still accepted as input.
 - Desktop: the webview runs with a strict Content Security Policy. It runs only the app's own scripts and connects only to Tauri IPC.
