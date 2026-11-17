@@ -20,7 +20,7 @@ use crate::identity::{
 };
 use crate::install_targets::UNIVERSAL_TARGET;
 use crate::ops::{OpStatus, Operation, Outcome};
-use crate::pack::{self, Pack, PackKind, PackRemote, PackSkill};
+use crate::pack::{self, Pack, PackKind, PackRemote, PackSkill, RemoteError};
 use crate::ports::{OpContext, Runtime};
 
 /// Input for `pack_add`.
@@ -177,6 +177,7 @@ pub fn pack_add(
     remote: Option<&dyn PackRemote>,
 ) -> Result<PackActionReport, CoreError> {
     rt.run(Operation::PackAdd, ctx, || {
+        crate::install_tools::require_node(rt)?;
         let scope = match &req.project_path {
             Some(path) => pack::selected_scopes(rt, Some(path))?.remove(0).0,
             None => RootScope::Global,
@@ -287,6 +288,7 @@ pub fn pack_update(
                 });
             }
         }
+        require_node_for(rt, &steps)?;
         if !req.dry_run {
             update_by_scope(rt, ctx, &mut steps, &methods);
         }
@@ -331,6 +333,7 @@ pub fn pack_remove(
                 targets.push(target);
             }
         }
+        require_node_for(rt, &steps)?;
         if !req.dry_run {
             run_each(ctx, &mut steps, |index, _| {
                 let deployment_id = targets[index].clone().ok_or_else(|| {
@@ -342,6 +345,18 @@ pub fn pack_remove(
         }
         Ok(action_report(req.dry_run, PackStepAction::Remove, steps))
     })
+}
+
+/// Every planned update or remove step runs `npx`: plugin and npm packs are
+/// already skipped. Fails once, before the plan is shown, when Node is missing.
+fn require_node_for(rt: &Runtime, steps: &[PackStep]) -> Result<(), CoreError> {
+    if steps
+        .iter()
+        .any(|step| step.state == PackStepState::Planned)
+    {
+        crate::install_tools::require_node(rt)?;
+    }
+    Ok(())
 }
 
 fn upstream_skills(
@@ -366,8 +381,10 @@ fn upstream_skills(
     })?;
     let upstream = remote
         .fetch(&url, req.ref_pin.as_deref(), ctx.cancel.as_ref())
-        .map_err(|reason| {
-            CoreError::new(ErrorCode::Io, format!("could not read {url}: {reason}"))
+        .map_err(|err| match err {
+            RemoteError::GitMissing => CoreError::new(ErrorCode::Unsupported, err.text(&url)),
+            RemoteError::NoAccess => CoreError::new(ErrorCode::Io, err.text(&req.source)),
+            RemoteError::Failed(_) => CoreError::new(ErrorCode::Io, err.text(&url)),
         })?;
     if upstream.skills.is_empty() {
         return Err(CoreError::new(

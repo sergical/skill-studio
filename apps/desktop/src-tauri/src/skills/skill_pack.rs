@@ -22,6 +22,15 @@ fn run_pack_op<T: Outcome>(
     call: impl FnOnce(&Runtime, &OpContext, Option<&dyn PackRemote>) -> Result<T, CoreError>,
 ) -> Result<T, String> {
     let rt = super::core_runtime::build_runtime_write()?;
+    run_pack_op_on(&rt, operation, git, call)
+}
+
+fn run_pack_op_on<T: Outcome>(
+    rt: &Runtime,
+    operation: Operation,
+    git: bool,
+    call: impl FnOnce(&Runtime, &OpContext, Option<&dyn PackRemote>) -> Result<T, CoreError>,
+) -> Result<T, String> {
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let remote = rt
         .ports
@@ -29,7 +38,7 @@ fn run_pack_op<T: Outcome>(
         .clone()
         .filter(|_| git)
         .map(skill_studio_host::GitPackRemote::new);
-    let result = call(&rt, &ctx, remote.as_ref().map(|r| r as &dyn PackRemote));
+    let result = call(rt, &ctx, remote.as_ref().map(|r| r as &dyn PackRemote));
     super::core_runtime::to_command_result(ResultEnvelope::from_result(
         operation, &rt.scope, &ctx, result,
     ))
@@ -130,4 +139,42 @@ pub async fn pack_remove(
         })
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use skill_studio_core::install_tools::NODE_MISSING;
+
+    /// The text Packs -> Add pack shows on a Mac without Node.js, through the
+    /// same runtime and error conversion as the `pack_add` command. Before
+    /// the fix, the plan listed the skills and Confirm failed each one with
+    /// "No such file or directory (os error 2)". Fails if the dry run plans.
+    #[test]
+    fn add_pack_without_node_shows_the_install_node_sentence_or_plans_steps_that_fail() {
+        let home = tempfile::tempdir().expect("temp home");
+        let _opencode_home = crate::skills::test_support::OpencodeHomeGuard::new(home.path());
+        let mut rt = super::super::core_runtime::build_runtime_write_at_with_search_dirs(
+            home.path(),
+            &home.path().join(".skill-studio"),
+            Vec::new(),
+        )
+        .expect("desktop runtime");
+        // A Mac with no Node.js: no folder holds `npx`.
+        rt.ports.tools = Some(std::sync::Arc::new(
+            skill_studio_host::PathToolLookup::with_search_dirs(Vec::new()),
+        ));
+        let request = PackAddRequest {
+            source: "acme/team-skills".to_string(),
+            dry_run: true,
+            ..PackAddRequest::default()
+        };
+
+        let shown = run_pack_op_on(&rt, Operation::PackAdd, true, |rt, ctx, remote| {
+            ops::pack_add(rt, ctx, &request, remote)
+        })
+        .expect_err("a plan without Node");
+
+        assert_eq!(shown, NODE_MISSING);
+    }
 }

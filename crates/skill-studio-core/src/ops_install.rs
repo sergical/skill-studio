@@ -334,13 +334,8 @@ fn install_preferences_body(
             saved: true,
         });
     }
-    let npx_on_path = rt
-        .ports
-        .tools
-        .as_ref()
-        .is_some_and(|tools| tools.find_binary("npx").is_some());
     Ok(InstallPreferences {
-        method: if npx_on_path {
+        method: if crate::install_tools::node_on_path(rt) {
             InstallMethod::SkillsSh
         } else {
             InstallMethod::Copy
@@ -369,6 +364,9 @@ fn install_body(
 ) -> Result<InstallOutcome, CoreError> {
     ctx.checkpoint()?;
     install_targets::validate_harnesses(&req.harnesses)?;
+    if req.method != InstallMethod::Copy {
+        crate::install_tools::require_node(rt)?;
+    }
     // Before anything below creates so much as a directory: `ensure_dir_all`
     // (further down, via `install_and_link`) `mkdir -p`s
     // `<project>/.agents/skills`, which would silently create a missing

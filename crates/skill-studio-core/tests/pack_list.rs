@@ -6,7 +6,7 @@ use std::sync::Arc;
 use skill_studio_core::harness::HarnessCatalog;
 use skill_studio_core::pack::{
     skills_cli_folder_hash, Pack, PackKind, PackListRequest, PackRemote, PackReport,
-    PackShowRequest, RemotePack, RemoteState, SKILLS_CLI_STATE_ROOT,
+    PackShowRequest, RemoteError, RemotePack, RemoteState, SKILLS_CLI_STATE_ROOT,
 };
 use skill_studio_core::pack_action::PackRemoveRequest;
 use skill_studio_core::ports::{CancelToken, Ports, Runtime};
@@ -23,7 +23,12 @@ const WRONG_TREE: &str = "0000000000000000000000000000000000000000";
 struct PanicRemote;
 
 impl PackRemote for PanicRemote {
-    fn fetch(&self, _: &str, _: Option<&str>, _: &dyn CancelToken) -> Result<RemotePack, String> {
+    fn fetch(
+        &self,
+        _: &str,
+        _: Option<&str>,
+        _: &dyn CancelToken,
+    ) -> Result<RemotePack, RemoteError> {
         panic!("pack_list without remote must not reach the network");
     }
 }

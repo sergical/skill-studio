@@ -330,17 +330,16 @@ fn validate_cli_request(rt: &Runtime, req: &UpdateRequest) -> Result<(), CoreErr
             "a dotagents update needs a source",
         ));
     }
-    if matches!(
-        req.method,
-        InstallMethod::Dotagents | InstallMethod::SkillsSh
-    ) && rt.ports.spawner.is_none()
-    {
+    if req.method == InstallMethod::Copy {
+        return Ok(());
+    }
+    if rt.ports.spawner.is_none() {
         return Err(CoreError::new(
             ErrorCode::Unsupported,
             "this host build has no process spawner; dotagents/skills.sh updates are not available",
         ));
     }
-    Ok(())
+    crate::install_tools::require_node(rt)
 }
 
 /// `Dotagents`/`SkillsSh`: runs `req.method`'s argv (see

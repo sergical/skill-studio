@@ -7,10 +7,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use skill_studio_core::dto::ListEventsRequest;
+use skill_studio_core::dto::{InstallLinkMode, InstallMethod, InstallRequest, ListEventsRequest};
 use skill_studio_core::harness::HarnessCatalog;
-use skill_studio_core::identity::AgentId;
-use skill_studio_core::pack::{PackRemote, RemotePack, RemoteSkill};
+use skill_studio_core::identity::{AgentId, RootScope, SkillDestination, SkillName};
+use skill_studio_core::install_tools;
+use skill_studio_core::pack::{PackRemote, RemoteError, RemotePack, RemoteSkill};
 use skill_studio_core::pack_action::{
     PackActionReport, PackAddRequest, PackRemoveRequest, PackStepState, PackUpdateRequest,
 };
@@ -19,7 +20,7 @@ use skill_studio_core::ports::{
 };
 use skill_studio_core::scope::RuntimeScope;
 use skill_studio_core::testing::golden::{ctx, unique_temp_dir};
-use skill_studio_core::testing::{FakeClock, FakeIds, RecordingSink};
+use skill_studio_core::testing::{FakeClock, FakeIds, FakeToolLookup, RecordingSink};
 use skill_studio_core::{ops, ErrorCode, OpStatus, Outcome};
 use skill_studio_host::{FileLease, RealFs, SqliteHistoryOpener};
 
@@ -31,6 +32,8 @@ struct FakeSkillsCli {
     home: PathBuf,
     calls: Mutex<Vec<Vec<String>>>,
     fail_updates: AtomicBool,
+    /// When set, `add` exits 1 and prints this skills diagnostic code.
+    fail_auth: Mutex<Option<&'static str>>,
 }
 
 impl FakeSkillsCli {
@@ -39,6 +42,7 @@ impl FakeSkillsCli {
             home: home.to_path_buf(),
             calls: Mutex::new(Vec::new()),
             fail_updates: AtomicBool::new(false),
+            fail_auth: Mutex::new(None),
         })
     }
 
@@ -60,6 +64,15 @@ impl ProcessSpawner for FakeSkillsCli {
         };
         let cwd = spec.cwd.clone().unwrap_or_else(|| self.home.clone());
         let mut status = 0;
+        if let Some(code) = *self.fail_auth.lock().unwrap() {
+            // skills@1.8.1 prints its diagnostic code on stdout.
+            return Ok(ProcessOutput {
+                status: Some(1),
+                stdout: format!("Failed to clone repository\n[{code}] Access denied.\n"),
+                stderr: String::new(),
+                timed_out: false,
+            });
+        }
         if let Some(skill) = after("--skill") {
             write_skill(&cwd, &skill);
         } else if let Some(skill) = after("remove") {
@@ -83,8 +96,26 @@ impl ProcessSpawner for FakeSkillsCli {
 
 struct FakeRemote(Vec<&'static str>);
 
+struct FailingRemote(RemoteError);
+
+impl PackRemote for FailingRemote {
+    fn fetch(
+        &self,
+        _: &str,
+        _: Option<&str>,
+        _: &dyn CancelToken,
+    ) -> Result<RemotePack, RemoteError> {
+        Err(self.0.clone())
+    }
+}
+
 impl PackRemote for FakeRemote {
-    fn fetch(&self, url: &str, _: Option<&str>, _: &dyn CancelToken) -> Result<RemotePack, String> {
+    fn fetch(
+        &self,
+        url: &str,
+        _: Option<&str>,
+        _: &dyn CancelToken,
+    ) -> Result<RemotePack, RemoteError> {
         assert_eq!(url, "https://github.com/owner/pack.git");
         Ok(RemotePack {
             commit: "abc".to_string(),
@@ -135,6 +166,16 @@ fn installed_from_pack(home: &Path, skill: &str, hash: &str) {
 }
 
 fn runtime(home: &Path, cli: Arc<FakeSkillsCli>) -> Runtime {
+    runtime_with_tools(home, cli, None)
+}
+
+/// `tools: None` skips the Node check; a lookup without `node` and `npx`
+/// stands for a Mac with no Node.js.
+fn runtime_with_tools(
+    home: &Path,
+    cli: Arc<FakeSkillsCli>,
+    tools: Option<FakeToolLookup>,
+) -> Runtime {
     let ports = Ports {
         fs: Arc::new(RealFs::new()),
         clock: Arc::new(FakeClock::at(0)),
@@ -146,7 +187,7 @@ fn runtime(home: &Path, cli: Arc<FakeSkillsCli>) -> Runtime {
         sink: Arc::new(RecordingSink::default()),
         spawner: Some(cli),
         discovery: None,
-        tools: None,
+        tools: tools.map(|t| Arc::new(t) as Arc<dyn skill_studio_core::ports::ToolLookup>),
         catalog: Arc::new(HarnessCatalog::builtin()),
         telemetry: Arc::new(skill_studio_core::ports::NoopTelemetry),
     };
@@ -388,4 +429,135 @@ fn pack_remove_removes_clean_skills_with_undo_and_keeps_edited_ones() {
         "{events:#?}"
     );
     std::fs::remove_dir_all(&home).ok();
+}
+
+fn tools(names: &[&str]) -> FakeToolLookup {
+    let mut tools = FakeToolLookup::default();
+    for name in names {
+        tools.binaries.insert(
+            (*name).to_string(),
+            PathBuf::from("/usr/local/bin").join(name),
+        );
+    }
+    tools
+}
+
+/// A Mac with no Node.js: Packs -> Add pack showed a plan, then failed each
+/// step with "No such file or directory (os error 2)". Fails if pack add
+/// plans, or single install spawns, before it says to install Node.
+#[test]
+fn pack_add_and_single_install_say_install_node_before_the_plan_when_node_is_missing() {
+    let home = home("pack_add_no_node");
+    let cli = FakeSkillsCli::new(&home);
+    for missing in [&[][..], &["node"][..]] {
+        let rt = runtime_with_tools(&home, cli.clone(), Some(tools(missing)));
+        for dry_run in [true, false] {
+            let err =
+                ops::pack_add(&rt, &ctx(), &add(&["alpha"], None, dry_run), None).unwrap_err();
+            assert_eq!(err.text(), install_tools::NODE_MISSING, "{missing:?}");
+            assert_eq!(err.code, ErrorCode::Unsupported);
+        }
+        let remote = FakeRemote(vec!["alpha"]);
+        let err = ops::pack_add(&rt, &ctx(), &add(&[], None, true), Some(&remote)).unwrap_err();
+        assert_eq!(err.text(), install_tools::NODE_MISSING);
+        let err = ops::install(&rt, &ctx(), &skills_sh_install("alpha")).unwrap_err();
+        assert_eq!(err.text(), install_tools::NODE_MISSING);
+    }
+    assert!(cli.calls().is_empty(), "ran {:?}", cli.calls());
+
+    let rt = runtime_with_tools(&home, cli.clone(), Some(tools(&["npx"])));
+    let report = ops::pack_add(&rt, &ctx(), &add(&["alpha"], None, false), None).unwrap();
+    assert_eq!(states(&report), [("alpha".into(), "done")]);
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Pack update and remove run `npx` too, so they stop at the same check.
+/// Fails if either plans its steps when Node is missing.
+#[test]
+fn pack_update_and_remove_say_install_node_before_the_plan_when_node_is_missing() {
+    let home = home("pack_update_no_node");
+    installed_from_pack(&home, "clean", "deadbeef");
+    let cli = FakeSkillsCli::new(&home);
+    let rt = runtime_with_tools(&home, cli.clone(), Some(tools(&[])));
+
+    let err = ops::pack_update(&rt, &ctx(), &update(true)).unwrap_err();
+    assert_eq!(err.text(), install_tools::NODE_MISSING);
+    let remove = PackRemoveRequest {
+        source: "owner/pack".to_string(),
+        dry_run: true,
+        ..PackRemoveRequest::default()
+    };
+    let err = ops::pack_remove(&rt, &ctx(), &remove).unwrap_err();
+    assert_eq!(err.text(), install_tools::NODE_MISSING);
+    assert!(cli.calls().is_empty(), "ran {:?}", cli.calls());
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// A coworker without access to a private pack saw git's
+/// "could not read Username ... terminal prompts disabled". Fails if a
+/// refused or missing git source is not one sentence that names the pack
+/// as typed and says what to do.
+#[test]
+fn pack_add_names_an_unreadable_pack_or_missing_git_in_one_sentence() {
+    let home = home("pack_add_no_access");
+    let rt = runtime(&home, FakeSkillsCli::new(&home));
+
+    let err = ops::pack_add(
+        &rt,
+        &ctx(),
+        &add(&[], None, true),
+        Some(&FailingRemote(RemoteError::NoAccess)),
+    )
+    .unwrap_err();
+    assert_eq!(err.text(), install_tools::no_access("owner/pack"));
+    assert!(err
+        .text()
+        .starts_with("You don't have access to owner/pack,"));
+
+    let err = ops::pack_add(
+        &rt,
+        &ctx(),
+        &add(&[], None, true),
+        Some(&FailingRemote(RemoteError::GitMissing)),
+    )
+    .unwrap_err();
+    assert_eq!(err.text(), install_tools::GIT_MISSING);
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Named skills skip the git listing, so `npx skills add` meets the private
+/// repository itself. Fails if its auth failure, printed on stdout, reaches
+/// the step as npx's raw exit status.
+#[test]
+fn pack_add_step_says_no_access_when_the_skills_cli_cannot_read_the_pack() {
+    let home = home("pack_add_cli_no_access");
+    let cli = FakeSkillsCli::new(&home);
+    let rt = runtime(&home, cli.clone());
+
+    for code in ["SKILLS_GIT_AUTH_FAILED", "SKILLS_GIT_SAML_SSO_BLOCKED"] {
+        *cli.fail_auth.lock().unwrap() = Some(code);
+        let report = ops::pack_add(&rt, &ctx(), &add(&["alpha"], Some("v1"), false), None).unwrap();
+
+        let PackStepState::Failed { reason, .. } = &report.steps[0].state else {
+            panic!("{code}: {:?}", report.steps[0].state)
+        };
+        assert_eq!(reason, &install_tools::no_access("owner/pack"), "{code}");
+    }
+    std::fs::remove_dir_all(&home).ok();
+}
+
+fn skills_sh_install(skill: &str) -> InstallRequest {
+    InstallRequest {
+        skill: SkillName(skill.to_string()),
+        method: InstallMethod::SkillsSh,
+        scope: RootScope::Global,
+        harnesses: Vec::new(),
+        link_mode: InstallLinkMode::Link,
+        destination: SkillDestination::Universal,
+        files: Vec::new(),
+        source: Some("owner/pack".to_string()),
+        trust_identity: None,
+        trust_confirmed: false,
+        save_as_preference: false,
+    }
 }
