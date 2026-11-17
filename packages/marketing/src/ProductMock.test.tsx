@@ -85,6 +85,32 @@ describe("ProductMock Packs page", () => {
     expect(within(second).getByRole("button", { name: "Add" }).hasAttribute("disabled")).toBe(true);
   });
 
+  it("plans a known source from its own skills and skips the ones installed here", async () => {
+    const user = await openPacks();
+    await user.type(screen.getByRole("textbox", { name: "Pack source" }), "sergical/skills");
+    await user.click(screen.getByRole("button", { name: "Add pack" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Add skills from sergical/skills?" });
+    // new-branch is installed only in a project, so Global still lacks it.
+    expect(within(dialog).getByRole("status").textContent).toBe(
+      "Would install 1 skill; 3 skipped.",
+    );
+    expect(within(dialog).getAllByText("already installed here")).toHaveLength(3);
+    expect(within(dialog).queryByText("sql-review")).toBeNull();
+  });
+
+  it("keeps keyboard focus in the dialog after Confirm runs the plan", async () => {
+    const user = await openPacks();
+    const row = screen.getByRole("listitem", { name: "getsentry/skills" });
+    await user.click(within(row).getByRole("button", { name: "Update" }));
+    await user.click(screen.getByRole("button", { name: "Update 2 skills" }));
+    const close = screen.getByRole("button", { name: "Close" });
+    expect(document.activeElement).toBe(close);
+    await user.tab();
+    expect(document.activeElement).toBe(close);
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(close);
+  });
+
   it("turns off Update and Remove for a plugin pack and names the agent command", async () => {
     await openPacks();
     const row = screen.getByRole("listitem", { name: "figma@claude-plugins-official" });

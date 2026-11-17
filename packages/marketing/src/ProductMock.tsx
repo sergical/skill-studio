@@ -1171,7 +1171,16 @@ interface PackStep {
 }
 
 const EDITED_REASON = "has local edits, which the owner tool would overwrite or delete";
+// A source the demo has no pack for ships these skills.
 const ADD_PACK_SKILLS = ["sql-review", "pr-review"];
+
+// The core reads the source's skills upstream; the demo's upstream is each pack's
+// installed skills plus its new upstream ones.
+function upstreamSkills(packs: readonly MockPack[], source: string): readonly string[] {
+  const pack = packs.find((each) => each.source === source && each.kind === "skills.sh");
+  if (!pack) return ADD_PACK_SKILLS;
+  return [...new Set([...pack.skills.map((skill) => skill.name), ...pack.newUpstream])].sort();
+}
 
 const initialPacks: readonly MockPack[] = [
   {
@@ -1337,6 +1346,10 @@ function PackPlanDialog({
     initialFocus: cancelButton,
     onKeyDown,
   } = useModalFocus<HTMLButtonElement>(onClose);
+  // Confirm unmounts after it runs; move focus to Close so it stays in the dialog.
+  useEffect(() => {
+    if (done) cancelButton.current?.focus();
+  }, [done, cancelButton]);
   const toRun = steps.filter((step) => step.skip === null).length;
   const skipped = steps.length - toRun;
   const title = done
@@ -1482,7 +1495,7 @@ function PacksScreen() {
         onSubmit={(event) => {
           event.preventDefault();
           const source = addSource.trim();
-          if (source) open({ kind: "add", source, skills: ADD_PACK_SKILLS });
+          if (source) open({ kind: "add", source, skills: upstreamSkills(packs, source) });
         }}
         {...stylex.props(styles.toolbar)}
       >
