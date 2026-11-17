@@ -7,8 +7,8 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 if base=$(git merge-base origin/main HEAD 2> /dev/null); then
   changed=$(git diff --name-only "$base")
 else
-  echo "pre-push: origin/main not found; running the full check" >&2
-  changed=Cargo.toml
+  echo "pre-push: origin/main not found; running every check" >&2
+  changed=$(git ls-files)
 fi
 if printf '%s\n' "$changed" | grep -Eq '\.rs$|(^|/)Cargo\.(toml|lock)$|^crates/skill-studio-core/schema/'; then
   pnpm run check
