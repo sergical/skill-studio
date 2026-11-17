@@ -396,9 +396,12 @@ export function computeHomeGroups(snapshot: SkillSnapshot | undefined): HomeGrou
   const issues = collectDashboardIssues(own);
   const { broken, warnings } = attentionGroups(issues);
   const updates = snapshot ? skillsWithUpdates(snapshot) : [];
-  const inv = homeInvocationCounts(own);
-  const cost = homePromptCost(own, snapshot?.invocations ?? []);
-  const unused = unusedSkills(own, snapshot?.invocations ?? []);
+  // A parked skill is in no agent's prompt, so the figures count only the skills agents still
+  // read. `own` keeps the parked ones: the issue groups and the selection need them.
+  const live = own.filter((skill) => !skill.parked);
+  const inv = homeInvocationCounts(live);
+  const cost = homePromptCost(live, snapshot?.invocations ?? []);
+  const unused = unusedSkills(live, snapshot?.invocations ?? []);
   const recent = snapshot
     ? recentlyUsedSkills(snapshot.skills, snapshot.invocations, RECENTLY_USED_COUNT)
     : [];

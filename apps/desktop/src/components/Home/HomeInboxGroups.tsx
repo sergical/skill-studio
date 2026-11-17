@@ -369,7 +369,7 @@ function UnusedGroup({
             );
           })}
           {unused.length > MAX_ROWS_PER_GROUP && (
-            <ShowAllLink count={unused.length} label="Show all" onClick={onShowAll} />
+            <ShowAllLink count={count} label="Show all" onClick={onShowAll} />
           )}
         </div>
       </CollapsiblePanel>

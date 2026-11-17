@@ -392,11 +392,14 @@ export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeVie
 
   // An acted-on row keeps its place until the user changes what the list shows; see `rowActs`.
   const resetKey = String(filter);
+  // A row parked here leaves `groups.unused`; its held row takes the parked skill's data from
+  // `groups.own`, so the row selects the copy at its new path.
   const heldSkills = useHeldLayout(
     { updates, unused: groups.unused },
     (skill) => skill.name,
     (skill) => skill.name,
     resetKey,
+    (name) => groups.own.find((skill) => skill.parked && skill.name === name),
   );
   const heldIssues = useHeldLayout(
     { broken, warnings },
