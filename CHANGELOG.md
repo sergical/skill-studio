@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+## v0.3.0
+
 ### Added
 
 - Desktop: a Packs page. It lists each pack and has Check upstream, Update all and Add pack. Add, Update and Remove show the plan first, Confirm runs it, and the dialog shows what each step did. Update and Remove are off for plugin and npm packs; a tooltip names the command that owns them.
