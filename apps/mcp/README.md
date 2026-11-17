@@ -21,6 +21,24 @@ request DTO's `schemars` output, unchanged; every tool's output is the same
 `structured_content`, with `is_error` set to match
 `envelope.status == "error"`.
 
+The text block carries the same JSON, as the MCP spec recommends for
+clients that read only `content`. Each client gives its model a different
+part of the result. Measured on 2026-11-16 with a probe server whose two
+channels held different words, and for Gemini CLI read from its source
+(`packages/core/src/tools/mcp-tool.ts`):
+
+| Client              | Success: the model sees         | Error: the model sees |
+| ------------------- | ------------------------------- | --------------------- |
+| Claude Code 2.1.326 | `structured_content` only       | text block only       |
+| Codex 0.169.0       | the whole result, both channels | the whole result      |
+| OpenCode 2.3.0      | `structured_content` only       | not measured          |
+| Gemini CLI (main)   | text block only                 | the whole result      |
+
+So Codex reads each answer twice, and Gemini CLI loses the data if the text
+block does not hold the JSON. Keep both copies. To make Codex read less,
+make the envelope smaller; do not shorten the text block or branch on the
+client name.
+
 Tools that write, or that open the history store (`list_events`,
 `restore_event`), take the same file lease as the CLI and the desktop app.
 If another process holds it, the call returns the ordinary `scope_busy`
