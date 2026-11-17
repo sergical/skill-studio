@@ -48,6 +48,7 @@ mod harness_switch;
 pub mod health;
 pub mod identity;
 pub mod install_targets;
+pub mod install_tools;
 pub mod invocation;
 pub mod journal;
 pub mod listing_cost;

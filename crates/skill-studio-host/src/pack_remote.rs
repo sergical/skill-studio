@@ -7,7 +7,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use skill_studio_core::frontmatter::frontmatter_fields;
-use skill_studio_core::pack::{skills_cli_folder_hash, PackRemote, RemotePack, RemoteSkill};
+use skill_studio_core::pack::{
+    skills_cli_folder_hash, PackRemote, RemoteError, RemotePack, RemoteSkill,
+};
 use skill_studio_core::ports::{CancelToken, ProcessSpawner, ProcessSpec};
 
 use crate::RealFs;
@@ -26,7 +28,7 @@ impl GitPackRemote {
         Self { spawner }
     }
 
-    fn git(&self, args: &[&str], cancel: &dyn CancelToken) -> Result<String, String> {
+    fn git(&self, args: &[&str], cancel: &dyn CancelToken) -> Result<String, RemoteError> {
         let spec = ProcessSpec {
             program: "git".into(),
             args: args.iter().map(ToString::to_string).collect(),
@@ -34,13 +36,22 @@ impl GitPackRemote {
             env: vec![("GIT_TERMINAL_PROMPT".into(), "0".into())],
             timeout_ms: GIT_TIMEOUT_MS,
         };
-        let output = self.spawner.run(&spec, cancel).map_err(|e| e.message)?;
+        let output = self.spawner.run(&spec, cancel).map_err(|e| {
+            match e.source.as_ref().map(std::io::Error::kind) {
+                Some(std::io::ErrorKind::NotFound) => RemoteError::GitMissing,
+                _ => RemoteError::Failed(e.message),
+            }
+        })?;
         if output.timed_out {
-            return Err(format!("git {} timed out", args[0]));
+            return Err(RemoteError::Failed(format!("git {} timed out", args[0])));
         }
         if output.status != Some(0) {
-            let reason = output.stderr.trim().lines().last().unwrap_or("no message");
-            return Err(format!("git {} failed: {reason}", args[0]));
+            return Err(
+                RemoteError::from_git_stderr(&output.stderr).unwrap_or_else(|| {
+                    let reason = output.stderr.trim().lines().last().unwrap_or("no message");
+                    RemoteError::Failed(format!("git {} failed: {reason}", args[0]))
+                }),
+            );
         }
         Ok(output.stdout)
     }
@@ -52,13 +63,16 @@ impl PackRemote for GitPackRemote {
         url: &str,
         git_ref: Option<&str>,
         cancel: &dyn CancelToken,
-    ) -> Result<RemotePack, String> {
+    ) -> Result<RemotePack, RemoteError> {
         let wanted = git_ref.unwrap_or("HEAD");
         if url.starts_with('-') || wanted.starts_with('-') {
-            return Err(format!("refusing git source {url} at {wanted}"));
+            return Err(RemoteError::Failed(format!(
+                "refusing git source {url} at {wanted}"
+            )));
         }
         let listing = self.git(&["ls-remote", url, wanted], cancel)?;
-        let commit = peeled_commit(&listing).ok_or_else(|| format!("{url} has no ref {wanted}"))?;
+        let commit = peeled_commit(&listing)
+            .ok_or_else(|| RemoteError::Failed(format!("{url} has no ref {wanted}")))?;
         let dir =
             std::env::temp_dir().join(format!("skill-studio-pack-{}", ulid::Ulid::generate()));
         let dir_arg = dir.to_string_lossy();

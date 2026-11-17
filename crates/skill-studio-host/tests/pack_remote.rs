@@ -214,3 +214,35 @@ fn folder_hash_ends_a_loop_between_two_sibling_links_or_drops_the_skill() {
 
     assert!(skills_cli_folder_hash(&RealFs::new(), &skill).is_ok());
 }
+
+/// A spawner that cannot find its program, as on a Mac without git.
+struct NoProgram;
+
+impl skill_studio_core::ports::ProcessSpawner for NoProgram {
+    fn run(
+        &self,
+        spec: &skill_studio_core::ports::ProcessSpec,
+        _: &dyn skill_studio_core::ports::CancelToken,
+    ) -> Result<skill_studio_core::ports::ProcessOutput, skill_studio_core::CoreError> {
+        Err(skill_studio_core::CoreError::io(
+            &spec.program,
+            std::io::Error::from(std::io::ErrorKind::NotFound),
+        ))
+    }
+}
+
+/// Fails if a git that cannot start reaches the person as "No such file or
+/// directory (os error 2)" instead of the missing-git sentence.
+#[test]
+fn git_that_cannot_start_is_reported_as_missing_git_or_as_raw_os_text() {
+    use skill_studio_core::pack::{PackRemote, RemoteError};
+    let remote = GitPackRemote::new(Arc::new(NoProgram));
+    let err = remote
+        .fetch(
+            "https://github.com/owner/pack.git",
+            None,
+            &skill_studio_core::ports::NeverCancel,
+        )
+        .unwrap_err();
+    assert_eq!(err, RemoteError::GitMissing);
+}
