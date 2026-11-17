@@ -1,14 +1,16 @@
-## What and why
+## Why
 
-<!-- Describe the change and the reason for it. -->
+<!-- One line: the problem a user or maintainer had. -->
 
-## How it was tested
+## Before → After
 
-<!-- List the commands you ran, for example `npm run check` or `cargo test --workspace`. -->
+<!-- UI: a before and an after screenshot.
+     Behavior: the call path or command output before and after, as short
+     pseudo-code or a small diagram. Do not list files or checks; GitHub shows them. -->
 
-## Checklist
+## Proof
 
-- [ ] `npm run check` passes locally
-- [ ] Tests are named by the project rule: flow, expectation, failure caught
-- [ ] No secrets, keys, or personal data in this diff
-- [ ] Screenshots attached for UI changes
+<!-- The command you ran and the part of its real output that shows the change works. -->
+
+<!-- Needs you: add this section only when the PR has the risk:owner label
+     or a review disagreement after 2 rounds. Say the one decision. -->

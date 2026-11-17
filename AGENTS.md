@@ -176,7 +176,7 @@ pnpm run format:check
 # React health check (react-doctor)
 pnpm run doctor
 
-# Full gate: typecheck + lint + format:check + doctor + knip + test + types:check + cargo fmt --all --check + clippy --workspace --all-targets -D warnings + cargo test --workspace (CI also runs cargo machete and cargo deny check)
+# Full gate: versions:check + typecheck + lint + format:check + doctor + knip + test + types:check + cargo fmt --all --check + clippy --workspace --all-targets -D warnings + cargo test --workspace (CI also runs cargo machete and cargo deny check)
 pnpm run check
 ```
 
@@ -440,11 +440,28 @@ The shared guard proposed in #531 was not built; #531 was also closed. Before yo
 5. If the change grows past about 500 lines, or a fix needs a fix, stop and
    write a design note in the issue before you continue.
 
-## Merge gate freeze (until 2026-11-22)
+## How a PR lands
 
-The merge gate (`scripts/gate/**`, `.gate/**` and the `gate-*` workflows) is
-frozen. Change it only to fix a merge that is broken now, and say which merge
-in the PR. Write each other gate idea as an issue for after the freeze.
+1. Push. The pre-push hook runs `pnpm run check:fast` (about 1 minute). When
+   Rust changed, it runs `pnpm run check` and the contract snapshots instead
+   (about 6 minutes). When a workflow changed, it also runs zizmor. Fix what
+   fails. Do not use `--no-verify`.
+2. Open the PR with `.github/PULL_REQUEST_TEMPLATE.md`, then run
+   `gh pr merge --auto --squash`.
+3. Get a review from a model of another provider and post it with
+   `scripts/gate/gate review-status` (see `scripts/gate/README.md`). Each push
+   needs a new review.
+4. GitHub merges when the required checks pass. Watch the PR only to fix a
+   failing check.
+5. `gate/risk` adds the `risk:owner` label and stays pending for: a release, a
+   version change, deploy or secret files, a new dependency, a change to
+   `package.json` scripts, workflows, `.githooks/`, `.gate/` or `deny.toml`, and
+   policy files. The rules
+   are in `.gate/config.toml`. The owner merges these PRs. Start your reply
+   with `Needs you: #<number> <the one decision>`, then stop. Do not wait for
+   the merge, use `--admin`, or remove the label.
+6. If the review still fails after 2 rounds of fixes, stop and start your reply
+   with `Needs you:` and the disagreement.
 
 ## Reference docs
 

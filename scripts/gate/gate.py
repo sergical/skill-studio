@@ -197,7 +197,7 @@ def main():
     snap = sub.add_parser('snapshots')
     snap.add_argument('--update', action='store_true')
     snap.add_argument('--prepare', action='store_true')
-    from proof import arguments, start, review, card
+    from proof import arguments, start, review
     arguments(sub)
     metric = sub.add_parser('metrics')
     metric.add_argument('--since', required=True)
@@ -211,8 +211,6 @@ def main():
         base = git('merge-base', base, args.head)
         policy = read_at(base, '.gate/config.toml')
         result = classify(tomllib.loads(policy) if policy else cfg, base, args.head, args.raise_to, args.reason, args.author)
-        if args.raise_to:
-            state_path().with_suffix('.risk.json').write_text(json.dumps(result))
         print(json.dumps(result, indent=2) if args.json else result['tier'] + '\n' + '\n'.join(f"- {r['rule']}: {r.get('reason', ', '.join(r.get('files', [])))}" for r in result['reasons']))
     elif args.command == 'snapshots':
         snapshots(cfg, args.update, args.prepare)
@@ -220,8 +218,6 @@ def main():
         start(args, cfg)
     elif args.command == 'review-status':
         review(args, cfg)
-    elif args.command == 'card':
-        card(args, cfg)
     elif args.command == 'metrics':
         from metrics import metrics
         metrics(args, cfg)

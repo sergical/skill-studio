@@ -24,6 +24,11 @@ Before you open a pull request, run the full gate:
 pnpm run check
 ```
 
+`pnpm install` turns on a pre-push hook (`.githooks/pre-push`). It runs
+`pnpm run check:fast`, which is the gate without the Rust tests. When Rust
+changed, it runs the full gate and the contract snapshots. When a workflow
+changed, it also runs zizmor. CI runs everything.
+
 For a small change, the scoped commands below are faster. Run the ones that
 match what you touched:
 

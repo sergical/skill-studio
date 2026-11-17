@@ -1,0 +1,26 @@
+#!/bin/sh
+# Runs the CI checks before a push. `pnpm install` turns it on for this worktree.
+# Rust tests and contract snapshots run only when Rust changed.
+set -e
+# Git sets these for hooks; tools such as react-doctor then resolve wrong paths.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+if base=$(git merge-base origin/main HEAD 2> /dev/null); then
+  changed=$(git diff --name-only "$base")
+else
+  echo "pre-push: origin/main not found; running every check" >&2
+  changed=$(git ls-files)
+fi
+if printf '%s\n' "$changed" | grep -Eq '\.rs$|(^|/)Cargo\.(toml|lock)$|^crates/skill-studio-core/schema/'; then
+  pnpm run check
+  cargo build --workspace --all-features --bins
+  scripts/gate/gate snapshots
+else
+  pnpm run check:fast
+fi
+if printf '%s\n' "$changed" | grep -q '^\.github/workflows/'; then
+  if ! command -v uvx > /dev/null; then
+    echo "pre-push: a workflow changed and zizmor needs uvx; install uv (brew install uv)" >&2
+    exit 1
+  fi
+  uvx zizmor@1.32.0 --offline --min-severity medium --min-confidence medium .github/workflows
+fi

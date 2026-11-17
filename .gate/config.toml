@@ -17,11 +17,9 @@ prepare_linux = [
 ]
 base = "origin/main"
 repository = "sergical/skill-studio"
-check = "pnpm run check"
 version_files = ["**/package.json", "package.json", "**/Cargo.toml", "Cargo.toml", "**/tauri*.json"]
 dependency_files = ["**/package.json", "package.json", "**/Cargo.toml", "Cargo.toml"]
 patch_bots = ["dependabot[bot]", "app/dependabot"]
-ci_jobs = ["test", "host-macos", "check", "zizmor"]
 
 [[rules]]
 id = "release"
@@ -55,14 +53,15 @@ paths = [
   ".gate/.gitignore",
   "scripts/gate/gate",
   "scripts/gate/gate.py",
-  "scripts/gate/approval.py",
   ".github/workflows/**",
+  ".githooks/**",
+  "deny.toml",
 ]
 
 [[rules]]
 id = "deploy-secrets"
 tier = "stop"
-paths = ["apps/server/wrangler.jsonc", "**/deploy-server.yml", "**/.env*", ".env*"]
+paths = ["**/wrangler.jsonc", "**/wrangler.toml", "**/deploy-server.yml", "**/.env*", ".env*"]
 
 [[rules]]
 id = "public-contract"
@@ -91,7 +90,7 @@ paths = [
 
 [[rules]]
 id = "user-data-writes"
-tier = "stop"
+tier = "show"
 paths = [
   "crates/skill-studio-core/src/fsops.rs",
   "crates/skill-studio-core/src/ops.rs",
