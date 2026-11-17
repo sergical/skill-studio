@@ -816,6 +816,44 @@ impl SkillStudioServer {
     }
 
     #[tool(
+        description = "List interrupted writes that recovery could not undo. While one is listed, every write fails with recovery_pending. Each plan names the paths it may have left half done and its saved copies.",
+        annotations(read_only_hint = true)
+    )]
+    async fn recovery_list(
+        &self,
+        Parameters(Viewed {
+            request: NoInput {},
+            view,
+        }): Parameters<Viewed<NoInput>>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op_viewed(
+            Operation::RecoveryList,
+            false,
+            None,
+            &view,
+            &context,
+            ops::recovery_list,
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Give up one interrupted plan from recovery_list, so writes run again. Changes no file the plan touched: tell the user to check those paths. This cannot be undone.",
+        annotations(read_only_hint = false, destructive_hint = true)
+    )]
+    async fn recovery_drop(
+        &self,
+        Parameters(req): Parameters<skill_studio_core::ops_recovery::RecoveryDropRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op(Operation::RecoveryDrop, true, &context, |rt, ctx| {
+            ops::recovery_drop(rt, ctx, &req)
+        })
+        .await
+    }
+
+    #[tool(
         description = "History detail by harness, project and trigger, with window and all-time use counts. Use library for a per-skill answer that also includes agents, modes, sources and copies.\nUses = loads in the window, once per session; a sub-agent log is its own session; resumed or forked session copies and names no longer in the library do not count.",
         annotations(read_only_hint = true)
     )]

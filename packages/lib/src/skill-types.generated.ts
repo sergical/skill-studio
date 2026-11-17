@@ -1539,6 +1539,7 @@ export interface PackStep {
           | "drift_conflict"
           | "ownership_changed"
           | "already_reverted"
+          | "recovery_pending"
           | "incomplete"
           | "cancelled";
         /**
@@ -1950,6 +1951,7 @@ export interface ErrorEntry {
     | "drift_conflict"
     | "ownership_changed"
     | "already_reverted"
+    | "recovery_pending"
     | "incomplete"
     | "cancelled";
   /**

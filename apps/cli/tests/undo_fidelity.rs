@@ -146,7 +146,7 @@ fn cli_history_and_restore_refuse_unfinished_recovery_or_write_over_an_interrupt
     let event = undo_fixtures::interrupted_plan_before_restore(home.path(), foreign.path());
     assert_eq!(cli(home.path(), &["history"])["data"][0]["id"], event.0);
     let result = cli(home.path(), &["restore", "--event-id", &event.0, "--force"]);
-    assert_eq!(result["errors"][0]["code"], "incomplete", "{result}");
+    assert_eq!(result["errors"][0]["code"], "recovery_pending", "{result}");
     assert!(
         result["errors"][0]["message"]
             .as_str()

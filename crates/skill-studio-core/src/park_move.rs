@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use crate::error::{CoreError, ErrorCode};
+use crate::fsops::Root;
 use crate::ports::{confine, FileKind, MutationSession, Runtime, ScopeFs};
 
 /// Largest single file the cross-volume copy reads into memory.
@@ -245,27 +246,35 @@ fn copy_tree(
     tree: &[TreeEntry],
 ) -> Result<(), CoreError> {
     let fs = rt.ports.fs.as_ref();
-    let scoped_root = confine(&rt.scope, fs, to)?;
-    fs.create_dir_all(&session.guard, &scoped_root)
-        .map_err(|e| CoreError::io(to, e))?;
+    let parent = to.parent().unwrap_or(to);
+    let scoped_parent = confine(&rt.scope, fs, parent)?;
+    fs.create_dir_all(&session.guard, &scoped_parent)
+        .map_err(|e| CoreError::io(parent, e))?;
+    let root = Root::open(fs, parent.to_path_buf())
+        .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()).at(parent))?;
+    let leaf = to.strip_prefix(parent).unwrap_or(to);
+    root.create_dirs(leaf)
+        .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()).at(to))?;
     for entry in tree {
         let source = from.join(&entry.relative);
-        let dest = to.join(&entry.relative);
-        // Confine each destination before the unscoped write below.
-        let scoped = confine(&rt.scope, fs, &dest)?;
-        if entry.kind == FileKind::Dir {
-            fs.create_dir_all(&session.guard, &scoped)
-                .map_err(|e| CoreError::io(&dest, e))?;
+        let dest = root
+            .confine(&leaf.join(&entry.relative))
+            .map_err(|e| CoreError::new(ErrorCode::InvalidRequest, e.to_string()).at(to))?;
+        let written = if entry.kind == FileKind::Dir {
+            root.writer().fsops_create_dir(&dest)
         } else {
             let bytes = fs
                 .read_capped(&source, COPY_FILE_MAX_BYTES)
                 .map_err(|e| CoreError::io(&source, e))?;
-            let written = match entry.mode {
-                Some(mode) => fs.fsops_write_new_file_with_mode(&dest, &bytes, mode & 0o7777),
-                None => fs.fsops_write_new_file(&dest, &bytes),
-            };
-            written.map_err(|e| CoreError::io(&dest, e))?;
-        }
+            match entry.mode {
+                Some(mode) => {
+                    root.writer()
+                        .fsops_write_new_file_with_mode(&dest, &bytes, mode & 0o7777)
+                }
+                None => root.writer().fsops_write_new_file(&dest, &bytes),
+            }
+        };
+        written.map_err(|e| CoreError::io(&dest, e))?;
     }
     Ok(())
 }

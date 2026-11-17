@@ -237,6 +237,11 @@ enum Command {
         #[command(subcommand)]
         action: PackCommand,
     },
+    /// List or drop interrupted writes that recovery cannot undo.
+    Recovery {
+        #[command(subcommand)]
+        action: RecoveryCommand,
+    },
     /// Show which skills your agents used, and which they never used.
     ///
     /// Uses = loads in the window, once per session; a sub-agent log is its own session; resumed or forked session copies and names no longer in the library do not count.
@@ -660,6 +665,30 @@ enum ReviewCommand {
 }
 
 #[derive(clap::Subcommand)]
+enum RecoveryCommand {
+    /// List the plans that block writes, with the paths each one may have
+    /// left half done.
+    List {
+        #[command(flatten)]
+        scope: ScopeArgs,
+        #[command(flatten)]
+        view: ViewArgs,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Give up one interrupted plan, so writes run again. Changes no file
+    /// the plan touched: check those paths by hand. This cannot be undone.
+    Drop {
+        /// Plan ID, as recovery list prints it.
+        plan_id: String,
+        #[command(flatten)]
+        scope: ScopeArgs,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(clap::Subcommand)]
 enum PackCommand {
     /// List every installed pack. Reads local files only unless --remote is given.
     List {
@@ -917,6 +946,7 @@ fn main() -> ExitCode {
             run_library(&scope, &request, &view.into(), json, time)
         }
         Command::Pack { action } => run_pack(action, time),
+        Command::Recovery { action } => run_recovery(action, time),
         Command::Usage {
             scope,
             days,
@@ -1995,7 +2025,11 @@ fn run_undo(scope: &ScopeArgs, force: bool, json: bool, time: bool) -> ExitCode 
                             reverted_by: Some(_)
                         }
                 ) | (
-                    Some(EventKind::QuarantinePrune | EventKind::ReconcileRemoveStaleLink),
+                    Some(
+                        EventKind::QuarantinePrune
+                            | EventKind::ReconcileRemoveStaleLink
+                            | EventKind::RecoveryPlanDropped
+                    ),
                     _
                 )
             )
@@ -2987,6 +3021,46 @@ fn run_pack_action(action: PackCommand, time: bool) -> ExitCode {
     };
     let envelope = ResultEnvelope::from_result(operation, &rt.scope, &ctx, result);
     finish(&envelope, json, time, output::print_pack_action)
+}
+
+fn run_recovery(action: RecoveryCommand, time: bool) -> ExitCode {
+    use skill_studio_core::ops_recovery::{
+        RecoveryDropOutcome, RecoveryDropRequest, RecoveryReport,
+    };
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    match action {
+        RecoveryCommand::List { scope, view, json } => {
+            let rt = match build_runtime::<RecoveryReport>(&scope, Operation::RecoveryList, json) {
+                Ok(rt) => rt,
+                Err(code) => return code,
+            };
+            let result = ops::recovery_list(&rt, &ctx);
+            let envelope =
+                ResultEnvelope::from_result(Operation::RecoveryList, &rt.scope, &ctx, result);
+            finish_view(&envelope, &view.into(), json, time, output::print_recovery)
+        }
+        RecoveryCommand::Drop {
+            plan_id,
+            scope,
+            json,
+        } => {
+            let rt = match build_runtime_write::<RecoveryDropOutcome>(
+                &scope,
+                Operation::RecoveryDrop,
+                json,
+            ) {
+                Ok(rt) => rt,
+                Err(code) => return code,
+            };
+            let req = RecoveryDropRequest {
+                plan_id: skill_studio_core::identity::PlanId(plan_id),
+            };
+            let result = ops::recovery_drop(&rt, &ctx, &req);
+            let envelope =
+                ResultEnvelope::from_result(Operation::RecoveryDrop, &rt.scope, &ctx, result);
+            finish(&envelope, json, time, output::print_recovery_drop)
+        }
+    }
 }
 
 fn run_review(action: ReviewCommand, time: bool) -> ExitCode {

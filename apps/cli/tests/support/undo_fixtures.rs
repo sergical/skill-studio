@@ -233,8 +233,15 @@ pub fn cli_binary() -> PathBuf {
 }
 
 pub fn interrupted_plan_before_restore(home: &Path, foreign: &Path) -> EventId {
-    use skill_studio_core::ports::{acquire_exclusive, Journal, PlanRecord, PlanStatus, PlanStep};
     let event = removed_with_secondary_replacement(home);
+    stuck_plan(home, foreign);
+    event
+}
+
+/// Leaves the pending plan `unrecoverable-fixture`, whose one step lies
+/// under `foreign`, outside every write lease, so each recovery run fails.
+pub fn stuck_plan(home: &Path, foreign: &Path) {
+    use skill_studio_core::ports::{acquire_exclusive, Journal, PlanRecord, PlanStatus, PlanStep};
     let rt = runtime(home);
     let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope).unwrap();
     let journal = skill_studio_core::journal::FsJournal::new(
@@ -255,10 +262,11 @@ pub fn interrupted_plan_before_restore(home: &Path, foreign: &Path) -> EventId {
                     staged: foreign.join("sentinel"),
                 }],
                 status: PlanStatus::Pending,
+                recovery_attempts: 0,
+                recovery_error: None,
             },
         )
         .unwrap();
-    event
 }
 
 pub fn large_asset_update(home: &Path, failed: bool) -> (EventId, Vec<u8>, Vec<u8>) {

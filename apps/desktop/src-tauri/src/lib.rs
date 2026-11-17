@@ -137,10 +137,7 @@ fn reconcile_event_store_at_startup(
                     .ok_or_else(|| "Could not find home directory".to_string())
                     .and_then(|home| {
                         skills::skill_frontmatter_repair::reconcile_interrupted_frontmatter_repair(
-                            store,
-                            &home,
-                            row,
-                            Some(guard),
+                            store, &home, row, guard,
                         )
                     })
                 {

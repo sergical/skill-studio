@@ -71,11 +71,14 @@ pub enum EventKind {
     QuarantinePrune,
     /// Universal folder replaced by one copy per chosen harness.
     Split,
+    /// A stuck recovery plan given up by `recovery drop`; the payload is the
+    /// plan as it was, with what it may have left on disk.
+    RecoveryPlanDropped,
 }
 
 impl EventKind {
     /// Every kind, in declaration order.
-    pub const ALL: [EventKind; 23] = [
+    pub const ALL: [EventKind; 24] = [
         EventKind::Install,
         EventKind::Remove,
         EventKind::Update,
@@ -99,6 +102,7 @@ impl EventKind {
         EventKind::Restore,
         EventKind::QuarantinePrune,
         EventKind::Split,
+        EventKind::RecoveryPlanDropped,
     ];
 
     /// The literal stored in the `kind` column.
@@ -127,6 +131,7 @@ impl EventKind {
             EventKind::Restore => "restore",
             EventKind::QuarantinePrune => "quarantine_prune",
             EventKind::Split => "split",
+            EventKind::RecoveryPlanDropped => "recovery_plan_dropped",
         }
     }
 

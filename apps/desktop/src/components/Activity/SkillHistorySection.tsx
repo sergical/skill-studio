@@ -46,6 +46,7 @@ function iconForKind(kind: string, className: string) {
       return <Download {...props} />;
     case "remove":
     case "quarantine_prune":
+    case "recovery_plan_dropped":
       return <Trash2 {...props} />;
     case "update":
       return <RefreshCw {...props} />;

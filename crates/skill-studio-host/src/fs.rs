@@ -6,6 +6,8 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use cap_std::ambient_authority;
+use cap_std::fs::{Dir, OpenOptionsExt as _, PermissionsExt as _};
 use chrono::{DateTime, Utc};
 use skill_studio_core::ports::{
     DirEntryFacts, ExclusiveGuard, FileFacts, FileKind, OpenedFile, ScopeFs, ScopedPath,
@@ -16,6 +18,11 @@ use skill_studio_core::ports::{
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// `ScopeFs` backed by the real filesystem.
+///
+/// Writes that take a [`ScopedPath`] open its root as a [`Dir`] and resolve
+/// the rest inside it, so a link out of the root fails the write.
+/// [`ScopeFs::fsops_bind_root`] returns a [`BoundFs`] that does the same for
+/// the `fsops_*` writes.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RealFs;
 
@@ -24,6 +31,25 @@ impl RealFs {
     pub fn new() -> Self {
         RealFs
     }
+}
+
+fn open_root(path: &ScopedPath) -> io::Result<Dir> {
+    Dir::open_ambient_dir(path.root(), ambient_authority())
+}
+
+fn dot_if_empty(path: &Path) -> &Path {
+    if path.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        path
+    }
+}
+
+fn split_leaf(path: &Path) -> io::Result<(&Path, &std::ffi::OsStr)> {
+    let leaf = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no file name"))?;
+    Ok((dot_if_empty(path.parent().unwrap_or(Path::new(""))), leaf))
 }
 
 fn to_facts(meta: &fs::Metadata) -> FileFacts {
@@ -136,22 +162,21 @@ impl ScopeFs for RealFs {
         path: &ScopedPath,
         bytes: &[u8],
     ) -> io::Result<()> {
-        let path = path.as_path();
-        let dir = path
-            .parent()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
-        let file_name = path
-            .file_name()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no file name"))?
-            .to_string_lossy();
+        let root = open_root(path)?;
+        let path = path.in_root();
+        let (parent, file_name) = split_leaf(path)?;
         let counter = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let tmp_path = dir.join(format!(".{file_name}.tmp-{}-{counter}", std::process::id()));
-        let existing_mode = fs::metadata(path).ok().map(|m| m.mode());
-        fs::write(&tmp_path, bytes)?;
+        let tmp_path = parent.join(format!(
+            ".{}.tmp-{}-{counter}",
+            file_name.to_string_lossy(),
+            std::process::id()
+        ));
+        let existing_mode = root.metadata(path).ok().map(|m| m.permissions().mode());
+        root.write(&tmp_path, bytes)?;
         if let Some(mode) = existing_mode {
-            fs::set_permissions(&tmp_path, fs::Permissions::from_mode(mode))?;
+            root.set_permissions(&tmp_path, cap_std::fs::Permissions::from_mode(mode))?;
         }
-        fs::rename(&tmp_path, path)
+        root.rename(&tmp_path, &root, path)
     }
 
     fn rename(
@@ -160,15 +185,15 @@ impl ScopeFs for RealFs {
         from: &ScopedPath,
         to: &ScopedPath,
     ) -> io::Result<()> {
-        fs::rename(from.as_path(), to.as_path())
+        open_root(from)?.rename(from.in_root(), &open_root(to)?, to.in_root())
     }
 
     fn remove_file(&self, _guard: &ExclusiveGuard, path: &ScopedPath) -> io::Result<()> {
-        fs::remove_file(path.as_path())
+        open_root(path)?.remove_file(path.in_root())
     }
 
     fn create_dir_all(&self, _guard: &ExclusiveGuard, path: &ScopedPath) -> io::Result<()> {
-        fs::create_dir_all(path.as_path())
+        open_root(path)?.create_dir_all(dot_if_empty(path.in_root()))
     }
 
     fn symlink(
@@ -179,7 +204,7 @@ impl ScopeFs for RealFs {
     ) -> io::Result<()> {
         // `target` is a `ScopedPath`, so it was already proven to lie inside
         // the scope by `confine` before this call was made.
-        std::os::unix::fs::symlink(target.as_path(), link.as_path())
+        open_root(link)?.symlink_contents(target.as_path(), link.in_root())
     }
 
     fn symlink_relative(
@@ -191,7 +216,7 @@ impl ScopeFs for RealFs {
     ) -> io::Result<()> {
         // `relative_target` resolves from `link`'s parent to `_target`,
         // which `confine` already proved lies inside the scope.
-        std::os::unix::fs::symlink(relative_target, link.as_path())
+        open_root(link)?.symlink_contents(relative_target, link.in_root())
     }
 
     fn fsops_device_inode(&self, path: &Path) -> io::Result<(u64, u64)> {
@@ -261,6 +286,180 @@ impl ScopeFs for RealFs {
     fn fsops_exchange(&self, a: &Path, b: &Path) -> io::Result<()> {
         atomic_exchange::exchange(a, b)
     }
+
+    fn fsops_bind_root(&self, root: &Path) -> io::Result<Option<Box<dyn ScopeFs + '_>>> {
+        Ok(Some(Box::new(BoundFs {
+            path: root.to_path_buf(),
+            dir: Dir::open_ambient_dir(root, ambient_authority())?,
+        })))
+    }
+}
+
+/// [`RealFs`] whose `fsops_*` writes resolve inside one open root folder.
+/// Every other call goes to [`RealFs`].
+#[derive(Debug)]
+struct BoundFs {
+    path: PathBuf,
+    dir: Dir,
+}
+
+impl BoundFs {
+    fn relative<'p>(&self, path: &'p Path) -> io::Result<&'p Path> {
+        let relative = path.strip_prefix(&self.path).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "{} lies outside the root {}",
+                    path.display(),
+                    self.path.display()
+                ),
+            )
+        })?;
+        Ok(dot_if_empty(relative))
+    }
+
+    fn create_new(&self, path: &Path, mode: Option<u32>) -> io::Result<cap_std::fs::File> {
+        let mut options = cap_std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        if let Some(mode) = mode {
+            options.mode(mode);
+        }
+        self.dir.open_with(self.relative(path)?, &options)
+    }
+}
+
+impl ScopeFs for BoundFs {
+    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        RealFs.canonicalize(path)
+    }
+    fn symlink_metadata(&self, path: &Path) -> io::Result<FileFacts> {
+        RealFs.symlink_metadata(path)
+    }
+    fn read_link(&self, path: &Path) -> io::Result<PathBuf> {
+        RealFs.read_link(path)
+    }
+    fn ancestor_holds(&self, start: &Path, name: &str) -> io::Result<bool> {
+        RealFs.ancestor_holds(start, name)
+    }
+    fn read_dir(&self, path: &Path) -> io::Result<Vec<DirEntryFacts>> {
+        RealFs.read_dir(path)
+    }
+    fn visit_dir(&self, path: &Path, visit: &mut dyn FnMut(DirEntryFacts)) -> io::Result<()> {
+        RealFs.visit_dir(path, visit)
+    }
+    fn open_file(&self, path: &Path) -> io::Result<OpenedFile> {
+        RealFs.open_file(path)
+    }
+    fn read_capped(&self, path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
+        RealFs.read_capped(path, max_bytes)
+    }
+    fn read_prefix(&self, path: &Path, limit: u64) -> io::Result<(Vec<u8>, bool)> {
+        RealFs.read_prefix(path, limit)
+    }
+    fn write_atomic(
+        &self,
+        guard: &ExclusiveGuard,
+        path: &ScopedPath,
+        bytes: &[u8],
+    ) -> io::Result<()> {
+        RealFs.write_atomic(guard, path, bytes)
+    }
+    fn rename(&self, guard: &ExclusiveGuard, from: &ScopedPath, to: &ScopedPath) -> io::Result<()> {
+        RealFs.rename(guard, from, to)
+    }
+    fn remove_file(&self, guard: &ExclusiveGuard, path: &ScopedPath) -> io::Result<()> {
+        RealFs.remove_file(guard, path)
+    }
+    fn create_dir_all(&self, guard: &ExclusiveGuard, path: &ScopedPath) -> io::Result<()> {
+        RealFs.create_dir_all(guard, path)
+    }
+    fn symlink(
+        &self,
+        guard: &ExclusiveGuard,
+        target: &ScopedPath,
+        link: &ScopedPath,
+    ) -> io::Result<()> {
+        RealFs.symlink(guard, target, link)
+    }
+    fn symlink_relative(
+        &self,
+        guard: &ExclusiveGuard,
+        target: &ScopedPath,
+        relative_target: &Path,
+        link: &ScopedPath,
+    ) -> io::Result<()> {
+        RealFs.symlink_relative(guard, target, relative_target, link)
+    }
+    fn fsops_device_inode(&self, path: &Path) -> io::Result<(u64, u64)> {
+        RealFs.fsops_device_inode(path)
+    }
+    fn fsops_fsync_file(&self, path: &Path) -> io::Result<()> {
+        self.dir.open(self.relative(path)?)?.sync_all()
+    }
+    fn fsops_fsync_dir(&self, path: &Path) -> io::Result<()> {
+        // `open_dir` gives an O_PATH handle on Linux, and fsync on one fails
+        // with EBADF.
+        self.dir.open(self.relative(path)?)?.sync_all()
+    }
+    fn fsops_create_dir(&self, path: &Path) -> io::Result<()> {
+        self.dir.create_dir(self.relative(path)?)
+    }
+    fn fsops_write_new_file(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+        use std::io::Write;
+        self.create_new(path, None)?.write_all(bytes)
+    }
+    fn fsops_write_new_file_with_mode(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        mode: u32,
+    ) -> io::Result<()> {
+        use std::io::Write;
+        let mut file = self.create_new(path, Some(mode))?;
+        file.write_all(bytes)?;
+        // The umask already masked the create mode above.
+        file.set_permissions(cap_std::fs::Permissions::from_mode(mode))
+    }
+    fn fsops_rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        self.dir
+            .rename(self.relative(from)?, &self.dir, self.relative(to)?)
+    }
+    fn fsops_symlink(&self, target: &Path, link: &Path) -> io::Result<()> {
+        self.dir.symlink_contents(target, self.relative(link)?)
+    }
+    fn fsops_remove_dir(&self, path: &Path) -> io::Result<()> {
+        self.dir.remove_dir(self.relative(path)?)
+    }
+    fn fsops_remove_file(&self, path: &Path) -> io::Result<()> {
+        self.dir.remove_file(self.relative(path)?)
+    }
+    fn fsops_exchange(&self, a: &Path, b: &Path) -> io::Result<()> {
+        exchange_in(&self.dir, self.relative(a)?, self.relative(b)?)
+    }
+    fn fsops_bind_root(&self, root: &Path) -> io::Result<Option<Box<dyn ScopeFs + '_>>> {
+        RealFs.fsops_bind_root(root)
+    }
+}
+
+/// [`atomic_exchange::exchange`] for two entries inside `dir`: each parent
+/// folder is opened through `dir`, so neither can be a link out of it.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn exchange_in(dir: &Dir, a: &Path, b: &Path) -> io::Result<()> {
+    let (a_parent, a_leaf) = split_leaf(a)?;
+    let (b_parent, b_leaf) = split_leaf(b)?;
+    rustix::fs::renameat_with(
+        dir.open_dir(a_parent)?,
+        a_leaf,
+        dir.open_dir(b_parent)?,
+        b_leaf,
+        rustix::fs::RenameFlags::EXCHANGE,
+    )
+    .map_err(io::Error::from)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn exchange_in(_dir: &Dir, a: &Path, b: &Path) -> io::Result<()> {
+    atomic_exchange::exchange(a, b)
 }
 
 /// Atomically exchanges two paths on the real filesystem: [`crate::fs`]'s

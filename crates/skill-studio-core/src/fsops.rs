@@ -159,9 +159,12 @@ pub(crate) fn join_lexical(base: &Path, target: &Path) -> PathBuf {
 /// Every primitive that takes a `Root` revalidates its device and inode
 /// (via [`ScopeFs::fsops_device_inode`]) before and after each on-disk
 /// step: a root swapped for a symlink or another directory mid-operation
-/// is refused with [`FsOpsError::RootMoved`], never followed.
+/// is refused with [`FsOpsError::RootMoved`], never followed. Writes go
+/// through [`ScopeFs::fsops_bind_root`], so a folder under the root swapped
+/// for a link after [`Self::confine`] cannot move them out of the root.
 pub struct Root<'a> {
     fs: &'a dyn ScopeFs,
+    bound: Option<Box<dyn ScopeFs + 'a>>,
     path: PathBuf,
     binding: (u64, u64),
 }
@@ -170,7 +173,46 @@ impl<'a> Root<'a> {
     /// Opens `path` as a root, capturing its device and inode.
     pub fn open(fs: &'a dyn ScopeFs, path: PathBuf) -> Result<Self, FsOpsError> {
         let binding = fs.fsops_device_inode(&path).fs_err(&path)?;
-        Ok(Root { fs, path, binding })
+        let bound = fs.fsops_bind_root(&path).fs_err(&path)?;
+        Ok(Root {
+            fs,
+            bound,
+            path,
+            binding,
+        })
+    }
+
+    /// The [`ScopeFs`] for every write under the root. A path from
+    /// [`Self::confine`] written through the `fs` given to [`Self::open`]
+    /// can follow a folder that became a link after the check; written
+    /// here, it cannot leave the root.
+    pub fn writer(&self) -> &dyn ScopeFs {
+        self.bound.as_deref().unwrap_or(self.fs)
+    }
+
+    /// Creates `name` (relative to the root) and each missing folder above
+    /// it through [`Self::writer`], fsyncing each new folder and its parent.
+    /// Returns the confined path.
+    pub fn create_dirs(&self, name: &Path) -> Result<PathBuf, FsOpsError> {
+        let target = self.confine(name)?;
+        let relative = target.strip_prefix(&self.path).unwrap_or(Path::new(""));
+        let mut dir = self.path.clone();
+        for component in relative.components() {
+            let parent = dir.clone();
+            dir.push(component);
+            if self.fs.symlink_metadata(&dir).is_ok() {
+                continue;
+            }
+            match self.writer().fsops_create_dir(&dir) {
+                Ok(()) => {
+                    self.writer().fsops_fsync_dir(&dir).fs_err(&dir)?;
+                    self.writer().fsops_fsync_dir(&parent).fs_err(&parent)?;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(FsOpsError::io(&dir, error)),
+            }
+        }
+        Ok(target)
     }
 
     /// The root's own path.
@@ -270,7 +312,7 @@ const MAX_SYMLINK_HOPS: usize = 40;
 /// names, survives a crash.
 fn fsync_up_to_root(root: &Root, mut dir: PathBuf) -> Result<(), FsOpsError> {
     loop {
-        root.fs.fsops_fsync_dir(&dir).fs_err(&dir)?;
+        root.writer().fsops_fsync_dir(&dir).fs_err(&dir)?;
         if dir == root.path {
             return Ok(());
         }
@@ -357,7 +399,9 @@ fn stage_entries<'c>(
     // `tmp_path` for reversal's `remove_tree` to remove, which is already
     // its no-op case.
     plan.record_stage(&tmp_path).map_err(FsOpsError::Journal)?;
-    root.fs.fsops_create_dir(&tmp_path).fs_err(&tmp_path)?;
+    root.writer()
+        .fsops_create_dir(&tmp_path)
+        .fs_err(&tmp_path)?;
 
     let mut created_dirs = vec![tmp_path.clone()];
     for (relative, bytes, mode) in contents {
@@ -376,24 +420,26 @@ fn stage_entries<'c>(
         for component in &components[..components.len().saturating_sub(1)] {
             dir.push(component);
             if root.fs.symlink_metadata(&dir).is_err() {
-                root.fs.fsops_create_dir(&dir).fs_err(&dir)?;
+                root.writer().fsops_create_dir(&dir).fs_err(&dir)?;
                 created_dirs.push(dir.clone());
             }
         }
         let file_path = tmp_path.join(relative);
         match mode {
             Some(mode) => root
-                .fs
+                .writer()
                 .fsops_write_new_file_with_mode(&file_path, bytes, mode),
-            None => root.fs.fsops_write_new_file(&file_path, bytes),
+            None => root.writer().fsops_write_new_file(&file_path, bytes),
         }
         .fs_err(&file_path)?;
-        root.fs.fsops_fsync_file(&file_path).fs_err(&file_path)?;
+        root.writer()
+            .fsops_fsync_file(&file_path)
+            .fs_err(&file_path)?;
     }
 
     created_dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
     for dir in &created_dirs {
-        root.fs.fsops_fsync_dir(dir).fs_err(dir)?;
+        root.writer().fsops_fsync_dir(dir).fs_err(dir)?;
     }
     fsync_up_to_root(root, tmp_path.clone())?;
     root.revalidate()?;
@@ -453,7 +499,7 @@ pub fn swap(
         None => {
             plan.record_swap(&final_path, &staged.path, staged_binding, None)
                 .map_err(FsOpsError::Journal)?;
-            root.fs
+            root.writer()
                 .fsops_rename(&staged.path, &final_path)
                 .fs_err(&final_path)?;
         }
@@ -494,12 +540,12 @@ pub fn swap(
             )
             .map_err(FsOpsError::Journal)?;
             if created_quarantine_dir.is_some() {
-                root.fs
+                root.writer()
                     .fsops_create_dir(&quarantine_root)
                     .fs_err(&quarantine_root)?;
                 fsync_up_to_root(root, quarantine_root.clone())?;
             }
-            root.fs
+            root.writer()
                 .fsops_exchange(&staged.path, &final_path)
                 .fs_err(&final_path)?;
             // `final_path` already shows the new content: the exchange
@@ -507,7 +553,7 @@ pub fn swap(
             // `staged.path`, under its temp name; moving it into
             // quarantine is durability for the *old* copy, not for this
             // operation's own correctness.
-            root.fs
+            root.writer()
                 .fsops_rename(&staged.path, &quarantine_target)
                 .fs_err(&quarantine_target)?;
         }
@@ -556,8 +602,10 @@ pub fn link(
     // rename landed.
     plan.record_link_with_temp(&link_path, target, previous_target, Some(tmp_path.clone()))
         .map_err(FsOpsError::Journal)?;
-    root.fs.fsops_symlink(target, &tmp_path).fs_err(&tmp_path)?;
-    root.fs
+    root.writer()
+        .fsops_symlink(target, &tmp_path)
+        .fs_err(&tmp_path)?;
+    root.writer()
         .fsops_rename(&tmp_path, &link_path)
         .fs_err(&link_path)?;
     fsync_up_to_root(root, parent)?;
@@ -677,11 +725,15 @@ pub fn write_file(
         previous_mode,
     )
     .map_err(FsOpsError::Journal)?;
-    root.fs
+    root.writer()
         .fsops_write_new_file_with_mode(&tmp_path, bytes, previous_mode.unwrap_or(0o644))
         .fs_err(&tmp_path)?;
-    root.fs.fsops_fsync_file(&tmp_path).fs_err(&tmp_path)?;
-    root.fs.fsops_rename(&tmp_path, &target).fs_err(&target)?;
+    root.writer()
+        .fsops_fsync_file(&tmp_path)
+        .fs_err(&tmp_path)?;
+    root.writer()
+        .fsops_rename(&tmp_path, &target)
+        .fs_err(&target)?;
     fsync_up_to_root(root, parent)?;
     root.revalidate()?;
     Ok(())

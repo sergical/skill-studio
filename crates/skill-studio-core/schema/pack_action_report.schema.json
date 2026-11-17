@@ -267,6 +267,11 @@
           "const": "already_reverted"
         },
         {
+          "description": "An interrupted write is not recovered yet, so no new write ran.",
+          "type": "string",
+          "const": "recovery_pending"
+        },
+        {
           "description": "The operation finished but some roots could not be read in time.",
           "type": "string",
           "const": "incomplete"

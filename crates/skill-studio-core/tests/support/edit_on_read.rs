@@ -166,4 +166,7 @@ impl ScopeFs for EditOnRead {
     fn fsops_exchange(&self, a: &Path, b: &Path) -> io::Result<()> {
         RealFs::new().fsops_exchange(a, b)
     }
+    fn fsops_bind_root(&self, _root: &Path) -> io::Result<Option<Box<dyn ScopeFs + '_>>> {
+        Ok(None)
+    }
 }

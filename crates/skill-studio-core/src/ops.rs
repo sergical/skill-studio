@@ -167,6 +167,10 @@ pub enum Operation {
     PackUpdate,
     /// Remove the skills of one pack.
     PackRemove,
+    /// List the recovery plans that did not finish or were dropped.
+    RecoveryList,
+    /// Give up one interrupted recovery plan.
+    RecoveryDrop,
 }
 
 /// Outcome status of one call.
@@ -5860,6 +5864,8 @@ pub use crate::extras::extras;
 pub use crate::ops_discard::discard;
 pub use crate::ops_doctor::doctor;
 pub use crate::ops_install::{install, install_preferences};
+/// Stuck recovery plans, shared by CLI and MCP.
+pub use crate::ops_recovery::{recovery_drop, recovery_list};
 pub use crate::ops_remove::{remove, sweep_quarantine};
 pub use crate::ops_split::split;
 pub use crate::ops_update::{update, update_all, update_all_unbounded, update_split_copies};
@@ -8683,6 +8689,8 @@ mod tests {
                 Operation::PackAdd,
                 Operation::PackUpdate,
                 Operation::PackRemove,
+                Operation::RecoveryList,
+                Operation::RecoveryDrop,
             ];
             for operation in all {
                 let expected = match operation {
@@ -8719,6 +8727,8 @@ mod tests {
                     Operation::PackAdd => "pack_add",
                     Operation::PackUpdate => "pack_update",
                     Operation::PackRemove => "pack_remove",
+                    Operation::RecoveryList => "recovery_list",
+                    Operation::RecoveryDrop => "recovery_drop",
                 };
                 let value = serde_json::to_value(operation).unwrap();
                 assert_eq!(

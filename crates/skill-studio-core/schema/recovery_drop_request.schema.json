@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RecoveryDropRequest",
+  "description": "Request to give up one interrupted plan.",
+  "type": "object",
+  "properties": {
+    "plan_id": {
+      "description": "ID from `recovery list`.",
+      "$ref": "#/$defs/PlanId"
+    }
+  },
+  "required": [
+    "plan_id"
+  ],
+  "$defs": {
+    "PlanId": {
+      "description": "Journal plan id (ULID string).\n\nInvariant: lexical order equals creation order inside one journal.",
+      "type": "string"
+    }
+  }
+}

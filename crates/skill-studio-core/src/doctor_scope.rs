@@ -668,6 +668,12 @@ mod tests {
         fn fsops_exchange(&self, a: &Path, b: &Path) -> std::io::Result<()> {
             self.inner.fsops_exchange(a, b)
         }
+        fn fsops_bind_root(
+            &self,
+            _root: &Path,
+        ) -> std::io::Result<Option<Box<dyn crate::ports::ScopeFs + '_>>> {
+            Ok(None)
+        }
     }
 
     #[test]
@@ -733,6 +739,8 @@ mod tests {
                 expired_backups: Vec::new(),
                 steps: Vec::new(),
                 status: crate::ports::PlanStatus::Done,
+                recovery_attempts: 0,
+                recovery_error: None,
             };
             fixture = fixture.dir(&root).file(
                 &format!("{root}/plan.json"),
