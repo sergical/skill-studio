@@ -72,8 +72,11 @@ export function mockPackReport(snapshot: SkillSnapshot, remote: boolean): PackRe
   const packs = new Map<string, Pack>();
   for (const item of snapshot.skills) {
     const kind = KIND_BY_SOURCE.get(item.source_kind);
-    if (!kind || item.parked) continue;
+    // `pack_list` leaves out skills copied from a local folder. The scan says
+    // "manual" for a dotagents `path:` folder, and also for a dotagents source
+    // on a git host other than GitHub, which the fixture does not have.
     const source = packSource(item);
+    if (!kind || item.parked || source === "manual" || item.source_type === "local") continue;
     const pack = packs.get(source) ?? {
       source,
       kind,

@@ -509,7 +509,12 @@ fn ledger_entries(
         global_lock = Some(lock);
         rows
     };
+    // A skill copied from a folder on this machine (`sourceType: "local"`,
+    // or a dotagents `path:` source) has no upstream, so it is not a pack.
     for (name, row) in skills_sh {
+        if row.source_type == "local" {
+            continue;
+        }
         let (kind, source) = match (&row.via, row.source_type.as_str()) {
             (Some(package), _) => (PackKind::Npm, package.clone()),
             (None, "node_modules") => (PackKind::Npm, row.source.clone()),
@@ -561,6 +566,9 @@ fn ledger_entries(
         row.and_then(|row| row.git_ref.clone())
     };
     for (name, row) in &lock.skills {
+        if crate::dotagents_ledger::is_local_path_source(&row.source) {
+            continue;
+        }
         entries.push(dotagents_entry(
             scope,
             name.clone(),
@@ -573,7 +581,11 @@ fn ledger_entries(
         .map_or_else(|| dir.clone(), |p| p.join(".agents"))
         .join("plugins");
     for row in &manifest.plugins {
-        let Some(source) = row.source.clone() else {
+        let Some(source) = row
+            .source
+            .clone()
+            .filter(|s| !crate::dotagents_ledger::is_local_path_source(s))
+        else {
             continue;
         };
         let locked = lock.plugins.get(&row.name);
