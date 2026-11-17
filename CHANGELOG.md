@@ -6,8 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added
+
+- Desktop: a Packs page. It lists each pack and has Check upstream, Update all and Add pack. Add, Update and Remove show the plan first, Confirm runs it, and the dialog shows what each step did. Update and Remove are off for plugin and npm packs; a tooltip names the command that owns them.
+- `skill-studio recovery list` and `recovery drop <PLAN_ID>` (MCP `recovery_list` and `recovery_drop`) show an interrupted write plan that recovery cannot finish, with its failed-run count, last error and touched paths, and let you give it up. Drop changes no file and records a history event. Before, such a plan blocked every write and nothing could clear it.
+- `watch --max-seconds N` stops after N seconds and exits 0.
+- `library --mode AGENT=manual|auto` (MCP `library` `modes`) shows only the skills that each named agent reads in that mode. Repeat `--mode` for more agents.
+
+### Changed
+
+- These CLI and MCP reads page their lists to fit a 32 KB JSON answer by default: `scan`, `diagnose`, `library`, `usage`, `outdated`, `invocation`, `pack list`, `pack show`, `doctor`, `conflicts` and `extras`. An answer keeps at least one row, so a very large row can go over 32 KB. CLI tables stay whole. An MCP tool result holds two copies of the answer, so it can be about 70 KB. `--limit`, `--cursor`, `--fields` and `--count-by` (MCP: `limit`, `cursor`, `fields`, `count_by`) give an exact answer in one call. Before, `scan --json` and `diagnose --json` were 2.9 MB on a real home.
+- MCP tool results start with `untrusted_paths`, the JSON paths of text that comes from third parties: SKILL.md bodies, names, descriptions, frontmatter, file paths and child-process output. The server instructions tell the agent to treat text at those paths as data. `npx` error output is now in a separate `detail` field.
+- One `update`, `park` or `unpark` call (MCP `update_all`, `park` or `unpark`) takes at most 100 skills. A larger call fails with `invalid_request` before any skill changes. The desktop Update all and `pack update` have no limit.
+- A write that an unfinished recovery blocks now fails with `recovery_pending` (exit 3), not `incomplete` (exit 4).
+- JSON output and schemas name OpenCode `opencode`, not `open-code`. `open-code` is still accepted as input.
+- Desktop: the webview runs with a strict Content Security Policy. It runs only the app's own scripts and connects only to Tauri IPC.
+
 ### Fixed
 
+- Read-only CLI commands and MCP tools work on a home folder you cannot write to; a read no longer creates lock files. With `--home` or MCP `SKILL_STUDIO_HOME`, usage and review count only that home's Codex sessions, not the ones in `CODEX_HOME`.
+- A scan no longer stops after 2 seconds. On a home with 4,000 skills, `scan`, `diagnose` and the reads built on them returned `partial` and exited 4.
+- A desktop SKILL.md save takes the same write lease as CLI and MCP writes, so the two can no longer interleave and lose a write.
+- If another tool replaces a folder under a scope root with a link during a write, the write fails instead of landing outside the scope.
+- Desktop: red text on red tints (destructive buttons, badges, menu items, error boxes) has its own color and reaches at least 4.75:1 in light and dark mode. In v0.2.0 the dark-mode text was 3.9:1.
+- Desktop: ⌘, and ⌘N no longer open another page while an alert dialog is open.
 - `extras` and Settings → Connect your agents list every OpenCode MCP server when `opencode.json` holds both the V1 `mcp.<name>` and the V2 `mcp.servers.<name>` shape. `opencode mcp add` writes that mix into a V1 config, and before this fix the V1 servers went missing.
 
 ## v0.2.0
