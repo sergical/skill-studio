@@ -2,6 +2,8 @@
 # Runs the CI checks before a push. `pnpm install` turns it on.
 # Rust tests and contract snapshots run only when Rust changed.
 set -e
+# Git sets these for hooks; tools such as react-doctor then resolve wrong paths.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 changed=$(git diff --name-only "$(git merge-base origin/main HEAD)")
 if printf '%s\n' "$changed" | grep -Eq '\.rs$|(^|/)Cargo\.(toml|lock)$|^crates/skill-studio-core/schema/'; then
   pnpm run check
