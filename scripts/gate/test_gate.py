@@ -122,7 +122,9 @@ class GateTests(unittest.TestCase):
     def test_every_stop_rule_in_the_repo_config_has_owner_text(self):
         import tomllib
         cfg = tomllib.loads((Path(__file__).resolve().parents[2] / '.gate/config.toml').read_text())
-        rules = {r['id'] for r in cfg['rules'] if r['tier'] == 'stop'} | {'version', 'dependencies', 'check-scripts', 'policy-change'}
+        rules = {r['id'] for r in cfg['rules'] if r['tier'] == 'stop'} | {'dependencies', 'check-scripts', 'policy-change'}
+        if cfg.get('version_files'):
+            rules.add('version')
         for rule in rules:
             self.assertTrue(cfg['owner'][rule]['ask'] and cfg['owner'][rule]['why'], rule)
 
