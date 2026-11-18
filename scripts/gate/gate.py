@@ -50,7 +50,9 @@ def matches(path, patterns):
 
 
 def classify(cfg, base, head='HEAD', raise_to=None, reason=None, author=''):
-    files = git('diff', '--name-only', '--no-renames', base, head).splitlines()
+    # -z gives raw names. Without it, git quotes a name with a backslash or a
+    # control character, and the quoted name matches no rule.
+    files = [f for f in subprocess.check_output(['git', 'diff', '--name-only', '--no-renames', '-z', base, head], text=True).split('\0') if f]
     hits = []
     if read_at(base, '.gate/config.toml') != read_at(head, '.gate/config.toml'):
         hits.append({'rule': 'policy-change', 'tier': 'stop', 'files': ['.gate/config.toml']})

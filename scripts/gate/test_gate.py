@@ -108,6 +108,13 @@ class GateTests(unittest.TestCase):
         self.commit()
         self.assertEqual(gate.classify({'rules': []}, self.base)['tier'], 'stop')
 
+    def test_unusual_file_names_still_match_rules(self):
+        self.write('contracts/a\\b.json', '{}')
+        self.write('contracts/‮x.json', '{}')
+        self.commit()
+        files = self.risk()['needs_you'][0]['files']
+        self.assertEqual(sorted(files), sorted(['contracts/a\\b.json', 'contracts/‮x.json']))
+
     def test_same_name_from_another_source_stops(self):
         self.write('package.json', '{"dependencies":{"ai":"^7.0.96"}}')
         self.commit()
