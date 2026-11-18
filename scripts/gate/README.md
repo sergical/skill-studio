@@ -16,6 +16,11 @@ Tiers: **ship** and **show** PRs merge by auto-merge when CI and the review
 pass. A **stop** PR gets the `risk:owner` label, its `gate/risk` status stays
 pending, and the owner merges it.
 
+Each stop rule has an `[owner.<rule id>]` table with `ask` (the decision the
+owner makes) and `why` (why a person must make it). `gate risk --json` returns
+them in `needs_you`, one entry per rule with the files that matched. A stop rule
+without this text still stops, and its `why` says the text is missing.
+
 Snapshot checks run the configured executables. Build them first with
 `cargo build --workspace --all-features --bins`, then run `gate snapshots`.
 Use `gate snapshots --update` to accept a contract change. Review the snapshot
@@ -70,7 +75,7 @@ review. Run review-status only after the review is complete.
 
 ## Workflows and metrics
 
-`gate-risk.yml` runs the `risk` job on `pull_request_target`, only for PRs to the default branch. GitHub uses base-branch YAML for this event. The job checks out the base SHA without stored credentials. It fetches the PR head as git objects and runs only base-branch scripts. For a stop tier it adds the `risk:owner` label and posts `gate/risk = pending` with the rules that matched. Otherwise it removes that label and posts `gate/risk = success`. It never posts failure, so the risk check sends no failure email.
+`gate-risk.yml` runs the `risk` job on `pull_request_target`, only for PRs to the default branch. GitHub uses base-branch YAML for this event. The job checks out the base SHA without stored credentials. It fetches the PR head as git objects and runs only base-branch scripts. For a stop tier it adds the `risk:owner` label, posts one "Needs you" PR comment with each rule's `ask`, `why` and files, and posts `gate/risk = pending` with the first `ask`. Otherwise it removes that label and that comment and posts `gate/risk = success`. It never posts failure, so the risk check sends no failure email.
 
 `gate.yml` runs `unit` and `contracts` on `pull_request` with read access only. These checks run PR code. They do not control the risk job. Both are required checks in the ruleset.
 

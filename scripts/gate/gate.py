@@ -82,7 +82,23 @@ def classify(cfg, base, head='HEAD', raise_to=None, reason=None, author=''):
             raise ValueError('The minimum tier cannot be lowered')
         hits.append({'rule': 'manual', 'tier': raise_to, 'reason': reason})
         tier = raise_to
-    return {'tier': tier, 'reasons': hits, 'base': base, 'head': git('rev-parse', head)}
+    return {'tier': tier, 'reasons': hits, 'needs_you': needs_you(cfg, hits), 'base': base, 'head': git('rev-parse', head)}
+
+
+def needs_you(cfg, hits):
+    """One entry per stop rule: what the owner decides, why a person must, and the files."""
+    texts, grouped = cfg.get('owner', {}), {}
+    for hit in hits:
+        if hit['tier'] != 'stop':
+            continue
+        text = texts.get(hit['rule']) or {
+            'ask': hit.get('reason') or f"Merge this PR? Rule `{hit['rule']}` matched.",
+            'why': 'An agent raised this PR to stop by hand.' if hit['rule'] == 'manual'
+            else f"`.gate/config.toml` has no [owner.{hit['rule']}] text yet.",
+        }
+        item = grouped.setdefault(hit['rule'], {'rule': hit['rule'], 'ask': text['ask'], 'why': text['why'], 'files': []})
+        item['files'] += [f for f in hit.get('files', []) if f not in item['files']]
+    return list(grouped.values())
 
 
 def dependencies(path, text):
@@ -211,7 +227,8 @@ def main():
         base = git('merge-base', base, args.head)
         policy = read_at(base, '.gate/config.toml')
         result = classify(tomllib.loads(policy) if policy else cfg, base, args.head, args.raise_to, args.reason, args.author)
-        print(json.dumps(result, indent=2) if args.json else result['tier'] + '\n' + '\n'.join(f"- {r['rule']}: {r.get('reason', ', '.join(r.get('files', [])))}" for r in result['reasons']))
+        print(json.dumps(result, indent=2) if args.json else result['tier'] + '\n' + '\n'.join(f"- {r['rule']}: {r.get('reason', ', '.join(r.get('files', [])))}" for r in result['reasons'])
+              + ''.join(f"\nNeeds you: {n['ask']}\n  Why: {n['why']}" for n in result['needs_you']))
     elif args.command == 'snapshots':
         snapshots(cfg, args.update, args.prepare)
     elif args.command == 'start':

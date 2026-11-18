@@ -108,6 +108,24 @@ class GateTests(unittest.TestCase):
         self.commit()
         self.assertEqual(gate.classify({'rules': []}, self.base)['tier'], 'stop')
 
+    def test_needs_you_names_the_decision_and_why(self):
+        self.cfg['owner'] = {'contract': {'ask': 'Change the API?', 'why': 'Clients break.'}}
+        self.write('contracts/a.json', '{}')
+        self.write('contracts/b.json', '{}')
+        self.write('package.json', '{"dependencies":{"a":"1.0.0"}}')
+        self.commit()
+        needs = {n['rule']: n for n in self.risk()['needs_you']}
+        self.assertEqual(needs['contract'], {'rule': 'contract', 'ask': 'Change the API?', 'why': 'Clients break.', 'files': ['contracts/a.json', 'contracts/b.json']})
+        self.assertIn('no [owner.dependencies] text', needs['dependencies']['why'])
+        self.assertEqual(self.risk(raise_to='stop', reason='Spends money')['needs_you'][-1]['ask'], 'Spends money')
+
+    def test_every_stop_rule_in_the_repo_config_has_owner_text(self):
+        import tomllib
+        cfg = tomllib.loads((Path(__file__).resolve().parents[2] / '.gate/config.toml').read_text())
+        rules = {r['id'] for r in cfg['rules'] if r['tier'] == 'stop'} | {'version', 'dependencies', 'check-scripts', 'policy-change'}
+        for rule in rules:
+            self.assertTrue(cfg['owner'][rule]['ask'] and cfg['owner'][rule]['why'], rule)
+
     def test_intent_is_untracked_and_branch_specific(self):
         first = gate.state_path()
         first.write_text('{}')
