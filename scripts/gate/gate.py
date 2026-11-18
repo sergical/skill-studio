@@ -91,11 +91,13 @@ def needs_you(cfg, hits):
     for hit in hits:
         if hit['tier'] != 'stop':
             continue
-        text = texts.get(hit['rule']) or {
-            'ask': hit.get('reason') or f"Merge this PR? Rule `{hit['rule']}` matched.",
-            'why': 'An agent raised this PR to stop by hand.' if hit['rule'] == 'manual'
-            else f"`.gate/config.toml` has no [owner.{hit['rule']}] text yet.",
-        }
+        text = texts.get(hit['rule'], {})
+        if not (str(text.get('ask', '')).strip() and str(text.get('why', '')).strip()):
+            text = {
+                'ask': hit.get('reason') or f"Merge this PR? Rule `{hit['rule']}` matched.",
+                'why': 'An agent raised this PR to stop by hand.' if hit['rule'] == 'manual'
+                else f"`.gate/config.toml` has no complete [owner.{hit['rule']}] text yet.",
+            }
         item = grouped.setdefault(hit['rule'], {'rule': hit['rule'], 'ask': text['ask'], 'why': text['why'], 'files': []})
         item['files'] += [f for f in hit.get('files', []) if f not in item['files']]
     return list(grouped.values())

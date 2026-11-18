@@ -116,7 +116,9 @@ class GateTests(unittest.TestCase):
         self.commit()
         needs = {n['rule']: n for n in self.risk()['needs_you']}
         self.assertEqual(needs['contract'], {'rule': 'contract', 'ask': 'Change the API?', 'why': 'Clients break.', 'files': ['contracts/a.json', 'contracts/b.json']})
-        self.assertIn('no [owner.dependencies] text', needs['dependencies']['why'])
+        self.assertIn('no complete [owner.dependencies] text', needs['dependencies']['why'])
+        self.cfg['owner']['contract'] = {'ask': 'Change the API?', 'why': ' '}
+        self.assertIn('no complete [owner.contract] text', self.risk()['needs_you'][0]['why'])
         self.assertEqual(self.risk(raise_to='stop', reason='Spends money')['needs_you'][-1]['ask'], 'Spends money')
 
     def test_every_stop_rule_in_the_repo_config_has_owner_text(self):
