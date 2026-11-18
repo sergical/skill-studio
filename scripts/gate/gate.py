@@ -73,7 +73,9 @@ def classify(cfg, base, head='HEAD', raise_to=None, reason=None, author=''):
             before, after = dependencies(path, old), dependencies(path, new)
             # A new name, or the same name from another source (an npm alias,
             # a git URL, a local path), is outside code we have not trusted.
-            added = set(after) - set(before) | {k for k in set(before) & set(after) if source(before[k]) != source(after[k])}
+            # Removing an entry that came from another source changes what is
+            # installed too.
+            added = (set(after) - set(before)) | {k for k in set(before) & set(after) if source(before[k]) != source(after[k])} | {k for k in set(before) - set(after) if source(before[k])}
             patch = author in cfg.get('patch_bots', []) and set(before) == set(after) and all(
                 before.get(k) == v or patch_bump(before.get(k, ''), v) for k, v in after.items())
             if added or (author in cfg.get('patch_bots', []) and not patch):
@@ -115,13 +117,15 @@ def dependencies(path, text):
         result = {f'{section}/{k}': str(v) for section in ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'] for k, v in data.get(section, {}).items()}
         # Overrides and resolutions replace a package anywhere in the tree,
         # including with another name, a tarball or a git source.
+        # npm writes `"foo": "1"` and `"foo": {".": "1"}` for the same override.
         def flatten(node, prefix):
             for key, value in node.items():
                 if isinstance(value, dict):
                     flatten(value, f'{prefix}/{key}')
                 else:
-                    result[f'{prefix}/{key}'] = str(value)
-        for prefix, node in [('overrides', data.get('overrides')), ('resolutions', data.get('resolutions')), ('pnpm/overrides', data.get('pnpm', {}).get('overrides'))]:
+                    result[prefix if key == '.' else f'{prefix}/{key}'] = str(value)
+        pnpm = data.get('pnpm')
+        for prefix, node in [('overrides', data.get('overrides')), ('resolutions', data.get('resolutions')), ('pnpm/overrides', pnpm.get('overrides') if isinstance(pnpm, dict) else None)]:
             if isinstance(node, dict):
                 flatten(node, prefix)
         return result
@@ -143,7 +147,12 @@ def source(spec):
     if isinstance(spec, dict):
         return {k: spec[k] for k in ['git', 'path', 'registry', 'package', 'branch', 'tag', 'rev'] if k in spec} or None
     spec = str(spec)
-    return spec if ':' in spec or '/' in spec else None
+    if spec.startswith('npm:'):
+        # npm:name@version: the source is the name, not the version.
+        name, _, _ = spec[4:].rpartition('@')
+        return 'npm:' + (name or spec[4:])
+    # `$name` reuses another dependency's spec, so a new reference can be a new source.
+    return spec if ':' in spec or '/' in spec or spec.startswith('$') else None
 
 
 def version(path, text):

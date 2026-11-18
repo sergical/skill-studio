@@ -123,6 +123,23 @@ class GateTests(unittest.TestCase):
             self.commit()
             self.assertEqual(self.risk()['tier'], 'stop', doc)
 
+    def test_override_edge_cases(self):
+        def tier(before, after, author=''):
+            self.write('package.json', json.dumps(before))
+            self.commit()
+            self.base = self.git('rev-parse', 'HEAD')
+            self.write('package.json', json.dumps(after))
+            self.commit()
+            return self.risk(author=author)['tier']
+        deps = {'a': 'npm:x@1.0.0', 'b': 'github:someone/b'}
+        self.assertEqual(tier({'dependencies': deps, 'overrides': {'f': '$a'}}, {'dependencies': deps, 'overrides': {'f': '$b'}}), 'stop')
+        self.assertEqual(tier({'overrides': {'f': '1.0.0'}}, {'overrides': {'f': {'.': '1.0.1'}}}), 'ship')
+        self.assertEqual(tier({'pnpm': None}, {'pnpm': None, 'name': 'x'}), 'ship')
+        self.assertEqual(tier({'pnpm': 'meta'}, {'pnpm': ['meta']}), 'ship')
+        self.assertEqual(tier({'overrides': {'f': 'npm:other@1.0.0'}}, {}), 'stop')
+        self.assertEqual(tier({'dependencies': {'a': 'npm:other@1.0.0'}}, {'dependencies': {'a': 'npm:other@1.0.1'}}), 'ship')
+        self.assertEqual(tier({'dependencies': {'a': 'npm:@s/other@1.0.0'}}, {'dependencies': {'a': 'npm:@s/evil@1.0.0'}}), 'stop')
+
     def test_unusual_file_names_still_match_rules(self):
         self.write('contracts/a\\b.json', '{}')
         self.write('contracts/‮x.json', '{}')
