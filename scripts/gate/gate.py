@@ -73,9 +73,10 @@ def classify(cfg, base, head='HEAD', raise_to=None, reason=None, author=''):
             before, after = dependencies(path, old), dependencies(path, new)
             # A new name, or the same name from another source (an npm alias,
             # a git URL, a local path), is outside code we have not trusted.
-            # Removing an entry that came from another source changes what is
-            # installed too.
-            added = (set(after) - set(before)) | {k for k in set(before) & set(after) if source(before[k]) != source(after[k])} | {k for k in set(before) - set(after) if source(before[k])}
+            # Removing an override from another source puts a different package
+            # back in the tree. Removing a dependency adds no code.
+            added = (set(after) - set(before)) | {k for k in set(before) & set(after) if source(before[k]) != source(after[k])} | {
+                k for k in set(before) - set(after) if source(before[k]) and k.startswith(('overrides/', 'resolutions/', 'pnpm/overrides/'))}
             patch = author in cfg.get('patch_bots', []) and set(before) == set(after) and all(
                 before.get(k) == v or patch_bump(before.get(k, ''), v) for k, v in after.items())
             if added or (author in cfg.get('patch_bots', []) and not patch):

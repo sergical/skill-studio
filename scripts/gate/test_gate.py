@@ -139,6 +139,14 @@ class GateTests(unittest.TestCase):
         self.assertEqual(tier({'overrides': {'f': 'npm:other@1.0.0'}}, {}), 'stop')
         self.assertEqual(tier({'dependencies': {'a': 'npm:other@1.0.0'}}, {'dependencies': {'a': 'npm:other@1.0.1'}}), 'ship')
         self.assertEqual(tier({'dependencies': {'a': 'npm:@s/other@1.0.0'}}, {'dependencies': {'a': 'npm:@s/evil@1.0.0'}}), 'stop')
+        self.assertEqual(tier({'dependencies': {'a': 'npm:x@1.0.0', 'b': 'github:someone/b', 'c': '1'}}, {'dependencies': {'c': '1'}}), 'ship')
+        self.cfg['dependency_files'] = ['Cargo.toml']
+        self.write('Cargo.toml', '[dependencies]\nlocal = { path = "../local" }\nremote = { git = "https://example.invalid/r" }\n')
+        self.commit()
+        self.base = self.git('rev-parse', 'HEAD')
+        self.write('Cargo.toml', '[dependencies]\n')
+        self.commit()
+        self.assertEqual(self.risk()['tier'], 'ship')
 
     def test_unusual_file_names_still_match_rules(self):
         self.write('contracts/a\\b.json', '{}')
