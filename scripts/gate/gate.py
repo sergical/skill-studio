@@ -69,7 +69,9 @@ def classify(cfg, base, head='HEAD', raise_to=None, reason=None, author=''):
             hits.append({'rule': 'check-scripts', 'tier': 'stop', 'files': [path]})
         if matches(path, cfg.get('dependency_files', [])):
             before, after = dependencies(path, old), dependencies(path, new)
-            added = set(after) - set(before)
+            # A new name, or the same name from another source (an npm alias,
+            # a git URL, a local path), is outside code we have not trusted.
+            added = set(after) - set(before) | {k for k in set(before) & set(after) if source(before[k]) != source(after[k])}
             patch = author in cfg.get('patch_bots', []) and set(before) == set(after) and all(
                 before.get(k) == v or patch_bump(before.get(k, ''), v) for k, v in after.items())
             if added or (author in cfg.get('patch_bots', []) and not patch):
@@ -120,6 +122,14 @@ def dependencies(path, text):
                 walk(value, prefix + key + '/')
     walk(data)
     return result
+
+
+def source(spec):
+    """Where a dependency comes from. None is the default registry."""
+    if isinstance(spec, dict):
+        return {k: spec[k] for k in ['git', 'path', 'registry', 'package', 'branch', 'tag', 'rev'] if k in spec} or None
+    spec = str(spec)
+    return spec if ':' in spec or '/' in spec else None
 
 
 def version(path, text):
@@ -225,10 +235,13 @@ def main():
     os.chdir(git('rev-parse', '--show-toplevel'))
     cfg = config()
     if args.command == 'risk':
+        # The rules come from the trusted base as it is now, so a rule added
+        # after the branch started still applies. The merge base only decides
+        # which files changed.
         base = args.base or cfg['base']
-        base = git('merge-base', base, args.head)
         policy = read_at(base, '.gate/config.toml')
-        result = classify(tomllib.loads(policy) if policy else cfg, base, args.head, args.raise_to, args.reason, args.author)
+        merge_base = git('merge-base', base, args.head)
+        result = classify(tomllib.loads(policy) if policy else cfg, merge_base, args.head, args.raise_to, args.reason, args.author)
         print(json.dumps(result, indent=2) if args.json else result['tier'] + '\n' + '\n'.join(f"- {r['rule']}: {r.get('reason', ', '.join(r.get('files', [])))}" for r in result['reasons'])
               + ''.join(f"\nNeeds you: {n['ask']}\n  Why: {n['why']}" for n in result['needs_you']))
     elif args.command == 'snapshots':

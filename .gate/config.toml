@@ -87,8 +87,7 @@ tier = "stop"
 paths = [
   ".gate/*.toml",
   ".gate/.gitignore",
-  "scripts/gate/gate",
-  "scripts/gate/gate.py",
+  "scripts/gate/**",
   ".github/workflows/**",
   ".githooks/**",
   "deny.toml",

@@ -57,7 +57,7 @@ jobs:
           ids=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id")
           keep=""
           if [ "$tier" = stop ]; then
-            jq -r --arg marker "$marker" 'def esc: gsub("(?<c>[!-/:-@\\[-`{-~])"; "\\\(.c)"); $marker + "\n### Needs you\n\n" + ([.needs_you[] | "**\(.ask)**\nWhy: \(.why)\nTriggered by: \(.files[:10] | map(esc) | join(", "))\(if (.files | length) > 10 then " and \((.files | length) - 10) more" else "" end)"] | join("\n\n"))' risk.json > comment.md
+            jq -r --arg marker "$marker" 'def esc: gsub("(?<c>[!-/:-@\\[-`{-~])"; "\\\(.c)"); $marker + "\n" + ([.needs_you[] | "**Needs you: \(.ask)**\nWhy: \(.why)\nTriggered by: \(.files[:10] | map(esc) | join(", "))\(if (.files | length) > 10 then " and \((.files | length) - 10) more" else "" end)"] | join("\n\n"))' risk.json > comment.md
             keep=$(printf '%s\n' "$ids" | head -n 1)
             # A comment deleted since the lookup gets a new one.
             if [ -z "$keep" ] || ! gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$keep" -F body=@comment.md > /dev/null; then

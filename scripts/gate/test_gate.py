@@ -108,6 +108,41 @@ class GateTests(unittest.TestCase):
         self.commit()
         self.assertEqual(gate.classify({'rules': []}, self.base)['tier'], 'stop')
 
+    def test_same_name_from_another_source_stops(self):
+        self.write('package.json', '{"dependencies":{"ai":"^7.0.96"}}')
+        self.commit()
+        self.base = self.git('rev-parse', 'HEAD')
+        self.write('package.json', '{"dependencies":{"ai":"^7.1.0"}}')
+        self.commit()
+        self.assertEqual(self.risk()['tier'], 'ship')
+        for spec in ['npm:other-package@1.0.0', 'github:someone/ai', 'file:../ai']:
+            self.write('package.json', json.dumps({'dependencies': {'ai': spec}}))
+            self.commit()
+            self.assertEqual(self.risk()['tier'], 'stop', spec)
+        self.cfg['dependency_files'] = ['Cargo.toml']
+        self.write('Cargo.toml', '[dependencies]\na = "1"\n')
+        self.commit()
+        self.base = self.git('rev-parse', 'HEAD')
+        self.write('Cargo.toml', '[dependencies]\na = { version = "1", git = "https://example.invalid/a" }\n')
+        self.commit()
+        self.assertEqual(self.risk()['tier'], 'stop')
+
+    def test_cli_uses_the_current_base_rules_not_the_branch_start(self):
+        self.write('.gate/config.toml', 'rules = []\n')
+        self.commit()
+        start = self.git('rev-parse', 'HEAD')
+        self.git('checkout', '-qb', 'branch')
+        self.write('secret.txt', 'changed')
+        self.commit()
+        self.git('checkout', '-q', start)
+        self.git('checkout', '-qb', 'main2')
+        self.write('.gate/config.toml', 'rules = [{ id = "secret", tier = "stop", paths = ["secret.txt"] }]\n')
+        self.commit()
+        self.git('checkout', '-q', 'branch')
+        script = Path(gate.__file__).resolve()
+        result = json.loads(subprocess.check_output(['python3', str(script), 'risk', '--base', 'main2', '--head', 'branch', '--json'], text=True))
+        self.assertEqual(result['tier'], 'stop')
+
     def test_needs_you_names_the_decision_and_why(self):
         self.cfg['owner'] = {'contract': {'ask': 'Change the API?', 'why': 'Clients break.'}}
         self.write('contracts/a.json', '{}')
