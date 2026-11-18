@@ -112,7 +112,19 @@ def dependencies(path, text):
         return {}
     if path.endswith('.json'):
         data = json.loads(text)
-        return {f'{section}/{k}': str(v) for section in ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'] for k, v in data.get(section, {}).items()}
+        result = {f'{section}/{k}': str(v) for section in ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'] for k, v in data.get(section, {}).items()}
+        # Overrides and resolutions replace a package anywhere in the tree,
+        # including with another name, a tarball or a git source.
+        def flatten(node, prefix):
+            for key, value in node.items():
+                if isinstance(value, dict):
+                    flatten(value, f'{prefix}/{key}')
+                else:
+                    result[f'{prefix}/{key}'] = str(value)
+        for prefix, node in [('overrides', data.get('overrides')), ('resolutions', data.get('resolutions')), ('pnpm/overrides', data.get('pnpm', {}).get('overrides'))]:
+            if isinstance(node, dict):
+                flatten(node, prefix)
+        return result
     data = tomllib.loads(text)
     result = {}
     def walk(node, prefix=''):

@@ -108,6 +108,21 @@ class GateTests(unittest.TestCase):
         self.commit()
         self.assertEqual(gate.classify({'rules': []}, self.base)['tier'], 'stop')
 
+    def test_overrides_that_swap_a_package_stop(self):
+        self.write('package.json', '{"pnpm":{"overrides":{"a":"1.0.0"}},"overrides":{"b":{"c":"1.0.0"}}}')
+        self.commit()
+        self.base = self.git('rev-parse', 'HEAD')
+        self.write('package.json', '{"pnpm":{"overrides":{"a":"1.0.1"}},"overrides":{"b":{"c":"1.0.1"}}}')
+        self.commit()
+        self.assertEqual(self.risk()['tier'], 'ship')
+        for doc in [{'pnpm': {'overrides': {'a': 'npm:evil@1.0.0'}}, 'overrides': {'b': {'c': '1.0.1'}}},
+                    {'pnpm': {'overrides': {'a': '1.0.1'}}, 'overrides': {'b': {'c': 'github:someone/c'}}},
+                    {'pnpm': {'overrides': {'a': '1.0.1', 'd': '2.0.0'}}, 'overrides': {'b': {'c': '1.0.1'}}},
+                    {'pnpm': {'overrides': {'a': '1.0.1'}}, 'overrides': {'b': {'c': '1.0.1'}}, 'resolutions': {'e': '1.0.0'}}]:
+            self.write('package.json', json.dumps(doc))
+            self.commit()
+            self.assertEqual(self.risk()['tier'], 'stop', doc)
+
     def test_unusual_file_names_still_match_rules(self):
         self.write('contracts/a\\b.json', '{}')
         self.write('contracts/‮x.json', '{}')
