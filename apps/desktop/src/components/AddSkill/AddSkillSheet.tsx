@@ -1129,7 +1129,7 @@ function useAddSkillGithubSelection(
   const selectedPaths =
     selection.listing === listingState.listing
       ? selection.paths
-      : listedSkills.filter((skill) => !isInstalled(skill.name)).map((skill) => skill.path);
+      : listedSkills.flatMap((skill) => (isInstalled(skill.name) ? [] : [skill.path]));
   const selectedPathSet = new Set(selectedPaths);
 
   // An installed skill never installs, even when the scope changed after it was checked.
