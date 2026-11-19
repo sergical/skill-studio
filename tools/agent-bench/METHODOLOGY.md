@@ -196,9 +196,7 @@ Per cell (harness × model × method), from 3 runs: the median, the minimum and
 the maximum of each metric, the share of runs that got each question right,
 and answer agreement (the share of runs that gave the most common answer).
 
-Per method: the median of the cell medians. The homepage line "correct
-answers" is the mean of the cell medians, so one cell that is often wrong
-still shows.
+Per method: the median of the cell medians.
 
 Only scored runs (no error, fixture intact) go into the medians. If a run
 ends in an error and `--retry-errors` runs it again, the report keeps the
@@ -206,23 +204,20 @@ last attempt only, and the total cost counts every attempt. `bench.py report`
 refuses to write the homepage file while a matrix run has no scored result,
 unless you pass `--partial`.
 
-The homepage shows a race. For each harness and model, it pairs the `raw`
-cell with one Skill Studio cell: the more correct of `cli` and `mcp`, then
-the faster. Only cells with at least 3 scored runs go into a pair. A pair
-where Skill Studio is less correct than `raw` is left out of the race and the
-ratio tiles, so speed cannot hide a miss. It stays in the correct shares.
+Each cell also reports `scored`, the number of scored runs.
 
-- Each lane plays the cell's median time on a sped-up clock. Each tick is one
-  tool call (the median).
-- The race shows at most one pair per harness, and only pairs that are at
-  least 1.25× faster. It picks the pair with every answer right first, then
-  the fastest.
-- The tiles above the race show the best pair for time, tool calls and cost,
-  each with its agent and model. A tile with the mean correct share by hand
-  and with Skill Studio, over every pair, shows only when Skill Studio is
-  higher.
-- The "Every run" table below the race shows every cell, also the ones the
-  race leaves out.
+The homepage shows bars. For each harness and model, it pairs the `raw` cell
+with the `mcp` cell. A pair counts only when both cells have at least 3 scored
+runs, so both sides cover the same agents and models. The `cli` cell is not
+in the bars.
+
+- Time and tool calls: the median over the pairs of each cell's median, for
+  each side. The ratio above the bars uses the rounded numbers that the bars
+  show. A ratio below 1.25× in either direction shows as "Same".
+- Wrong answers: for each side, every question of every scored run in the
+  pairs is one answer. The bar is the share of those answers that were wrong.
+- The "Every run" table below the bars shows every cell, also `cli` and the
+  cells the pairs leave out.
 
 ## Results (15 November 2026)
 

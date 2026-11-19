@@ -24,6 +24,13 @@ const SETTLE = "cubic-bezier(0.32, 0.72, 0, 1)";
 const MESSY_SUMMARY = `${PILE_COUNTS.total} skills in ${PILE_COUNTS.folders} folders. ${PILE_COUNTS.copies} of them are copies.`;
 const TIDY_SUMMARY = `${PILE_COUNTS.kept} kept. ${PILE_COUNTS.parked} parked, ${PILE_COUNTS.broken} fixed, ${PILE_COUNTS.outdated} updated.`;
 
+const LEGEND = [
+  ["copy", `${PILE_COUNTS.copies} copies`],
+  ["unused", `${PILE_COUNTS.unused} not used`],
+  ["broken", `${PILE_COUNTS.broken} broken`],
+  ["outdated", `${PILE_COUNTS.outdated} outdated`],
+] satisfies ReadonlyArray<[PileState, string]>;
+
 const RESOLVED_LABEL = {
   ok: undefined,
   broken: "fixed",
@@ -81,9 +88,7 @@ export function slotPose(g: Geometry, slot: number): Pose {
   if (g.stacked) {
     const top = g.mascot.y + g.mascotSize / 2 + 22;
     const step = Math.min(34, (g.drawer.y - 22 - top) / perColumn);
-    return column === 0
-      ? { x: g.w / 2 - 8, y: top + row * step, ax: -100 }
-      : { x: g.w / 2 + 8, y: top + row * step, ax: 0 };
+    return { x: g.w / 2 + (column === 0 ? -172 : -4), y: top + row * step, ax: 0 };
   }
   const step = 38;
   const top = (g.h - perColumn * step) / 2 + step / 2;
@@ -225,10 +230,12 @@ export function place(element: HTMLElement | null, pose: Pose) {
   element.style.opacity = String(pose.o ?? 1);
 }
 
-// Starts from wherever the element is now, so a flight can interrupt another one.
+// Flies the element through `path` to `to`. It starts from wherever the element is now, so a
+// flight can interrupt another one.
 export function fly(
   element: HTMLElement | null,
-  frames: Keyframe[],
+  path: Keyframe[],
+  to: Pose,
   { startEasing = SETTLE, ...options }: KeyframeAnimationOptions & { startEasing?: string },
   onDone?: () => void,
 ) {
@@ -240,11 +247,15 @@ export function fly(
     offset: 0,
     easing: startEasing,
   };
-  const animation = element.animate([start, ...frames], { fill: "forwards", ...options });
+  const animation = element.animate([start, ...path, frame(to)], {
+    fill: "forwards",
+    ...options,
+  });
   animation.finished.then(
     () => {
-      animation.commitStyles();
-      animation.cancel();
+      // Not `commitStyles`: at the end of a flight WebKit can commit the first keyframe, and
+      // the chip snaps back to where it started.
+      place(element, to);
       onDone?.();
     },
     () => undefined,
@@ -427,15 +438,37 @@ export function PileFrame({
       <div ref={stageRef} {...stylex.props(styles.stage, !ready && styles.stageHidden)}>
         {children}
       </div>
-      <button
-        type="button"
-        aria-disabled={!canParkCopy}
-        onClick={onParkCopy}
-        onFocus={onParkCopyFocus}
-        {...stylex.props(styles.parkCopy, !canParkCopy && styles.parkCopyDone)}
-      >
-        Park a copy
-      </button>
+      <div {...stylex.props(styles.caption, !ready && styles.stageHidden)}>
+        <p aria-hidden="true" {...stylex.props(styles.captionLine, tidy && styles.captionOff)}>
+          <span {...stylex.props(styles.captionLead, styles.captionOwnLine)}>
+            {PILE_COUNTS.total} skills in {PILE_COUNTS.folders} folders
+          </span>
+          {LEGEND.map(([state, label]) => (
+            <span key={state} {...stylex.props(styles.captionItem)}>
+              <span {...stylex.props(styles.dot, styles.dotColor(STATE_COLOR[state]))} />
+              {label}
+            </span>
+          ))}
+        </p>
+        <p aria-hidden="true" {...stylex.props(styles.captionLine, !tidy && styles.captionOff)}>
+          <span {...stylex.props(styles.captionItem, styles.captionLead)}>
+            <span {...stylex.props(styles.dot, styles.dotColor(STATE_COLOR.ok))} />
+            {PILE_COUNTS.kept} kept
+          </span>
+          <span>{PILE_COUNTS.broken} fixed</span>
+          <span>{PILE_COUNTS.outdated} updated</span>
+        </p>
+        {/* Pointer users click a chip. This control is the keyboard path, so it shows on focus. */}
+        <button
+          type="button"
+          aria-disabled={!canParkCopy}
+          onClick={onParkCopy}
+          onFocus={onParkCopyFocus}
+          {...stylex.props(styles.parkCopy, !canParkCopy && styles.parkCopyDone)}
+        >
+          Park a copy
+        </button>
+      </div>
       <p {...stylex.props(styles.visuallyHidden)} aria-live="polite" aria-atomic="true">
         {tidy ? TIDY_SUMMARY : `${MESSY_SUMMARY} ${parkedCount} parked.`}
       </p>
@@ -444,16 +477,71 @@ export function PileFrame({
 }
 
 const styles = stylex.create({
+  caption: {
+    display: "grid",
+    marginTop: 14,
+    position: "relative",
+  },
+  // Both lines share one grid cell, so the frame keeps its height when they swap.
+  captionLine: {
+    alignItems: "center",
+    alignSelf: "start",
+    color: siteTokens.muted,
+    display: "flex",
+    flexWrap: "wrap",
+    fontSize: 12,
+    fontVariantNumeric: "tabular-nums",
+    gap: "4px 14px",
+    gridArea: "1 / 1",
+    justifyContent: { default: "flex-start", "@media (max-width: 1080px)": "center" },
+    lineHeight: 1.5,
+    margin: 0,
+    // Lines the caption dots up with the dots in the chips above.
+    paddingInline: 12,
+    transition: {
+      default: "opacity 240ms ease-out 420ms",
+      "@media (prefers-reduced-motion: reduce)": "none",
+    },
+    whiteSpace: "nowrap",
+  },
+  captionOff: {
+    opacity: 0,
+    transition: {
+      default: "opacity 160ms ease-out",
+      "@media (prefers-reduced-motion: reduce)": "none",
+    },
+  },
+  captionLead: { color: siteTokens.text, fontWeight: 560 },
+  // On a phone the legend does not fit beside the total, so the total takes the first line.
+  captionOwnLine: {
+    flexBasis: { default: "auto", "@media (max-width: 600px)": "100%" },
+    textAlign: { default: "start", "@media (max-width: 600px)": "center" },
+  },
+  captionItem: { alignItems: "center", display: "inline-flex", gap: 6 },
   parkCopy: {
     backgroundColor: siteTokens.surface,
+    borderColor: siteTokens.border,
+    borderRadius: 999,
+    borderStyle: "solid",
+    borderWidth: 1,
     color: siteTokens.text,
-    border: `1px solid ${siteTokens.border}`,
-    borderRadius: 6,
-    padding: "8px 12px",
     cursor: "pointer",
-    ":focus-visible": { outline: `2px solid ${siteTokens.text}`, outlineOffset: 3 },
+    fontFamily: "inherit",
+    fontSize: 12,
+    fontWeight: 600,
+    height: 30,
+    left: { default: 0, "@media (max-width: 1080px)": "50%" },
+    opacity: { default: 0, ":focus-visible": 1 },
+    outline: { default: "none", ":focus-visible": `2px solid ${siteTokens.text}` },
+    outlineOffset: 2,
+    paddingInline: 12,
+    pointerEvents: { default: "none", ":focus-visible": "auto" },
+    position: "absolute",
+    top: "calc(100% + 8px)",
+    transform: { default: "none", "@media (max-width: 1080px)": "translateX(-50%)" },
+    whiteSpace: "nowrap",
   },
-  parkCopyDone: { opacity: 0.5, cursor: "default" },
+  parkCopyDone: { color: siteTokens.muted, cursor: "default" },
   frame: { textAlign: "center", width: "100%" },
   stage: {
     height: { default: 480, "@media (max-width: 600px)": 440 },
