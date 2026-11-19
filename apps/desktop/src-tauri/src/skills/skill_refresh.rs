@@ -58,6 +58,19 @@ const INVOCATIONS_REBUILD_INTERVAL: Duration = Duration::from_secs(5);
 /// persistent failure does not rescan on every `POLL_INTERVAL` tick.
 const FAILED_REBUILD_RETRY: Duration = Duration::from_secs(5);
 
+/// After a full rebuild that took `d`, a full rebuild that the file watcher
+/// queued waits until `d * 4` has passed, so watched paths that change all the
+/// time (agents start and stop all day) keep full rebuilds to at most a fifth
+/// of one core. A full rebuild reads every skill: 5-21 s for 529 skills and
+/// 78 projects in a release build (measured 2026-11-19). Without the wait, a
+/// change every few seconds kept one core busy without a stop.
+const WATCHED_REBUILD_WAIT_FACTOR: u32 = 4;
+
+/// The longest that wait gets. A rebuild that waits on another process's
+/// lease takes minutes of wall time but little CPU (114 s measured), and a
+/// change made outside the app must still show within this time.
+const WATCHED_REBUILD_MAX_WAIT: Duration = Duration::from_mins(2);
+
 /// Everything the frontend needs about installed skills, discovered
 /// projects, and invocation history, built together in one background pass.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1377,10 +1390,13 @@ fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
     // needs a schedule of its own (`issue-3.9a-followup-a.md` item 3).
     // Routed through `first_scan_then_sweep` so a test can pin both the
     // order and the thread without re-implementing this loop's scaffold.
+    let mut watched_rebuild = WatchedRebuildGate::default();
     let _: Result<(), String> = in_background_span("snapshot_refresh.startup", || {
         first_scan_then_sweep(
             &mut || {
+                let started = Instant::now();
                 let result = rebuild_snapshot_now(&app, &state);
+                watched_rebuild.finish(started, Instant::now());
                 if let Err(e) = &result {
                     eprintln!("skill refresh: initial rebuild failed: {e}");
                 }
@@ -1421,7 +1437,7 @@ fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
                 if let Some(path) = &plan.full_rebuild_by {
                     // Logged once per rebuild cycle so an unexpected
                     // rescan can be traced to the path that caused it.
-                    if !state.skills_dirty.swap(true, Ordering::SeqCst) {
+                    if watched_rebuild.queue() {
                         eprintln!("skill refresh: full rebuild queued by {}", path.display());
                     }
                 } else if !plan.targeted_skills.is_empty() && !state.is_skills_dirty() {
@@ -1453,6 +1469,7 @@ fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
                 > INVOCATIONS_REBUILD_INTERVAL,
             hour_stale: state.is_hour_stale(Utc::now()),
             retry_due: retry_not_before.is_none_or(|at| now >= at),
+            watched_change_due: watched_rebuild.is_due(now),
         });
 
         let failed = match step {
@@ -1462,9 +1479,12 @@ fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
                 // mid-rebuild sets them again rather than being lost.
                 state.skills_dirty.store(false, Ordering::SeqCst);
                 state.invocations_dirty.store(false, Ordering::SeqCst);
-                match in_background_span("snapshot_refresh.full", || {
+                let watched_change = watched_rebuild.start();
+                let result = in_background_span("snapshot_refresh.full", || {
                     rebuild_snapshot_now(&app, &state)
-                }) {
+                });
+                watched_rebuild.finish(now, Instant::now());
+                match result {
                     Ok(_) => {
                         reconcile_watchers_from_snapshot(
                             &home,
@@ -1476,6 +1496,9 @@ fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
                     }
                     Err(e) => {
                         eprintln!("skill refresh: full rebuild failed: {e}");
+                        if watched_change {
+                            watched_rebuild.queue();
+                        }
                         state.skills_dirty.fetch_or(skills_dirty, Ordering::SeqCst);
                         state
                             .invocations_dirty
@@ -1548,6 +1571,43 @@ struct RefreshTick {
     hour_stale: bool,
     /// No failed rebuild is waiting out `FAILED_REBUILD_RETRY`.
     retry_due: bool,
+    /// The file watcher queued a full rebuild and its wait is over.
+    watched_change_due: bool,
+}
+
+/// Holds a full rebuild that the file watcher queued until
+/// `WATCHED_REBUILD_WAIT_FACTOR` times the last full rebuild's duration, at
+/// most `WATCHED_REBUILD_MAX_WAIT`, has passed. Commands that change skills set `skills_dirty` instead and do not
+/// wait here.
+#[derive(Debug, Default)]
+struct WatchedRebuildGate {
+    queued: bool,
+    not_before: Option<Instant>,
+}
+
+impl WatchedRebuildGate {
+    /// Queues a rebuild. Returns false when one was already queued.
+    fn queue(&mut self) -> bool {
+        !std::mem::replace(&mut self.queued, true)
+    }
+
+    fn is_due(&self, now: Instant) -> bool {
+        self.queued && self.not_before.is_none_or(|at| now >= at)
+    }
+
+    /// Takes the queued rebuild when a full rebuild starts, so a change that
+    /// arrives during the rebuild queues the next one. Returns whether one
+    /// was queued.
+    fn start(&mut self) -> bool {
+        std::mem::take(&mut self.queued)
+    }
+
+    /// Records a full rebuild that ran from `started` to `finished`.
+    fn finish(&mut self, started: Instant, finished: Instant) {
+        let took = finished.saturating_duration_since(started);
+        self.not_before =
+            Some(finished + (took * WATCHED_REBUILD_WAIT_FACTOR).min(WATCHED_REBUILD_MAX_WAIT));
+    }
 }
 
 /// The one rebuild the refresh loop runs on a tick.
@@ -1567,7 +1627,7 @@ enum RefreshStep {
 fn next_refresh_step(tick: RefreshTick) -> RefreshStep {
     if !tick.retry_due {
         RefreshStep::Idle
-    } else if tick.skills_dirty || !tick.has_snapshot {
+    } else if tick.skills_dirty || tick.watched_change_due || !tick.has_snapshot {
         RefreshStep::Full
     } else if tick.invocations_dirty && tick.invocations_due {
         RefreshStep::InvocationsOnly
@@ -4970,6 +5030,7 @@ resolved_commit = "old"
             invocations_due: true,
             hour_stale: false,
             retry_due: true,
+            watched_change_due: false,
         }
     }
 
@@ -4987,6 +5048,14 @@ resolved_commit = "old"
                     skills_dirty: true,
                     invocations_dirty: true,
                     hour_stale: true,
+                    ..quiet_tick()
+                },
+                RefreshStep::Full,
+            ),
+            (
+                "a watched path changed and its wait is over",
+                RefreshTick {
+                    watched_change_due: true,
                     ..quiet_tick()
                 },
                 RefreshStep::Full,
@@ -5041,6 +5110,73 @@ resolved_commit = "old"
         for (situation, tick, expected) in cases {
             assert_eq!(next_refresh_step(tick), expected, "{situation}: {tick:?}");
         }
+    }
+
+    /// Flow: the file watcher reports a skill change every 5 s for 10 min (agent
+    /// sessions start and stop all day), and a full rebuild takes 20 s.
+    /// Expectation: full rebuilds use at most a fifth of the time, and the last
+    /// change is still rebuilt. A failure means each change starts the next full
+    /// rebuild at once, which kept one core busy without a stop (0.3.0 at
+    /// 50-75% CPU while idle).
+    #[test]
+    fn watched_changes_every_few_seconds_keep_full_rebuilds_to_a_fifth_of_the_time_or_peg_a_core() {
+        let rebuild = Duration::from_secs(20);
+        let change_every = Duration::from_secs(5);
+        let run_for = Duration::from_mins(10);
+        let start = Instant::now();
+        let mut now = start;
+        let mut next_change = start;
+        let mut gate = WatchedRebuildGate::default();
+        let mut busy = Duration::ZERO;
+        let mut last_change = start;
+        let mut last_rebuild_start = None;
+        while now < start + run_for + rebuild * (WATCHED_REBUILD_WAIT_FACTOR + 1) {
+            while next_change <= now && next_change < start + run_for {
+                gate.queue();
+                last_change = next_change;
+                next_change += change_every;
+            }
+            let tick = RefreshTick {
+                watched_change_due: gate.is_due(now),
+                ..quiet_tick()
+            };
+            if next_refresh_step(tick) == RefreshStep::Full {
+                gate.start();
+                last_rebuild_start = Some(now);
+                let finished = now + rebuild;
+                gate.finish(now, finished);
+                busy += rebuild;
+                now = finished;
+            } else {
+                now += POLL_INTERVAL;
+            }
+        }
+        let share = busy.as_secs_f64() / now.duration_since(start).as_secs_f64();
+        assert!(
+            share <= 0.21,
+            "full rebuilds took {:.0}% of the time",
+            share * 100.0
+        );
+        assert!(
+            last_rebuild_start.is_some_and(|at| at >= last_change),
+            "the last watched change was never rebuilt"
+        );
+    }
+
+    /// Flow: a full rebuild waits on another process's lease for 114 s, then
+    /// the watcher queues a change. Expectation: the change is rebuilt within
+    /// `WATCHED_REBUILD_MAX_WAIT`. A failure means a slow rebuild hides
+    /// changes made outside the app for 4 times its wall time (over 7 min).
+    #[test]
+    fn a_slow_rebuild_holds_watched_changes_at_most_the_max_wait_or_hides_them_for_minutes() {
+        let started = Instant::now();
+        let finished = started + Duration::from_secs(114);
+        let mut gate = WatchedRebuildGate::default();
+        gate.finish(started, finished);
+        gate.queue();
+        assert!(!gate
+            .is_due(finished + WATCHED_REBUILD_MAX_WAIT.saturating_sub(Duration::from_secs(1))));
+        assert!(gate.is_due(finished + WATCHED_REBUILD_MAX_WAIT));
     }
 
     #[test]
