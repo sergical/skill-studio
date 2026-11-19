@@ -9,7 +9,7 @@ import unittest
 import gate
 
 
-CUSTOM_PATHS = r'(?m)^\s*["\']?(pnpmfile|globalPnpmfile|patchesDir|patchedDependencies|include|configDependencies)["\']?\s*:'
+CUSTOM_PATHS = r'\\|(?<![A-Za-z])(pnpmfile|globalPnpmfile|patchesDir|patchedDependencies|include|configDependencies)(?![A-Za-z])'
 
 
 class GateTests(unittest.TestCase):
@@ -361,7 +361,8 @@ class GateTests(unittest.TestCase):
         workspace = Path(__file__).resolve().parents[2] / 'pnpm-workspace.yaml'
         text = workspace.read_text() if workspace.exists() else ''
         self.assertIsNone(re.search(CUSTOM_PATHS, text))
-        for named in ['pnpmfile: hooks.mjs', '"pnpmfile": hooks.mjs', "  'patchesDir': fixes", 'patchedDependencies:', 'include: [a.yaml]']:
+        for named in ['pnpmfile: hooks.mjs', '"pnpmfile": hooks.mjs', "  'patchesDir': fixes", 'patchedDependencies:', 'include: [a.yaml]',
+                      '{"patchedDependencies": {"a@1.0.0": "fixes/a.diff"}}', '"pnpm\\x66ile": a.mjs']:
             self.assertRegex(named, CUSTOM_PATHS)
 
     def test_a_lockfile_entry_from_outside_the_registry_stops(self):
@@ -372,9 +373,18 @@ class GateTests(unittest.TestCase):
         self.write('pnpm-lock.yaml', '  left-pad@1.0.0:\n    resolution: {integrity: sha512-b}\n')
         self.commit()
         self.assertEqual(self.risk()['tier'], 'ship')
-        for entry in ['{tarball: https://example.invalid/a.tgz}', '{type: git, repo: https://example.invalid/a, commit: abc}', '{directory: ../a}']:
+        for entry in ['{tarball: https://example.invalid/a.tgz}', '{type: git, repo: https://example.invalid/a, commit: abc}', '{directory: ../a}',
+                      '{"tarball": https://example.invalid/a.tgz}', "{'tarball': https://example.invalid/a.tgz}",
+                      '{"t\\x61rball": https://example.invalid/a.tgz}', '\n      tarball: https://example.invalid/a.tgz',
+                      '{integrity: sha512-a, tarball: https://example.invalid/a.tgz}', '*registry', '!!map {tarball: x}']:
             with self.subTest(entry):
                 self.write('pnpm-lock.yaml', f'  left-pad@1.0.0:\n    resolution: {entry}\n')
+                self.commit()
+                self.assertEqual(self.risk()['tier'], 'stop')
+        for lock in ['  left-pad@1.0.0:\n    "res\\x6flution": {tarball: https://example.invalid/a.tgz}\n',
+                     'patchedDependencies:\n  left-pad@1.0.0: patches/a.patch\n']:
+            with self.subTest(lock):
+                self.write('pnpm-lock.yaml', lock)
                 self.commit()
                 self.assertEqual(self.risk()['tier'], 'stop')
 

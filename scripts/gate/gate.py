@@ -86,11 +86,8 @@ def classify(cfg, base, head='HEAD', raise_to=None, reason=None, author=''):
                 before.get(k) == v or patch_bump(before.get(k, ''), v) for k, v in after.items())
             if added or (author in cfg.get('patch_bots', []) and not patch):
                 hits.append({'rule': 'dependencies', 'tier': 'stop', 'files': [path]})
-    # A lockfile entry can point a package at a tarball, git or a local folder
-    # without a manifest change. A registry entry has only an integrity hash.
     for path in files:
-        if matches(path, cfg.get('lock_files', [])) and re.search(
-                r'(?m)^\+.*(?:tarball:|type: git|\brepo:|directory:|patchedDependencies|pnpmfileChecksum)',
+        if matches(path, cfg.get('lock_files', [])) and lock_adds_outside_code(
                 subprocess.check_output(['git', 'diff', base, head, '--', path], text=True)):
             hits.append({'rule': 'dependencies', 'tier': 'stop', 'files': [path]})
     tier = max((h['tier'] for h in hits), key=TIERS.index, default='ship')
@@ -232,6 +229,22 @@ def needs_you(cfg, hits):
         item = grouped.setdefault(hit['rule'], {'rule': hit['rule'], 'ask': text['ask'], 'why': text['why'], 'files': []})
         item['files'] += [f for f in hit.get('files', []) if f not in item['files']]
     return list(grouped.values())
+
+
+def lock_adds_outside_code(diff):
+    """True when an added lockfile line could point a package anywhere but the
+    registry. A registry entry is `resolution: {integrity: sha512-...}`. Without
+    double quotes, backslashes, anchors, tags and explicit keys, YAML cannot
+    spell a key except as written, so any other resolution shows."""
+    for line in diff.splitlines():
+        if not line.startswith('+') or line.startswith('+++'):
+            continue
+        text = line[1:]
+        if re.search(r'["\\&!%]|\*\w|^\s*\?|patchedDependencies|pnpmfileChecksum', text):
+            return True
+        if 'resolution' in text and not re.fullmatch(r'\s*resolution: \{integrity: sha512-[A-Za-z0-9+/=]+\}', text):
+            return True
+    return False
 
 
 def installers(text):
