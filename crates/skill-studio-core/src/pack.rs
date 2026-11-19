@@ -368,16 +368,15 @@ pub(crate) fn build(
             members.push(entry);
         }
     }
-    let links = crate::pack_original::read_links(&fs, &rt.scope.home.lexical);
+    let records = crate::pack_original::read_records(&fs, &rt.scope.home.lexical);
     let mut packs = Vec::new();
     for (key, entries) in grouped.into_values() {
         ctx.checkpoint()?;
-        let original = crate::pack_original::original_of(&links, key.kind, &key.source);
         packs.push(pack(
             &fs,
             key,
             entries,
-            original,
+            &records,
             remote,
             ctx.cancel.as_ref(),
         ));
@@ -807,11 +806,12 @@ fn pack(
     fs: &dyn ScopeFs,
     key: PackKey,
     entries: Vec<Entry>,
-    original_source: Option<String>,
+    records: &crate::pack_original::Records,
     remote: Option<&dyn PackRemote>,
     cancel: &dyn CancelToken,
 ) -> Pack {
     let git_url = entries.iter().find_map(|e| e.git_url.clone());
+    let original_source = original_source(records, &entries);
     let pinned = key
         .ref_pin
         .as_deref()
@@ -869,12 +869,17 @@ fn pack(
     }
     skills.sort_by(|a, b| (&a.scope, &a.name).cmp(&(&b.scope, &b.name)));
     let original = original_source.map(|source| {
-        let fetched = match (remote, crate::pack::git_url(&source)) {
+        let (base, git_ref) = source
+            .split_once('#')
+            .map_or((source.as_str(), None), |(base, git_ref)| {
+                (base, Some(git_ref))
+            });
+        let fetched = match (remote, crate::pack::git_url(base)) {
             (None, _) => Err(RemoteState::NotChecked),
             (Some(_), None) => Err(RemoteState::NoGitSource),
             (Some(remote), Some(url)) => {
                 remote
-                    .fetch(&url, None, cancel)
+                    .fetch(&url, git_ref, cancel)
                     .map_err(|err| RemoteState::Failed {
                         reason: match err {
                             RemoteError::Failed(reason) => reason,
@@ -884,7 +889,8 @@ fn pack(
             }
         };
         let installed: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
-        crate::pack_original::compare(source, upstream.as_ref().ok(), fetched, &installed)
+        let own = upstream.as_ref().map_err(Clone::clone);
+        crate::pack_original::compare(source, own, fetched, &installed)
     });
     let (new_upstream, remote) = match upstream {
         Ok(up) => {
@@ -926,6 +932,22 @@ fn pack(
         original,
         summary,
     }
+}
+
+/// The original most of a pack's skills moved away from, when any of them
+/// has a current record.
+fn original_source(records: &crate::pack_original::Records, entries: &[Entry]) -> Option<String> {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for entry in entries {
+        if let Some(original) = records.original(&entry.scope, &entry.name, &entry.key.source) {
+            *counts.entry(original).or_default() += 1;
+        }
+    }
+    let most = counts.values().copied().max()?;
+    counts
+        .into_iter()
+        .find(|(_, count)| *count == most)
+        .map(|(original, _)| original.to_string())
 }
 
 pub(crate) fn plural(count: usize, one: &str) -> String {
@@ -970,10 +992,7 @@ fn pack_summary(
                 original.not_in_source.len()
             ),
             RemoteState::Failed { reason } => {
-                format!(
-                    "moved from {}, which could not be checked: {reason}",
-                    original.source
-                )
+                format!("moved from {}; not compared: {reason}", original.source)
             }
             _ => format!("moved from {}", original.source),
         });

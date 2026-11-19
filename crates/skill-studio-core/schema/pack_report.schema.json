@@ -330,11 +330,11 @@
           "x-untrusted": true
         },
         "remote": {
-          "description": "Remote check result for the original.",
+          "description": "`checked` only when the remote check read both the pack's own source\nand the original; otherwise the state of the read that did not happen\nor failed, and the two lists are empty.",
           "$ref": "#/$defs/RemoteState"
         },
         "differs": {
-          "description": "Installed skills whose folder in the original differs from the\nfolder in the pack's own source: one of the two changed it. Empty\nunless the remote check read both sources.",
+          "description": "Installed skills whose folder in the original differs from the\nfolder in the pack's own source: one of the two changed it.",
           "type": "array",
           "items": {
             "type": "string"
@@ -342,7 +342,7 @@
           "x-untrusted": true
         },
         "not_in_source": {
-          "description": "Skills of the original that the pack's own source does not have.\nEmpty unless the remote check read both sources.",
+          "description": "Skills of the original that the pack's own source does not have.",
           "type": "array",
           "items": {
             "type": "string"

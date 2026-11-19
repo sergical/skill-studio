@@ -5076,21 +5076,8 @@ fn restore_event_body(
             }
         }
         crate::ops_install::check_registry_drift(fs, inverse)?;
-        if let Some(edit) = inverse.get("lock_row_undo").filter(|v| !v.is_null()) {
-            let lock = crate::lock_file::lock_file_path(&rt.scope.home.lexical);
-            let live = crate::lock_file::read_lock_entry_value(
-                fs,
-                &lock,
-                edit["skill"].as_str().unwrap_or_default(),
-            )?;
-            if live.as_ref().unwrap_or(&serde_json::Value::Null) != &edit["expected"] {
-                return Err(CoreError::new(
-                    ErrorCode::DriftConflict,
-                    "the updated lock row changed; pass force to restore anyway",
-                )
-                .at(lock));
-            }
-        }
+        // `LockRowUndo::check` above already compared the lock row at the
+        // path the event recorded, global or project.
     }
     let mut write_back_plans: Vec<(PathBuf, RestorePlan)> = Vec::new();
     if !write_back.is_empty() {

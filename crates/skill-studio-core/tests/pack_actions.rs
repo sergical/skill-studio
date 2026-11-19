@@ -175,8 +175,19 @@ fn installed_from_pack(home: &Path, skill: &str, hash: &str) {
     std::fs::write(&lock, serde_json::to_vec(&doc).unwrap()).unwrap();
 }
 
-fn set_lock_source(home: &Path, skill: &str, source: &str) {
-    let lock = home.join(".agents/.skill-lock.json");
+/// A project keeps its rows in `skills-lock.json` at its root; the home in
+/// `.agents/.skill-lock.json`.
+fn lock_path(root: &Path) -> PathBuf {
+    let project = root.join("skills-lock.json");
+    if project.exists() {
+        project
+    } else {
+        root.join(".agents/.skill-lock.json")
+    }
+}
+
+fn set_lock_source(root: &Path, skill: &str, source: &str) {
+    let lock = lock_path(root);
     let mut doc: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&lock).unwrap()).unwrap();
     doc["skills"][skill]["source"] = serde_json::json!(source);
@@ -185,10 +196,25 @@ fn set_lock_source(home: &Path, skill: &str, source: &str) {
     std::fs::write(&lock, serde_json::to_vec(&doc).unwrap()).unwrap();
 }
 
-fn lock_source(home: &Path, skill: &str) -> String {
-    let lock = home.join(".agents/.skill-lock.json");
+fn lock_source(root: &Path, skill: &str) -> String {
+    let lock = lock_path(root);
     let doc: serde_json::Value = serde_json::from_slice(&std::fs::read(lock).unwrap()).unwrap();
     doc["skills"][skill]["source"].as_str().unwrap().to_string()
+}
+
+/// The original `pack show <source>` reports, offline.
+fn shown_original(rt: &Runtime, source: &str) -> Option<String> {
+    let shown = ops::pack_show(
+        rt,
+        &ctx(),
+        &PackShowRequest {
+            source: source.to_string(),
+            ..PackShowRequest::default()
+        },
+        None,
+    )
+    .unwrap();
+    shown.packs[0].original.as_ref().map(|o| o.source.clone())
 }
 
 fn pack_originals(home: &Path) -> serde_json::Value {
@@ -235,6 +261,25 @@ fn switch(source: &str, to: &str, dry_run: bool) -> PackSwitchSourceRequest {
         dry_run,
         ..PackSwitchSourceRequest::default()
     }
+}
+
+fn runtime_in(scope: &RuntimeScope, home: &Path, cli: Arc<FakeSkillsCli>) -> Runtime {
+    let ports = Ports {
+        fs: Arc::new(RealFs::new()),
+        clock: Arc::new(FakeClock::at(0)),
+        ids: Arc::new(FakeIds::default()),
+        leases: Arc::new(FileLease::new(home.join(".leases"))),
+        history: Arc::new(SqliteHistoryOpener::new(
+            home.join(".history/events.sqlite3"),
+        )),
+        sink: Arc::new(RecordingSink::default()),
+        spawner: Some(cli),
+        discovery: None,
+        tools: None,
+        catalog: Arc::new(HarnessCatalog::builtin()),
+        telemetry: Arc::new(skill_studio_core::ports::NoopTelemetry),
+    };
+    Runtime::new(scope, ports).unwrap()
 }
 
 fn runtime(home: &Path, cli: Arc<FakeSkillsCli>) -> Runtime {
@@ -675,11 +720,18 @@ fn pack_switch_source_moves_clean_skills_to_the_fork_and_keeps_the_original() {
     assert!(call.contains(&"--global".to_string()), "{call:?}");
     assert_eq!(lock_source(&home, "alpha"), "me/fork");
     assert_eq!(lock_source(&home, "edited"), "owner/pack");
-    assert_eq!(pack_originals(&home)["me/fork"]["original"], "owner/pack");
+    assert_eq!(
+        pack_originals(&home)["global"]["alpha"]["original"],
+        "owner/pack"
+    );
+    assert_eq!(
+        pack_originals(&home)["global"]["edited"],
+        serde_json::Value::Null
+    );
     assert!(
         report
             .summary
-            .contains("owner/pack stays recorded as the original"),
+            .contains("owner/pack stays recorded as their original"),
         "{}",
         report.summary
     );
@@ -735,43 +787,107 @@ fn pack_switch_source_moves_clean_skills_to_the_fork_and_keeps_the_original() {
 }
 
 /// Moving back to the original must not leave the original pointing at the
-/// fork as its original. Fails if the reverse link is written.
+/// fork as its original, and moving back only some skills must keep the
+/// others' original. Fails if the reverse link is written, or if a partial
+/// move back drops the original of a skill still on the fork.
 #[test]
-fn pack_switch_source_back_to_the_original_drops_the_link() {
+fn pack_switch_source_back_to_the_original_keeps_the_original_of_skills_still_on_the_fork() {
     let home = home("pack_switch_back");
     installed_from_pack(&home, "alpha", "deadbeef");
+    installed_from_pack(&home, "beta", "deadbeef");
     let cli = FakeSkillsCli::new(&home);
     cli.lock_on_add.store(true, Ordering::SeqCst);
     let rt = runtime(&home, cli.clone());
 
     ops::pack_switch_source(&rt, &ctx(), &switch("owner/pack", "me/fork", false)).unwrap();
-    let back = ops::pack_switch_source(
-        &rt,
-        &ctx(),
-        &switch("me/fork", "https://github.com/owner/pack.git", false),
-    )
-    .unwrap();
+    let back = PackSwitchSourceRequest {
+        skills: vec!["alpha".to_string()],
+        ..switch("me/fork", "https://github.com/owner/pack.git", false)
+    };
+    let back = ops::pack_switch_source(&rt, &ctx(), &back).unwrap();
 
     assert_eq!(states(&back), [("alpha".into(), "done")]);
-    assert_eq!(pack_originals(&home), serde_json::Value::Null);
     assert!(
-        back.summary.contains("no original is recorded now"),
+        back.summary.contains("was their original"),
         "{}",
         back.summary
+    );
+    assert_eq!(
+        lock_source(&home, "alpha"),
+        "https://github.com/owner/pack.git"
+    );
+    assert_eq!(shown_original(&rt, "owner/pack"), None);
+    assert_eq!(
+        shown_original(&rt, "me/fork").as_deref(),
+        Some("owner/pack")
     );
     std::fs::remove_dir_all(&home).ok();
 }
 
-/// Fails if a target that is the same pack, a local path, or a skill the
-/// pack lacks gets a plan, or if a run where no skill moved keeps a link.
+/// Undo of a project skill's update checked the home lock file instead of
+/// the project's, so it failed with `drift_conflict`. Fails if a switched
+/// project skill cannot be undone without force.
 #[test]
-fn pack_switch_source_refuses_bad_targets_and_records_no_link_when_nothing_moved() {
+fn pack_switch_source_in_a_project_moves_the_project_lock_row_and_undo_restores_it() {
+    let home = home("pack_switch_project");
+    let project = home.join("proj");
+    write_skill(&project, "alpha");
+    std::fs::write(
+        project.join("skills-lock.json"),
+        serde_json::to_vec(&serde_json::json!({"version": 1, "skills": {"alpha": {
+            "source": "owner/pack", "sourceType": "github", "computedHash": "x"
+        }}}))
+        .unwrap(),
+    )
+    .unwrap();
+    let cli = FakeSkillsCli::new(&home);
+    cli.lock_on_add.store(true, Ordering::SeqCst);
+    let mut scope = RuntimeScope::fixture(&home);
+    scope.projects = skill_studio_core::scope::ProjectSelection::Explicit {
+        paths: vec![project.clone()],
+    };
+    let rt = runtime_in(&scope, &home, cli.clone());
+    let request = PackSwitchSourceRequest {
+        project_path: Some(project.clone()),
+        ..switch("owner/pack", "me/fork#main", false)
+    };
+
+    let report = ops::pack_switch_source(&rt, &ctx(), &request).unwrap();
+
+    assert_eq!(states(&report), [("alpha".into(), "done")]);
+    assert_eq!(cli.calls()[0][2], "me/fork#main", "{:?}", cli.calls());
+    assert_eq!(lock_source(&project, "alpha"), "me/fork#main");
+    let PackStepState::Done { event_id } = &report.steps[0].state else {
+        unreachable!()
+    };
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: event_id.clone(),
+            force: false,
+        },
+    )
+    .unwrap_or_else(|e| panic!("undo of a project switch must succeed without force: {e}"));
+    assert_eq!(lock_source(&project, "alpha"), "owner/pack");
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Fails if a target that is the same pack, a local path, or a skill the
+/// pack lacks gets a plan, or if a skill whose move failed reports the fork's
+/// original.
+#[test]
+fn pack_switch_source_refuses_bad_targets_and_a_failed_move_shows_no_original() {
     let home = home("pack_switch_refuse");
     installed_from_pack(&home, "alpha", "deadbeef");
     let cli = FakeSkillsCli::new(&home);
     let rt = runtime(&home, cli.clone());
 
-    for to in ["https://github.com/Owner/pack.git", "./local/pack"] {
+    for to in [
+        "https://github.com/Owner/pack.git",
+        "owner/pack#v2",
+        "./local/pack",
+    ] {
         let err =
             ops::pack_switch_source(&rt, &ctx(), &switch("owner/pack", to, true)).unwrap_err();
         assert_eq!(err.code, ErrorCode::InvalidRequest, "{to}: {err:?}");
@@ -791,6 +907,6 @@ fn pack_switch_source_refuses_bad_targets_and_records_no_link_when_nothing_moved
     assert_eq!(states(&report), [("alpha".into(), "failed")]);
     assert_eq!(report.status(), OpStatus::Partial);
     assert_eq!(lock_source(&home, "alpha"), "owner/pack");
-    assert_eq!(pack_originals(&home), serde_json::Value::Null);
+    assert_eq!(shown_original(&rt, "owner/pack"), None);
     std::fs::remove_dir_all(&home).ok();
 }

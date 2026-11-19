@@ -381,14 +381,14 @@ pub fn pack_switch_source(
     req: &PackSwitchSourceRequest,
 ) -> Result<PackActionReport, CoreError> {
     rt.run(Operation::PackSwitchSource, ctx, || {
-        if git_url(&req.to).is_none() {
+        let base = req.to.split_once('#').map_or(req.to.as_str(), |(base, _)| base);
+        if git_url(base).is_none() {
             return Err(CoreError::new(
                 ErrorCode::InvalidRequest,
                 format!("give the new source {} as owner/repo or a git URL", req.to),
             ));
         }
-        let identity = |source: &str| pack::source_identity(PackKind::SkillsSh, source);
-        if identity(&req.to) == identity(&req.source) {
+        if crate::pack_original::same_source(&req.to, &req.source) {
             return Err(CoreError::new(
                 ErrorCode::InvalidRequest,
                 format!("the pack already comes from {}", req.to),
@@ -451,12 +451,24 @@ pub fn pack_switch_source(
             }
         }
         require_node_for(rt, &steps)?;
-        let planned = steps.iter().any(|s| s.state == PackStepState::Planned);
-        let mut switched = None;
-        if !req.dry_run && planned {
-            // The link goes down first: if it cannot be written, nothing moved.
-            let from = &report.packs[0].source;
-            let (before, link) = crate::pack_original::record_switch(rt, from, &req.to)?;
+        let moves: Vec<crate::pack_original::Move<'_>> = steps
+            .iter()
+            .filter(|s| s.state == PackStepState::Planned)
+            .map(|s| crate::pack_original::Move {
+                scope: &s.scope,
+                skill: &s.skill,
+            })
+            .collect();
+        let from = report.packs[0].source.clone();
+        let mut all_back = false;
+        if !req.dry_run && !moves.is_empty() {
+            // Recorded first, so a skill never sits on `to` without its
+            // original. A record whose skill did not move stays stale: it
+            // counts only while the lock row names `to`.
+            all_back = crate::pack_original::record_moves(rt, &from, &req.to, &moves)?;
+        }
+        drop(moves);
+        if !req.dry_run {
             run_each(ctx, &mut steps, |_, step| {
                 let request = UpdateRequest {
                     skill: SkillName(step.skill.clone()),
@@ -469,27 +481,22 @@ pub fn pack_switch_source(
                 crate::ops_update::update_from_source(rt, ctx, &request, &req.to)
                     .map(|outcome| outcome.event_id)
             });
-            if steps
-                .iter()
-                .any(|s| matches!(s.state, PackStepState::Done { .. }))
-            {
-                switched = Some((from.clone(), link));
-            } else {
-                crate::pack_original::restore_links(rt, before)?;
-            }
         }
+        let moved = steps
+            .iter()
+            .any(|s| matches!(s.state, PackStepState::Done { .. }));
         let mut report = action_report(req.dry_run, PackStepAction::SwitchSource, steps);
-        report.summary = match switched {
-            Some((from, crate::pack_original::Switched::Linked)) => format!(
-                "{} {from} stays recorded as the original; pack show {} --remote compares the two.",
+        if moved && all_back {
+            report.summary = format!(
+                "{} {} was their original, so they show no original now.",
                 report.summary, req.to
-            ),
-            Some((_, crate::pack_original::Switched::BackToOriginal)) => format!(
-                "{} {} was the original of this pack, so no original is recorded now.",
+            );
+        } else if moved {
+            report.summary = format!(
+                "{} {from} stays recorded as their original; pack show {} --remote compares the two.",
                 report.summary, req.to
-            ),
-            None => report.summary,
-        };
+            );
+        }
         Ok(report)
     })
 }

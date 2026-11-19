@@ -1402,7 +1402,9 @@ export interface PackOriginal {
    */
   source: string;
   /**
-   * Remote check result for the original.
+   * `checked` only when the remote check read both the pack's own source
+   * and the original; otherwise the state of the read that did not happen
+   * or failed, and the two lists are empty.
    */
   remote:
     | {
@@ -1430,13 +1432,11 @@ export interface PackOriginal {
       };
   /**
    * Installed skills whose folder in the original differs from the
-   * folder in the pack's own source: one of the two changed it. Empty
-   * unless the remote check read both sources.
+   * folder in the pack's own source: one of the two changed it.
    */
   differs: string[];
   /**
    * Skills of the original that the pack's own source does not have.
-   * Empty unless the remote check read both sources.
    */
   not_in_source: string[];
 }

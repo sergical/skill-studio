@@ -1,9 +1,11 @@
-//! A pack's original source. When `pack_switch_source` moves a pack's
-//! skills to another git source, usually the user's GitHub fork, the old
-//! source stays recorded as that pack's original in
-//! `~/.agents/skill-studio.json` (`pack_originals`, keyed by the new source).
-//! A remote pack check then reads the original too and reports which skills
-//! differ from it and which skills only it has.
+//! A pack's original source. When `pack_switch_source` moves a skill to
+//! another git source, usually the user's GitHub fork, it records the old
+//! source as that skill's original in `~/.agents/skill-studio.json`
+//! (`pack_originals`, by scope and skill name). A record counts only while
+//! the skill's lock row still names the source it moved to, so a failed
+//! step, an undo, or a later move makes it stale without a rollback. A
+//! remote pack check reads the original too and reports which skills differ
+//! from it and which skills only it has.
 //!
 //! "Upstream" in a pack report stays the pack's own git source; the original
 //! is the source the pack's source was forked from. Skill Studio owns this
@@ -16,10 +18,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::CoreError;
+use crate::identity::RootScope;
 use crate::pack::{source_identity, PackKind, RemotePack, RemoteState};
 use crate::ports::{acquire_exclusive, Runtime, ScopeFs};
 
-/// The `skill-studio.json` key that holds every link.
+/// The `skill-studio.json` key that holds every record.
 const PACK_ORIGINALS_KEY: &str = "pack_originals";
 
 /// The source a pack moved away from, and how the pack compares with it.
@@ -29,52 +32,67 @@ pub struct PackOriginal {
     /// pack's own source.
     #[schemars(extend("x-untrusted" = true))]
     pub source: String,
-    /// Remote check result for the original.
+    /// `checked` only when the remote check read both the pack's own source
+    /// and the original; otherwise the state of the read that did not happen
+    /// or failed, and the two lists are empty.
     pub remote: RemoteState,
     /// Installed skills whose folder in the original differs from the
-    /// folder in the pack's own source: one of the two changed it. Empty
-    /// unless the remote check read both sources.
+    /// folder in the pack's own source: one of the two changed it.
     #[schemars(extend("x-untrusted" = true))]
     pub differs: Vec<String>,
     /// Skills of the original that the pack's own source does not have.
-    /// Empty unless the remote check read both sources.
     #[schemars(extend("x-untrusted" = true))]
     pub not_in_source: Vec<String>,
 }
 
-/// Every recorded link, pack source to original source, as written. A
-/// missing, unreadable, or malformed file reads as no links: a pack report
-/// must not fail on Skill Studio's own bookkeeping.
-pub(crate) fn read_links(fs: &dyn ScopeFs, home: &Path) -> BTreeMap<String, String> {
-    let Ok(document) = crate::ops_install::read_registry_document(fs, home) else {
-        return BTreeMap::new();
-    };
-    document
-        .get(PACK_ORIGINALS_KEY)
-        .and_then(serde_json::Value::as_object)
-        .map(|links| {
-            links
-                .iter()
-                .filter_map(|(source, row)| {
-                    let original = row.get("original")?.as_str()?;
-                    Some((source.clone(), original.to_string()))
-                })
-                .collect()
-        })
+/// One skill's move, as recorded.
+#[derive(Debug, Clone, Deserialize)]
+struct Record {
+    source: String,
+    original: String,
+}
+
+/// Every record, by scope key and skill name.
+#[derive(Debug, Default)]
+pub(crate) struct Records(BTreeMap<String, BTreeMap<String, Record>>);
+
+/// The key a scope's records sit under.
+fn scope_key(scope: &RootScope) -> String {
+    match scope {
+        RootScope::Global => "global".to_string(),
+        RootScope::Project(project) => project.0.to_string_lossy().into_owned(),
+    }
+}
+
+/// A source without its `#ref`, for matching.
+fn identity(source: &str) -> String {
+    let base = source.split_once('#').map_or(source, |(base, _)| base);
+    source_identity(PackKind::SkillsSh, base)
+}
+
+/// True when `a` and `b` name the same git source, ignoring a `#ref`.
+pub(crate) fn same_source(a: &str, b: &str) -> bool {
+    identity(a) == identity(b)
+}
+
+/// Reads every record. A missing, unreadable, or malformed file reads as
+/// none: a pack report must not fail on Skill Studio's own bookkeeping.
+pub(crate) fn read_records(fs: &dyn ScopeFs, home: &Path) -> Records {
+    crate::ops_install::read_registry_document(fs, home)
+        .ok()
+        .and_then(|mut document| document.shift_remove(PACK_ORIGINALS_KEY))
+        .and_then(|value| serde_json::from_value(value).ok())
+        .map(Records)
         .unwrap_or_default()
 }
 
-/// The original recorded for a pack with this kind and source, if any.
-pub(crate) fn original_of(
-    links: &BTreeMap<String, String>,
-    kind: PackKind,
-    source: &str,
-) -> Option<String> {
-    let wanted = source_identity(kind, source);
-    links
-        .iter()
-        .find(|(linked, _)| source_identity(kind, linked) == wanted)
-        .map(|(_, original)| original.clone())
+impl Records {
+    /// The original of a skill installed in `scope` from `source`, when a
+    /// record for it is still current.
+    pub(crate) fn original(&self, scope: &RootScope, skill: &str, source: &str) -> Option<&str> {
+        let record = self.0.get(&scope_key(scope))?.get(skill)?;
+        same_source(&record.source, source).then_some(record.original.as_str())
+    }
 }
 
 /// Compares the pack's own source with its original at their newest
@@ -82,33 +100,30 @@ pub(crate) fn original_of(
 /// the pack's installed skills.
 pub(crate) fn compare(
     source: String,
-    own: Option<&RemotePack>,
+    own: Result<&RemotePack, RemoteState>,
     original: Result<RemotePack, RemoteState>,
     installed: &[String],
 ) -> PackOriginal {
-    let (remote, original) = match original {
-        Ok(fetched) => (
-            RemoteState::Checked {
-                commit: fetched.commit.clone(),
-            },
-            Some(fetched),
-        ),
-        Err(state) => (state, None),
-    };
     let (mut differs, mut not_in_source) = (Vec::new(), Vec::new());
-    if let (Some(own), Some(original)) = (own, original) {
-        for skill in &original.skills {
-            match own.skills.iter().find(|s| s.name == skill.name) {
-                Some(mine) if installed.contains(&skill.name) => {
-                    if mine.tree_hash != skill.tree_hash {
-                        differs.push(skill.name.clone());
+    let remote = match (own, original) {
+        (Ok(own), Ok(original)) => {
+            for skill in &original.skills {
+                match own.skills.iter().find(|s| s.name == skill.name) {
+                    Some(mine) if installed.contains(&skill.name) => {
+                        if mine.tree_hash != skill.tree_hash {
+                            differs.push(skill.name.clone());
+                        }
                     }
+                    Some(_) => {}
+                    None => not_in_source.push(skill.name.clone()),
                 }
-                Some(_) => {}
-                None => not_in_source.push(skill.name.clone()),
+            }
+            RemoteState::Checked {
+                commit: original.commit,
             }
         }
-    }
+        (Err(state), _) | (_, Err(state)) => state,
+    };
     for list in [&mut differs, &mut not_in_source] {
         list.sort();
         list.dedup();
@@ -121,87 +136,61 @@ pub(crate) fn compare(
     }
 }
 
-/// The links as they were before [`record_switch`], for
-/// [`restore_links`] when no skill moved.
-pub(crate) struct LinksBefore(Option<serde_json::Value>);
-
-/// What [`record_switch`] wrote.
-pub(crate) enum Switched {
-    /// `from` is now recorded as the original of `to`.
-    Linked,
-    /// `to` was the original of `from`, so that link is gone.
-    BackToOriginal,
+/// One skill that is about to move.
+pub(crate) struct Move<'a> {
+    pub scope: &'a RootScope,
+    pub skill: &'a str,
 }
 
-/// Records that a pack moved from `from` to `to`. Moving back to the
-/// original a pack was linked to drops that link instead of adding a
-/// reverse one. Any older link keyed by `to` is replaced.
-pub(crate) fn record_switch(
+/// Records, before the skills move from `from` to `to`, that each one's
+/// original is `from`. A skill whose current record already names `to` as
+/// its original is moving back, so its record stays as it is: it goes stale
+/// once the lock row names `to`, and counts again if that move is undone.
+/// Returns true when every skill is moving back.
+pub(crate) fn record_moves(
     rt: &Runtime,
     from: &str,
     to: &str,
-) -> Result<(LinksBefore, Switched), CoreError> {
-    let identity = |source: &str| source_identity(PackKind::SkillsSh, source);
-    let linked_at = rt.ports.clock.now().to_rfc3339();
-    edit_links(rt, |links| {
-        let before = LinksBefore(links.clone().map(serde_json::Value::Object));
-        let links = links.get_or_insert_with(serde_json::Map::new);
-        let back_to_original = links.iter().any(|(source, row)| {
-            identity(source) == identity(from)
-                && row
-                    .get("original")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|original| identity(original) == identity(to))
-        });
-        links.retain(|source, _| {
-            let key = identity(source);
-            key != identity(to) && !(back_to_original && key == identity(from))
-        });
-        if back_to_original {
-            return (before, Switched::BackToOriginal);
-        }
-        links.insert(
-            to.to_string(),
-            serde_json::json!({ "original": from, "linked_at": linked_at }),
-        );
-        (before, Switched::Linked)
-    })
-}
-
-/// Puts the links back as [`record_switch`] found them.
-pub(crate) fn restore_links(rt: &Runtime, before: LinksBefore) -> Result<(), CoreError> {
-    edit_links(rt, |links| {
-        *links = before.0.and_then(|value| match value {
-            serde_json::Value::Object(map) => Some(map),
-            _ => None,
-        });
-    })
-}
-
-/// Reads `skill-studio.json` under the exclusive lease, lets `edit` change
-/// its `pack_originals` map (`None` when the key is absent), and writes the
-/// document back with every other key unchanged.
-fn edit_links<T>(
-    rt: &Runtime,
-    edit: impl FnOnce(&mut Option<serde_json::Map<String, serde_json::Value>>) -> T,
-) -> Result<T, CoreError> {
+    moves: &[Move<'_>],
+) -> Result<bool, CoreError> {
     let fs = rt.ports.fs.as_ref();
     let home = &rt.scope.home.lexical;
     let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope)?;
     let mut document = crate::ops_install::read_registry_document(fs, home)?;
-    let mut links = match document.shift_remove(PACK_ORIGINALS_KEY) {
-        Some(serde_json::Value::Object(map)) => Some(map),
-        _ => None,
+    let mut records = match document.shift_remove(PACK_ORIGINALS_KEY) {
+        Some(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
     };
-    let result = edit(&mut links);
-    if let Some(links) = links.filter(|links| !links.is_empty()) {
-        document.insert(
-            PACK_ORIGINALS_KEY.to_string(),
-            serde_json::Value::Object(links),
+    let linked_at = rt.ports.clock.now().to_rfc3339();
+    let mut all_back = true;
+    for step in moves {
+        let scope = records
+            .entry(scope_key(step.scope))
+            .or_insert_with(|| serde_json::json!({}));
+        if !scope.is_object() {
+            *scope = serde_json::json!({});
+        }
+        let Some(scope) = scope.as_object_mut() else {
+            continue;
+        };
+        let current = scope
+            .get(step.skill)
+            .and_then(|row| serde_json::from_value::<Record>(row.clone()).ok());
+        if current.is_some_and(|r| same_source(&r.source, from) && same_source(&r.original, to)) {
+            continue;
+        }
+        all_back = false;
+        scope.insert(
+            step.skill.to_string(),
+            serde_json::json!({ "source": to, "original": from, "linked_at": linked_at }),
         );
     }
+    document.insert(
+        PACK_ORIGINALS_KEY.to_string(),
+        serde_json::Value::Object(records),
+    );
     crate::ops_install::write_registry_document(&guard, fs, home, document)?;
-    Ok(result)
+    Ok(all_back)
 }
 
 #[cfg(test)]
@@ -233,23 +222,40 @@ mod tests {
         let original = remote(&[("a", "1"), ("b", "9"), ("new", "5"), ("skipped", "8")]);
         let installed = ["a".to_string(), "b".to_string(), "mine".to_string()];
 
-        let found = compare("o/r".into(), Some(&own), Ok(original), &installed);
+        let found = compare("o/r".into(), Ok(&own), Ok(original), &installed);
 
         assert_eq!(found.differs, ["b"]);
         assert_eq!(found.not_in_source, ["new"]);
         assert_eq!(found.remote, RemoteState::Checked { commit: "c".into() });
     }
 
-    /// Fails if a failed fork check still reports a comparison.
+    /// A failed read of the fork showed "0 differ, 0 only there", which
+    /// reads as a measured result. Fails if a comparison that did not read
+    /// both sources reports `checked`.
     #[test]
-    fn compare_reports_nothing_without_both_sources() {
-        let original = remote(&[("new", "5")]);
-        let found = compare("o/r".into(), None, Ok(original), &[]);
+    fn compare_reports_the_failed_read_when_either_source_is_missing() {
+        let failed = RemoteState::Failed { reason: "x".into() };
+        let found = compare(
+            "o/r".into(),
+            Err(failed.clone()),
+            Ok(remote(&[("new", "5")])),
+            &[],
+        );
+        assert_eq!(found.remote, failed);
         assert!(found.differs.is_empty() && found.not_in_source.is_empty());
 
-        let failed = RemoteState::Failed { reason: "x".into() };
         let own = remote(&[("a", "1")]);
-        let found = compare("o/r".into(), Some(&own), Err(failed.clone()), &[]);
+        let found = compare("o/r".into(), Ok(&own), Err(failed.clone()), &[]);
         assert_eq!(found.remote, failed);
+    }
+
+    /// Fails if a `#ref` makes the same repo look like another source.
+    #[test]
+    fn same_source_ignores_a_ref_and_github_spelling() {
+        assert!(same_source(
+            "me/fork#main",
+            "https://github.com/Me/fork.git"
+        ));
+        assert!(!same_source("me/fork", "owner/pack"));
     }
 }
