@@ -1533,11 +1533,12 @@ mod tests {
     }
     struct FakeSnapshot;
     impl RepoSnapshot for FakeSnapshot {
-        fn copy_dir(&self, _path: &str, into: &Path) -> Result<(), String> {
+        fn copy_dir(&self, path: &str, into: &Path) -> Result<(), String> {
+            let name = path.rsplit('/').next().unwrap_or(path);
             fs::create_dir_all(into).unwrap();
             fs::write(
                 into.join("SKILL.md"),
-                "---\nname: visual-recap\ndescription: test\n---\nBody.",
+                format!("---\nname: {name}\ndescription: test\n---\nBody."),
             )
             .unwrap();
             Ok(())
@@ -1550,6 +1551,84 @@ mod tests {
         fn open_repo(&self, _: &str, _: &str) -> Result<Option<Box<dyn RepoSnapshot>>, String> {
             *self.downloads.lock().unwrap() += 1;
             Ok(Some(Box::new(FakeSnapshot)))
+        }
+    }
+
+    /// Flow: a three-skill Copy batch from one GitHub repo runs through the
+    /// batch worker. Expectation: the repo is downloaded once and every
+    /// skill installs from that one snapshot. A failure here means each
+    /// skill refetches the whole repo.
+    #[test]
+    fn copy_batch_downloads_the_repo_once_for_every_skill_or_names_the_extra_download() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let state = AddSkillOperationState::default();
+        let names = ["visual-recap", "other", "third"];
+        let request = AddSkillsRequest {
+            source: {
+                let mut source = github("kentcdodds/kcd-skills", "visual-recap");
+                source.skill_name = None;
+                source.git_ref = Some("main".to_string());
+                source.path = Some("skills".to_string());
+                source
+            },
+            skills: names
+                .iter()
+                .map(
+                    |name| crate::skills::github_skill_listing::GithubSkillEntry {
+                        name: (*name).to_string(),
+                        path: format!("skills/{name}"),
+                    },
+                )
+                .collect(),
+            method: AddMethod::Copy,
+            destination: SkillDestination::Universal,
+            agents: vec![],
+            link_mode: skill_studio_core::dto::InstallLinkMode::Link,
+            scope: InstallScope::Global,
+            project_path: None,
+        };
+        state
+            .begin(
+                "op-batch-once".to_string(),
+                AddSkillOperationKind::Batch(request),
+                None,
+            )
+            .unwrap();
+        crate::skills::skill_trust_policy::record_trusted_dotagents_source(
+            home,
+            "kentcdodds/kcd-skills",
+        )
+        .unwrap();
+        let rt = test_runtime(home);
+        let fetch = CountingFetch {
+            downloads: StdMutex::new(0),
+        };
+        run_operation_body(
+            None,
+            &state,
+            "op-batch-once",
+            || Ok(rt),
+            &fetch,
+            &NeverLookup,
+        );
+
+        let status = state.snapshot("op-batch-once").unwrap();
+        assert_eq!(status.phase, AddSkillOperationPhase::Completed);
+        assert_eq!(
+            *fetch.downloads.lock().unwrap(),
+            1,
+            "one shared snapshot should serve the whole batch, not one per skill"
+        );
+        for name in names {
+            assert!(
+                home.join(".agents/skills")
+                    .join(name)
+                    .join("SKILL.md")
+                    .exists(),
+                "{name} was not installed: {:?}",
+                status.outcomes
+            );
         }
     }
 
