@@ -307,8 +307,9 @@ fn a_batched_install_saves_the_preference_once_and_the_first_undo_removes_it() {
         std::fs::read(home.join(".agents/skill-studio.json"))
             .ok()
             .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-            .map(|doc| doc["preferred_method"].clone())
-            .unwrap_or(serde_json::Value::Null)
+            .map_or(serde_json::Value::Null, |doc| {
+                doc["preferred_method"].clone()
+            })
     };
     assert_eq!(preference(), serde_json::json!("skills_sh"));
     let first = match &outcomes[0] {

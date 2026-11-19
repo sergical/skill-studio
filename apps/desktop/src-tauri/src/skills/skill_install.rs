@@ -531,11 +531,8 @@ pub(crate) fn set_install_one_thread_probe(
     INSTALL_ONE_THREAD_PROBE.with(|cell| *cell.borrow_mut() = Some(probe));
 }
 
-/// One skill through `ops::install`: gather `Copy` files (if applicable,
-/// against a batch's shared `snapshot` when given), build the op's request,
-/// call `ops::install`, then run `finish_install`. Shared by
-/// `add_skill_with_runtime` below and `skill_add_operation.rs`'s single and
-/// batch workers, so there is exactly one place that calls `ops::install`.
+/// One skill through [`install_many`]. Shared by `add_skill_with_runtime`
+/// below and `skill_add_operation.rs`'s single worker.
 pub(crate) fn install_one(
     rt: &Runtime,
     request: &AddSkillRequest,
@@ -552,33 +549,16 @@ pub(crate) fn install_one(
                 Some(std::thread::current().id());
         }
     });
-    let files = if matches!(request.method, AddMethod::Copy) {
-        let name = derive_and_validate_name(request)?;
-        let scope_root = request_scope_root(request, rt)?;
-        let destination = scope_root.join(UNIVERSAL_ROOT_RELATIVE).join(&name);
-        gather_copy_files(
-            &request.source,
-            &scope_root,
-            &destination,
-            fetch,
-            lookup,
-            snapshot,
-        )?
-    } else {
-        Vec::new()
-    };
-    let install_req = build_install_request(request, files)?;
-    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
-    let result = ops::install(rt, &ctx, &install_req);
-    let envelope = ResultEnvelope::from_result(Operation::Install, &rt.scope, &ctx, result);
-    let outcome = super::core_runtime::to_command_result(envelope)?;
-    Ok(finish_install(request, outcome))
+    install_many(rt, std::slice::from_ref(request), fetch, lookup, snapshot)
+        .pop()
+        .unwrap_or_else(|| Err("install_many returned no result".to_string()))
 }
 
-/// [`install_one`] for several skills, results in request order. Builds
-/// every request first (gathering `Copy` files against the batch's shared
-/// `snapshot`), then makes one `ops::install_batch` call, so skills.sh skills
-/// of one source cost one `npx skills add` (#687).
+/// Installs skills, results in request order: gathers `Copy` files
+/// (against a batch's shared `snapshot` when given), builds each op request,
+/// makes one `ops::install_batch` call - so skills.sh skills of one source
+/// cost one `npx skills add` (#687) - then runs `finish_install` on each.
+/// The one place the desktop calls the core install.
 pub(crate) fn install_many(
     rt: &Runtime,
     requests: &[AddSkillRequest],

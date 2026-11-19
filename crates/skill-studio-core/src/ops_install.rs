@@ -444,8 +444,8 @@ fn batch_groups(requests: &[InstallRequest]) -> Vec<Vec<usize>> {
 }
 
 /// One [`batch_groups`] group under one lease: every skill planned and
-/// recorded first, then one CLI call per set of served agents (normally
-/// one), then each skill checked, linked and finished on its own. A failed
+/// recorded first, then one CLI call, then each skill checked, linked and
+/// finished on its own. A failed
 /// call fails every row it covered, as a failed single install does.
 fn install_group(
     rt: &Runtime,
@@ -505,64 +505,31 @@ fn install_group(
         }
     }
 
-    // Each prepared skill's link-step result, in `prepared` order.
+    // Each prepared skill's link-step result, in `prepared` order. Skip
+    // reasons depend on the scope and agent, never the skill, so every plan
+    // in the group serves the same agents and one call covers them all.
     let mut linked: Vec<Result<LinkedSteps, CoreError>> = Vec::new();
     if let Some((_, ready)) = prepared.first() {
-        let universal_root = ready.plan.universal_root.clone();
-        let shared = ready.plan.shared.is_some();
-        let made_root = if shared {
-            crate::ops::ensure_dir_all(rt, &mut session, fs, &universal_root)
+        let served = ready.plan.served_harnesses();
+        let made_root = if ready.plan.shared.is_some() {
+            crate::ops::ensure_dir_all(rt, &session, fs, &ready.plan.universal_root)
         } else {
             Ok(())
         };
-        let mut checks: Vec<Option<Result<(), CoreError>>> =
-            prepared.iter().map(|_| None).collect();
-        match made_root {
-            Err(e) => {
-                for check in &mut checks {
-                    *check = Some(Err(e.for_each_item()));
-                }
-            }
-            Ok(()) => {
-                // Skills whose plans serve the same agents share one call.
-                let mut calls: Vec<(Vec<AgentId>, Vec<usize>)> = Vec::new();
-                for (k, (_, ready)) in prepared.iter().enumerate() {
-                    let served = ready.plan.served_harnesses();
-                    match calls.iter_mut().find(|(agents, _)| *agents == served) {
-                        Some((_, members)) => members.push(k),
-                        None => calls.push((served, vec![k])),
-                    }
-                }
-                for (served, members) in calls {
-                    let targets: Vec<CliTarget<'_>> = members
-                        .iter()
-                        .map(|&k| CliTarget {
-                            skill: &batch[prepared[k].0].skill,
-                            destination: &prepared[k].1.destination,
-                        })
-                        .collect();
-                    match install_via_cli_batch(rt, ctx, first, &targets, &served) {
-                        Ok(each) => {
-                            for (&k, check) in members.iter().zip(each) {
-                                checks[k] = Some(check);
-                            }
-                        }
-                        Err(e) => {
-                            for &k in &members {
-                                checks[k] = Some(Err(e.for_each_item()));
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        let targets: Vec<CliTarget<'_>> = prepared
+            .iter()
+            .map(|(index, ready)| CliTarget {
+                skill: &batch[*index].skill,
+                destination: &ready.destination,
+            })
+            .collect();
+        let checks = match made_root
+            .and_then(|()| install_via_cli_batch(rt, ctx, first, &targets, &served))
+        {
+            Ok(each) => each,
+            Err(e) => targets.iter().map(|_| Err(e.for_each_item())).collect(),
+        };
         for ((index, ready), check) in prepared.iter().zip(checks) {
-            let check = check.unwrap_or_else(|| {
-                Err(CoreError::new(
-                    ErrorCode::Incomplete,
-                    "the install call never reached this skill",
-                ))
-            });
             linked.push(
                 check.and_then(|()| link_steps(rt, &mut session, fs, batch[*index], &ready.plan)),
             );
