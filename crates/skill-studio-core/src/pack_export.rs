@@ -25,6 +25,11 @@ use crate::ports::{FileKind, OpContext, Runtime, ScopeFs};
 /// Largest single file the export copies.
 const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
+/// Most files, and most bytes, one export copies, so a huge or looping
+/// skill folder fails instead of filling memory.
+const MAX_FILES: usize = 10_000;
+const MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
+
 /// What `source` names in the README when the request gives none.
 const SOURCE_PLACEHOLDER: &str = "<owner>/<repo>";
 
@@ -40,7 +45,8 @@ pub struct PackExportRequest {
     /// README's install lines. Absent: the lines say `<owner>/<repo>`.
     #[serde(default)]
     pub source: Option<String>,
-    /// Take each skill's copy from this tracked project. Absent: the home.
+    /// Take each skill's copy from this project, as the other pack ops
+    /// take `project_path`. Absent: the home.
     #[serde(default)]
     pub project_path: Option<PathBuf>,
     /// Return the plan and write nothing.
@@ -262,102 +268,163 @@ fn live_copy<'a>(
 }
 
 /// Adds every file under `folder` to `planned`, at `into/<relative path>`.
-/// The folder itself may be a link (a linked install). Inside it, a link is
-/// copied as the file or folder it names when that stays inside the skill
-/// folder, and refused when it leaves it. `.git` is left out.
+/// The folder itself may be a link (a linked install): its resolved folder
+/// is the boundary. Files are read through a handle bound to that folder
+/// ([`ScopeFs::fsops_read_capped`]), so a link to outside it, even one
+/// swapped in after the checks here, fails the read. A link that leaves the
+/// folder or loops back into a folder being walked is refused. `.git` is
+/// left out.
 fn collect(
     fs: &dyn ScopeFs,
     folder: &Path,
     into: &Path,
     planned: &mut Vec<PlannedFile>,
 ) -> Result<(), CoreError> {
-    let root = fs
-        .canonicalize(folder)
-        .map_err(|e| CoreError::io(folder, e))?;
-    walk(fs, &root, &root, into, planned)
-}
-
-fn walk(
-    fs: &dyn ScopeFs,
-    root: &Path,
-    dir: &Path,
-    into: &Path,
-    planned: &mut Vec<PlannedFile>,
-) -> Result<(), CoreError> {
-    let mut entries = fs.read_dir(dir).map_err(|e| CoreError::io(dir, e))?;
-    entries.sort_by(|a, b| a.name.cmp(&b.name));
-    for entry in entries {
-        if entry.name == ".git" {
-            continue;
-        }
-        let path = dir.join(&entry.name);
-        let target = if entry.kind == FileKind::Symlink {
-            let resolved = fs
-                .canonicalize(&path)
-                .map_err(|e| CoreError::io(&path, e))?;
-            if !resolved.starts_with(root) {
-                return Err(CoreError::new(
-                    ErrorCode::InvalidRequest,
-                    "a link in the skill leaves its folder; the pack would not hold what it names",
-                )
-                .at(&path));
-            }
-            resolved
-        } else {
-            path.clone()
-        };
-        let facts = fs
-            .symlink_metadata(&target)
-            .map_err(|e| CoreError::io(&target, e))?;
-        let relative = into.join(&entry.name);
-        match facts.kind {
-            FileKind::Dir => walk(fs, root, &target, &relative, planned)?,
-            FileKind::File => {
-                if facts.len > MAX_FILE_BYTES {
-                    return Err(CoreError::new(
-                        ErrorCode::InvalidRequest,
-                        "a file in the skill is larger than 16 MB",
-                    )
-                    .at(&path));
-                }
-                let bytes = fs
-                    .read_capped(&target, MAX_FILE_BYTES)
-                    .map_err(|e| CoreError::io(&target, e))?;
-                let executable = facts.mode.is_some_and(|mode| mode & 0o111 != 0);
-                planned.push(PlannedFile {
-                    relative,
-                    bytes,
-                    mode: if executable { 0o755 } else { 0o644 },
-                });
-            }
-            FileKind::Symlink | FileKind::Other => {
-                return Err(CoreError::new(
-                    ErrorCode::InvalidRequest,
-                    "the skill holds something that is not a file or a folder",
-                )
-                .at(&path));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Creates `dir` when it does not exist, then every folder and file, each
-/// with create-new, so an existing file stops the export instead of being
-/// overwritten.
-fn write_pack(fs: &dyn ScopeFs, dir: &Path, planned: &[PlannedFile]) -> Result<(), CoreError> {
-    let stopped = |path: &Path, e: std::io::Error| {
-        CoreError::io(path, e).with_detail(format!(
-            "the export stopped here; remove {} and export again",
-            dir.display()
-        ))
+    let root = fs.canonicalize(folder).map_err(|e| CoreError::io(folder, e))?;
+    let bound = fs.fsops_bind_root(&root).map_err(|e| CoreError::io(&root, e))?;
+    let reader = bound.as_deref().unwrap_or(fs);
+    let mut walk = Walk {
+        fs,
+        reader,
+        root: &root,
+        open: vec![root.clone()],
+        planned,
     };
-    if fs.symlink_metadata(dir).is_err() {
-        fs.fsops_create_dir(dir).map_err(|e| stopped(dir, e))?;
+    walk.dir(&root, into)
+}
+
+struct Walk<'a> {
+    fs: &'a dyn ScopeFs,
+    reader: &'a dyn ScopeFs,
+    root: &'a Path,
+    /// Resolved folders on the current path, to refuse a link back into one.
+    open: Vec<PathBuf>,
+    planned: &'a mut Vec<PlannedFile>,
+}
+
+impl Walk<'_> {
+    fn refuse(path: &Path, message: &str) -> CoreError {
+        CoreError::new(ErrorCode::InvalidRequest, message.to_string()).at(path)
     }
+
+    fn dir(&mut self, dir: &Path, into: &Path) -> Result<(), CoreError> {
+        let mut entries = self.fs.read_dir(dir).map_err(|e| CoreError::io(dir, e))?;
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        for entry in entries {
+            if entry.name == ".git" {
+                continue;
+            }
+            let path = dir.join(&entry.name);
+            let target = if entry.kind == FileKind::Symlink {
+                let resolved = self.fs.canonicalize(&path).map_err(|e| CoreError::io(&path, e))?;
+                if !resolved.starts_with(self.root) {
+                    return Err(Self::refuse(
+                        &path,
+                        "a link in the skill leaves its folder; the pack would not hold what it names",
+                    ));
+                }
+                resolved
+            } else {
+                path.clone()
+            };
+            let facts = self
+                .fs
+                .symlink_metadata(&target)
+                .map_err(|e| CoreError::io(&target, e))?;
+            let relative = into.join(&entry.name);
+            match facts.kind {
+                FileKind::Dir => {
+                    if self.open.contains(&target) {
+                        return Err(Self::refuse(&path, "a link in the skill loops back into its own folder"));
+                    }
+                    self.open.push(target.clone());
+                    self.dir(&target, &relative)?;
+                    self.open.pop();
+                }
+                FileKind::File => self.file(&path, &target, relative, facts.mode)?,
+                FileKind::Symlink | FileKind::Other => {
+                    return Err(Self::refuse(
+                        &path,
+                        "the skill holds something that is not a file or a folder",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn file(
+        &mut self,
+        path: &Path,
+        target: &Path,
+        relative: PathBuf,
+        mode: Option<u32>,
+    ) -> Result<(), CoreError> {
+        if self.planned.len() >= MAX_FILES {
+            return Err(Self::refuse(path, "the pack would hold more than 10,000 files"));
+        }
+        let bytes = self
+            .reader
+            .fsops_read_capped(target, MAX_FILE_BYTES)
+            .map_err(|e| CoreError::io(path, e))?;
+        let total: u64 = self.planned.iter().map(|f| f.bytes.len() as u64).sum::<u64>()
+            + bytes.len() as u64;
+        if total > MAX_TOTAL_BYTES {
+            return Err(Self::refuse(path, "the pack would hold more than 256 MB"));
+        }
+        let executable = mode.is_some_and(|mode| mode & 0o111 != 0);
+        self.planned.push(PlannedFile {
+            relative,
+            bytes,
+            mode: if executable { 0o755 } else { 0o644 },
+        });
+        Ok(())
+    }
+}
+
+/// Writes the pack through a handle bound to `dir`, so no write can leave it,
+/// even through a folder swapped for a link after the checks: creates `dir`
+/// when it does not exist, checks again that it is a real, empty folder,
+/// then creates every folder and file with create-new. On a failure the
+/// error lists what was written and what to remove: the folder when this
+/// export created it, else only the listed files.
+fn write_pack(fs: &dyn ScopeFs, dir: &Path, planned: &[PlannedFile]) -> Result<(), CoreError> {
+    let created = fs.symlink_metadata(dir).is_err();
+    if created {
+        fs.fsops_create_dir(dir).map_err(|e| CoreError::io(dir, e))?;
+    }
+    let is_real_dir = |fs: &dyn ScopeFs| {
+        fs.symlink_metadata(dir).is_ok_and(|facts| facts.kind == FileKind::Dir)
+    };
+    if !is_real_dir(fs) {
+        return Err(Walk::refuse(dir, "the pack folder is no longer a folder"));
+    }
+    let bound = fs.fsops_bind_root(dir).map_err(|e| CoreError::io(dir, e))?;
+    let writer = bound.as_deref().unwrap_or(fs);
+    let empty = fs.read_dir(dir).map_err(|e| CoreError::io(dir, e))?.is_empty();
+    if !is_real_dir(fs) || !empty {
+        return Err(Walk::refuse(
+            dir,
+            "the pack folder changed while the export read the skills; choose a new or empty folder",
+        ));
+    }
+    let mut written: Vec<PathBuf> = Vec::new();
+    let stopped = |path: &Path, e: std::io::Error, written: &[PathBuf]| {
+        let undo = if created {
+            format!("remove {}", dir.display())
+        } else if written.is_empty() {
+            "nothing was written".to_string()
+        } else {
+            format!(
+                "remove what it wrote in {}: {}",
+                dir.display(),
+                written.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
+            )
+        };
+        CoreError::io(path, e).with_detail(format!("the export stopped here; {undo}"))
+    };
     let mut made: BTreeSet<PathBuf> = BTreeSet::new();
     for file in planned {
-        let path = dir.join(&file.relative);
         let mut parents: Vec<&Path> = file
             .relative
             .ancestors()
@@ -368,22 +435,41 @@ fn write_pack(fs: &dyn ScopeFs, dir: &Path, planned: &[PlannedFile]) -> Result<(
         for parent in parents {
             if made.insert(parent.to_path_buf()) {
                 let folder = dir.join(parent);
-                fs.fsops_create_dir(&folder)
-                    .map_err(|e| stopped(&folder, e))?;
+                writer
+                    .fsops_create_dir(&folder)
+                    .map_err(|e| stopped(&folder, e, &written))?;
+                written.push(parent.to_path_buf());
             }
         }
-        fs.fsops_write_new_file_with_mode(&path, &file.bytes, file.mode)
-            .map_err(|e| stopped(&path, e))?;
+        let path = dir.join(&file.relative);
+        writer
+            .fsops_write_new_file_with_mode(&path, &file.bytes, file.mode)
+            .map_err(|e| stopped(&path, e, &written))?;
+        written.push(file.relative.clone());
     }
     Ok(())
 }
 
+/// `word` as one shell word: as is when it holds only safe characters, else
+/// in single quotes. The install lines are meant to be pasted into a shell.
+fn shell_word(word: &str) -> String {
+    let safe = !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./:@#+=,%".contains(c));
+    if safe {
+        word.to_string()
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
+    }
+}
+
 /// `npx skills add <source> --skill a --skill b`, for every skill at once.
 fn install_line(source: &str, skills: &[String]) -> String {
-    let mut line = format!("npx skills add {source}");
+    let mut line = format!("npx skills add {}", shell_word(source));
     for skill in skills {
         line.push_str(" --skill ");
-        line.push_str(skill);
+        line.push_str(&shell_word(skill));
     }
     line
 }
@@ -396,7 +482,7 @@ fn readme(source: &str, skills: &[String], install_command: &str) -> String {
     );
     // Writing to a `String` cannot fail.
     for skill in skills {
-        let _ = writeln!(text, "npx skills add {source} --skill {skill}");
+        let _ = writeln!(text, "{}", install_line(source, std::slice::from_ref(skill)));
     }
     text.push_str("```\n");
     if source == SOURCE_PLACEHOLDER {

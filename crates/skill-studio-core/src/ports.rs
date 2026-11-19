@@ -476,6 +476,13 @@ pub trait ScopeFs: Send + Sync {
     /// in-memory fake, or a test wrapper that must see each write. A
     /// wrapper over a real filesystem forwards this to its inner one.
     fn fsops_bind_root(&self, root: &Path) -> std::io::Result<Option<Box<dyn ScopeFs + '_>>>;
+    /// [`Self::read_capped`] through the root this view is bound to
+    /// ([`Self::fsops_bind_root`]): a path that leaves the root through a
+    /// link or `..`, even one swapped in after a check, fails. An unbound
+    /// view reads the plain path.
+    fn fsops_read_capped(&self, path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
+        self.read_capped(path, max_bytes)
+    }
 }
 
 /// Finds the projects a scope covers under [`ProjectSelection::Discover`].

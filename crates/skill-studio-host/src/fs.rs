@@ -439,6 +439,19 @@ impl ScopeFs for BoundFs {
     fn fsops_bind_root(&self, root: &Path) -> io::Result<Option<Box<dyn ScopeFs + '_>>> {
         RealFs.fsops_bind_root(root)
     }
+    fn fsops_read_capped(&self, path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
+        use std::io::Read as _;
+        let file = self.dir.open(self.relative(path)?)?;
+        let mut bytes = Vec::new();
+        file.take(max_bytes.saturating_add(1)).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > max_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{} is larger than {max_bytes} bytes", path.display()),
+            ));
+        }
+        Ok(bytes)
+    }
 }
 
 /// [`atomic_exchange::exchange`] for two entries inside `dir`: each parent

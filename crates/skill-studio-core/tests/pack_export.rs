@@ -202,3 +202,42 @@ fn pack_export_refuses_bad_requests_before_it_writes_anything() {
     }
     std::fs::remove_dir_all(&home).ok();
 }
+
+/// A link inside a skill back into its own folder would make the walk run
+/// forever. Fails when the export follows it instead of refusing.
+#[test]
+fn pack_export_refuses_a_link_that_loops_back_into_the_skill() {
+    let home = home("pack_export_loop");
+    let skill = home.join(".agents/skills/epsilon");
+    write(&skill.join("SKILL.md"), &skill_md("epsilon"));
+    std::os::unix::fs::symlink(".", skill.join("loop")).unwrap();
+    let rt = runtime(&home);
+
+    let err = ops::pack_export(&rt, &ctx(), &export(&home.join("pack"), &["epsilon"], true))
+        .unwrap_err();
+
+    assert_eq!(err.code, ErrorCode::InvalidRequest);
+    assert!(err.message.contains("loops back"), "{err:?}");
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// The install lines are pasted into a shell, so a name or source with a
+/// space or a shell character is quoted. Fails when `my skill;id` reaches
+/// the README unquoted.
+#[test]
+fn pack_export_quotes_each_install_argument_for_the_shell() {
+    let home = home("pack_export_quote");
+    write(&home.join(".agents/skills/my skill;id/SKILL.md"), &skill_md("my skill;id"));
+    let rt = runtime(&home);
+    let out = home.join("pack");
+
+    let report = ops::pack_export(&rt, &ctx(), &export(&out, &["my skill;id"], false)).unwrap();
+
+    assert_eq!(
+        report.install_command,
+        "npx skills add me/my-skills --skill 'my skill;id'"
+    );
+    let readme = std::fs::read_to_string(out.join("README.md")).unwrap();
+    assert!(!readme.contains("--skill my skill;id"), "{readme}");
+    std::fs::remove_dir_all(&home).ok();
+}
