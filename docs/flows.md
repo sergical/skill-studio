@@ -220,7 +220,10 @@ create-new, so nothing is overwritten. It is the one op that writes outside
 the managed roots, and only into `<dir>`. It writes no lock, registry or agent
 file and records no event: delete the folder to undo it. It refuses a parked
 or plugin skill, an unknown or repeated name, and a link that leaves a skill
-folder, before the first write. It does not run git: push the folder yourself.
+folder, before the first write. It opens each folder one step at a time from
+`/` without following links and reads and writes only through the open
+handles, so a folder swapped for a link during the export fails it instead
+of redirecting it. It does not run git: push the folder yourself.
 
 `pack switch-source <source> <to>` moves the skills of a skills.sh pack to
 another git source, usually the user's GitHub fork of it. Each skill runs

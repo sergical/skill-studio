@@ -173,6 +173,9 @@ fn pack_export_refuses_bad_requests_before_it_writes_anything() {
     let delta = home.join(".agents/skills/delta");
     write(&delta.join("SKILL.md"), &skill_md("delta"));
     std::os::unix::fs::symlink(&outside, delta.join("notes.md")).unwrap();
+    let foxtrot = home.join(".agents/skills/foxtrot");
+    write(&foxtrot.join("SKILL.md"), &skill_md("foxtrot"));
+    std::os::unix::fs::symlink("../../../outside.md", foxtrot.join("notes.md")).unwrap();
     let rt = runtime(&home);
     let out = home.join("pack");
 
@@ -196,6 +199,7 @@ fn pack_export_refuses_bad_requests_before_it_writes_anything() {
             export(&out, &["alpha", "delta"], false),
             "leaves its folder",
         ),
+        (export(&out, &["foxtrot"], false), "leaves its folder"),
     ];
     for (req, expected) in cases {
         let err = ops::pack_export(&rt, &ctx(), &req).unwrap_err();
@@ -203,6 +207,30 @@ fn pack_export_refuses_bad_requests_before_it_writes_anything() {
         assert!(err.message.contains(expected), "{expected}: {err:?}");
         assert!(!out.exists(), "{expected}: refused after writing");
     }
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// A link that stays inside its skill is copied as the file or folder it
+/// names. Fails when the export refuses or drops it.
+#[test]
+fn pack_export_copies_what_a_link_inside_the_skill_names() {
+    let home = home("pack_export_inner_link");
+    let skill = home.join(".agents/skills/golf");
+    write(&skill.join("SKILL.md"), &skill_md("golf"));
+    write(&skill.join("docs/guide.md"), "guide\n");
+    std::os::unix::fs::symlink("docs/guide.md", skill.join("guide.md")).unwrap();
+    std::os::unix::fs::symlink("docs", skill.join("more")).unwrap();
+    let rt = runtime(&home);
+    let out = home.join("pack");
+
+    let report = ops::pack_export(&rt, &ctx(), &export(&out, &["golf"], false)).unwrap();
+
+    for copy in ["guide.md", "more/guide.md", "docs/guide.md"] {
+        let path = out.join("skills/golf").join(copy);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "guide\n", "{copy}");
+        assert!(!path.is_symlink(), "{copy} is a link in the pack");
+    }
+    assert_eq!(report.skills[0].files, 4, "{:?}", report.files);
     std::fs::remove_dir_all(&home).ok();
 }
 
