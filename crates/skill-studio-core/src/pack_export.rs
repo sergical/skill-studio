@@ -401,11 +401,14 @@ impl Walk<'_> {
 /// it holds the real folder the path named a moment before: a folder or an
 /// ancestor swapped for a link between the check and the open would bind
 /// the wrong folder. Returns the view and the folder's device and inode.
+/// [`bind_checked`]'s view (`None`: unbound) and the folder's device and inode.
+type CheckedView<'a> = (Option<Box<dyn ScopeFs + 'a>>, (u64, u64));
+
 fn bind_checked<'a>(
     fs: &'a dyn ScopeFs,
     dir: &Path,
     what: &str,
-) -> Result<(Option<Box<dyn ScopeFs + 'a>>, (u64, u64)), CoreError> {
+) -> Result<CheckedView<'a>, CoreError> {
     let changed = || Walk::refuse(dir, &format!("{what} changed while the export opened it"));
     if !fs
         .symlink_metadata(dir)
@@ -413,10 +416,14 @@ fn bind_checked<'a>(
     {
         return Err(changed());
     }
-    let expected = fs.fsops_device_inode(dir).map_err(|e| CoreError::io(dir, e))?;
+    let expected = fs
+        .fsops_device_inode(dir)
+        .map_err(|e| CoreError::io(dir, e))?;
     let bound = fs.fsops_bind_root(dir).map_err(|e| CoreError::io(dir, e))?;
     if let Some(view) = &bound {
-        let opened = view.fsops_root_identity().map_err(|e| CoreError::io(dir, e))?;
+        let opened = view
+            .fsops_root_identity()
+            .map_err(|e| CoreError::io(dir, e))?;
         if opened.is_some_and(|opened| opened != expected) {
             return Err(changed());
         }

@@ -336,13 +336,24 @@ fn pack_export_refuses_a_pack_folder_swapped_while_its_handle_opens() {
     std::fs::create_dir_all(&outside).unwrap();
     let rt = runtime_with(
         &home,
-        SwapOnBind { real: RealFs::new(), target: out.clone(), outside: outside.clone() },
+        SwapOnBind {
+            real: RealFs::new(),
+            target: out.clone(),
+            outside: outside.clone(),
+        },
     );
 
     let err = ops::pack_export(&rt, &ctx(), &export(&out, &["alpha"], false)).unwrap_err();
 
-    assert!(err.message.contains("changed while the export opened it"), "{err:?}");
-    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0, "wrote outside the pack");
+    assert!(
+        err.message.contains("changed while the export opened it"),
+        "{err:?}"
+    );
+    assert_eq!(
+        std::fs::read_dir(&outside).unwrap().count(),
+        0,
+        "wrote outside the pack"
+    );
     std::fs::remove_dir_all(&home).ok();
 }
 
@@ -357,12 +368,19 @@ fn pack_export_refuses_a_skill_folder_swapped_while_its_handle_opens() {
     let skill = std::fs::canonicalize(home.join(".agents/skills/alpha")).unwrap();
     let rt = runtime_with(
         &home,
-        SwapOnBind { real: RealFs::new(), target: skill, outside },
+        SwapOnBind {
+            real: RealFs::new(),
+            target: skill,
+            outside,
+        },
     );
 
-    let err = ops::pack_export(&rt, &ctx(), &export(&home.join("pack"), &["alpha"], true))
-        .unwrap_err();
+    let err =
+        ops::pack_export(&rt, &ctx(), &export(&home.join("pack"), &["alpha"], true)).unwrap_err();
 
-    assert!(err.message.contains("changed while the export opened it"), "{err:?}");
+    assert!(
+        err.message.contains("changed while the export opened it"),
+        "{err:?}"
+    );
     std::fs::remove_dir_all(&home).ok();
 }
