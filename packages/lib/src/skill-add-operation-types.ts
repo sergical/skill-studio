@@ -19,13 +19,6 @@ export type AddSkillOperationPhase =
   | "cancelled"
   | "timed-out";
 
-/** Batch item progress: 1-based `current` of `total`. */
-export interface AddSkillItemProgress {
-  current: number;
-  total: number;
-  name: string;
-}
-
 /** Normalized repository identity that needs explicit trust. */
 export interface AddSkillUntrustedSource {
   identity: string;
@@ -37,7 +30,6 @@ export interface AddSkillOperationEvent {
   sequence: number;
   phase: AddSkillOperationPhase;
   message: string;
-  item?: AddSkillItemProgress;
   result?: AddSkillResult;
   outcomes?: AddSkillOutcome[];
   error?: string;
