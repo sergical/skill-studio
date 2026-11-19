@@ -4,7 +4,6 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  coverageGaps,
   deploymentWithSpecViolations,
   findDuplicateSkills,
   findLeftBehindPairs,
@@ -142,26 +141,6 @@ describe("findSpecWarnings", () => {
   it("ignores a notes-only skill, or a harmless length note would raise a warning", () => {
     const skill = fixtureSkill({ spec_violations: [NAME_FORMAT] });
     expect(findSpecWarnings([skill])).toEqual([]);
-  });
-});
-
-describe("coverageGaps", () => {
-  it("flags a skill deployed to some, but not all, first-class agents at the same scope", () => {
-    const skill = fixtureSkill({
-      deployments: [fixtureDeployment({ agent: "Claude Code", scope: "global" })],
-    });
-    const gaps = coverageGaps([skill]);
-    expect(gaps).toHaveLength(1);
-    expect(gaps[0].scopeLabel).toBe("Global");
-    expect(gaps[0].missing).not.toContain("Claude Code");
-  });
-
-  it("does not flag a parked skill", () => {
-    const skill = fixtureSkill({
-      parked: true,
-      deployments: [fixtureDeployment({ agent: "Claude Code", scope: "global" })],
-    });
-    expect(coverageGaps([skill])).toEqual([]);
   });
 });
 

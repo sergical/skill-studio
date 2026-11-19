@@ -20,8 +20,8 @@ import type { Deployment, InstalledSkill } from "./skill-types";
 /**
  * Kind of health issue a `HealthIssue` reports. `update-available` is not an
  * issue - see `skill-updates.ts`'s `skillsWithUpdates` - and neither is
- * `never-invoked` (noise, not a problem) or `missing-from-agents` (kept as
- * `coverageGaps` for the coverage column, not surfaced as something broken).
+ * `never-invoked` (noise, not a problem) or `missing-from-agents` (a
+ * coverage gap, not something broken).
  */
 export type HealthIssueKind =
   | "duplicate"
@@ -109,7 +109,7 @@ export const HEALTH_ISSUE_KIND_LABEL = {
   "lock-only": { singular: "skill only in the lock file", plural: "skills only in the lock file" },
 } as const satisfies Record<HealthIssueKind, { singular: string; plural: string }>;
 
-/** The first-class agents `coverageGaps` expects full coverage across; also the harness chip list in `SkillListFilterBar`. */
+/** The first-class agents: the harness chip list in `SkillListFilterBar`. */
 export const FIRST_CLASS_AGENTS = [
   "Claude Code",
   "Codex",
@@ -328,56 +328,6 @@ export function findLinkedRootIssues(skills: InstalledSkill[]): HealthIssue[] {
   return [...seen.values()];
 }
 
-/**
- * One skill's coverage gap at one scope: deployed to some, but not all, of
- * the four first-class agents. Not a `HealthIssue` - a gap here isn't
- * something broken, just a column the coverage view highlights.
- */
-export interface CoverageGap {
-  skill: InstalledSkill;
-  /** "Global", or the project path, whichever scope the gap is at. */
-  scopeLabel: string;
-  missing: string[];
-}
-
-/**
- * Skills deployed to some, but not all, of the four first-class agents at
- * the same scope (global, or a given project). See `CoverageGap`.
- */
-export function coverageGaps(skills: InstalledSkill[]): CoverageGap[] {
-  const gaps: CoverageGap[] = [];
-
-  for (const skill of skills) {
-    if (skill.parked) continue;
-    const groups = new Map<string, Set<string>>();
-    for (const deployment of skill.deployments) {
-      // A harness the user explicitly disabled isn't "missing" coverage.
-      if (deployment.disabled) continue;
-      const covered = agentsCoveredByDeployment(deployment.agent);
-      if (covered.length === 0) {
-        continue;
-      }
-      const groupKey =
-        deployment.scope === "project" ? `project:${deployment.project_path}` : "global";
-      const agents = groups.get(groupKey) ?? new Set<string>();
-      for (const agent of covered) agents.add(agent);
-      groups.set(groupKey, agents);
-    }
-
-    for (const [groupKey, agents] of groups) {
-      if (agents.size > 0 && agents.size < FIRST_CLASS_AGENTS.length) {
-        gaps.push({
-          skill,
-          scopeLabel: groupKey === "global" ? "Global" : groupKey.slice("project:".length),
-          missing: FIRST_CLASS_AGENTS.filter((a) => !agents.has(a)),
-        });
-      }
-    }
-  }
-
-  return gaps;
-}
-
 /** A live copy and a parked copy of one skill at the same origin. */
 export interface LeftBehindPair {
   live: Deployment;
@@ -438,9 +388,8 @@ export function findParkedButReinstalled(skills: InstalledSkill[]): HealthIssue[
 /**
  * Every dashboard-worthy issue across `skills`: parked-but-reinstalled,
  * duplicate, broken-symlink, spec-violation, spec-warning, and lock-only. Excludes
- * update-available (see `skill-updates.ts`) and coverage gaps (see
- * `coverageGaps` above) - neither is a problem, just something to act on or
- * a coverage-view column. Sorted by `HEALTH_ISSUE_KIND_ORDER` then skill
+ * update-available (see `skill-updates.ts`) and coverage gaps - neither is
+ * a problem, just something to act on. Sorted by `HEALTH_ISSUE_KIND_ORDER` then skill
  * name, so both the dashboard and the Skills view show a stable order.
  */
 export function collectDashboardIssues(skills: InstalledSkill[]): HealthIssue[] {
