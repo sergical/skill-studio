@@ -1229,7 +1229,7 @@
         },
         "project_path": {
           "default": null,
-          "description": "Take each skill's copy from this tracked project. Absent: the home.",
+          "description": "Take each skill's copy from this project, as the other pack ops\ntake `project_path`. Absent: the home.",
           "type": [
             "string",
             "null"
