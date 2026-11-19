@@ -1,7 +1,8 @@
 // ============================================================================
 // Skills Module - skill_pack
-// The Packs page's commands: thin adapters over `skill_studio_core::ops`'s
-// `pack_list`, `pack_add`, `pack_update` and `pack_remove`, the same calls the
+// The Packs page's commands, and the selection bar's Pack: thin adapters over
+// `skill_studio_core::ops`'s `pack_list`, `pack_add`, `pack_update`,
+// `pack_remove` and `pack_export`, the same calls the
 // CLI's `pack` subcommands and the MCP `pack_*` tools make. The core plans
 // each action (a dry run returns only the plan) and hands each step to the
 // owner tool, so the app writes no lock or manifest file itself.
@@ -136,6 +137,22 @@ pub async fn pack_remove(
     pack_action(app, trace, "pack_remove", move || {
         run_pack_op(Operation::PackRemove, false, |rt, ctx, _| {
             ops::pack_remove(rt, ctx, &request)
+        })
+    })
+    .await
+}
+
+/// Plans (`dry_run`) or writes a new pack folder from installed skills. It
+/// changes no managed file, so no snapshot is rebuilt.
+#[tauri::command]
+pub async fn pack_export(
+    trace: crate::timing_log::IpcTrace,
+    request: skill_studio_core::pack_export::PackExportRequest,
+    app: tauri::AppHandle,
+) -> Result<skill_studio_core::pack_export::PackExportReport, String> {
+    crate::timing_log::time_command_blocking(&app, trace, "pack_export", move || {
+        run_pack_op(Operation::PackExport, false, |rt, ctx, _| {
+            ops::pack_export(rt, ctx, &request)
         })
     })
     .await

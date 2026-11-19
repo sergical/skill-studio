@@ -69,6 +69,8 @@ struct WireTypes {
     pack_update_request: skill_studio_core::pack_action::PackUpdateRequest,
     pack_remove_request: skill_studio_core::pack_action::PackRemoveRequest,
     pack_action_report: skill_studio_core::pack_action::PackActionReport,
+    pack_export_request: skill_studio_core::pack_export::PackExportRequest,
+    pack_export_report: skill_studio_core::pack_export::PackExportReport,
     skill_invocation: SkillInvocation,
     skill_trigger: SkillTrigger,
     lifecycle_target: LifecycleTarget,

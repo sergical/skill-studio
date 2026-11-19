@@ -547,6 +547,37 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
           if (!request.dry_run) await publish(next);
           return report;
         }
+        case "pack_export": {
+          // Mirrors the core's report shape and texts (pack_export.rs); it
+          // writes nothing, as the harness has no disk.
+          const request = z
+            .object({
+              dir: z.string(),
+              skills: z.array(z.string()),
+              source: z.string().nullish(),
+              dry_run: z.boolean(),
+            })
+            .parse(payload.request);
+          const unknown = request.skills.find(
+            (name) => !currentSnapshot.skills.some((skill) => skill.name === name),
+          );
+          if (unknown) throw new Error(`no installed skill is named ${unknown}`);
+          const source = request.source ?? "'<owner>/<repo>'";
+          const verb = request.dry_run ? "Would write" : "Wrote";
+          const count = request.skills.length;
+          return {
+            dry_run: request.dry_run,
+            dir: request.dir,
+            skills: request.skills.map((name) => ({
+              skill: name,
+              from: `${HARNESS_HOME}/.agents/skills/${name}`,
+              files: 1,
+            })),
+            files: [...request.skills.map((name) => `skills/${name}/SKILL.md`), "README.md"],
+            install_command: `npx skills add ${source}${request.skills.map((name) => ` --skill ${name}`).join("")}`,
+            summary: `${verb} ${count} skill${count === 1 ? "" : "s"} and a README to ${request.dir}.`,
+          };
+        }
         case "pack_update":
         case "pack_remove": {
           const request = z
@@ -931,6 +962,8 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
           return HARNESS_HOME;
         case "plugin:dialog|ask":
           return true;
+        case "plugin:dialog|save":
+          return `${HARNESS_HOME}/my-skills`;
         case "plugin:dialog|open": {
           const parsedFilters = z
             .object({ filters: z.array(z.object({ extensions: z.array(z.string()) })).optional() })
