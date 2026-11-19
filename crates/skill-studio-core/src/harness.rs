@@ -1444,6 +1444,29 @@ pub fn reserved_skills_root_entry(harness: Option<&AgentId>) -> Option<&'static 
     }
 }
 
+/// Prefix of the folder Claude Code clones a plugin marketplace into before
+/// it moves the plugin into place, as in `temp_git_1795061472669_gad7gd`. A
+/// failed install can leave one behind.
+const CLAUDE_CLONE_STAGING_PREFIX: &str = "temp_git_";
+
+/// Whether `name`, one entry of a plugin cache, is the harness's own
+/// bookkeeping and not part of a plugin: Claude Code's clone staging folder
+/// (`temp_git_*`), or any dot-named entry, such as Claude Code's
+/// `.in_use/<pid>` session locks or Codex's
+/// `.codex-remote-plugin-install.json`, except the manifest folders in
+/// [`crate::ops::PLUGIN_MANIFEST_CANDIDATES`]. The plugin walk skips these entries, and
+/// the desktop watcher does not rescan when one changes, so both read the
+/// cache the same way.
+pub fn is_plugin_cache_bookkeeping(name: &str) -> bool {
+    if name.starts_with(CLAUDE_CLONE_STAGING_PREFIX) {
+        return true;
+    }
+    name.starts_with('.')
+        && !crate::ops::PLUGIN_MANIFEST_CANDIDATES
+            .iter()
+            .any(|candidate| candidate.split('/').next() == Some(name))
+}
+
 /// Claude Code's config directory: `CLAUDE_CONFIG_DIR` when the caller
 /// supplies the env var's value, else `<home>/.claude`. Reading the env var
 /// itself is a host concern (core has no `std::env` access); the caller
@@ -1615,6 +1638,30 @@ mod tests {
     use crate::error::CoreError;
     use crate::ports::{CancelToken, ProcessOutput};
     use crate::testing::{FakeToolLookup, FixtureBuilder};
+
+    #[test]
+    fn plugin_cache_bookkeeping_is_dot_named_entries_except_manifest_folders() {
+        for name in [
+            ".in_use",
+            ".tmpNR1Kws",
+            ".codex-remote-plugin-install.json",
+            "temp_git_1795061472669_gad7gd",
+        ] {
+            assert!(is_plugin_cache_bookkeeping(name), "{name} is bookkeeping");
+        }
+        for name in [
+            ".claude-plugin",
+            ".codex-plugin",
+            ".cursor-plugin",
+            "skills",
+            "v1",
+        ] {
+            assert!(
+                !is_plugin_cache_bookkeeping(name),
+                "{name} is part of a plugin"
+            );
+        }
+    }
 
     #[test]
     fn a_symlink_into_node_modules_is_detected_as_an_npm_install_or_names_the_method_found() {

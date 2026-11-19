@@ -81,7 +81,7 @@ const MAX_FOLDER_FILES: usize = 2_000;
 const MAX_FOLDER_BYTES: u64 = 64 * 1024 * 1024;
 /// Manifest filenames a plugin cache walk looks for, in priority order,
 /// per the agent-plugins.org manifest convention.
-const PLUGIN_MANIFEST_CANDIDATES: &[&str] = &[
+pub(crate) const PLUGIN_MANIFEST_CANDIDATES: &[&str] = &[
     ".claude-plugin/plugin.json",
     ".codex-plugin/plugin.json",
     ".cursor-plugin/plugin.json",
@@ -2237,7 +2237,9 @@ fn walk_for_plugin_roots(
         return;
     };
     for entry in entries {
-        if !matches!(entry.kind, FileKind::Dir) {
+        if !matches!(entry.kind, FileKind::Dir)
+            || crate::harness::is_plugin_cache_bookkeeping(&entry.name)
+        {
             continue;
         }
         let path = dir.join(&entry.name);
@@ -8186,6 +8188,38 @@ mod tests {
                 builder = builder.file("/h/.claude/settings.json", bytes);
             }
             builder
+        }
+
+        /// A plugin cache's bookkeeping folders hold no plugin: a dot-named folder, or the
+        /// `temp_git_*` folder Claude Code clones a marketplace into before it moves the
+        /// plugin into place. A manifest inside one is not a plugin yet, so the walk lists no
+        /// skill from it.
+        #[test]
+        fn plugin_walk_skips_bookkeeping_cache_folders_or_lists_a_staged_plugin() {
+            let fs = claude_plugin_fixture(None)
+                .dir("/h/.claude/plugins/cache/temp_git_1_ab/skills/cloned-skill")
+                .file(
+                    "/h/.claude/plugins/cache/temp_git_1_ab/.claude-plugin/plugin.json",
+                    b"{\"name\": \"cloned\"}",
+                )
+                .file(
+                    "/h/.claude/plugins/cache/temp_git_1_ab/skills/cloned-skill/SKILL.md",
+                    b"---\nname: cloned-skill\ndescription: Cloned.\n---\n",
+                )
+                .dir("/h/.claude/plugins/cache/mp/.tmpStaged/v1/skills/staged-skill")
+                .file(
+                    "/h/.claude/plugins/cache/mp/.tmpStaged/v1/.claude-plugin/plugin.json",
+                    b"{\"name\": \"staged\"}",
+                )
+                .file(
+                    "/h/.claude/plugins/cache/mp/.tmpStaged/v1/skills/staged-skill/SKILL.md",
+                    b"---\nname: staged-skill\ndescription: Staged.\n---\n",
+                )
+                .build_fs();
+            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
+            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
+            let names: Vec<String> = inv.skills.iter().map(|s| s.name.to_string()).collect();
+            assert_eq!(names, ["plugin-skill"]);
         }
 
         fn plugin_enabled_in(inv: &Inventory) -> Option<bool> {

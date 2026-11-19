@@ -2803,10 +2803,31 @@ fn has_skill_dir_component(path: &Path) -> bool {
         .any(|c| SKILL_DIR_NAMES.iter().any(|name| c.as_os_str() == *name))
 }
 
-/// Whether `path` is, or is under, a native plugin cache directory.
-fn is_under_plugin_cache(path: &Path, home: &Path) -> bool {
-    path.starts_with(skill_studio_host::agent_path(home, ".claude/plugins/cache"))
-        || path.starts_with(home.join(".codex/plugins/cache"))
+/// The native plugin cache directory `path` is in, if any.
+fn plugin_cache_containing(path: &Path, home: &Path) -> Option<PathBuf> {
+    [
+        skill_studio_host::agent_path(home, ".claude/plugins/cache"),
+        home.join(".codex/plugins/cache"),
+    ]
+    .into_iter()
+    .find(|cache| path.starts_with(cache))
+}
+
+/// Whether `path` is the harness's bookkeeping in a plugin cache, such as
+/// Claude Code's `.in_use/<pid>` lock, written each time a Claude Code process
+/// starts or stops, or its `temp_git_*` marketplace clone. The plugin walk skips these entries
+/// (`skill_studio_core::harness::is_plugin_cache_bookkeeping`), so they cannot
+/// change the scan. The rule stops at a plugin's `skills/` folder: the scan
+/// reads that folder in full.
+fn is_plugin_cache_bookkeeping_path(path: &Path, cache: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(cache) else {
+        return false;
+    };
+    relative
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .take_while(|name| !SKILL_DIR_NAMES.contains(&name.as_ref()))
+        .any(|name| skill_studio_core::harness::is_plugin_cache_bookkeeping(&name))
 }
 
 /// Classify a single filesystem-watch event. A path that is itself one of
@@ -2862,8 +2883,16 @@ pub fn classify_watch_event(
         return WatchEventKind::Ignored;
     }
 
+    let plugin_cache = plugin_cache_containing(path, home);
+    if plugin_cache
+        .as_deref()
+        .is_some_and(|cache| is_plugin_cache_bookkeeping_path(path, cache))
+    {
+        return WatchEventKind::Ignored;
+    }
+
     let is_skills_change = has_skill_dir_component(path)
-        || is_under_plugin_cache(path, home)
+        || plugin_cache.is_some()
         || path
             .file_name()
             .is_some_and(|name| is_config_file_name(name, home))
@@ -3474,6 +3503,50 @@ mod tests {
             classify_watch_event(&path, &home, &claude_projects, &opencode_databases),
             WatchEventKind::Skills
         );
+    }
+
+    /// Claude Code writes `<plugin>/<version>/.in_use/<pid>` each time one of its processes
+    /// starts or stops. With many agent sessions, a rescan of every skill on each one kept the
+    /// app busy most of the time (measured on 2026-11-18).
+    #[test]
+    fn classify_watch_event_plugin_cache_bookkeeping_is_ignored_or_rescans_on_each_session() {
+        let home = PathBuf::from("/home/tester");
+        let claude_projects = home.join(".claude/projects");
+        let opencode_databases = skill_studio_host::opencode_databases(&home);
+        for path in [
+            ".claude/plugins/cache/mp/plug/0.1.2/.in_use/29660",
+            ".claude/plugins/cache/mp/plug/0.1.2/.in_use/29660.tmp.f1bea69e",
+            ".claude/plugins/cache/mp/plug/0.1.2/.in_use",
+            ".codex/plugins/cache/openai-curated-remote/linear/.tmpR65mW4/plugin.json",
+            ".claude/plugins/cache/temp_git_1795061472669_gad7gd/skills/a/SKILL.md",
+        ] {
+            assert_eq!(
+                classify_watch_event(
+                    &home.join(path),
+                    &home,
+                    &claude_projects,
+                    &opencode_databases
+                ),
+                WatchEventKind::Ignored,
+                "{path} is harness bookkeeping"
+            );
+        }
+        for path in [
+            ".claude/plugins/cache/mp/plug/0.1.3",
+            ".claude/plugins/cache/mp/plug/0.1.2/.claude-plugin/plugin.json",
+            ".codex/plugins/cache/mp/plug/1.0.0/skills/.hidden-dir/SKILL.md",
+        ] {
+            assert_eq!(
+                classify_watch_event(
+                    &home.join(path),
+                    &home,
+                    &claude_projects,
+                    &opencode_databases
+                ),
+                WatchEventKind::Skills,
+                "{path} can change the plugin scan"
+            );
+        }
     }
 
     #[test]
