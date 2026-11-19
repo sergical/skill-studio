@@ -216,8 +216,6 @@ interface SidebarFooterProps {
   setTheme: (theme: Theme) => void;
 }
 
-const syncButtonClass = "shrink-0 gap-1.5 rounded-sm px-1.5 text-text-tertiary";
-
 interface SyncButtonProps {
   scannedAt: string | undefined;
   spinning: boolean;
@@ -228,63 +226,78 @@ interface SyncButtonProps {
 /**
  * Manual rescan. Background refreshes never show here, so the app stays still while agents write
  * transcripts. Only a failed refresh does: the icon turns into a warning that opens the error.
+ * One button serves both states, so focus stays on it when a retry starts or the error clears.
  */
 function SyncButton({ scannedAt, spinning, refreshError, onRefresh }: SyncButtonProps) {
+  const showError = refreshError !== null && !spinning;
   const [isErrorOpen, setIsErrorOpen] = useState(false);
-  if (refreshError && !spinning) {
-    return (
-      <Popover open={isErrorOpen} onOpenChange={setIsErrorOpen}>
+  // An open error closes with the error, so the next failure never opens it without a click.
+  if (isErrorOpen && !showError) setIsErrorOpen(false);
+
+  return (
+    <Popover
+      open={isErrorOpen}
+      onOpenChange={(open) => {
+        if (!showError) {
+          if (open) onRefresh();
+          return;
+        }
+        setIsErrorOpen(open);
+      }}
+    >
+      <TooltipControl content={showError ? "Show why sync failed" : rescanTooltip(scannedAt)}>
         <PopoverTrigger
           render={
             <Button
               variant="ghost"
               size="xs"
-              className={syncButtonClass}
-              aria-label="Sync failed, show error"
+              className="shrink-0 gap-1.5 rounded-sm px-1.5 text-text-tertiary"
+              aria-disabled={spinning}
+              // Without an error the click only starts a sync, so it opens no dialog.
+              aria-haspopup={showError ? "dialog" : undefined}
+              aria-expanded={showError ? isErrorOpen : undefined}
+              aria-label={
+                showError
+                  ? "Sync failed, show error"
+                  : spinning
+                    ? "Syncing installed skills"
+                    : "Sync installed skills"
+              }
             />
           }
         >
-          <AlertTriangle size={13} className="text-warning" />
+          {showError ? (
+            <AlertTriangle size={13} className="text-warning" />
+          ) : (
+            <RefreshCw size={13} className={spinning ? "animate-spin" : ""} />
+          )}
           <span className="whitespace-nowrap">Sync</span>
         </PopoverTrigger>
-        <PopoverContent
-          side="top"
-          align="start"
-          aria-label="Sync error"
-          className="w-72 gap-2 bg-bg-elevated text-small text-text-primary ring-border"
-        >
-          <p className="m-0 font-medium">Couldn't refresh your skills</p>
-          <p className="m-0 select-text break-words text-text-secondary">{refreshError}</p>
-          <p className="m-0 text-text-tertiary">The lists show the last results that loaded.</p>
-          <Button
-            size="sm"
-            variant="outline"
-            className="self-start"
-            onClick={() => {
-              setIsErrorOpen(false);
-              onRefresh();
-            }}
-          >
-            Try again
-          </Button>
-        </PopoverContent>
-      </Popover>
-    );
-  }
-  return (
-    <TooltipControl content={rescanTooltip(scannedAt)}>
-      <Button
-        variant="ghost"
-        size="xs"
-        className={syncButtonClass}
-        onClick={onRefresh}
-        aria-disabled={spinning}
-        aria-label={spinning ? "Syncing installed skills" : "Sync installed skills"}
+      </TooltipControl>
+      <PopoverContent
+        side="top"
+        align="start"
+        aria-label="Sync error"
+        className="w-72 gap-2 bg-bg-elevated text-small text-text-primary ring-border"
       >
-        <RefreshCw size={13} className={spinning ? "animate-spin" : ""} />
-        <span className="whitespace-nowrap">Sync</span>
-      </Button>
-    </TooltipControl>
+        <p className="m-0 font-medium">Couldn't refresh your skills</p>
+        <p className="m-0 max-h-40 select-text overflow-y-auto break-words text-text-secondary">
+          {refreshError}
+        </p>
+        <p className="m-0 text-text-tertiary">The lists show the last results that loaded.</p>
+        <Button
+          size="sm"
+          variant="outline"
+          className="self-start"
+          onClick={() => {
+            setIsErrorOpen(false);
+            onRefresh();
+          }}
+        >
+          Try again
+        </Button>
+      </PopoverContent>
+    </Popover>
   );
 }
 

@@ -77,3 +77,60 @@ test("a failed background refresh turns Sync into a warning that shows the error
   );
   await expect(page.getByRole("button", { name: "Sync installed skills" })).toBeVisible();
 });
+
+test("a failure after a cleared one shows the warning but does not open the error by itself", async ({
+  page,
+}) => {
+  await page.evaluate(
+    (next) => window.__harness?.publishBackgroundStatus(next),
+    status(2, false, "first failure"),
+  );
+  await page.getByRole("button", { name: "Sync failed, show error" }).click();
+  await expect(page.getByRole("dialog", { name: "Sync error" })).toBeVisible();
+
+  // A background retry succeeds while the error is open, then a later one fails.
+  await page.evaluate(
+    (next) => window.__harness?.publishBackgroundStatus(next),
+    status(3, false, null),
+  );
+  await expect(page.getByRole("dialog", { name: "Sync error" })).toBeHidden();
+  await page.evaluate(
+    (next) => window.__harness?.publishBackgroundStatus(next),
+    status(4, false, "second failure"),
+  );
+
+  await expect(page.getByRole("button", { name: "Sync failed, show error" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Sync error" })).toBeHidden();
+});
+
+test("Try again from the keyboard leaves focus on the Sync button", async ({ page }) => {
+  // Every harness answer takes 800 ms, so the retry shows its spinning state as it does on disk.
+  await page.goto("/?latency=800");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
+  await page.evaluate(
+    (next) => window.__harness?.publishBackgroundStatus(next),
+    status(2, false, "index locked"),
+  );
+  const sync = page.getByRole("button", { name: "Sync failed, show error" });
+  await sync.focus();
+  await page.keyboard.press("Enter");
+  const popover = page.getByRole("dialog", { name: "Sync error" });
+  await popover.getByRole("button", { name: "Try again" }).focus();
+  await page.keyboard.press("Enter");
+
+  await expect(popover).toBeHidden();
+  await expect(page.getByRole("button", { name: "Syncing installed skills" })).toBeFocused();
+});
+
+test("Sync without an error starts a rescan and opens nothing", async ({ page }) => {
+  const revisionBefore = await page.evaluate(() => window.__harness!.snapshot().revision);
+  const sync = page.getByRole("button", { name: "Sync installed skills" });
+  await expect(sync).not.toHaveAttribute("aria-haspopup");
+  await sync.click();
+
+  await expect
+    .poll(() => page.evaluate(() => window.__harness!.snapshot().revision))
+    .toBeGreaterThan(revisionBefore);
+  await expect(page.getByRole("dialog", { name: "Sync error" })).toHaveCount(0);
+});
