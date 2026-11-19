@@ -22,13 +22,8 @@ import { SkillPage } from "./components/SkillDetail/SkillPage";
 import { useAppShortcuts } from "./hooks/useAppShortcuts";
 import { useNativeShell } from "./hooks/useNativeShell";
 import { useSkillSnapshot } from "./hooks/useSkillSnapshot";
-import {
-  dataFolderStatus,
-  getTrackedProjects,
-  importTrackedProjects,
-  invokeErrorMessage,
-} from "./lib/skill-api";
-import { clearLegacyProjectPaths, readLegacyProjectPaths } from "./lib/legacy-project-paths";
+import { dataFolderStatus, invokeErrorMessage } from "./lib/skill-api";
+import { loadStartupTrackedProjects } from "./lib/legacy-project-paths";
 import type { ActiveView } from "./store/appStore";
 import { resolveSkillPageDeployment } from "./components/SkillDetail/skill-page-deployment";
 import { useAppStore } from "./store/appStore";
@@ -87,24 +82,16 @@ function App() {
 
   const onSelectSkill = (name: string, deploymentPath?: string) => openSkill(name, deploymentPath);
 
-  // Load the tracked project list once on startup. A machine with leftover
-  // localStorage entries imports them into `~/.agents/skill-studio.json`
-  // first (home-directory entries are the backend's job to drop, same as any
-  // other add) and clears localStorage only once that import succeeds; every
-  // other machine reads the saved list straight from the backend.
+  // Load the tracked project list once on startup, importing any leftover
+  // localStorage list first (see `loadStartupTrackedProjects`).
   const didLoadStartupProjects = useRef(false);
   useEffect(() => {
     if (didLoadStartupProjects.current) return;
     didLoadStartupProjects.current = true;
 
     (async () => {
-      const legacy = readLegacyProjectPaths();
       try {
-        const projects = legacy
-          ? await importTrackedProjects(legacy.added, legacy.excluded)
-          : await getTrackedProjects();
-        setTrackedProjects(projects);
-        if (legacy) clearLegacyProjectPaths();
+        setTrackedProjects(await loadStartupTrackedProjects());
       } catch (err) {
         addToast({
           type: "error",
