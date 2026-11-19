@@ -69,11 +69,26 @@ paths = ["**/release.yml", "packages/npm/**", "**/tauri.release.conf.json", "scr
 id = "dependencies"
 tier = "stop"
 paths = [
-  "pnpm-workspace.yaml", "**/pnpm-workspace.yaml", ".npmrc", "**/.npmrc",
-  ".pnpmfile.*", "**/.pnpmfile.*", "*.patch", "**/*.patch",
-  "package.json5", "**/package.json5", "package.yaml", "**/package.yaml",
-  "package-lock.json", "**/package-lock.json", "npm-shrinkwrap.json", "**/npm-shrinkwrap.json",
-  "yarn.lock", "**/yarn.lock", "bun.lock*", "**/bun.lock*",
+  "pnpm-workspace.yaml",
+  "**/pnpm-workspace.yaml",
+  ".npmrc",
+  "**/.npmrc",
+  ".pnpmfile.*",
+  "**/.pnpmfile.*",
+  "*.patch",
+  "**/*.patch",
+  "package.json5",
+  "**/package.json5",
+  "package.yaml",
+  "**/package.yaml",
+  "package-lock.json",
+  "**/package-lock.json",
+  "npm-shrinkwrap.json",
+  "**/npm-shrinkwrap.json",
+  "yarn.lock",
+  "**/yarn.lock",
+  "bun.lock*",
+  "**/bun.lock*",
 ]
 
 [[rules]]
