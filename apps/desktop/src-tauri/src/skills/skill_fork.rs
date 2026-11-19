@@ -3681,3 +3681,7 @@ mod tests {
         assert_eq!(err, "find-bugs was not found in the fetched tarball");
     }
 }
+
+#[cfg(test)]
+#[path = "skill_fork_traversal_tests.rs"]
+mod traversal_tests;
