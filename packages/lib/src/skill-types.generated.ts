@@ -1799,6 +1799,80 @@ export interface PackStep {
       };
 }
 /**
+ * Input for `pack_export`.
+ */
+export interface PackExportRequest {
+  /**
+   * Absolute folder to create the pack in. It must not exist yet, or be
+   * an empty folder.
+   */
+  dir: string;
+  /**
+   * Installed skills to put in the pack.
+   */
+  skills: string[];
+  /**
+   * Where the pack will live, as `owner/repo` or a git URL, for the
+   * README's install lines. Absent: the lines say `<owner>/<repo>`.
+   */
+  source: string | null;
+  /**
+   * Take each skill's copy from this project, as the other pack ops
+   * take `project_path`. Absent: the home.
+   */
+  project_path: string | null;
+  /**
+   * Return the plan and write nothing.
+   */
+  dry_run: boolean;
+}
+/**
+ * Result of `pack_export`.
+ */
+export interface PackExportReport {
+  /**
+   * The call wrote nothing.
+   */
+  dry_run: boolean;
+  /**
+   * The pack folder.
+   */
+  dir: string;
+  /**
+   * One entry per skill, in request order.
+   */
+  skills: PackExportSkill[];
+  /**
+   * Every file written, or to write on a dry run, relative to `dir`.
+   */
+  files: string[];
+  /**
+   * The command that installs every skill of the pack once it is pushed.
+   */
+  install_command: string;
+  /**
+   * One line for a person or agent.
+   */
+  summary: string;
+}
+/**
+ * One skill in the pack.
+ */
+export interface PackExportSkill {
+  /**
+   * Skill name, and its folder under `skills/`.
+   */
+  skill: string;
+  /**
+   * The installed copy its files come from.
+   */
+  from: string;
+  /**
+   * How many files it holds.
+   */
+  files: number;
+}
+/**
  * One recorded skill use from a harness's own session history.
  */
 export interface SkillInvocation {

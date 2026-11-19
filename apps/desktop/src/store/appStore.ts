@@ -18,6 +18,8 @@ import type {
   ListingReport,
   ListingRequest,
   PackActionReport,
+  PackExportReport,
+  PackExportRequest,
   PackReport,
 } from "@skill-studio/lib";
 import { addToast } from "../lib/toast";
@@ -26,6 +28,7 @@ import {
   getAddMethodDefaults,
   invokeErrorMessage,
   packAdd,
+  packExport,
   packList,
   skillListing,
   packRemove,
@@ -251,6 +254,8 @@ interface AppState {
   listPacks: (remote: boolean) => Promise<PackReport>;
   /** Plans (`dryRun`) or runs one pack action through the core. Rejects with the command's message. */
   runPackAction: (intent: PackIntent, dryRun: boolean) => Promise<PackActionReport>;
+  /** Plans (`dryRun`) or writes a new pack folder from installed skills. Rejects with the command's message. */
+  exportPack: (request: PackExportRequest) => Promise<PackExportReport>;
 
   // === Model listing ===
   /** Per-skill listing state for each agent, from the core's `listing`. Reads only. */
@@ -540,6 +545,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   readListing: (request) => withCommandMessage(skillListing(request)),
   runPackAction: (intent, dryRun) =>
     withCommandMessage(packActionCall(intent, dryRun, get().harnessDetection.choice?.kept ?? [])),
+  exportPack: (request) => withCommandMessage(packExport(request)),
 
   addSkillSheet: { open: false },
   openAddSkillSheet: (prefill) => set({ addSkillSheet: { open: true, prefill } }),

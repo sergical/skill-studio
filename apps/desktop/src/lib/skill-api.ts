@@ -31,6 +31,8 @@ import type {
   LocalEditsDto,
   PackActionReport,
   PackAddRequest,
+  PackExportReport,
+  PackExportRequest,
   PackRemoveRequest,
   PackReport,
   PackUpdateRequest,
@@ -638,6 +640,15 @@ export async function packUpdate(request: PackUpdateRequest): Promise<PackAction
  */
 export async function packRemove(request: PackRemoveRequest): Promise<PackActionReport> {
   return callCommand("pack_remove", { request });
+}
+
+/**
+ * Plan (`dry_run`) or write a new pack folder from installed skills:
+ * `skills/<name>/` for each and a README with the install lines. The folder
+ * must be new or empty; nothing else is written.
+ */
+export async function packExport(request: PackExportRequest): Promise<PackExportReport> {
+  return callCommand("pack_export", { request });
 }
 
 /**

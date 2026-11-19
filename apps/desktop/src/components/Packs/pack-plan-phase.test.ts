@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PackActionReport } from "@skill-studio/lib";
-import { advancePackPlan } from "./pack-plan-phase";
+import { advancePackPlan, advancePlanPhase } from "./pack-plan-phase";
 import type { PackPlanEvent, PackPlanState } from "./pack-plan-phase";
 
 function report(states: PackActionReport["steps"][number]["state"][]): PackActionReport {
@@ -68,4 +68,27 @@ describe("advancePackPlan", () => {
       });
     }
   }
+});
+
+describe("advancePlanPhase with a pack export's rule", () => {
+  // An export plan runs only when it has files to write.
+  const canRun = (plan: { files: string[] }) => plan.files.length > 0;
+  const withFiles = { files: ["skills/a/SKILL.md", "README.md"] };
+  const empty = { files: [] };
+
+  it.each([
+    { name: "a plan with files confirms", plan: withFiles, phase: "running" },
+    { name: "a plan with no file stays planned", plan: empty, phase: null },
+  ])("$name", ({ plan, phase }) => {
+    const move = advancePlanPhase({ phase: "planned", plan }, { type: "confirm" }, canRun);
+    expect(move.ok ? move.state.phase : null).toBe(phase);
+  });
+
+  it("finishes with the written result or fails with the message", () => {
+    const running = { phase: "running" as const, plan: withFiles };
+    const done = advancePlanPhase(running, { type: "ran", result: withFiles }, canRun);
+    expect(done.ok && done.state.phase).toBe("done");
+    const failed = advancePlanPhase(running, { type: "error", message: "not empty" }, canRun);
+    expect(failed.ok && failed.state).toEqual({ phase: "failed", message: "not empty" });
+  });
 });

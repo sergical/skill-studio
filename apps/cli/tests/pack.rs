@@ -144,3 +144,50 @@ fn pack_dry_runs_give_the_same_plan_on_cli_and_mcp_and_change_nothing_or_the_sur
     );
     assert!(!home.path().join(".agents/skill-studio.json").exists());
 }
+
+/// Flow: export `tracked` as a pack, as a dry run, on the CLI and MCP; then
+/// for real on the CLI.
+/// Expectation: both surfaces plan the same files; the dry run creates no
+/// folder; the real run writes the skill and a README with the install line.
+/// A failure means the surfaces drift, or a dry run writes.
+#[test]
+fn pack_export_gives_the_same_plan_on_cli_and_mcp_and_writes_only_for_real_or_the_surfaces_drift() {
+    let home = home();
+    let out = home.path().join("my-pack");
+    let dir = out.to_str().unwrap();
+    let cli = headless::cli(
+        home.path(),
+        &[
+            "pack",
+            "export",
+            dir,
+            "--skill",
+            "tracked",
+            "--source",
+            "me/pack",
+            "--dry-run",
+        ],
+    );
+    let mcp = headless::mcp(
+        home.path(),
+        "pack_export",
+        &json!({ "dir": dir, "skills": ["tracked"], "source": "me/pack", "dry_run": true }),
+    );
+    assert_eq!(cli["status"], "ok", "{cli}");
+    assert_eq!(cli["data"], mcp["result"]["structuredContent"]["data"]);
+    assert!(!out.exists());
+
+    let cli = headless::cli(
+        home.path(),
+        &[
+            "pack", "export", dir, "--skill", "tracked", "--source", "me/pack",
+        ],
+    );
+    assert_eq!(cli["status"], "ok", "{cli}");
+    assert!(out.join("skills/tracked/SKILL.md").exists());
+    let readme = std::fs::read_to_string(out.join("README.md")).unwrap();
+    assert!(
+        readme.contains("npx skills add me/pack --skill tracked"),
+        "{readme}"
+    );
+}

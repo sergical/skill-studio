@@ -1303,6 +1303,51 @@
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
+        "dir": {
+          "description": "Absolute folder to create the pack in. It must not exist yet, or be\nan empty folder.",
+          "type": "string"
+        },
+        "dry_run": {
+          "default": false,
+          "description": "Return the plan and write nothing.",
+          "type": "boolean"
+        },
+        "project_path": {
+          "default": null,
+          "description": "Take each skill's copy from this project, as the other pack ops\ntake `project_path`. Absent: the home.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "skills": {
+          "description": "Installed skills to put in the pack.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source": {
+          "default": null,
+          "description": "Where the pack will live, as `owner/repo` or a git URL, for the\nREADME's install lines. Absent: the lines say `<owner>/<repo>`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "dir",
+        "skills"
+      ],
+      "type": "object"
+    },
+    "name": "pack_export"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
         "count_by": {
           "default": null,
           "description": "Count the rows of the whole main list by this field. A list field\ncounts each item.",

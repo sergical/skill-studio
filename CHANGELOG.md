@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - Desktop: a Model listing page. For each agent and scope it shows which skills the model sees with a description, with a shortened one, with a name only, or not at all, and which skills are hidden. Enter another budget to see which skills gain or lose a description. The page gives the `skillListingBudgetFraction` or `skills.max_context_tokens` text to paste and the file to paste it into; when chezmoi manages that file, it names the chezmoi source. `skill-studio listing` and the MCP `listing` tool return the same data.
-
+- `skill-studio pack export <dir> --skill <name>...` (MCP `pack_export`) makes a new pack from installed skills: a folder with `skills/<name>/` for each and a README with the `npx skills add` install lines. Push it to git and anyone can install it. It writes only into a new or empty folder, never overwrites a file, and runs no git command.
 - `skill-studio pack switch-source <source> <to>` (MCP `pack_switch_source`) moves the skills of a skills.sh pack to another git source, such as your GitHub fork, with `npx skills add`, and keeps the old source as the pack's original. `pack show <to> --remote` then lists the skills that differ from the original and the skills only the original has. Each skill gets its own undo event. Before, you had to remove the pack and add it again from the fork, and the link to the original was lost.
 
 ### Fixed
