@@ -67,7 +67,11 @@ paths = ["**/release.yml", "packages/npm/**", "**/tauri.release.conf.json", "scr
 [[rules]]
 id = "dependencies"
 tier = "stop"
-paths = ["pnpm-workspace.yaml", ".npmrc", "**/.npmrc", ".pnpmfile.cjs", "**/.pnpmfile.cjs", "patches/**"]
+paths = [
+  "pnpm-workspace.yaml", "**/pnpm-workspace.yaml", ".npmrc", "**/.npmrc",
+  ".pnpmfile.*", "**/.pnpmfile.*", "*.patch", "**/*.patch",
+  "package.json5", "**/package.json5", "package.yaml", "**/package.yaml",
+]
 
 [[rules]]
 id = "gate"

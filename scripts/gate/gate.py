@@ -72,6 +72,8 @@ def classify(cfg, base, head='HEAD', raise_to=None, reason=None, author=''):
                 hits.append({'rule': 'version', 'tier': 'stop', 'files': [path]})
         if path.endswith('package.json') and old and new and json.loads(old).get('scripts') != json.loads(new).get('scripts'):
             hits.append({'rule': 'check-scripts', 'tier': 'stop', 'files': [path]})
+        if path.endswith('package.json') and installers(old) != installers(new):
+            hits.append({'rule': 'dependencies', 'tier': 'stop', 'files': [path]})
         if matches(path, cfg.get('dependency_files', [])):
             before, after = dependencies(path, old), dependencies(path, new)
             # A new name, or the same name from another source (an npm alias,
@@ -225,6 +227,15 @@ def needs_you(cfg, hits):
     return list(grouped.values())
 
 
+def installers(text):
+    """Fields that pick or patch the code an install runs: the package manager,
+    a runtime to download, and patched dependencies."""
+    data = json.loads(text) if text else {}
+    pnpm, engines = data.get('pnpm'), data.get('engines')
+    return [data.get('packageManager'), data.get('devEngines'), engines.get('runtime') if isinstance(engines, dict) else None,
+            pnpm.get('patchedDependencies') if isinstance(pnpm, dict) else None]
+
+
 def dependencies(path, text):
     if not text:
         return {}
@@ -241,10 +252,7 @@ def dependencies(path, text):
                 else:
                     result[prefix if key == '.' else f'{prefix}/{key}'] = str(value)
         pnpm = data.get('pnpm')
-        # A patched dependency is outside code we changed by hand.
-        pnpm = pnpm if isinstance(pnpm, dict) else {}
-        for prefix, node in [('overrides', data.get('overrides')), ('resolutions', data.get('resolutions')),
-                             ('pnpm/overrides', pnpm.get('overrides')), ('pnpm/patchedDependencies', pnpm.get('patchedDependencies'))]:
+        for prefix, node in [('overrides', data.get('overrides')), ('resolutions', data.get('resolutions')), ('pnpm/overrides', pnpm.get('overrides') if isinstance(pnpm, dict) else None)]:
             if isinstance(node, dict):
                 flatten(node, prefix)
         return result

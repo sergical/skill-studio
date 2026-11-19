@@ -1,4 +1,5 @@
 import json
+import re
 import os
 from pathlib import Path
 import subprocess
@@ -315,21 +316,47 @@ class GateTests(unittest.TestCase):
                 self.commit()
                 self.assertEqual(self.risk()['tier'], 'stop')
 
-    def test_a_patched_dependency_stops(self):
-        self.write('package.json', json.dumps({'dependencies': {'left-pad': '1.0.0'}}))
+    def test_a_change_to_what_an_install_runs_stops(self):
+        manifest = {'packageManager': 'pnpm@12.18.0', 'devEngines': {'packageManager': {'name': 'pnpm'}},
+                    'engines': {'node': '24'}, 'pnpm': {'patchedDependencies': {'left-pad@1.0.0': 'patches/a.patch'}}}
+        self.write('package.json', json.dumps(manifest))
         self.commit()
         self.base = self.git('rev-parse', 'HEAD')
-        self.write('package.json', json.dumps({'dependencies': {'left-pad': '1.0.0'}, 'pnpm': {'patchedDependencies': {'left-pad@1.0.0': 'patches/left-pad.patch'}}}))
-        self.commit()
-        self.assertEqual(self.risk()['tier'], 'stop')
+        changes = {
+            'package manager': lambda m: m.update(packageManager='pnpm@12.19.0'),
+            'dev engines': lambda m: m['devEngines'].update(runtime={'name': 'node', 'onFail': 'download'}),
+            'runtime': lambda m: m['engines'].update(runtime={'name': 'node'}),
+            'patch added': lambda m: m['pnpm']['patchedDependencies'].update({'is-odd@1.0.0': 'patches/b.patch'}),
+            'patch removed': lambda m: m['pnpm'].pop('patchedDependencies'),
+            'patch replaced': lambda m: m['pnpm']['patchedDependencies'].update({'left-pad@1.0.0': 'patches/b.patch'}),
+        }
+        for name, change in changes.items():
+            with self.subTest(name):
+                self.git('reset', '-q', '--hard', self.base)
+                edited = json.loads(json.dumps(manifest))
+                change(edited)
+                self.write('package.json', json.dumps(edited))
+                self.commit()
+                self.assertEqual(self.risk()['tier'], 'stop')
 
-    def test_the_repo_config_stops_pnpm_hooks_and_patches(self):
+    def test_the_repo_config_stops_pnpm_files_wherever_they_are(self):
         import tomllib
-        cfg = tomllib.loads((Path(__file__).resolve().parents[2] / '.gate/config.toml').read_text())
-        stop = [p for r in cfg['rules'] if r['tier'] == 'stop' for p in r['paths']]
-        for path in ['.pnpmfile.cjs', 'apps/web/.pnpmfile.cjs', 'patches/left-pad.patch', 'pnpm-workspace.yaml', '.npmrc']:
+        root = Path(__file__).resolve().parents[2]
+        self.cfg = tomllib.loads((root / '.gate/config.toml').read_text())
+        for path in ['.pnpmfile.cjs', '.pnpmfile.mjs', 'apps/web/.pnpmfile.mjs', 'patches/a.patch', 'vendor/a.patch',
+                     'pnpm-workspace.yaml', 'apps/web/pnpm-workspace.yaml', '.npmrc', 'package.yaml', 'apps/web/package.json5']:
             with self.subTest(path):
-                self.assertTrue(gate.matches(path, stop))
+                self.git('reset', '-q', '--hard', self.base)
+                self.write(path, 'x')
+                self.commit()
+                self.assertIn('dependencies', [h['rule'] for h in self.risk()['reasons'] if h['tier'] == 'stop'])
+
+    def test_pnpm_reads_no_hook_patch_or_config_from_a_path_the_rules_miss(self):
+        # pnpm can load these from any path the workspace file names. Name one,
+        # and add that path to the dependencies rule in .gate/config.toml.
+        workspace = Path(__file__).resolve().parents[2] / 'pnpm-workspace.yaml'
+        text = workspace.read_text() if workspace.exists() else ''
+        self.assertIsNone(re.search(r'(?m)^\s*(pnpmfile|globalPnpmfile|patchesDir|include|configDependencies)\s*:', text))
 
     def test_every_stop_rule_in_the_repo_config_has_owner_text(self):
         import tomllib
