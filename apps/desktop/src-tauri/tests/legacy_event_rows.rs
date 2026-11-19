@@ -12,7 +12,7 @@
 //! and `materialized_disabled`. Writing it with today's `EventStore` would
 //! give it today's schema and prove nothing about old files.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde_json::json;
 use skill_studio_core::testing::golden::unique_temp_dir;
@@ -98,11 +98,6 @@ fn write_old_format_events_file(path: &Path, root_a: &str, root_b: &str) {
     }
 }
 
-fn sorted(mut values: Vec<String>) -> Vec<String> {
-    values.sort();
-    values
-}
-
 #[test]
 fn an_old_format_event_log_imports_its_events_and_converted_folder_records_into_the_shared_history()
 {
@@ -114,7 +109,7 @@ fn an_old_format_event_log_imports_its_events_and_converted_folder_records_into_
     let legacy_path = app_data.join("events.sqlite3");
     write_old_format_events_file(&legacy_path, &root_a, &root_b);
 
-    let shared_db: PathBuf = history_db_path(&home.join(".skill-studio"));
+    let shared_db = history_db_path(&home.join(".skill-studio"));
     let store = EventStore::open_with_db(&app_data, &shared_db).unwrap();
     assert_eq!(store.import_legacy_events().unwrap(), 2);
 
@@ -176,10 +171,9 @@ fn an_old_format_event_log_imports_its_events_and_converted_folder_records_into_
         ),
         ("codex", "/home/.agents/skills", None)
     );
-    assert_eq!(
-        sorted(store.materialized_disabled(Path::new(&root_a)).unwrap()),
-        vec!["alpha".to_string(), "gamma".to_string()]
-    );
+    let mut disabled_a = store.materialized_disabled(Path::new(&root_a)).unwrap();
+    disabled_a.sort();
+    assert_eq!(disabled_a, vec!["alpha".to_string(), "gamma".to_string()]);
     assert_eq!(
         store.materialized_disabled(Path::new(&root_b)).unwrap(),
         vec!["delta".to_string()]

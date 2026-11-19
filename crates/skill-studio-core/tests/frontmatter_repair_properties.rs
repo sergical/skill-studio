@@ -85,23 +85,13 @@ fn build(
     final_newline: bool,
 ) -> Doc {
     let mut content = format!("---{eol}");
-    let start = content.len();
-    content.push_str(first);
-    let end = content.len();
-    content.push_str(eol);
-    let (target_start, target_end) = if target_first {
-        (start, end)
-    } else {
+    let [first_range, second_range] = [first, second].map(|line| {
         let start = content.len();
-        content.push_str(second);
-        let end = content.len();
+        content.push_str(line);
+        let range = start..content.len();
         content.push_str(eol);
-        (start, end)
-    };
-    if target_first {
-        content.push_str(second);
-        content.push_str(eol);
-    }
+        range
+    });
     for line in extra {
         content.push_str(&line.replace('\n', eol));
         content.push_str(eol);
@@ -116,7 +106,11 @@ fn build(
     }
     Doc {
         content,
-        target: target_start..target_end,
+        target: if target_first {
+            first_range
+        } else {
+            second_range
+        },
         eol,
     }
 }

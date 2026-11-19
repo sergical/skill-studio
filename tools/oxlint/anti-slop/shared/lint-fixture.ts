@@ -8,7 +8,7 @@ import { join, resolve } from "node:path";
 
 import { z } from "zod";
 
-export interface OxlintJsonDiagnostic {
+interface OxlintJsonDiagnostic {
 	readonly code: string;
 	readonly message: string;
 }
@@ -16,10 +16,6 @@ export interface OxlintJsonDiagnostic {
 const oxlintJsonOutputSchema = z.object({
 	diagnostics: z.array(z.object({ code: z.string(), message: z.string() })),
 });
-
-function parseOxlintDiagnostics(stdout: string): readonly OxlintJsonDiagnostic[] {
-	return oxlintJsonOutputSchema.parse(JSON.parse(stdout)).diagnostics;
-}
 
 /** Lints `source`, saved as `fileName`, with only `rules` on; returns the anti-slop diagnostics. */
 export function lintAntiSlopFixture(
@@ -55,9 +51,9 @@ export function lintAntiSlopFixture(
 		if (result.status !== 0 && result.status !== 1) {
 			throw new Error(`Anti-slop Oxlint fixture failed: ${result.stderr || result.stdout}`);
 		}
-		return parseOxlintDiagnostics(result.stdout).filter((diagnostic) =>
-			diagnostic.code.startsWith("anti-slop("),
-		);
+		return oxlintJsonOutputSchema
+			.parse(JSON.parse(result.stdout))
+			.diagnostics.filter((diagnostic) => diagnostic.code.startsWith("anti-slop("));
 	} finally {
 		rmSync(fixtureDirectory, { recursive: true, force: true });
 	}
