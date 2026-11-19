@@ -23,7 +23,10 @@ test("Park for every agent turns every copy off and Activity lists it with no Re
   await page.getByRole("menuitem", { name: "Park for every agent" }).click();
 
   await expect(toasts(page).getByText(`Parked ${SKILL}`)).toBeVisible();
-  for (const copy of await copies.all()) await expect(copy).not.toBeChecked();
+  // The Universal folder moves to the parked folder and the Claude Code link goes with it, so one
+  // copy is left, and it is off. Count first: `all()` on an empty list checks nothing.
+  await expect(copies).toHaveCount(1);
+  await expect(copies).not.toBeChecked();
 
   await openSidebarPage(page, "Activity");
   await expect(page.getByRole("main").getByText("Parked", { exact: true })).toBeVisible();
@@ -36,6 +39,7 @@ test("Park for every agent turns every copy off and Activity lists it with no Re
   await page.getByRole("menuitem", { name: "Turn on for every agent" }).click();
 
   await expect(toasts(page).getByText(`Turned on ${SKILL}`)).toBeVisible();
+  await expect(copies).toHaveCount(2);
   for (const copy of await copies.all()) await expect(copy).toBeChecked();
   await openSkillsPage(page, "Skills", SKILL);
   await expect(skillRow(page, SKILL)).toHaveCount(1);
