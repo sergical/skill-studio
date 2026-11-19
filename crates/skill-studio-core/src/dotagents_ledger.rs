@@ -290,5 +290,9 @@ resolved_commit = "3333333333333333333333333333333333cccc"
         let skills = read_dotagents_ledger(&fs, Path::new("/home/.agents")).unwrap();
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].declared_ref, None);
+        assert!(
+            !skills[0].has_manifest_row,
+            "no agents.toml row, so the skill is owned by a wildcard entry (WildcardDotagents)"
+        );
     }
 }
