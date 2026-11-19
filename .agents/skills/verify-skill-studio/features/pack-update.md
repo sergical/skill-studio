@@ -26,4 +26,4 @@ Preconditions: baseline, then `pack add` of three pack skills, then `control-ski
 
 - Without `track`, `pack update --all` plans no step: no pack is tracked for a loopback URL.
 - Without `bump`, upstream has not changed: `npx skills update` finds nothing new and writes nothing, so the run proves the call count only, not that new content arrives.
-- `track` must run after the add: it records each folder's tree hash. `npx skills` skips a lock row whose hash is empty instead of checking it.
+- `track` must run after the add: it records each folder's hash as `npx skills` computes it. `npx skills` skips a lock row whose hash is empty, and reinstalls one whose hash does not match. Without `bump`, `pack update --all` makes its 1 `npx` call and rewrites nothing.

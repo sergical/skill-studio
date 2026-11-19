@@ -98,12 +98,24 @@ def bump_pack(root, names, revision):
     git(env, "-C", str(work), "push", "-q", str(root / "srv" / "pack.git"), "main")
 
 
-def tree_hashes(root, names):
-    """Each skill folder's git tree hash at the served HEAD: what the skills CLI
-    records as `skillFolderHash` and compares on update."""
-    env = clean_env(root / "setup-home")
-    bare = root / "srv" / "pack.git"
-    return {name: git(env, "-C", str(bare), "rev-parse", f"HEAD:skills/{name}") for name in names}
+def skills_folder_hashes(home, names):
+    """Each installed skill folder's hash as `npx skills@1.8.1` computes it
+    for a git source (`computeSkillFolderHash`, which `update` compares),
+    taken from the skills package in `home`'s npm cache, so it cannot drift
+    from the CLI's own rule."""
+    chunks = [p for p in (home / ".npm" / "_npx").glob("*/node_modules/skills/dist/_chunks/*.mjs")
+              if "computeSkillFolderHash," in p.read_text(errors="ignore")]
+    if not chunks:
+        sys.exit(f"no {SKILLS_CLI} with computeSkillFolderHash in {home / '.npm'}")
+    script = ("const { computeSkillFolderHash } = await import(process.argv[1]);"
+              "const out = {};"
+              "for (const dir of process.argv.slice(2)) out[dir] = await computeSkillFolderHash(dir);"
+              "console.log(JSON.stringify(out));")
+    folders = [str(home / ".agents" / "skills" / name) for name in names]
+    out = subprocess.run(["node", "--input-type=module", "-e", script, chunks[0].as_uri(), *folders],
+                         check=True, capture_output=True, text=True).stdout
+    by_folder = json.loads(out)
+    return {name: by_folder[folder] for name, folder in zip(names, folders)}
 
 
 def serve_git(projects_root):
@@ -180,8 +192,9 @@ def warm_cache(home, template, env):
 def write_lock_rows(home, names, source, hashes):
     """`npx skills@1.8.1` writes no lock row for a loopback git URL (checked for
     both 127.0.0.1 and localhost), so nothing would track the pack. Writes the
-    rows it writes for a remote git source, with each folder's real tree hash:
-    skills skips a row whose hash is empty instead of checking it."""
+    rows it writes for a remote git source, with each folder's hash as skills
+    computes it: skills skips a row whose hash is empty instead of checking
+    it, and reinstalls a row whose hash does not match."""
     lock = home / ".agents" / ".skill-lock.json"
     doc = json.loads(lock.read_text()) if lock.exists() else {"version": 3, "skills": {}}
     for name in names:
@@ -252,7 +265,7 @@ def main():
                 elapsed, calls = run_job(cli, job_args, home, env, log)
                 samples[job].append({"ms": round(elapsed, 1), "npx_calls": calls})
                 if job == "pack_add":
-                    write_lock_rows(home, names, source, tree_hashes(root, names))
+                    write_lock_rows(home, names, source, skills_folder_hashes(home, names))
                 if job == "pack_update":
                     body = (home / ".agents/skills" / names[0] / "SKILL.md").read_text()
                     if f"Revision {run + 1}." not in body:

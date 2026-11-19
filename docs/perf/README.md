@@ -93,7 +93,7 @@ every commit. The times are for one machine and are not compared in CI; a
 
 `npx skills@1.8.1` writes no lock row for a loopback git URL, so the script
 writes the rows it writes for a remote git source after `pack add`, with each
-folder's git tree hash. Without them `pack update` finds no pack, and with an
+folder's hash as `npx skills` computes it (its own `computeSkillFolderHash`). Without them `pack update` finds no pack, and with an
 empty hash `npx skills update` skips the skill without fetching.
 
 Measured on 2026-11-19, Apple M3 Max, debug builds, idle machine, 5 runs,

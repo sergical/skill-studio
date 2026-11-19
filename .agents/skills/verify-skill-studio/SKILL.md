@@ -75,7 +75,7 @@ the exit code, the number of `npx` calls, and the JSON. It refuses `--home`
 and `--fixture`, and a `--project` or `--project-path` outside the run folder.
 `state` lists the skill folders, lock rows and journal. `track` writes the lock
 rows that `npx skills` does not write for a loopback git URL, with each
-folder's real git tree hash (see Gotchas in
+folder's hash as `npx skills` computes it (see Gotchas in
 [features/add-from-repo.md](features/add-from-repo.md)). `bump` commits a new
 revision of every pack skill upstream, so an update has something to fetch.
 

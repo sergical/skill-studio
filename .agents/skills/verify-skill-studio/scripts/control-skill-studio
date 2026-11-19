@@ -63,6 +63,20 @@ owned_server_pid() {
   echo "$pid"
 }
 
+# Stops this run's server, only when its recorded PID is still this run's
+# serve_pack.py (a PID can be reused once the process exits).
+stop_owned_server() {
+  local pid
+  if pid=$(owned_server_pid "$1"); then kill "$pid"; fi
+}
+
+# True when path $2 resolves inside run folder $1, after links and `..`.
+inside_run() {
+  python3 -c 'import os, sys
+run, path = (os.path.realpath(p) for p in sys.argv[1:3])
+sys.exit(0 if path == run or path.startswith(run + os.sep) else 1)' "$1" "$2"
+}
+
 cmd_launch() {
   local count=5
   if [[ "${1:-}" == "--skills" ]]; then count=$2; fi
@@ -79,7 +93,7 @@ cmd_launch() {
   dir="$RUN_ROOT/$(date +%Y%m%d-%H%M%S)-$$"
   mkdir -p "$dir/home" "$dir/evidence" "$dir/bin"
   # Until the run is published, any failure or interrupt removes it.
-  trap 'kill "$(cat "$dir/server.pid" 2> /dev/null)" 2> /dev/null || true; rm -rf "$dir"' EXIT
+  trap 'stop_owned_server "$dir"; rm -rf "$dir"' EXIT
   local real_npx
   real_npx=$(command -v npx)
   printf '#!/bin/sh\necho "$*" >> "%s/npx.log"\nexec "%s" "$@"\n' "$dir" "$real_npx" > "$dir/bin/npx"
@@ -134,14 +148,14 @@ cmd_cli() {
   local arg next=""
   for arg in "$@"; do
     if [[ -n "$next" ]]; then
-      [[ "$arg" == "$dir/"* ]] || die "$next must be a folder inside $dir"
+      inside_run "$dir" "$arg" || die "$next must be a folder inside $dir"
       next=""
       continue
     fi
     case "$arg" in
       --home | --home=* | --fixture | --fixture=*) die "$arg is set by this script; it always uses $dir/home" ;;
       --project | --project-path) next=$arg ;;
-      --project=* | --project-path=*) [[ "${arg#*=}" == "$dir/"* ]] || die "${arg%%=*} must be a folder inside $dir" ;;
+      --project=* | --project-path=*) inside_run "$dir" "${arg#*=}" || die "${arg%%=*} must be a folder inside $dir" ;;
     esac
   done
   local n label base
@@ -160,7 +174,7 @@ cmd_cli() {
 
 # `npx skills@1.8.1` writes no lock row for a loopback git URL, so no pack is
 # tracked after an add from the local pack. This writes the rows it writes for
-# a remote git source, with each folder's real git tree hash, for journeys
+# a remote git source, with each folder's hash as skills computes it, for journeys
 # that need a tracked pack: pack list, pack update, outdated.
 cmd_track() {
   local dir
@@ -169,7 +183,7 @@ cmd_track() {
 installed = {p.name for p in (run / "home" / ".agents" / "skills").glob("*")}
 names = [n for n in (run / "pack-skills").read_text().split() if n in installed]
 pw.write_lock_rows(run / "home", names, (run / "pack-url").read_text().strip(),
-                   pw.tree_hashes(run / "pack", names))
+                   pw.skills_folder_hashes(run / "home", names))
 print("tracked:", " ".join(names) or "(no pack skill is installed)")'
 }
 
@@ -203,11 +217,10 @@ cmd_cleanup() {
   [[ -f "$RUN_ROOT/current" ]] || die "no run to clean up"
   local dir pid
   dir=$(cat "$RUN_ROOT/current")
-  if pid=$(owned_server_pid "$dir"); then
-    kill "$pid"
-  elif [[ -f "$dir/server.pid" ]]; then
+  if ! owned_server_pid "$dir" > /dev/null && [[ -f "$dir/server.pid" ]]; then
     echo "the recorded server PID is no longer this run's server; not signalling it" >&2
   fi
+  stop_owned_server "$dir"
   rm -f "$dir/server.pid"
   rm -rf "$dir/home" "$dir/bin" "$dir/pack"
   rm -f "$RUN_ROOT/current"
