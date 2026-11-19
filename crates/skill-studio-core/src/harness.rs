@@ -1444,6 +1444,15 @@ pub fn reserved_skills_root_entry(harness: Option<&AgentId>) -> Option<&'static 
     }
 }
 
+/// Manifest filenames a plugin cache walk looks for, in priority order,
+/// per the agent-plugins.org manifest convention.
+pub const PLUGIN_MANIFEST_CANDIDATES: &[&str] = &[
+    ".claude-plugin/plugin.json",
+    ".codex-plugin/plugin.json",
+    ".cursor-plugin/plugin.json",
+    "plugin.json",
+];
+
 /// Prefix of the folder Claude Code clones a plugin marketplace into before
 /// it moves the plugin into place, as in `temp_git_1795061472669_gad7gd`. A
 /// failed install can leave one behind.
@@ -1454,7 +1463,7 @@ const CLAUDE_CLONE_STAGING_PREFIX: &str = "temp_git_";
 /// (`temp_git_*`), or any dot-named entry, such as Claude Code's
 /// `.in_use/<pid>` session locks or Codex's
 /// `.codex-remote-plugin-install.json`, except the manifest folders in
-/// [`crate::ops::PLUGIN_MANIFEST_CANDIDATES`]. The plugin walk skips these entries, and
+/// [`PLUGIN_MANIFEST_CANDIDATES`]. The plugin walk skips these entries, and
 /// the desktop watcher does not rescan when one changes, so both read the
 /// cache the same way.
 pub fn is_plugin_cache_bookkeeping(name: &str) -> bool {
@@ -1462,7 +1471,7 @@ pub fn is_plugin_cache_bookkeeping(name: &str) -> bool {
         return true;
     }
     name.starts_with('.')
-        && !crate::ops::PLUGIN_MANIFEST_CANDIDATES
+        && !PLUGIN_MANIFEST_CANDIDATES
             .iter()
             .any(|candidate| candidate.split('/').next() == Some(name))
 }
