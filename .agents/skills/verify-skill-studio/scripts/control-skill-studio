@@ -1,0 +1,158 @@
+#!/bin/bash
+# control-skill-studio - one disposable Skill Studio run for verification:
+# a temporary home, a local pack served over smart HTTP, a warm npm cache,
+# and the built CLI with the real `npx skills`. See ../SKILL.md.
+#
+#   control-skill-studio launch [--skills N]   start a run; prints its folder
+#   control-skill-studio doctor                is the current run worth driving?
+#   control-skill-studio cli -- <args>...      run the CLI in the run's home; saves evidence
+#   control-skill-studio track                 write the lock rows npx skills skips for a loopback pack
+#   control-skill-studio state                 skills on disk, lock rows, journal
+#   control-skill-studio cleanup               stop the server; keep only evidence/
+set -euo pipefail
+
+SKILLS_CLI="skills@1.8.1"
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+REPO=$(cd "$SCRIPT_DIR/../../../.." && pwd)
+RUN_ROOT=${SKILL_STUDIO_VERIFY_ROOT:-${TMPDIR:-/tmp}/skill-studio-verify}
+CLI=${SKILL_STUDIO_VERIFY_CLI:-$REPO/target/debug/skill-studio}
+
+die() { echo "control-skill-studio: $*" >&2; exit 1; }
+
+current_run() {
+  [[ -f "$RUN_ROOT/current" ]] || die "no run; start one with: control-skill-studio launch"
+  local dir
+  dir=$(cat "$RUN_ROOT/current")
+  [[ -d "$dir/home" ]] || die "run $dir has no home; it was cleaned up. Launch a new run"
+  echo "$dir"
+}
+
+# The environment every CLI call gets: PATH starts with the npx wrapper that
+# logs calls, the npm cache is the run's own, and no Skill Studio or agent
+# variable from the caller leaks in.
+run_env() {
+  local dir=$1
+  env -u SKILL_STUDIO_HOME -u SKILL_STUDIO_FIXTURE -u CODEX_HOME -u CLAUDE_CONFIG_DIR \
+    -u XDG_STATE_HOME -u XDG_CONFIG_HOME -u XDG_DATA_HOME \
+    PATH="$dir/bin:$PATH" npm_config_cache="$dir/npm-cache" SKILL_STUDIO_TELEMETRY=0 \
+    HOME="$dir/home" "${@:2}"
+}
+
+cmd_launch() {
+  local count=5
+  if [[ "${1:-}" == "--skills" ]]; then count=$2; fi
+  command -v npx > /dev/null || die "npx not found; install Node.js"
+  if [[ ! -x "$CLI" ]]; then
+    echo "building the CLI: cargo build --workspace --all-features --bins" >&2
+    (cd "$REPO" && cargo build --workspace --all-features --bins) >&2
+  fi
+  local dir
+  dir="$RUN_ROOT/$(date +%Y%m%d-%H%M%S)-$$"
+  mkdir -p "$dir/home" "$dir/evidence" "$dir/npm-cache" "$dir/bin"
+  local real_npx
+  real_npx=$(command -v npx)
+  printf '#!/bin/sh\necho "$*" >> "%s/npx.log"\nexec "%s" "$@"\n' "$dir" "$real_npx" > "$dir/bin/npx"
+  chmod +x "$dir/bin/npx"
+  python3 "$SCRIPT_DIR/serve_pack.py" "$dir" "$count" > "$dir/server.log" 2>&1 &
+  echo $! > "$dir/server.pid"
+  for _ in $(seq 1 50); do [[ -s "$dir/pack-url" ]] && break; sleep 0.1; done
+  [[ -s "$dir/pack-url" ]] || die "the pack server did not start; see $dir/server.log"
+  echo "$dir" > "$RUN_ROOT/current"
+  echo "warming the npm cache with $SKILLS_CLI" >&2
+  run_env "$dir" npx -y "$SKILLS_CLI" --version > /dev/null
+  : > "$dir/npx.log"
+  echo "$dir"
+}
+
+cmd_doctor() {
+  local dir ok=1
+  dir=$(current_run)
+  local pid
+  pid=$(cat "$dir/server.pid")
+  if kill -0 "$pid" 2> /dev/null; then echo "server: pid $pid running"; else echo "server: NOT running"; ok=0; fi
+  local url
+  url=$(cat "$dir/pack-url")
+  if git ls-remote "$url" > /dev/null 2>&1; then echo "pack: $url answers"; else echo "pack: $url does NOT answer"; ok=0; fi
+  echo "pack skills: $(tr '\n' ' ' < "$dir/pack-skills")"
+  if [[ -x "$CLI" ]]; then echo "cli: $CLI ($("$CLI" --version))"; else echo "cli: $CLI missing"; ok=0; fi
+  echo "home: $dir/home"
+  echo "evidence: $dir/evidence"
+  [[ $ok == 1 ]] || die "this run is not healthy; clean it up and launch a new one"
+}
+
+cmd_cli() {
+  [[ "${1:-}" == "--" ]] && shift
+  [[ $# -gt 0 ]] || die "usage: control-skill-studio cli -- <skill-studio args>"
+  local dir
+  dir=$(current_run)
+  local n label base
+  n=$(find "$dir/evidence" -name '*.cmd' | wc -l | tr -d ' ')
+  label=$(printf '%02d-%s' "$((n + 1))" "$(echo "${*:1:2}" | tr ' /' '--')")
+  base="$dir/evidence/$label"
+  : > "$dir/npx.log"
+  printf '%s\n' "$CLI $* --home $dir/home --json" > "$base.cmd"
+  local code=0
+  run_env "$dir" "$CLI" "$@" --home "$dir/home" --json > "$base.json" 2> "$base.stderr" || code=$?
+  echo "$code" > "$base.exit"
+  cp "$dir/npx.log" "$base.npx"
+  echo "exit $code, npx calls $(grep -c . "$base.npx" || true), evidence $base.*"
+  cat "$base.json"
+}
+
+# `npx skills@1.8.1` writes no lock row for a loopback git URL, so no pack is
+# tracked after an add from the local pack. This writes the rows it writes for
+# a remote git source (tools/perf-writes.py), for journeys that need a tracked
+# pack: pack list, pack update, outdated.
+cmd_track() {
+  local dir
+  dir=$(current_run)
+  python3 - "$REPO" "$dir" << 'PY'
+import importlib.util, sys
+from pathlib import Path
+repo, run = Path(sys.argv[1]), Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location("pw", repo / "tools" / "perf-writes.py")
+pw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(pw)
+installed = {p.name for p in (run / "home" / ".agents" / "skills").glob("*")}
+names = [n for n in (run / "pack-skills").read_text().split() if n in installed]
+pw.write_lock_rows(run / "home", names, (run / "pack-url").read_text().strip())
+print("tracked:", " ".join(names) or "(no pack skill is installed)")
+PY
+}
+
+cmd_state() {
+  local dir
+  dir=$(current_run)
+  echo "== skills in $dir/home/.agents/skills"
+  ls "$dir/home/.agents/skills" 2> /dev/null || echo "(none)"
+  echo "== lock rows"
+  python3 -c 'import json,sys
+try: rows = json.load(open(sys.argv[1]))["skills"]
+except FileNotFoundError: rows = {}
+for name, row in sorted(rows.items()): print(name, row.get("source"))' "$dir/home/.agents/.skill-lock.json"
+  echo "== journal (newest first)"
+  run_env "$dir" "$CLI" events --home "$dir/home" | head -20
+}
+
+cmd_cleanup() {
+  [[ -f "$RUN_ROOT/current" ]] || die "no run to clean up"
+  local dir
+  dir=$(cat "$RUN_ROOT/current")
+  if [[ -f "$dir/server.pid" ]]; then
+    kill "$(cat "$dir/server.pid")" 2> /dev/null || true
+    rm -f "$dir/server.pid"
+  fi
+  rm -rf "$dir/home" "$dir/npm-cache" "$dir/bin" "$dir/pack"
+  rm -f "$RUN_ROOT/current"
+  echo "kept evidence: $dir/evidence"
+}
+
+case "${1:-}" in
+  launch) shift; cmd_launch "$@" ;;
+  doctor) cmd_doctor ;;
+  cli) shift; cmd_cli "$@" ;;
+  track) cmd_track ;;
+  state) cmd_state ;;
+  cleanup) cmd_cleanup ;;
+  *) sed -n '2,10p' "$0"; exit 2 ;;
+esac
