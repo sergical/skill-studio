@@ -2,12 +2,14 @@
 // SkillListSelectionBar - The docked bar on Home and Skills that appears once
 // any row is checked. One skill: its name, its fix, Open, then the other
 // actions. Several: the count and the bulk actions (Park/Unpark, Invocation,
-// Update, Remove). Each bulk action runs the single-skill call on every
+// Update, Pack, Remove). Pack writes the selected skills into a new folder
+// laid out as a pack (PackExportDialog). Each bulk action runs the single-skill call on every
 // selected skill it applies to (see skill-bulk-actions.ts); a button that
 // applies to none is disabled and its tooltip says why.
 // ============================================================================
 
 import { useState } from "react";
+import { save } from "@tauri-apps/plugin-dialog";
 import type { ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import {
@@ -22,6 +24,7 @@ import {
   Button,
 } from "@skill-studio/ui";
 import type { InstalledSkill } from "@skill-studio/lib";
+import { PackExportDialog } from "../Packs/PackExportDialog";
 import { INVOCATION_POLICY_OPTIONS } from "../SkillDetail/skill-location-status";
 import { MenuControl, MenuItem } from "../ui/MenuControl";
 import { TooltipControl } from "../ui/TooltipControl";
@@ -32,6 +35,9 @@ import { UpdateOverwritesEditsDialog } from "../SkillDetail/UpdateOverwritesEdit
 import { useSkillBulkActions } from "./useSkillBulkActions";
 
 interface SkillListSelectionBarProps {
+  /** The project Pack takes each skill's copy from: the project the owning list is scoped to,
+   * or null for the home. Passed in, not read from the store, because Home shows the bar too. */
+  packProjectPath: string | null;
   /** The skills whose rows are checked, in list order. */
   selectedSkills: InstalledSkill[];
   onCancel: () => void;
@@ -89,8 +95,25 @@ export function SkillListSelectionBar({
   onActionFinished,
   onAct,
   onOpen,
+  packProjectPath,
 }: SkillListSelectionBarProps) {
   const [confirmingRemove, setConfirmingRemove] = useState(false);
+  const [packing, setPacking] = useState<{
+    skills: string[];
+    dir: string;
+    projectPath: string | null;
+  } | null>(null);
+
+  // The pack folder must be new: the save panel asks for a name and a place.
+  const handlePack = async () => {
+    const dir = await save({ title: "Name the new pack folder", defaultPath: "my-skills" });
+    if (!dir) return;
+    setPacking({
+      skills: selectedSkills.map((skill) => skill.name),
+      dir,
+      projectPath: packProjectPath,
+    });
+  };
   const { running, progress, run, updatePrompt } = useSkillBulkActions(onActionFinished);
   const busy = running !== null;
 
@@ -208,6 +231,9 @@ export function SkillListSelectionBar({
             Update{count(updatePlan.applicable.length)}
           </BarButton>
         )}
+        <BarButton running={running} disabledReason={null} onClick={() => void handlePack()}>
+          Pack
+        </BarButton>
         <BarButton
           running={running}
           kind="remove"
@@ -228,6 +254,15 @@ export function SkillListSelectionBar({
           Cancel
         </Button>
       </div>
+
+      {packing && (
+        <PackExportDialog
+          skills={packing.skills}
+          dir={packing.dir}
+          projectPath={packing.projectPath}
+          onClose={() => setPacking(null)}
+        />
+      )}
 
       <UpdateOverwritesEditsDialog
         skillNames={updatePrompt?.skillNames ?? []}
