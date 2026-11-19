@@ -207,17 +207,17 @@ class GateTests(unittest.TestCase):
         self.cfg['owner'] = {'contract': {'ask': 'Change the API?', 'why': 'Clients break.'}}
         for i in range(12):
             self.write(f'contracts/{i:02}.json', '{}')
-        self.write('contracts/[x](y).json', '{}')
+        self.write('contracts/(x)[y].json', '{}')
         self.commit()
         risk = self.risk(raise_to='stop', reason='Spends money')
         jq = Path(gate.__file__).resolve().with_name('comment.jq')
         body = subprocess.run(['jq', '-r', '--arg', 'marker', '<!-- m -->', '-f', str(jq)], input=json.dumps(risk),
                               text=True, capture_output=True, check=True).stdout
         self.assertTrue(body.startswith('<!-- m -->\n## Needed from you and why\n\n**Decision:** Change the API?\n'
-                                        '**Why you:** Clients break.\n**Change:** contracts\\/00\\.json, '), body)
+                                        '**Why you:** Clients break.\n**Change:** contracts\\/\\(x\\)\\[y\\]\\.json, contracts\\/00\\.json, '), body)
         self.assertIn(' and 3 more, matched by rule `contract` in `.gate/config.toml`.\n\n**Decision:** Spends money\n'
                       '**Why you:** An agent raised this PR to stop by hand.\n\nTo say yes, merge this PR.', body)
-        self.assertNotIn('[x](y)', body)
+        self.assertNotIn('(x)[y]', body)
 
     def test_every_stop_rule_in_the_repo_config_has_owner_text(self):
         import tomllib

@@ -267,7 +267,7 @@ def main():
         merge_base = git('merge-base', base, args.head)
         result = classify(tomllib.loads(policy) if policy else cfg, merge_base, args.head, args.raise_to, args.reason, args.author)
         print(json.dumps(result, indent=2) if args.json else result['tier'] + '\n' + '\n'.join(f"- {r['rule']}: {r.get('reason', ', '.join(r.get('files', [])))}" for r in result['reasons'])
-              + ''.join(f"\nDecision: {n['ask']}\n  Why you: {n['why']}\n  Rule: {n['rule']}" for n in result['needs_you']))
+              + ''.join(f"\nNeeds you: {n['ask']}\n  Why: {n['why']}" for n in result['needs_you']))
     elif args.command == 'snapshots':
         snapshots(cfg, args.update, args.prepare)
     elif args.command == 'start':
