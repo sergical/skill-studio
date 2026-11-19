@@ -24,6 +24,11 @@ without this text still stops, and its `why` says the text is missing.
 the decision, why a person must make it, and the files and rule that matched,
 then what a merge means and where to change a rule that asks too often.
 
+A rule named in `[additive_migrations]` ships a drizzle migration that only adds:
+new tables, indexes and foreign keys on them, and columns that are nullable or
+have a constant default. Its other files must be the new snapshot, journal
+entries after every older one, and the `schema` files. Anything else stops.
+
 Snapshot checks run the configured executables. Build them first with
 `cargo build --workspace --all-features --bins`, then run `gate snapshots`.
 Use `gate snapshots --update` to accept a contract change. Review the snapshot

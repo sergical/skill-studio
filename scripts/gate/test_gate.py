@@ -219,6 +219,76 @@ class GateTests(unittest.TestCase):
                       '**Why you:** An agent raised this PR to stop by hand.\n\nTo say yes, merge this PR.', body)
         self.assertNotIn('(x)[y]', body)
 
+    def migrations(self):
+        self.cfg['rules'].append({'id': 'database', 'paths': ['drizzle/**', 'drizzle.config.ts', 'schema.ts'], 'tier': 'stop'})
+        self.cfg['additive_migrations'] = {'rule': 'database', 'dir': 'drizzle', 'journal': 'drizzle/meta/_journal.json', 'schema': ['schema.ts']}
+        self.write('drizzle/0000_base.sql', 'CREATE TABLE "old" ("id" uuid PRIMARY KEY NOT NULL);')
+        self.write('drizzle/meta/_journal.json', json.dumps({'entries': [{'idx': 0, 'tag': '0000_base', 'when': 100}]}))
+        self.write('drizzle.config.ts', 'config')
+        self.write('schema.ts', 'old')
+        self.commit()
+        self.base = self.git('rev-parse', 'HEAD')
+
+    def migrate(self, sql, when=200, tag='0001_next'):
+        self.git('reset', '-q', '--hard', self.base)
+        self.write(f'drizzle/{tag}.sql', sql)
+        self.write(f'drizzle/meta/{tag[:4]}_snapshot.json', '{}')
+        entries = json.loads(Path('drizzle/meta/_journal.json').read_text())['entries']
+        self.write('drizzle/meta/_journal.json', json.dumps({'entries': entries + [{'idx': len(entries), 'tag': tag, 'when': when}]}))
+        self.write('schema.ts', 'new')
+
+    def test_a_migration_that_only_adds_ships(self):
+        self.migrations()
+        for sql in [
+            'CREATE TABLE "grids" (\n\t"id" uuid PRIMARY KEY NOT NULL,\n\t"old_id" uuid\n);\n--> statement-breakpoint\n'
+            'ALTER TABLE "grids" ADD CONSTRAINT "grids_old_fk" FOREIGN KEY ("old_id") REFERENCES "public"."old"("id") ON DELETE cascade ON UPDATE no action;'
+            '--> statement-breakpoint\nCREATE UNIQUE INDEX "grids_one" ON "grids" USING btree ("old_id") WHERE "grids"."old_id" is not null;',
+            'ALTER TABLE "old" ADD COLUMN "note" text;',
+            'ALTER TABLE "old" ADD COLUMN "count" integer DEFAULT 0 NOT NULL;',
+            "ALTER TABLE \"old\" ADD COLUMN \"tags\" jsonb DEFAULT '[]'::jsonb NOT NULL;",
+        ]:
+            with self.subTest(sql=sql):
+                self.migrate(sql)
+                self.commit()
+                self.assertEqual((self.risk()['tier'], self.risk()['needs_you']), ('ship', []))
+
+    def test_a_migration_that_can_change_or_lock_rows_stops(self):
+        self.migrations()
+        for sql in [
+            'DROP TABLE "old";',
+            'ALTER TABLE "old" RENAME COLUMN "id" TO "key";',
+            'ALTER TABLE "old" ALTER COLUMN "id" TYPE text;',
+            'ALTER TABLE "old" ADD COLUMN "name" text NOT NULL;',
+            'ALTER TABLE "old" ADD COLUMN "at" timestamp DEFAULT now();',
+            'ALTER TABLE "old" ADD COLUMN "name" text, DROP COLUMN "id";',
+            'ALTER TABLE "old" ADD COLUMN "new_id" uuid REFERENCES "public"."old"("id");',
+            'CREATE INDEX "old_id" ON "old" USING btree ("id");',
+            'CREATE TABLE "grids" ("id" uuid);--> statement-breakpoint\n'
+            'ALTER TABLE "old" ADD CONSTRAINT "old_grid_fk" FOREIGN KEY ("id") REFERENCES "public"."grids"("id");',
+            'CREATE TABLE "grids" ("id" uuid);--> statement-breakpoint\nUPDATE "old" SET "id" = null;',
+            '-- nothing',
+        ]:
+            with self.subTest(sql=sql):
+                self.migrate(sql)
+                self.commit()
+                self.assertEqual(self.risk()['tier'], 'stop')
+
+    def test_a_migration_stops_when_the_files_around_it_are_not_new_or_in_order(self):
+        self.migrations()
+        adds = 'ALTER TABLE "old" ADD COLUMN "note" text;'
+        cases = {
+            'runs before an older migration': lambda: self.migrate(adds, when=50),
+            'journal tag names another file': lambda: (self.migrate(adds), self.write('drizzle/0001_other.sql', adds)),
+            'old migration edited': lambda: (self.migrate(adds), self.write('drizzle/0000_base.sql', 'DROP TABLE "old";')),
+            'drizzle config changed': lambda: (self.migrate(adds), self.write('drizzle.config.ts', 'other')),
+            'schema without a migration': lambda: (self.git('reset', '-q', '--hard', self.base), self.write('schema.ts', 'new')),
+        }
+        for name, change in cases.items():
+            with self.subTest(name):
+                change()
+                self.commit()
+                self.assertEqual(self.risk()['tier'], 'stop')
+
     def test_every_stop_rule_in_the_repo_config_has_owner_text(self):
         import tomllib
         cfg = tomllib.loads((Path(__file__).resolve().parents[2] / '.gate/config.toml').read_text())

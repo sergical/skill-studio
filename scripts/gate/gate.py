@@ -56,9 +56,12 @@ def classify(cfg, base, head='HEAD', raise_to=None, reason=None, author=''):
     hits = []
     if read_at(base, '.gate/config.toml') != read_at(head, '.gate/config.toml'):
         hits.append({'rule': 'policy-change', 'tier': 'stop', 'files': ['.gate/config.toml']})
+    migrations = cfg.get('additive_migrations', {})
     for rule in cfg.get('rules', []):
         affected = [p for p in files if matches(p, rule['paths'])]
-        if affected:
+        if affected and rule['id'] == migrations.get('rule') and additive_migration(migrations, base, head, affected):
+            hits.append({'rule': rule['id'], 'tier': 'ship', 'files': affected, 'reason': 'a migration that only adds'})
+        elif affected:
             hits.append({'rule': rule['id'], 'tier': rule['tier'], 'files': affected})
     for path in files:
         if not matches(path, cfg.get('version_files', []) + cfg.get('dependency_files', [])):
@@ -90,6 +93,62 @@ def classify(cfg, base, head='HEAD', raise_to=None, reason=None, author=''):
         hits.append({'rule': 'manual', 'tier': raise_to, 'reason': reason})
         tier = raise_to
     return {'tier': tier, 'reasons': hits, 'needs_you': needs_you(cfg, hits), 'base': base, 'head': git('rev-parse', head)}
+
+
+TABLE = r'(?:"public"\.)?"(?P<t>[^"]+)"'
+CONSTANT = r"-?\d+(?:\.\d+)?|'(?:[^']|'')*'(?:::[a-z ]+(?:\[\])?)?|true|false|null"
+
+
+def adds_only(sql):
+    """True when each statement adds a table, an index or foreign key on a table the
+    same file creates, or a column that is nullable or has a constant default."""
+    text = re.sub(r'--[^\n]*', '', sql.replace('--> statement-breakpoint', ';'))
+    statements = [' '.join(s.split()) for s in text.split(';')]
+    statements = [s for s in statements if s]
+    created = {m['t'] for s in statements if (m := re.fullmatch(rf'CREATE TABLE (?:IF NOT EXISTS )?{TABLE} \(.*\)', s, re.I))}
+    for s in statements:
+        if re.fullmatch(rf'CREATE TABLE (?:IF NOT EXISTS )?{TABLE} \(.*\)', s, re.I):
+            continue
+        on_new = (re.fullmatch(rf'CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?"[^"]+" ON {TABLE}(?: USING \w+)? \(.*\)(?: WHERE .*)?', s, re.I)
+                  or re.fullmatch(rf'ALTER TABLE {TABLE} ADD CONSTRAINT "[^"]+" FOREIGN KEY \(.*\) REFERENCES .*', s, re.I))
+        if on_new:
+            if on_new['t'] in created:
+                continue
+            return False
+        column = re.fullmatch(rf'ALTER TABLE {TABLE} ADD COLUMN (?:IF NOT EXISTS )?"[^"]+" (?P<rest>.+)', s, re.I)
+        if not column or re.search(r',|\b(?:PRIMARY|UNIQUE|REFERENCES|CHECK|GENERATED|ADD|DROP|ALTER|RENAME)\b', column['rest'], re.I):
+            return False
+        default = re.search(r'\bDEFAULT (?P<v>.+?)(?: NOT NULL)?$', column['rest'], re.I)
+        if default and not re.fullmatch(CONSTANT, default['v'], re.I):
+            return False
+        if not default and re.search(r'\bNOT NULL\b', column['rest'], re.I):
+            return False
+    return bool(statements)
+
+
+def additive_migration(spec, base, head, files):
+    """True when the matched files are new migrations that only add, their new
+    snapshots, schema files, and journal entries appended after every older one."""
+    out = subprocess.check_output(['git', 'diff', '--name-status', '--no-renames', '-z', base, head], text=True).split('\0')
+    status = dict(zip(out[1::2], out[0::2]))
+    folder, journal = Path(spec['dir']), spec['journal']
+    sql = [f for f in files if status.get(f) == 'A' and Path(f).parent == folder and f.endswith('.sql')]
+    for f in files:
+        if f in sql or f == journal and status.get(f) == 'M' or f in spec.get('schema', []) and status.get(f) == 'M':
+            continue
+        if status.get(f) == 'A' and Path(f).parent == folder / 'meta' and f.endswith('_snapshot.json'):
+            continue
+        return False
+    if not sql or journal not in files or not all(adds_only(read_at(head, f)) for f in sql):
+        return False
+    try:
+        before = json.loads(read_at(base, journal))['entries']
+        after = json.loads(read_at(head, journal))['entries']
+        added = after[len(before):]
+        return (after[:len(before)] == before and sorted(str(folder / f"{e['tag']}.sql") for e in added) == sorted(sql)
+                and min(e['when'] for e in added) > max((e['when'] for e in before), default=float('-inf')))
+    except (ValueError, KeyError, TypeError):
+        return False
 
 
 def needs_you(cfg, hits):
