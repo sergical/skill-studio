@@ -1616,12 +1616,10 @@ fn skills_sh_run(requests: &[UpdateRequest], start: usize) -> usize {
     if !batchable(first) {
         return 0;
     }
+    let mut names = std::collections::HashSet::from([&first.skill]);
     let mut len = 1;
     while let Some(next) = requests.get(start + len) {
-        let duplicate = requests[start..start + len]
-            .iter()
-            .any(|req| req.skill == next.skill);
-        if !batchable(next) || next.scope != first.scope || duplicate {
+        if !batchable(next) || next.scope != first.scope || !names.insert(&next.skill) {
             break;
         }
         len += 1;
@@ -1781,8 +1779,12 @@ fn update_all_body(
         // A run of skills.sh requests starts here: one `npx skills update`
         // for the whole run, in request order. Its outcomes are reported as
         // the loop reaches them, before the next run or request starts.
-        let run = skills_sh_run(requests, index);
-        if batched[index].is_none() && run > 1 && !ctx.cancel.is_cancelled() {
+        let run = if batched[index].is_none() && !ctx.cancel.is_cancelled() {
+            skills_sh_run(requests, index)
+        } else {
+            0
+        };
+        if run > 1 {
             let members = &requests[index..index + run];
             for (slot, outcome) in batched[index..index + run]
                 .iter_mut()
