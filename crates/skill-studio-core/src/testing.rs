@@ -887,6 +887,8 @@ pub struct FailingFs {
     /// parent it wants unreadable rather than counting calls.
     fail_symlink_metadata_for: Mutex<Option<PathBuf>>,
     fail_read_link_for: Mutex<Option<PathBuf>>,
+    /// Every path `read_dir` was called on, in call order.
+    read_dir_calls: Mutex<Vec<PathBuf>>,
 }
 
 impl FailingFs {
@@ -915,7 +917,16 @@ impl FailingFs {
             fail_read_when_present: Mutex::new(None),
             fail_symlink_metadata_for: Mutex::new(None),
             fail_read_link_for: Mutex::new(None),
+            read_dir_calls: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Every path `read_dir` was called on so far, in call order.
+    pub fn read_dir_calls(&self) -> Vec<PathBuf> {
+        self.read_dir_calls
+            .lock()
+            .expect("read_dir_calls lock")
+            .clone()
     }
 
     /// The next `write_atomic` call returns an error instead of reaching
@@ -1130,6 +1141,10 @@ impl ScopeFs for FailingFs {
         self.inner.ancestor_holds(start, name)
     }
     fn read_dir(&self, path: &Path) -> std::io::Result<Vec<DirEntryFacts>> {
+        self.read_dir_calls
+            .lock()
+            .expect("read_dir_calls lock")
+            .push(path.to_path_buf());
         let mut target = self
             .fail_read_dir_for
             .lock()

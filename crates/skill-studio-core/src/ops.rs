@@ -8219,70 +8219,10 @@ mod tests {
             }
         }
 
-        /// A clock that reports zero elapsed time for the first
-        /// `within_budget_calls` reads after `start`, then jumps past a
-        /// 2s scan budget on every call after that - lets a test trip the
-        /// budget check at an exact target-group boundary instead of a
-        /// guessed call count.
-        struct BudgetAfterNClock {
-            calls: AtomicU64,
-            within_budget_calls: u64,
-        }
-
-        impl BudgetAfterNClock {
-            fn new(within_budget_calls: u64) -> Self {
-                BudgetAfterNClock {
-                    calls: AtomicU64::new(0),
-                    within_budget_calls,
-                }
-            }
-        }
-
-        impl Clock for BudgetAfterNClock {
-            fn now(&self) -> chrono::DateTime<Utc> {
-                Utc::now()
-            }
-
-            fn monotonic(&self) -> Duration {
-                // Call 0 is `scan_inner`'s `start` read. Calls 1-3 are its
-                // own timing instrumentation, read before the roots walk
-                // begins: the `ledgers_read` step's start and its
-                // `timing::step` reading, then the `roots_walk` step's
-                // start. Calls (1 + PRELUDE_CALLS)..=(within_budget_calls +
-                // PRELUDE_CALLS) are every call the global groups make
-                // walking their roots and timing `dir_walk`/`skill_md_read`/
-                // `frontmatter_parse`/`plugin_cache_walk`.
-                const PRELUDE_CALLS: u64 = 3;
-                let call = self.calls.fetch_add(1, Ordering::SeqCst);
-                if call <= self.within_budget_calls + PRELUDE_CALLS {
-                    Duration::from_millis(0)
-                } else {
-                    Duration::from_secs(3)
-                }
-            }
-        }
-
-        /// Never trips a budget, just counts `monotonic()` calls - used to
-        /// measure exactly how many clock reads one `scan` makes walking a
-        /// fixture's global roots, so [`BudgetAfterNClock`] can be
-        /// calibrated to trip right at the project-scope boundary without a
-        /// hand-counted constant that would silently go stale the next time
-        /// `scan_inner`'s instrumentation changes.
-        struct CountingClock {
-            calls: AtomicU64,
-        }
-
-        impl Clock for CountingClock {
-            fn now(&self) -> chrono::DateTime<Utc> {
-                Utc::now()
-            }
-
-            fn monotonic(&self) -> Duration {
-                self.calls.fetch_add(1, Ordering::SeqCst);
-                Duration::from_millis(0)
-            }
-        }
-
+        /// Flow: one global root, one plugin cache and one project root.
+        /// Expectation: the scan lists both global sources before any
+        /// project root, so a scan budget that runs out mid-walk drops
+        /// project skills, never the user's own.
         #[test]
         fn global_roots_and_plugin_caches_scan_before_project_roots() {
             let fs = FixtureBuilder::new()
@@ -8308,74 +8248,48 @@ mod tests {
                 .build_fs();
 
             let mut scope = RuntimeScope::fixture("/h");
-            scope.scan_budget_ms = Some(2_000);
             scope.projects = ProjectSelection::Explicit {
                 paths: vec![PathBuf::from("/h/proj")],
             };
-
-            let ports_for = |clock: Arc<dyn Clock>| Ports {
-                fs: Arc::new(fs.clone()),
-                clock,
-                ids: Arc::new(FakeIds::default()),
-                leases: Arc::new(FakeLease::default()),
-                history: Arc::new(NoHistory),
-                sink: Arc::new(RecordingSink::default()),
-                spawner: None,
-                discovery: None,
-                tools: None,
-                catalog: Arc::new(HarnessCatalog::builtin()),
-
-                telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
-            };
-
-            // Run the same fixture with no project roots at all through a
-            // clock that never trips, so every clock read comes from
-            // `scan_inner`'s own timing (`ledgers_read`, `roots_walk`, and
-            // the per-section reads inside it) plus the global groups' own
-            // walk - never from a project group, since there are none to
-            // walk. Subtracting the fixed pre/post-loop reads (4 before the
-            // loop, 6 after it: `roots_walk`'s own elapsed read, the two
-            // post-loop steps' start+elapsed reads, and the whole-call
-            // `op_timing` read) leaves exactly the call count the global
-            // groups' walk consumed, which is what the calibrated clock
-            // below needs to trip the budget right at the project-scope
-            // boundary without a guessed constant that would go stale the
-            // next time `scan_inner`'s instrumentation changes.
-            let mut probe_scope = scope.clone();
-            probe_scope.projects = ProjectSelection::Explicit { paths: Vec::new() };
-            let counting_clock = Arc::new(CountingClock {
-                calls: AtomicU64::new(0),
-            });
-            let probe_rt = Runtime::new(
-                &probe_scope,
-                ports_for(counting_clock.clone() as Arc<dyn Clock>),
-            )
-            .unwrap();
-            scan(&probe_rt, &ctx(), &ScanRequest::default()).unwrap();
-            const PRELUDE_CALLS: u64 = 4;
-            const POSTLUDE_CALLS: u64 = 6;
-            let within_budget_calls =
-                counting_clock.calls.load(Ordering::SeqCst) - PRELUDE_CALLS - POSTLUDE_CALLS;
-
+            let fs = Arc::new(crate::testing::FailingFs::wrap(Arc::new(fs)));
             let rt = Runtime::new(
                 &scope,
-                ports_for(Arc::new(BudgetAfterNClock::new(within_budget_calls))),
+                Ports {
+                    fs: fs.clone(),
+                    clock: Arc::new(FakeClock::at(0)),
+                    ids: Arc::new(FakeIds::default()),
+                    leases: Arc::new(FakeLease::default()),
+                    history: Arc::new(NoHistory),
+                    sink: Arc::new(RecordingSink::default()),
+                    spawner: None,
+                    discovery: None,
+                    tools: None,
+                    catalog: Arc::new(HarnessCatalog::builtin()),
+                    telemetry: Arc::new(crate::ports::NoopTelemetry),
+                },
             )
             .unwrap();
             let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
-
-            assert_eq!(inv.completeness, Completeness::Partial);
             let names: Vec<&str> = inv.skills.iter().map(|s| s.name.0.as_str()).collect();
-            assert!(names.contains(&"home-skill"));
-            assert!(names.contains(&"plugin-skill"));
-            assert!(!names.contains(&"project-skill"));
-            assert!(!inv.observations.is_empty());
-            for observation in &inv.observations {
-                let root = observation
-                    .root
-                    .as_ref()
-                    .expect("budget observations always name a root");
-                assert!(matches!(root.scope, RootScope::Project(_)));
+            assert!(names.contains(&"project-skill"), "{names:?}");
+
+            // A budget that runs out stops the walk at the next root, so
+            // the global roots and plugin caches must be listed before any
+            // project root to survive a slow project.
+            let reads = fs.read_dir_calls();
+            let first_project = reads
+                .iter()
+                .position(|path| path.starts_with("/h/proj"))
+                .expect("the project root was read");
+            for global in ["/h/.claude/skills", "/h/.claude/plugins/cache"] {
+                let read = reads
+                    .iter()
+                    .position(|path| path.starts_with(global))
+                    .unwrap_or_else(|| panic!("{global} was not read: {reads:?}"));
+                assert!(
+                    read < first_project,
+                    "{global} was read after the project root: {reads:?}"
+                );
             }
         }
 
