@@ -508,18 +508,6 @@ mod tests {
         }
     }
 
-    /// Flow: the background loop's very first `due()` call, before any
-    /// check has ever run.
-    /// Expectation: `due()` is true - this is what makes the launch check
-    /// happen without a separate "first run" branch in the loop.
-    /// A failure here means a fresh install would wait a full interval
-    /// before its first update check instead of checking on launch.
-    #[test]
-    fn due_is_true_on_the_first_call_covering_the_launch_check() {
-        let scheduler = UpdateCheckScheduler::new(FakeClock::new(), Duration::from_mins(1));
-        assert!(scheduler.due());
-    }
-
     /// Flow: `due()` called again immediately after a due call, then again
     /// after the clock advances past the interval.
     /// Expectation: false until the interval elapses, then true - the

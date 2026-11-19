@@ -1273,6 +1273,7 @@ mod tests {
             &lock,
         )
         .unwrap();
+        assert_eq!(queued.phase, AddSkillOperationPhase::Queued);
         assert_eq!(queued.retry_of.as_deref(), Some("op-replay"));
 
         let replay = confirm_add_skill_trust_with(
@@ -1758,46 +1759,5 @@ mod tests {
             .unwrap_err();
         assert!(error.contains("all 32 operation slots are active"));
         assert_eq!(state.lock().unwrap().records.len(), MAX_RETAINED_OPERATIONS);
-    }
-
-    #[test]
-    fn needs_trust_retry_succeeds_before_expiry() {
-        let tmp = tempfile::tempdir().unwrap();
-        let state = AddSkillOperationState::default();
-        state
-            .begin(
-                "trust-parent".to_string(),
-                AddSkillOperationKind::Single(single_request(
-                    "kentcdodds/kcd-skills",
-                    "visual-recap",
-                    AddMethod::Dotagents,
-                )),
-                None,
-            )
-            .unwrap();
-        walk_to_reconciling(&state, "trust-parent");
-        state
-            .advance(
-                "trust-parent",
-                AddSkillOperationPhase::NeedsTrust,
-                "Needs trust",
-                |event| {
-                    event.untrusted_source = Some(AddSkillUntrustedSource {
-                        identity: "kentcdodds/kcd-skills".to_string(),
-                    });
-                },
-            )
-            .unwrap();
-        let (_, retry) = confirm_add_skill_trust_with(
-            tmp.path(),
-            "trust-parent",
-            "trust-retry",
-            "kentcdodds/kcd-skills",
-            &state,
-            &super::super::write_lease::WriteLease::with_lease_root(tmp.path().join("leases")),
-        )
-        .unwrap();
-        assert_eq!(retry.phase, AddSkillOperationPhase::Queued);
-        assert_eq!(retry.retry_of.as_deref(), Some("trust-parent"));
     }
 }

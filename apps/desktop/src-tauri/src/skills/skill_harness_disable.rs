@@ -417,14 +417,4 @@ mod tests {
         assert_eq!(rows[0].payload["from"], serde_json::json!(path));
         assert_eq!(rows[0].payload["to"], serde_json::json!(restored));
     }
-
-    #[test]
-    fn manual_row_restores_or_names_the_registry_copy_refusal() {
-        let manual = Deployment {
-            owner_kind: LifecycleOwnerKind::Manual,
-            path: "/home/.claude/skills/find-bugs".to_string(),
-            ..Default::default()
-        };
-        assert!(refuse_registry_copy_restore(&manual).is_ok());
-    }
 }

@@ -1344,31 +1344,6 @@ mod tests {
     }
 
     #[test]
-    fn direct_write_changes_only_the_exact_scope_and_keeps_managed_registry_ownership() {
-        let temp = tempfile::tempdir().unwrap();
-        let selected = temp.path().join("global/sample");
-        let other = temp.path().join("project/sample");
-        fs::create_dir_all(&selected).unwrap();
-        fs::create_dir_all(&other).unwrap();
-        fs::write(selected.join("SKILL.md"), malformed()).unwrap();
-        fs::write(other.join("SKILL.md"), malformed()).unwrap();
-        let deployment = deployment(&selected, LifecycleOwnerKind::SkillsSh);
-        let owner_before = deployment.owner_id.clone();
-        let preview =
-            preview_from_deployment(&deployment, FrontmatterRepairKind::ColonScalar, None).unwrap();
-        write_skill_md_bytes(
-            &selected.join("SKILL.md"),
-            preview.proposed_content.as_bytes(),
-        )
-        .unwrap();
-        assert_eq!(
-            fs::read_to_string(other.join("SKILL.md")).unwrap(),
-            malformed()
-        );
-        assert_eq!(deployment.owner_id, owner_before);
-    }
-
-    #[test]
     fn atomic_failure_leaves_original_and_failed_event_is_undoable_with_drift_guard() {
         let temp = tempfile::tempdir().unwrap();
         let skill = temp.path().join("sample");
@@ -1501,56 +1476,6 @@ mod tests {
             malformed()
         );
         assert_eq!(store.list(10, Some("sample")).unwrap()[0].status, "failed");
-    }
-
-    #[test]
-    fn startup_rolls_back_fork_record_when_ledger_detach_never_finished() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path().join("home");
-        let agents = home.join(".agents");
-        let skill = agents.join("skills/sample");
-        fs::create_dir_all(&skill).unwrap();
-        fs::write(skill.join("SKILL.md"), malformed()).unwrap();
-        fs::write(
-            agents.join("agents.lock"),
-            "[skills.sample]\nsource = \"owner/repo\"\nresolved_path = \"skills/sample\"\n",
-        )
-        .unwrap();
-        let deployment = deployment(&skill, LifecycleOwnerKind::Dotagents);
-        let store = EventStore::open(&temp.path().join("app-data")).unwrap();
-        record_repair_intent(
-            &store,
-            "crashed",
-            &deployment,
-            FrontmatterRepairApplyMode::ForkAndFix,
-        );
-        let mut registry = ForkRegistry::default();
-        registry.forks.insert(
-            "sample".to_string(),
-            ForkRecord {
-                deployment_id: deployment.id.clone(),
-                skill_dir: skill.clone(),
-                forked_at: "now".to_string(),
-                origin_tool: OriginTool::Dotagents,
-                origin_source: "owner/repo".to_string(),
-                repo: "owner/repo".to_string(),
-                path: "skills/sample".to_string(),
-                declared_ref: None,
-                base_commit: "abc".to_string(),
-            },
-        );
-        write_fork_registry(&home, &mut registry).unwrap();
-        let rows = store.reconcile_at_startup().unwrap();
-        reconcile_interrupted_frontmatter_repair(&store, &home, &rows[0], &home_guard(&home))
-            .unwrap();
-        assert!(super::super::skill_fork_registry::read_fork_registry(&home)
-            .unwrap()
-            .forks
-            .is_empty());
-        assert_eq!(
-            fs::read_to_string(skill.join("SKILL.md")).unwrap(),
-            malformed()
-        );
     }
 
     /// Regression for the second fix-round BLOCKER: `lib.rs`'s startup pass

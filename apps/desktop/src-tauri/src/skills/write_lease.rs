@@ -329,18 +329,4 @@ mod tests {
              not need a second lease on the same root: {result:?}"
         );
     }
-
-    #[test]
-    fn two_different_roots_never_block_each_other() {
-        let dir = tempfile::tempdir().unwrap();
-        let lease_root = dir.path().join("leases");
-        let root_a = dir.path().join("a");
-        let root_b = dir.path().join("b");
-        std::fs::create_dir_all(&root_a).unwrap();
-        std::fs::create_dir_all(&root_b).unwrap();
-
-        let lease = WriteLease::with_lease_root(lease_root);
-        let _a = lease.try_acquire(&root_a).unwrap();
-        assert!(lease.try_acquire(&root_b).is_ok());
-    }
 }

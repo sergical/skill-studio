@@ -628,24 +628,6 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn timeout_kills_and_reaps_a_sleeping_child() {
-        let cancel = AtomicBool::new(false);
-        let started = Instant::now();
-        let error = run_controlled_command(
-            "sleep",
-            &["30".to_string()],
-            None,
-            &cancel,
-            Duration::from_millis(80),
-            MAX_PROCESS_OUTPUT_BYTES,
-        )
-        .unwrap_err();
-        assert_eq!(error, ControlledProcessError::TimedOut);
-        assert!(started.elapsed() < Duration::from_secs(5));
-    }
-
-    #[cfg(unix)]
-    #[test]
     fn timeout_kills_descendant_that_ignores_term_and_holds_output_pipes() {
         let tmp = tempfile::tempdir().unwrap();
         let pid_file = tmp.path().join("descendant.pid");

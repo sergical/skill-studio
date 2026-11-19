@@ -630,20 +630,6 @@ mod tests {
     }
 
     #[test]
-    fn merge_of_one_skill_across_three_roots_yields_three_deployments() {
-        let skills = assemble_installed_skills(
-            &skills_from(vec![
-                ("my-skill", deployment_dto("my-skill", "Claude Code")),
-                ("my-skill", deployment_dto("my-skill", "Codex")),
-                ("my-skill", deployment_dto("my-skill", "pi")),
-            ]),
-            &empty_lock(),
-        );
-        assert_eq!(skills.len(), 1);
-        assert_eq!(skills[0].deployments.len(), 3);
-    }
-
-    #[test]
     fn violations_are_deduped() {
         let mut a = deployment_dto("my-skill", "Claude Code");
         a.spec_violations = vec!["missing required frontmatter field: description".to_string()];

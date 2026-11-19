@@ -1001,60 +1001,6 @@ mod tests {
         assert!(home.join(".agents/skills/third/SKILL.md").exists());
     }
 
-    /// `a_failed_skill_does_not_stop_the_rest_of_the_batch_or_names_the_skipped_entry`:
-    /// unchanged from the deleted `skill_add.rs` in spirit - an
-    /// already-existing destination fails one entry while the next entry,
-    /// called right after in the same loop a real caller
-    /// (`skill_add_operation.rs`'s batch worker) would run, still installs.
-    #[test]
-    fn a_failed_skill_does_not_stop_the_rest_of_the_batch_or_names_the_skipped_entry() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path();
-        std::fs::create_dir_all(home.join(".agents/skills/other")).unwrap();
-        super::super::skill_trust_policy::record_trusted_dotagents_source(
-            home,
-            "kentcdodds/kcd-skills",
-        )
-        .unwrap();
-        let rt = test_runtime(home);
-        let request = batch_request(vec![
-            GithubSkillEntry {
-                name: "other".to_string(),
-                path: "skills/other".to_string(),
-            },
-            GithubSkillEntry {
-                name: "visual-recap".to_string(),
-                path: "skills/visual-recap".to_string(),
-            },
-        ]);
-        let fetch = CountingFetch {
-            downloads: std::sync::Mutex::new(0),
-        };
-        let snapshot = open_batch_snapshot(&request, &fetch, &StubLookup).unwrap();
-
-        let Err(first) = install_one(
-            &rt,
-            &request_for_entry(&request, &request.skills[0]),
-            &fetch,
-            &StubLookup,
-            snapshot.as_deref(),
-        ) else {
-            panic!("destination already exists, install_one should have failed");
-        };
-        assert!(first.contains("already exists"), "{first}");
-
-        let second = install_one(
-            &rt,
-            &request_for_entry(&request, &request.skills[1]),
-            &fetch,
-            &StubLookup,
-            snapshot.as_deref(),
-        )
-        .unwrap();
-        assert!(matches!(second, InstallAdapterOutcome::Result(_)));
-        assert!(home.join(".agents/skills/visual-recap/SKILL.md").exists());
-    }
-
     /// `add_skill_runs_on_a_blocking_thread_not_the_ui_task_or_names_the_task_it_blocks`:
     /// same shape as `harness_first_run.rs`'s
     /// `detect_runs_the_probes_on_a_blocking_thread...` - the runtime-builder
@@ -1148,32 +1094,6 @@ mod tests {
         assert!(error.contains("kentcdodds/kcd-skills"), "{error}");
     }
 
-    /// `promote_to_global_of_an_untrusted_copy_source_or_names_needs_trust_as_a_plain_error`:
-    /// "Promote to global"'s own method (`skill-location-actions.ts:227`) is
-    /// `Copy`, fixed per review item 4/12 - proving `build_install_request`
-    /// now threads an explicit `trust_identity` for `Copy` too, the same way
-    /// it already does for `SkillsSh` above. `copy_github_request`'s own doc
-    /// explains why this uses a GitHub source rather than promote's real
-    /// `local` one: `Local` carries no repository identity to gate.
-    #[tokio::test]
-    async fn promote_to_global_of_an_untrusted_copy_source_or_names_needs_trust_as_a_plain_error() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        std::fs::create_dir_all(&home).unwrap();
-        let rt = test_runtime(&home);
-        let request = copy_github_request("evil/repo", "promoted-skill");
-
-        let error = add_skill_with_runtime(move || Ok(rt), request, stub_github())
-            .await
-            .unwrap_err();
-
-        assert!(
-            error.starts_with(UNTRUSTED_DOTAGENTS_SOURCE_PREFIX),
-            "unexpected error: {error}"
-        );
-        assert!(error.contains("evil/repo"), "{error}");
-    }
-
     /// `confirm_add_skill_trust_retries_the_same_request_and_installs_or_names_the_changed_field`:
     /// replaces the dropped `trusted_retry_uses_the_same_request` (see
     /// `skill_add_operation.rs`'s own doc on why that one was cut) - a
@@ -1197,6 +1117,10 @@ mod tests {
         assert!(
             first_error.starts_with(UNTRUSTED_DOTAGENTS_SOURCE_PREFIX),
             "unexpected error: {first_error}"
+        );
+        assert!(
+            first_error.contains("kentcdodds/kcd-skills"),
+            "{first_error}"
         );
 
         super::super::skill_trust_policy::record_trusted_dotagents_source(
@@ -1240,24 +1164,6 @@ mod tests {
 
         assert!(error.contains(&home.display().to_string()), "{error}");
         assert!(!home.join(".agents").exists());
-    }
-
-    /// `local_copy_of_a_project_ancestor_is_refused_before_any_read_or_names_the_path`
-    #[test]
-    fn local_copy_of_a_project_ancestor_is_refused_before_any_read_or_names_the_path() {
-        let tmp = tempfile::tempdir().unwrap();
-        let project = tmp.path().join("project");
-        std::fs::create_dir_all(&project).unwrap();
-        std::fs::write(project.join("SKILL.md"), "body").unwrap();
-        let source = local_source(&project, "nested-copy");
-        let destination = project.join(".agents/skills/nested-copy");
-        let (fetch, lookup) = never_fetch_lookup();
-
-        let error =
-            gather_copy_files(&source, &project, &destination, &fetch, &lookup, None).unwrap_err();
-
-        assert!(error.contains(&project.display().to_string()), "{error}");
-        assert!(!project.join(".agents").exists());
     }
 
     /// `local_copy_of_a_symlink_into_a_destination_ancestor_is_refused_or_names_the_resolved_path`

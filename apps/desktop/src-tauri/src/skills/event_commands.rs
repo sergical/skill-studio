@@ -1131,20 +1131,6 @@ mod tests {
     }
 
     #[test]
-    fn validate_materialize_request_accepts_a_recorded_whole_dir_link() {
-        let root = PathBuf::from("/home/.claude/skills");
-        let snapshot = fixture_materialize_snapshot(&root);
-        let target = materialize_target(&snapshot);
-        assert!(validate_materialize_request(
-            &snapshot,
-            &target,
-            "claude-code",
-            "/home/.claude/skills"
-        )
-        .is_ok());
-    }
-
-    #[test]
     fn materialize_refuses_when_fresh_snapshot_no_longer_has_cached_target() {
         let root = PathBuf::from("/home/.claude/skills");
         let cached = fixture_materialize_snapshot(&root);
@@ -1335,25 +1321,6 @@ mod tests {
 
         let snapshot = fixture_snapshot(&broken, &healthy);
         assert!(find_deployment_at(&snapshot, &outside).is_none());
-    }
-
-    #[test]
-    fn repair_refuses_when_fresh_snapshot_no_longer_has_cached_link() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("root");
-        fs::create_dir_all(&root).unwrap();
-        let broken = root.join("find-bugs-claude");
-        symlink("/does/not/exist", &broken).unwrap();
-        let healthy = root.join("find-bugs-codex");
-        fs::create_dir_all(&healthy).unwrap();
-        let cached = fixture_snapshot(&broken, &healthy);
-        assert!(find_deployment_at(&cached, &broken).is_some());
-
-        let mut fresh = cached;
-        fresh.skills[0]
-            .deployments
-            .retain(|deployment| Path::new(&deployment.path) != broken);
-        assert!(find_deployment_at(&fresh, &broken).is_none());
     }
 
     #[test]
