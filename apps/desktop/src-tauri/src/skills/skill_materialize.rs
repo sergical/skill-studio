@@ -7,9 +7,7 @@
 // once, after which `unlink_harness`/`relink_harness` (Case A) toggle
 // individual skills. `materialized_roots`/`materialized_disabled` in
 // event_store.rs are the durable record of which roots were converted and
-// which skills are deliberately unlinked; `reconcile_materialized_root` keeps
-// the filesystem a faithful projection of that record plus the shared root's
-// current contents. Every function here takes `&EventStore` and plain paths
+// which skills are deliberately unlinked. Every function here takes `&EventStore` and plain paths
 // so they're testable without Tauri - see event_commands.rs for the IPC
 // wrappers.
 //
@@ -25,7 +23,6 @@
 // and the targets are already correct before the rename.
 // ============================================================================
 
-use std::collections::HashSet;
 use std::ffi::CString;
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
@@ -734,100 +731,6 @@ pub fn relink_harness(
     store.set_materialized_disabled(root, skill, false)
 }
 
-/// Makes the filesystem under a materialized `root` match
-/// `materialized_roots` + `materialized_disabled` + the shared root's
-/// current contents: creates a link for every shared-root skill not listed
-/// in `materialized_disabled` and missing at `root`, and removes symlinks at
-/// `root` whose target no longer exists. Never touches a non-symlink entry.
-/// No-op when `root` isn't a registered materialized root.
-pub fn reconcile_materialized_root(store: &EventStore, root: &Path) -> Result<(), String> {
-    let Some(materialized) = store.materialized_root(root)? else {
-        return Ok(());
-    };
-    let shared_root = PathBuf::from(&materialized.shared_root);
-    let disabled: HashSet<String> = store.materialized_disabled(root)?.into_iter().collect();
-
-    let shared_skills: Vec<String> = fs::read_dir(&shared_root)
-        .map_err(|e| format!("Failed to read {}: {e}", shared_root.display()))?
-        .filter_map(std::result::Result::ok)
-        .filter(|e| e.metadata().is_ok_and(|m| m.is_dir()))
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
-
-    for skill in &shared_skills {
-        if disabled.contains(skill) {
-            continue;
-        }
-        if fs::symlink_metadata(root.join(skill)).is_ok() {
-            continue; // already linked, or a real dir the user dropped in - leave it
-        }
-        relink_harness(store, root, skill, &materialized.harness)?;
-    }
-
-    for entry in
-        fs::read_dir(root).map_err(|e| format!("Failed to read {}: {e}", root.display()))?
-    {
-        let entry = entry.map_err(|e| format!("Failed to read dir entry: {e}"))?;
-        let path = entry.path();
-        let smeta = fs::symlink_metadata(&path)
-            .map_err(|e| format!("Failed to stat {}: {e}", path.display()))?;
-        if !smeta.file_type().is_symlink() {
-            continue; // a real folder the user dropped in stays theirs
-        }
-        if fs::metadata(&path).is_ok() {
-            continue; // target still resolves
-        }
-        let skill = entry.file_name().to_string_lossy().into_owned();
-        remove_stale_link(store, &path, &skill, &materialized.harness)?;
-    }
-
-    Ok(())
-}
-
-/// Removes a symlink whose shared-root target vanished out from under a
-/// materialized root - not a user disable, so it doesn't touch
-/// `materialized_disabled`: if the skill reappears in the shared root, the
-/// next reconcile relinks it. Recorded as its own event kind
-/// (`reconcile_remove_stale_link`, payload: `{root}`) so it's restorable
-/// like any other mutation.
-fn remove_stale_link(
-    store: &EventStore,
-    link: &Path,
-    skill: &str,
-    harness: &str,
-) -> Result<(), String> {
-    let literal_target =
-        fs::read_link(link).map_err(|e| format!("Failed to read link {}: {e}", link.display()))?;
-    let pre_fingerprint = fingerprint_path(link);
-    let id = allocate_id();
-    let inverse = InverseOp::RecreateSymlink {
-        link: link.to_path_buf(),
-        target: literal_target,
-        pre_fingerprint,
-        post_fingerprint: None,
-    };
-    store.record(
-        &id,
-        &EventDraft {
-            kind: "reconcile_remove_stale_link".to_string(),
-            skill: skill.to_string(),
-            harness: Some(harness.to_string()),
-            scope: None,
-            project_path: None,
-            payload: serde_json::json!({ "root": link.parent() }),
-            inverse: Some(
-                serde_json::to_value(&inverse)
-                    .map_err(|e| format!("Failed to serialize inverse: {e}"))?,
-            ),
-            backup_dir: None,
-            restorable: true,
-        },
-    )?;
-    let removed =
-        fs::remove_file(link).map_err(|e| format!("Failed to remove {}: {e}", link.display()));
-    finish_link_event(store, &id, link, removed)
-}
-
 /// Refuses restoring an `explode_shared_dir` event while per-skill state
 /// depends on its real directory. Force restore must not bypass this guard.
 pub fn restore_guard_for_explode(
@@ -888,8 +791,7 @@ pub fn restore_guard_for_explode(
 /// Finishes a recorded event after its filesystem mutation runs: on success,
 /// patches the inverse's post-fingerprint and marks the event `done`; on
 /// failure, marks it `failed` and propagates the error. Shared by
-/// `unlink_harness`, `relink_harness`, and `remove_stale_link`, which differ
-/// only in the mutation and what (if anything) they do after it succeeds.
+/// `unlink_harness` and `relink_harness`, which differ only in the mutation and what (if anything) they do after it succeeds.
 fn finish_link_event(
     store: &EventStore,
     id: &str,
@@ -1403,38 +1305,6 @@ mod tests {
             fs::canonicalize(&root).unwrap(),
             fs::canonicalize(home.join(".agents/skills")).unwrap()
         );
-    }
-
-    #[test]
-    fn reconcile_creates_missing_links_respects_disabled_and_leaves_real_dirs_alone() {
-        let tmp = tempfile::tempdir().unwrap();
-        let store = store(tmp.path());
-        let home = tmp.path().join("home");
-        write_skill(&home.join(".agents/skills/find-bugs"), "find-bugs");
-        fs::create_dir_all(home.join(".claude")).unwrap();
-        let root = home.join(".claude/skills");
-        symlink(home.join(".agents/skills"), &root).unwrap();
-        explode_shared_dir(&store, &root, "claude-code").unwrap();
-
-        // A skill installed after materialization.
-        write_skill(&home.join(".agents/skills/write-docs"), "write-docs");
-        // A skill deliberately disabled.
-        unlink_harness(&store, &root, "find-bugs", "claude-code").unwrap();
-        // A real (non-symlink) folder a user dropped straight into the root.
-        write_skill(&root.join("user-made"), "user-made");
-
-        reconcile_materialized_root(&store, &root).unwrap();
-
-        assert!(fs::symlink_metadata(root.join("write-docs"))
-            .unwrap()
-            .file_type()
-            .is_symlink());
-        assert!(fs::symlink_metadata(root.join("find-bugs")).is_err());
-        assert!(!fs::symlink_metadata(root.join("user-made"))
-            .unwrap()
-            .file_type()
-            .is_symlink());
-        assert!(root.join("user-made/SKILL.md").is_file());
     }
 
     #[test]

@@ -668,13 +668,13 @@ pub async fn apply_skill_frontmatter_repair(
 
 #[cfg(test)]
 mod tests {
-    use super::super::frontmatter::{parse_frontmatter, FrontmatterParseResult};
     use super::super::skill_fork_registry::{
         write_fork_registry, ForkRecord, ForkRegistry, OriginTool,
     };
     use super::super::skill_md_write::write_skill_md_bytes;
     use super::super::write_lease::{exclusive_lease_is_held, WriteLease, WriteLeaseGuard};
     use super::*;
+    use skill_studio_core::frontmatter::{parse_frontmatter, FrontmatterParseResult};
 
     fn home_guard(home: &Path) -> WriteLeaseGuard {
         WriteLease::default().try_acquire(home).unwrap()

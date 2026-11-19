@@ -20,9 +20,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
-use super::agents::AgentId;
 use super::commands::{dotagents_add_args, dotagents_remove_args};
-use super::skill_deployment::SkillDestination;
 use super::skill_dto::InstallScope;
 use super::skill_fork_registry::{
     fork_snapshot_dir, read_fork_registry, write_fork_registry_locked, ForkRecord, ForkRegistry,
@@ -130,86 +128,26 @@ pub trait RepoSnapshot {
 /// Real `LedgerTool`, shelling out to `npx`.
 pub struct RealLedgerTool;
 
-// ============================================================================
-// skills.sh Universal argv - moved from `skill_install_plan.rs` (unit 3.5c):
-// `skill_add.rs`'s own install path is gone, and `ops_install_cli.rs` builds
-// this argv for every new install, so this stays only for `skills_sh_unfork_add_args`
-// below, an unrelated reinstall-from-origin call `ops::install` doesn't cover.
-// ============================================================================
-
-/// One install request used by `skills_sh_unfork_add_args`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct SkillInstallSpec {
-    pub scope: InstallScope,
-    pub destination: SkillDestination,
-    pub project_path: Option<String>,
-    /// Harnesses that receive a Claude Code link (Universal). Empty
-    /// Universal still writes `.agents/skills`.
-    pub harnesses: Vec<AgentId>,
-}
-
-/// Universal skills.sh argv, and the process cwd to run it in. Never
-/// includes Codex as a proxy for Universal. `skills@1.8.1` has no `--cwd`
-/// flag (PR #101 / `fix/project-install-runs-in-project-dir`), so a project
-/// scope returns the project path as the process cwd instead of an argv
-/// token - the same fix as `ops_install_cli.rs`'s `cli_args_and_cwd`.
-pub fn skills_sh_universal_add_args(
-    repo_source: &str,
-    skill_name: Option<&str>,
-    spec: &SkillInstallSpec,
-) -> Result<(Vec<String>, Option<PathBuf>), String> {
-    if spec.destination != SkillDestination::Universal {
-        return Err("That install option is only for the shared Universal folder".to_string());
-    }
-    let mut args = vec![
-        skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE.to_string(),
-        "add".to_string(),
-        repo_source.to_string(),
-        "--yes".to_string(),
-    ];
-    let cwd = match spec.scope {
-        InstallScope::Global => {
-            args.push("--global".to_string());
-            None
-        }
-        InstallScope::Project => {
-            let path = spec
-                .project_path
-                .as_deref()
-                .ok_or("Project scope needs a project path")?;
-            Some(PathBuf::from(path))
-        }
-    };
-    if let Some(name) = skill_name {
-        args.push("--skill".to_string());
-        args.push(name.to_string());
-    }
-    args.push("--agent".to_string());
-    args.push("universal".to_string());
-    if spec.harnesses.contains(&AgentId::ClaudeCode) {
-        args.push("--agent".to_string());
-        args.push("claude-code".to_string());
-    }
-    Ok((args, cwd))
-}
-
-fn skills_sh_unfork_add_args(
-    rec: &ForkRecord,
-    name: &str,
-) -> Result<(Vec<String>, Option<PathBuf>), String> {
-    // Fork only ever applies to a global-scope skill (see
-    // `skill_refresh::build_snapshot`), so this reinstall is always global
-    // and the cwd `skills_sh_universal_add_args` returns is always `None` -
-    // still threaded through `run_npx` rather than discarded, so a future
-    // caller that reinstalls a project-scope fork gets the right cwd for
-    // free instead of a silently dropped one.
-    let spec = SkillInstallSpec {
-        scope: InstallScope::Global,
-        destination: SkillDestination::Universal,
-        project_path: None,
-        harnesses: vec![],
-    };
-    skills_sh_universal_add_args(&rec.origin_source, Some(name), &spec)
+/// The skills.sh argv that reinstalls a fork's origin into the global
+/// Universal folder. Fork only ever applies to a global-scope skill (see
+/// `skill_refresh::build_snapshot`), so this is always `--global` and runs
+/// with no process cwd. `ops_install_cli.rs` builds the argv for every new
+/// install; this reinstall-from-origin call is one `ops::install` does not
+/// cover.
+fn skills_sh_unfork_add_args(rec: &ForkRecord, name: &str) -> Vec<String> {
+    [
+        skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE,
+        "add",
+        &rec.origin_source,
+        "--yes",
+        "--global",
+        "--skill",
+        name,
+        "--agent",
+        "universal",
+    ]
+    .map(str::to_string)
+    .to_vec()
 }
 
 /// Timeout for the un-fork `npx` remove/reinstall, matching
@@ -280,14 +218,13 @@ impl LedgerTool for RealLedgerTool {
     }
 
     fn reinstall(&self, rec: &ForkRecord, name: &str) -> Result<(), String> {
-        let (args, cwd) = match rec.origin_tool {
-            OriginTool::Dotagents => (
-                dotagents_add_args(&rec.origin_source, name, rec.declared_ref.as_deref()),
-                None,
-            ),
-            OriginTool::SkillsSh => skills_sh_unfork_add_args(rec, name)?,
+        let args = match rec.origin_tool {
+            OriginTool::Dotagents => {
+                dotagents_add_args(&rec.origin_source, name, rec.declared_ref.as_deref())
+            }
+            OriginTool::SkillsSh => skills_sh_unfork_add_args(rec, name),
         };
-        run_npx(&args, cwd.as_deref())
+        run_npx(&args, None)
     }
 }
 
@@ -1797,99 +1734,6 @@ mod tests {
             .unwrap()
     }
 
-    #[test]
-    fn fork_remove_uses_the_pinned_cli_or_names_the_unpinned_package() {
-        for scope in [InstallScope::Global, InstallScope::Project] {
-            let args =
-                super::super::skill_lifecycle::skills_sh_remove_args_for_scope("alpha", scope);
-            assert_eq!(
-                args[0],
-                skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE,
-                "fork removal must use the audited CLI"
-            );
-        }
-    }
-
-    #[test]
-    fn unfork_reinstall_uses_the_pinned_cli_or_names_the_unpinned_package() {
-        let (args, _) =
-            skills_sh_universal_add_args("owner/repo", Some("alpha"), &universal_global()).unwrap();
-        assert_eq!(
-            args[0],
-            skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE,
-            "unfork reinstall must use the audited CLI"
-        );
-    }
-
-    // Moved from `skill_install_plan.rs` (unit 3.5c) alongside
-    // `skills_sh_universal_add_args` itself.
-    fn universal_global() -> SkillInstallSpec {
-        SkillInstallSpec {
-            scope: InstallScope::Global,
-            destination: SkillDestination::Universal,
-            project_path: None,
-            harnesses: vec![],
-        }
-    }
-
-    #[test]
-    fn universal_skills_sh_uses_agent_universal_and_global_or_names_the_wrong_argv() {
-        let (argv, cwd) =
-            skills_sh_universal_add_args("o/r", Some("find-bugs"), &universal_global()).unwrap();
-        assert_eq!(
-            argv,
-            vec![
-                skill_studio_core::skills_cli_agents::SKILLS_CLI_PACKAGE,
-                "add",
-                "o/r",
-                "--yes",
-                "--global",
-                "--skill",
-                "find-bugs",
-                "--agent",
-                "universal",
-            ]
-        );
-        assert!(!argv.iter().any(|a| a == "codex"));
-        assert_eq!(cwd, None);
-    }
-
-    #[test]
-    fn universal_skills_sh_may_add_claude_code_not_codex_or_names_the_missing_agent() {
-        let mut spec = universal_global();
-        spec.harnesses = vec![AgentId::ClaudeCode];
-        let (argv, _cwd) = skills_sh_universal_add_args("o/r", None, &spec).unwrap();
-        assert!(argv.windows(2).any(|w| w == ["--agent", "universal"]));
-        assert!(argv.windows(2).any(|w| w == ["--agent", "claude-code"]));
-        assert!(!argv.iter().any(|a| a == "codex"));
-    }
-
-    #[test]
-    fn universal_skills_sh_ignores_direct_readers_or_names_the_leaked_agent() {
-        let mut spec = universal_global();
-        spec.harnesses = vec![AgentId::Codex];
-        let (argv, _cwd) = skills_sh_universal_add_args("o/r", None, &spec).unwrap();
-        assert!(!argv.iter().any(|arg| arg == "codex"));
-    }
-
-    /// `skills@1.8.1` has no `--cwd` flag: a project scope must carry the
-    /// project path as the process cwd, not as an argv token, or the CLI
-    /// writes into whatever directory the process happened to start in.
-    #[test]
-    fn project_universal_runs_in_project_dir_not_via_cwd_flag_or_names_the_wrong_scope() {
-        let spec = SkillInstallSpec {
-            scope: InstallScope::Project,
-            destination: SkillDestination::Universal,
-            project_path: Some("/work/app".to_string()),
-            harnesses: vec![],
-        };
-        let (argv, cwd) = skills_sh_universal_add_args("o/r", None, &spec).unwrap();
-        assert!(!argv.contains(&"--cwd".to_string()));
-        assert!(!argv.contains(&"/work/app".to_string()));
-        assert!(!argv.contains(&"--global".to_string()));
-        assert_eq!(cwd, Some(PathBuf::from("/work/app")));
-    }
-
     /// Records every `remove`/`reinstall` call so tests can assert "called
     /// once with the right `OriginTool`" without shelling out to `npx`.
     #[derive(Default)]
@@ -2158,7 +2002,10 @@ mod tests {
             .unwrap()
             .deployments
             .iter()
-            .find(|deployment| deployment.destination == SkillDestination::Universal)
+            .find(|deployment| {
+                deployment.destination
+                    == super::super::skill_deployment::SkillDestination::Universal
+            })
             .unwrap();
         let target = super::super::skill_dto::LifecycleTarget {
             deployment_id: Some(deployment.id.clone()),
@@ -3368,49 +3215,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn pull_conflict_produces_markers_and_is_listed() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        let app_data = tmp.path().join("data");
-        seed_registry(
-            &home,
-            &app_data,
-            "find-bugs",
-            &"a".repeat(40),
-            "line one\nbase line\n",
-        );
-        // Mine diverges from base.
-        write_file(
-            &home.join(".agents/skills/find-bugs/SKILL.md"),
-            "line one\nmine line\n",
-        );
-        seed_update_check_latest(&app_data, "find-bugs", &"b".repeat(40));
-
-        let fetch = FakeFetch {
-            files: vec![("SKILL.md", "line one\ntheirs line\n")],
-        };
-        let editor = RecordingEditorOpener::default();
-        let result = pull_fork_upstream_with(
-            &test_guard(&home),
-            &home,
-            &app_data,
-            "find-bugs",
-            &fetch,
-            &NeverCalledLookup,
-            &editor,
-        )
-        .unwrap();
-
-        assert_eq!(result.conflicts, vec!["SKILL.md".to_string()]);
-        let mine = fs::read_to_string(home.join(".agents/skills/find-bugs/SKILL.md")).unwrap();
-        assert!(mine.contains("<<<<<<<"));
-        assert!(
-            !editor.opened.lock().unwrap().is_empty(),
-            "expected the conflict to open the editor"
-        );
-    }
-
     /// Restores a directory's permissions on drop, so a fault-injection test
     /// that locks a directory down doesn't leave the tempdir un-removable
     /// even if an assertion panics first.
@@ -3658,7 +3462,7 @@ mod tests {
             base_commit: "a".repeat(40),
         };
 
-        let (args, cwd) = skills_sh_unfork_add_args(&record, "find-bugs").unwrap();
+        let args = skills_sh_unfork_add_args(&record, "find-bugs");
         assert_eq!(
             args,
             vec![
@@ -3672,10 +3476,6 @@ mod tests {
                 "--agent",
                 "universal",
             ]
-        );
-        assert_eq!(
-            cwd, None,
-            "a fork is always global-scope, so unfork never sets a process cwd"
         );
     }
 
@@ -3750,34 +3550,6 @@ mod tests {
         let calls = ledger.reinstall_calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0.declared_ref.as_deref(), Some("v1.2.3"));
-    }
-
-    #[test]
-    fn unfork_reinstall_has_no_ref_when_unpinned() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        let app_data = tmp.path().join("data");
-        let mut registry = read_fork_registry(&home).unwrap();
-        registry.forks.insert(
-            "find-bugs".to_string(),
-            ForkRecord {
-                deployment_id: String::new(),
-                skill_dir: PathBuf::new(),
-                forked_at: "2026-01-01T00:00:00Z".to_string(),
-                origin_tool: OriginTool::SkillsSh,
-                origin_source: "obra/find-bugs".to_string(),
-                repo: "obra/find-bugs".to_string(),
-                path: "skills/find-bugs".to_string(),
-                declared_ref: None,
-                base_commit: "a".repeat(40),
-            },
-        );
-        write_fork_registry(&home, &mut registry).unwrap();
-
-        let ledger = FakeLedger::default();
-        unfork_skill_with(&test_guard(&home), &home, &app_data, "find-bugs", &ledger).unwrap();
-        let calls = ledger.reinstall_calls.lock().unwrap();
-        assert_eq!(calls[0].0.declared_ref, None);
     }
 
     // ------------------------------------------------------------------

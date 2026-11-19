@@ -1211,9 +1211,8 @@ fn scan_one_plugin_target(
                     harness: Some(target.harness.clone()),
                     path: plugin_skill.skill_dir.clone(),
                     destination: SkillDestination::PerHarness,
-                    // Matches `id_for_candidate`: a plugin cache entry
-                    // is never the universal root and is never linked,
-                    // so it falls to the same `Independent` branch as
+                    // A plugin cache entry is never the universal root
+                    // and is never linked, so it is `Independent`, like
                     // any other plain per-harness directory.
                     backing: BackingRelationship::Independent,
                     mutability: DeploymentMutability::ReadOnly,
@@ -1499,8 +1498,7 @@ fn process_entries(
             }
         };
 
-        // Matches the desktop's `id_for_candidate` (`skill_deployment.rs`):
-        // a root that is itself universal is always Canonical; otherwise a
+        // A root that is itself universal is always Canonical; otherwise a
         // per-skill symlink into the universal root, or a whole-directory
         // link (the root itself is a symlink), promotes the deployment to
         // the Universal destination as a link back to that canonical entry;
@@ -2485,10 +2483,9 @@ fn native_disabled_by(
 
 /// True when `path`'s components contain a contiguous `[".agents",
 /// "skills"]` window, i.e. it names something inside the universal root.
-/// Mirrors the desktop's `path_is_under_universal_skills`
-/// (`skill_deployment.rs`); works on a raw (unresolved) symlink target the
-/// same way the desktop does, since a link written as `../../.agents/
-/// skills/<name>` carries the window regardless of the leading `..`s.
+/// Works on a raw (unresolved) symlink target, since a link written as
+/// `../../.agents/skills/<name>` carries the window regardless of the
+/// leading `..`s.
 fn path_is_under_universal_skills(path: &Path) -> bool {
     let components: Vec<String> = path
         .components()
@@ -2709,9 +2706,8 @@ fn project_label(scope: &RootScope) -> Option<String> {
     }
 }
 
-/// The `dep:v1` id's harness/universal path segment for a root, matching the
-/// desktop's `harness_slot` (`skill_deployment.rs`): every harness's own
-/// wire id, except `OpenCode`, whose slot is the un-hyphenated CLI name
+/// The `dep:v1` id's harness/universal path segment for a root: every
+/// harness's own wire id, except `OpenCode`, whose slot is the un-hyphenated CLI name
 /// `opencode`; `universal` for the shared and parked roots.
 pub(crate) fn harness_slot(id: &AgentId) -> String {
     if id.as_str() == AgentId::OPEN_CODE {
