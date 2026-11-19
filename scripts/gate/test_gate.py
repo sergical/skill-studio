@@ -382,7 +382,9 @@ class GateTests(unittest.TestCase):
                 self.commit()
                 self.assertEqual(self.risk()['tier'], 'stop')
         for lock in ['  left-pad@1.0.0:\n    "res\\x6flution": {tarball: https://example.invalid/a.tgz}\n',
-                     'patchedDependencies:\n  left-pad@1.0.0: patches/a.patch\n']:
+                     'patchedDependencies:\n  left-pad@1.0.0: patches/a.patch\n',
+                     "  left-pad@1.0.0:\n    resolution: {integrity: sha512-c}\r      'tarball': https://example.invalid/a.tgz\n",
+                     '  left-pad@1.0.0:\n    resolution: {integrity: sha512-d}\u2028tarball: x\n']:
             with self.subTest(lock):
                 self.write('pnpm-lock.yaml', lock)
                 self.commit()

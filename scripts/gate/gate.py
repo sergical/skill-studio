@@ -88,7 +88,7 @@ def classify(cfg, base, head='HEAD', raise_to=None, reason=None, author=''):
                 hits.append({'rule': 'dependencies', 'tier': 'stop', 'files': [path]})
     for path in files:
         if matches(path, cfg.get('lock_files', [])) and lock_adds_outside_code(
-                subprocess.check_output(['git', 'diff', base, head, '--', path], text=True)):
+                subprocess.check_output(['git', 'diff', base, head, '--', path])):
             hits.append({'rule': 'dependencies', 'tier': 'stop', 'files': [path]})
     tier = max((h['tier'] for h in hits), key=TIERS.index, default='ship')
     if raise_to:
@@ -236,11 +236,13 @@ def lock_adds_outside_code(diff):
     registry. A registry entry is `resolution: {integrity: sha512-...}`. Without
     double quotes, backslashes, anchors, tags and explicit keys, YAML cannot
     spell a key except as written, so any other resolution shows."""
-    for line in diff.splitlines():
+    # Git ends lines at LF only. Read bytes so a carriage return cannot start a
+    # line that git did not mark as added.
+    for line in diff.decode('utf-8', 'replace').split('\n'):
         if not line.startswith('+') or line.startswith('+++'):
             continue
         text = line[1:]
-        if re.search(r'["\\&!%]|\*\w|^\s*\?|patchedDependencies|pnpmfileChecksum', text):
+        if re.search(r'[^\t\x20-\x7e]|["\\&!%]|\*\w|^\s*\?|patchedDependencies|pnpmfileChecksum', text):
             return True
         if 'resolution' in text and not re.fullmatch(r'\s*resolution: \{integrity: sha512-[A-Za-z0-9+/=]+\}', text):
             return True
