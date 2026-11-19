@@ -154,11 +154,10 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
   const pausedForTrust = new Map<string, { request: AddRequestLike; batch: boolean }>();
   // Mirrors `trusted_dotagents_sources`: every repository a fixture skill came from through
   // dotagents was trusted when it was added.
-  const trustedSources = new Set(
-    initial.skills
-      .filter((item) => item.source_kind === "dotagents")
-      .map((item) => item.source.toLowerCase()),
-  );
+  const trustedSources = new Set<string>();
+  for (const item of initial.skills) {
+    if (item.source_kind === "dotagents") trustedSources.add(item.source.toLowerCase());
+  }
   // Mirrors the backend's `~/.agents/skill-studio.json` `projects` key - the register/unregister/
   // import handlers below mutate it with the same track/untrack rules as `TrackedProjects` in
   // `crates/skill-studio-core`, and `get_tracked_projects` reads it back.
@@ -467,11 +466,11 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
    * target, which names the skill and not one folder. */
   function targetIdsOf(item: InstalledSkill, deploymentId: string | null | undefined): Set<string> {
     if (deploymentId) return new Set([deploymentId]);
-    return new Set(
-      item.deployments
-        .filter((entry) => entry.backing.kind !== "linked-to")
-        .map((entry) => entry.id),
-    );
+    const ids = new Set<string>();
+    for (const entry of item.deployments) {
+      if (entry.backing.kind !== "linked-to") ids.add(entry.id);
+    }
+    return ids;
   }
 
   function buildAddedSkill(
