@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SkillThrow } from "./SkillThrow";
 import { PILE, PILE_COUNTS } from "./skill-pile-data";
+import { fly, frame, poseTransform } from "./skill-pile-kit";
 
 beforeEach(() => {
   vi.stubGlobal(
@@ -74,6 +75,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  sessionStorage.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -131,5 +133,38 @@ describe("single-copy parking", () => {
     await user.keyboard("{Enter}");
     expect(Element.prototype.animate).toHaveBeenCalled();
     expect(container.querySelector('[aria-live="polite"]')?.textContent).toContain("1 parked.");
+  });
+});
+
+describe("intro", () => {
+  it("plays once per session, then opens on the tidy result", async () => {
+    setReducedMotion(false);
+    const animate = vi.mocked(Element.prototype.animate);
+    const first = render(<SkillThrow />);
+    await act(async () => {});
+    expect(animate).toHaveBeenCalled();
+    expect(first.container.querySelector('[aria-live="polite"]')?.textContent).toContain(
+      `${PILE_COUNTS.total} skills`,
+    );
+    first.unmount();
+    animate.mockClear();
+    const second = render(<SkillThrow />);
+    await act(async () => {});
+    expect(animate).not.toHaveBeenCalled();
+    expect(second.container.querySelector('[aria-live="polite"]')?.textContent).toContain(
+      `${PILE_COUNTS.kept} kept.`,
+    );
+    expect(screen.getByRole("button", { name: "Make a mess again" })).toBeTruthy();
+  });
+});
+
+describe("fly", () => {
+  // WebKit can commit the first keyframe at the end of a flight. The mock commits nothing.
+  it("ends on its last keyframe, whatever the browser commits", async () => {
+    const chip = document.createElement("span");
+    fly(chip, [frame({ x: 10, y: 20 })], { x: 30, y: 40, o: 0 }, { duration: 100 });
+    await Promise.resolve();
+    expect(chip.style.transform).toBe(poseTransform({ x: 30, y: 40 }));
+    expect(chip.style.opacity).toBe("0");
   });
 });

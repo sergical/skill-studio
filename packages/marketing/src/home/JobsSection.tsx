@@ -29,9 +29,15 @@ interface Job {
   icon: LucideIcon;
   label: string;
   blurb: string;
+  /** Only real actions count as steps. Facts about the problem go in `byHandCost`. */
   byHand: Step[];
+  /** What multiplies the steps, for example "for each skill". */
+  byHandRepeat: string;
   byHandCost: string;
-  withStudio: Step[];
+  /** The one action in the app. The finding work is already done when the user arrives. */
+  studioStep: string;
+  /** What the app already did before the step, and what happens after it. Not steps. */
+  studioNotes: string[];
   command: string;
 }
 
@@ -51,13 +57,14 @@ const jobs: ReadonlyArray<Job> = [
         text: "Compare each copy with the new version.",
         code: "diff -r ~/.agents/skills/sql-review ~/.cursor/skills/sql-review",
       },
-      { text: "Copy the new files into each agent's folder. Do it again for the next skill." },
+      { text: "Copy the new files into each agent's folder." },
     ],
+    byHandRepeat: "for each skill",
     byHandCost: "One folder per agent. Miss one and that agent keeps the old version.",
-    withStudio: [
-      { text: "Updates on Home lists each skill that has a new version." },
-      { text: "Click Update, or Update all." },
-      { text: "Warnings shows each copy that still differs. Compare the copies side by side." },
+    studioStep: "Click Update all on Home.",
+    studioNotes: [
+      "Home already lists each skill that has a new version.",
+      "Each agent that links the skill gets the new version. A copy that you edited shows in Warnings, next to the new one.",
     ],
     command: "skill-studio outdated",
   },
@@ -75,15 +82,12 @@ const jobs: ReadonlyArray<Job> = [
       { text: "Guess which skills you wrote and which ones you changed." },
       { text: "Paste a list of repos into chat. Zip the rest." },
     ],
+    byHandRepeat: "each time someone asks",
     byHandCost: "The lock file knows only one installer. Your own skills are not in it.",
-    withStudio: [
-      { text: "Put your skills in a git repo, such as acme-labs/review-skills." },
-      {
-        text: "Your teammate pastes the repo in Packs and clicks Add pack. Each change shows its plan before it runs.",
-      },
-      {
-        text: "Check upstream finds new versions and new skills. Update skips each skill your teammate edited, and says why.",
-      },
+    studioStep: "Your teammate pastes your repo in Packs and clicks Add pack.",
+    studioNotes: [
+      "Your skills live in one git repo, such as acme-labs/review-skills. Packs shows the plan before it runs.",
+      "Check upstream finds new versions and new skills. Update skips each skill your teammate edited, and says why.",
     ],
     command: "skill-studio pack add acme-labs/review-skills",
   },
@@ -104,12 +108,13 @@ const jobs: ReadonlyArray<Job> = [
         code: "readlink ~/.claude/skills/pdf-tools",
       },
     ],
+    byHandRepeat: "for each agent",
     byHandCost:
       "Each agent reads different folders, and none of them tells you why it skipped a skill.",
-    withStudio: [
-      { text: "Diagnose names the problem in each skill, for each agent." },
-      { text: "Fix repairs the header or the link, and lists what it cannot repair." },
-      { text: "Undo reverses the fix." },
+    studioStep: "Click Fix on the skill.",
+    studioNotes: [
+      "Home already lists the skill under Broken, with the problem for each agent.",
+      "Fix repairs the header or the link, and tells you what it cannot repair. Undo reverses it.",
     ],
     command: "skill-studio diagnose",
   },
@@ -119,17 +124,19 @@ const jobs: ReadonlyArray<Job> = [
     label: "Your agents load skills you never use",
     blurb: "Keep only the skills that run.",
     byHand: [
-      { text: "Each skill's description goes into your agent's prompt, used or not." },
+      { text: "List the skills in the agent's folders." },
       {
-        text: "Search each agent's session logs to find which skills ran. Each agent uses a different log format.",
+        text: "Search the agent's session logs to find which skills ran. Each agent uses a different log format.",
       },
       { text: "Delete the folders you think you do not need, and hope that you are right." },
     ],
-    byHandCost: "No agent shows which skills it used, so the list only gets longer.",
-    withStudio: [
-      { text: "Usage shows which skills ran in the last 30 days, for each agent." },
-      { text: "Park the rest. They leave your agents' lists. Nothing is deleted." },
-      { text: "Unpark or Undo brings a skill back." },
+    byHandRepeat: "for each agent",
+    byHandCost:
+      "Each skill's description goes into your agent's prompt, used or not. No agent shows which skills it used, so the list only gets longer.",
+    studioStep: "Click Park on the skills you do not need.",
+    studioNotes: [
+      "Home already lists each skill that no agent used in the last 30 days.",
+      "A parked skill leaves your agents' lists. Nothing is deleted, and Unpark brings it back.",
     ],
     command: "skill-studio usage",
   },
@@ -203,7 +210,9 @@ export function JobsSection() {
           <div {...stylex.props(styles.card, styles.byHandCard)}>
             <h3 {...stylex.props(styles.cardTitle)}>
               By hand
-              <span {...stylex.props(styles.stepCount)}>{job.byHand.length} steps</span>
+              <span {...stylex.props(styles.stepCount)}>
+                {job.byHand.length} steps, {job.byHandRepeat}
+              </span>
             </h3>
             <ol {...stylex.props(styles.steps)}>
               {job.byHand.map((step, index) => (
@@ -228,16 +237,17 @@ export function JobsSection() {
           <div {...stylex.props(styles.card, styles.withCard)}>
             <h3 {...stylex.props(styles.cardTitle)}>
               With Skill Studio
-              <span {...stylex.props(styles.stepCount)}>{job.withStudio.length} steps</span>
+              <span {...stylex.props(styles.stepCount, styles.oneStep)}>1 step</span>
             </h3>
-            <ul {...stylex.props(styles.steps)}>
-              {job.withStudio.map((step) => (
-                <li key={step.text} {...stylex.props(styles.step)}>
-                  <span aria-hidden="true" {...stylex.props(styles.check)}>
-                    <Check size={13} strokeWidth={2.5} />
-                  </span>
-                  <span {...stylex.props(styles.stepBody)}>{step.text}</span>
-                </li>
+            <p {...stylex.props(styles.studioStep)}>
+              <span aria-hidden="true" {...stylex.props(styles.check)}>
+                <Check size={16} strokeWidth={2.5} />
+              </span>
+              {job.studioStep}
+            </p>
+            <ul {...stylex.props(styles.notes)}>
+              {job.studioNotes.map((note) => (
+                <li key={note}>{note}</li>
               ))}
             </ul>
             <p {...stylex.props(styles.commandLine)}>
@@ -328,7 +338,7 @@ const styles = stylex.create({
     gap: 16,
     gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
     minWidth: 0,
-    "@media (max-width: 1000px)": { gridTemplateColumns: "1fr" },
+    "@media (max-width: 1000px)": { gridTemplateColumns: "minmax(0, 1fr)" },
   },
   card: {
     borderRadius: 14,
@@ -361,6 +371,33 @@ const styles = stylex.create({
     margin: 0,
   },
   stepCount: { color: siteTokens.muted, fontSize: 12, fontWeight: 500 },
+  oneStep: { color: siteTokens.text, fontWeight: 650 },
+  studioStep: {
+    alignItems: "flex-start",
+    color: siteTokens.text,
+    display: "flex",
+    fontSize: 22,
+    fontWeight: 650,
+    gap: 12,
+    letterSpacing: "-.015em",
+    lineHeight: 1.3,
+    margin: 0,
+    textWrap: "balance",
+    "@media (max-width: 600px)": { fontSize: 19 },
+  },
+  notes: {
+    color: siteTokens.muted,
+    display: "flex",
+    flexDirection: "column",
+    fontSize: 14,
+    gap: 10,
+    lineHeight: 1.5,
+    listStyle: "none",
+    margin: 0,
+    padding: "0 0 0 40px",
+    textWrap: "pretty",
+    "@media (max-width: 600px)": { paddingLeft: 0 },
+  },
   steps: {
     display: "flex",
     flexDirection: "column",
@@ -392,9 +429,10 @@ const styles = stylex.create({
     color: siteTokens.accentText,
     display: "flex",
     flexShrink: 0,
-    height: 22,
+    height: 28,
     justifyContent: "center",
-    width: 22,
+    marginTop: -1,
+    width: 28,
   },
   stepBody: {
     color: siteTokens.text,
