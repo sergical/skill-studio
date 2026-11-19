@@ -52,6 +52,7 @@ pub mod install_tools;
 pub mod invocation;
 pub mod journal;
 pub mod listing_cost;
+pub mod listing_visibility;
 pub mod lock_file;
 pub mod opencode_config;
 pub mod ops;

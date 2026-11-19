@@ -155,6 +155,7 @@ const EXPECTED_WRAPPER_COMMANDS = {
     command: "get_add_method_defaults",
   },
   packList: { kind: "command", command: "pack_list" },
+  skillListing: { kind: "command", command: "skill_listing" },
   packAdd: { kind: "command", command: "pack_add" },
   packUpdate: { kind: "command", command: "pack_update" },
   packRemove: { kind: "command", command: "pack_remove" },

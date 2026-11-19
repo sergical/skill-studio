@@ -369,30 +369,59 @@ problem).
 
 ## Model listing budgets
 
-Verified on 2026-11-11 against installed Claude Code 2.1.319 and Codex CLI
-0.167.0. `skill-studio doctor --json` and the MCP `doctor` tool return
+Verified on 2026-11-11 against Claude Code 2.1.319 and Codex CLI
+0.167.0, and on 2026-11-19 against Claude Code 2.1.327 and Codex CLI 0.170.0. `skill-studio doctor --json` and the MCP `doctor` tool return
 `listing_cost` for each harness and session scope. Project rows include global
 skills. Codex and Claude keep same-name skills from different files and remove
 duplicate file paths. Parked, hidden, disabled-plugin, and manual-only skills
 do not enter the count. Codex also rejects missing or blank descriptions.
 The five largest entries help the owner choose skills to park or make manual-only.
 
-Claude's installed executable at `~/.local/share/claude/versions/2.1.319`
-contains its JavaScript. `dOt` computes the character budget as context tokens
-multiplied by four, then by `skillListingBudgetFraction`, default 0.01.
-`Z9t` reads `skillListingMaxDescChars`, default 1536. `Y_n` counts the name,
-capped description, list punctuation, and newlines. `X_n` keeps names and removes
-lower-priority descriptions when the list is over budget. `cOt` adds
-`when_to_use` text. `yt` reads merged settings, including user
-`~/.claude/settings.json`, project `.claude/settings.json`, and project
-`.claude/settings.local.json`. Managed settings and session flags can also apply.
-The skill directory loader removes duplicate real file paths. It keeps name
-collisions and calls `t0t` with `resolves: false`. Plugin skill loading also
-removes duplicate real paths. Disabled plugins do not supply skills.
-The listing call uses `Xh(mainLoopModel, jp())` for the active context size and
-`E_(mainLoopModel)` for the character ratio. If no context is supplied, `dOt`
-uses 200000 tokens. An environment character-budget override and experiments
-can change the live budget.
+Claude's installed executable at `~/.local/share/claude/versions/2.1.327`
+contains its JavaScript (checked on 2026-11-19).
+`hVt` computes the character budget as context tokens times characters per
+token times `skillListingBudgetFraction`, default 0.01, at least 1.
+`SLASH_COMMAND_TOOL_CHAR_BUDGET` replaces it. Only when the fraction is not
+set, an account experiment (`tengu_typed_pebble`, cached in `~/.claude.json`
+`cachedGrowthBookFeatures`, capped at 100000) can raise it; this path is
+inferred from the code, not observed. The context size is the active model's
+window (`$h`); characters per token (`Ky`) are 4 for Claude 3.x and the 4.0 to
+4.6 models and 3 for newer models. Skill Studio resolves the model from the
+`model` setting, else the last session's model, through Claude Code's cache
+`~/.claude/cache/model-catalog/*.json`: `provider_alias_targets.<alias>.default`
+gives the id, and `runtime.max_input_tokens` the window. A `[1m]` suffix means 1000000. On this machine `opus` is `claude-opus-5-5` with 1000000 tokens, so
+0.01 is 30000 characters; a `--debug-file` log of `claude -p` printed
+"9000 budget" at 0.003, which matches.
+
+`oVn` builds the listing. An entry is `- name: description`, or `- name`
+without one. The description is the frontmatter `description` plus
+` - when_to_use` when set, cut to `skillListingMaxDescChars` (default 1536)
+with an ellipsis. Width is display width (`Bun.stringWidth`); entries are
+joined by newlines. When the full listing fits, every entry keeps its
+description. Otherwise bundled skills and `skillOverrides` `name-only`
+entries keep their form, every other entry starts as a name, and descriptions
+come back in usage-score order while each still fits in what is left (a
+greedy pass: a smaller description later in the order can still fit). The
+score (`jBr`) is `usageCount × max(0.5^(days since lastUsedAt / 7), 0.1)` from
+`skillUsage` in `~/.claude.json`. The sort is stable, so equal scores keep
+listing order: user and plugin skill folders, bundled skills, then built-in
+commands and synced plugins. `skillOverrides` `off` and `user-invocable-only`
+remove an entry. Plugin skills are listed as `plugin:name`, and only for user
+installs or installs for the session's project (`plugins/installed_plugins.json`).
+The listing keeps one entry per name.
+
+Claude Code records each session's listing in its transcript
+(`~/.claude/projects/<path with non-alphanumerics as ->/<session>.jsonl`) as an
+`attachment` of type `skill_listing` with `isInitial`, `names` and `content`.
+Skill Studio reads the newest 20 transcripts for the scope: the newest gives
+the observed state and the listing order, and all of them size the entries
+Skill Studio does not scan (bundled skills, built-in commands, synced plugins).
+An entry never seen with a description stays a name; one seen both ways
+competes for the budget. The settings loader is the same as before: `yt`
+merges user `~/.claude/settings.json`, project `.claude/settings.json`, and
+project `.claude/settings.local.json`; managed settings and session flags can
+also apply. The skill directory loader removes duplicate real file paths.
+Disabled plugins do not supply skills.
 
 Codex's installed package identifies version 0.167.0. Its binary contains
 `SkillsConfig.max_context_tokens`, `SkillMetadataBudget`, and the bounded-list
@@ -402,8 +431,15 @@ sets the budget to 2% of the supplied context window. Without one, it uses 8000
 characters. An explicit `skills.max_context_tokens` overrides this and is capped
 at 10000 tokens. The renderer caps descriptions at 1024 characters. It counts
 names, descriptions, locators, line syntax, and any root-alias overhead. It uses
-UTF-8 bytes divided by four for token estimates. It shortens descriptions, then
-omits entries if even their names and locators do not fit. Extension listings
+UTF-8 bytes divided by four for token estimates. When the full list does not fit, it gives
+each description one more character per pass, in list order, while the line
+still fits (so all descriptions shrink about evenly from the end); if even
+names and locators do not fit, it keeps names in list order while they fit
+and omits the rest. The core-compatible order is repository skills, then
+user skills, by name, then path. Codex 0.170.0 `render.rs` is unchanged. The
+context window is the model's `context_window` (else `max_context_window`)
+in `$CODEX_HOME/models_cache.json` for the `model` setting; on this machine
+`gpt-6-astra` has 272000, so the budget is 5440 tokens. Extension listings
 can use `interface.short_description` from `agents/openai.yaml`. The
 [config type](https://github.com/openai/codex/blob/rust-v0.167.0/codex-rs/config/src/skills_config.rs)
 loads through Codex's config layers, which can include user, project, and session
@@ -433,11 +469,23 @@ and selected project settings. It reads Codex's user config,
 `.codex/config.toml` layers. Each budget reports the file that supplied it.
 Project trust uses exact and canonical path records and the nearest configured
 project root marker, `.git` by default. Separate worktree repository trust
-roots, system config, and session overrides are not resolved. Without a session
-context, it reports Claude's 200000
-token default or Codex's 8000-character fallback as 2000 estimated tokens. The
+roots, system config, and session overrides are not resolved. Without a known
+model, it reports Claude's 200000-token default at 4 characters per token,
+or Codex's 8000-character fallback, as 2000 estimated tokens. The
 `limit_source` and `uses_default_context_window` fields state the fallback.
-An unknown limit is null with source `no known limit`. OpenCode, pi, Cursor, and
+An unknown limit is null with source `no known limit`.
+
+`skill-studio listing`, the MCP `listing` tool and the desktop Model listing
+page report each skill's state per agent and scope: `described`, `truncated`,
+`name_only`, `omitted` or `hidden` (manual-only, off in settings, parked,
+plugin off or installed for another project, or rejected by Codex). Inputs
+predict another Claude fraction, context window or Codex
+`skills.max_context_tokens`. Skill Studio does not write these settings: the
+report gives the text and the file, and the chezmoi source when chezmoi
+manages the file. Measured on 2026-11-19 with five `claude -p` sessions at
+fractions 0.003 to 0.02: 418 of 420 predicted skill states matched the
+recorded listing (99.5%), and the model named the described skills of its
+own listing correctly in 755 of 755 cases. OpenCode, pi, Cursor, and
 Grok Build currently have no known listing limit. `near_limit` starts at 80%;
 `over_limit` means the estimate exceeds the budget. These are warning findings.
 
