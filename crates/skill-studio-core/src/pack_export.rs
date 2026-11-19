@@ -280,8 +280,12 @@ fn collect(
     into: &Path,
     planned: &mut Vec<PlannedFile>,
 ) -> Result<(), CoreError> {
-    let root = fs.canonicalize(folder).map_err(|e| CoreError::io(folder, e))?;
-    let bound = fs.fsops_bind_root(&root).map_err(|e| CoreError::io(&root, e))?;
+    let root = fs
+        .canonicalize(folder)
+        .map_err(|e| CoreError::io(folder, e))?;
+    let bound = fs
+        .fsops_bind_root(&root)
+        .map_err(|e| CoreError::io(&root, e))?;
     let reader = bound.as_deref().unwrap_or(fs);
     let mut walk = Walk {
         fs,
@@ -316,7 +320,10 @@ impl Walk<'_> {
             }
             let path = dir.join(&entry.name);
             let target = if entry.kind == FileKind::Symlink {
-                let resolved = self.fs.canonicalize(&path).map_err(|e| CoreError::io(&path, e))?;
+                let resolved = self
+                    .fs
+                    .canonicalize(&path)
+                    .map_err(|e| CoreError::io(&path, e))?;
                 if !resolved.starts_with(self.root) {
                     return Err(Self::refuse(
                         &path,
@@ -335,7 +342,10 @@ impl Walk<'_> {
             match facts.kind {
                 FileKind::Dir => {
                     if self.open.contains(&target) {
-                        return Err(Self::refuse(&path, "a link in the skill loops back into its own folder"));
+                        return Err(Self::refuse(
+                            &path,
+                            "a link in the skill loops back into its own folder",
+                        ));
                     }
                     self.open.push(target.clone());
                     self.dir(&target, &relative)?;
@@ -361,13 +371,20 @@ impl Walk<'_> {
         mode: Option<u32>,
     ) -> Result<(), CoreError> {
         if self.planned.len() >= MAX_FILES {
-            return Err(Self::refuse(path, "the pack would hold more than 10,000 files"));
+            return Err(Self::refuse(
+                path,
+                "the pack would hold more than 10,000 files",
+            ));
         }
         let bytes = self
             .reader
             .fsops_read_capped(target, MAX_FILE_BYTES)
             .map_err(|e| CoreError::io(path, e))?;
-        let total: u64 = self.planned.iter().map(|f| f.bytes.len() as u64).sum::<u64>()
+        let total: u64 = self
+            .planned
+            .iter()
+            .map(|f| f.bytes.len() as u64)
+            .sum::<u64>()
             + bytes.len() as u64;
         if total > MAX_TOTAL_BYTES {
             return Err(Self::refuse(path, "the pack would hold more than 256 MB"));
@@ -391,17 +408,22 @@ impl Walk<'_> {
 fn write_pack(fs: &dyn ScopeFs, dir: &Path, planned: &[PlannedFile]) -> Result<(), CoreError> {
     let created = fs.symlink_metadata(dir).is_err();
     if created {
-        fs.fsops_create_dir(dir).map_err(|e| CoreError::io(dir, e))?;
+        fs.fsops_create_dir(dir)
+            .map_err(|e| CoreError::io(dir, e))?;
     }
     let is_real_dir = |fs: &dyn ScopeFs| {
-        fs.symlink_metadata(dir).is_ok_and(|facts| facts.kind == FileKind::Dir)
+        fs.symlink_metadata(dir)
+            .is_ok_and(|facts| facts.kind == FileKind::Dir)
     };
     if !is_real_dir(fs) {
         return Err(Walk::refuse(dir, "the pack folder is no longer a folder"));
     }
     let bound = fs.fsops_bind_root(dir).map_err(|e| CoreError::io(dir, e))?;
     let writer = bound.as_deref().unwrap_or(fs);
-    let empty = fs.read_dir(dir).map_err(|e| CoreError::io(dir, e))?.is_empty();
+    let empty = fs
+        .read_dir(dir)
+        .map_err(|e| CoreError::io(dir, e))?
+        .is_empty();
     if !is_real_dir(fs) || !empty {
         return Err(Walk::refuse(
             dir,
@@ -418,7 +440,11 @@ fn write_pack(fs: &dyn ScopeFs, dir: &Path, planned: &[PlannedFile]) -> Result<(
             format!(
                 "remove what it wrote in {}: {}",
                 dir.display(),
-                written.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
+                written
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )
         };
         CoreError::io(path, e).with_detail(format!("the export stopped here; {undo}"))
@@ -482,7 +508,11 @@ fn readme(source: &str, skills: &[String], install_command: &str) -> String {
     );
     // Writing to a `String` cannot fail.
     for skill in skills {
-        let _ = writeln!(text, "{}", install_line(source, std::slice::from_ref(skill)));
+        let _ = writeln!(
+            text,
+            "{}",
+            install_line(source, std::slice::from_ref(skill))
+        );
     }
     text.push_str("```\n");
     if source == SOURCE_PLACEHOLDER {

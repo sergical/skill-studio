@@ -213,8 +213,8 @@ fn pack_export_refuses_a_link_that_loops_back_into_the_skill() {
     std::os::unix::fs::symlink(".", skill.join("loop")).unwrap();
     let rt = runtime(&home);
 
-    let err = ops::pack_export(&rt, &ctx(), &export(&home.join("pack"), &["epsilon"], true))
-        .unwrap_err();
+    let err =
+        ops::pack_export(&rt, &ctx(), &export(&home.join("pack"), &["epsilon"], true)).unwrap_err();
 
     assert_eq!(err.code, ErrorCode::InvalidRequest);
     assert!(err.message.contains("loops back"), "{err:?}");
@@ -227,7 +227,10 @@ fn pack_export_refuses_a_link_that_loops_back_into_the_skill() {
 #[test]
 fn pack_export_quotes_each_install_argument_for_the_shell() {
     let home = home("pack_export_quote");
-    write(&home.join(".agents/skills/my skill;id/SKILL.md"), &skill_md("my skill;id"));
+    write(
+        &home.join(".agents/skills/my skill;id/SKILL.md"),
+        &skill_md("my skill;id"),
+    );
     let rt = runtime(&home);
     let out = home.join("pack");
 

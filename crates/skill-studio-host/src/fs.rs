@@ -443,7 +443,8 @@ impl ScopeFs for BoundFs {
         use std::io::Read as _;
         let file = self.dir.open(self.relative(path)?)?;
         let mut bytes = Vec::new();
-        file.take(max_bytes.saturating_add(1)).read_to_end(&mut bytes)?;
+        file.take(max_bytes.saturating_add(1))
+            .read_to_end(&mut bytes)?;
         if bytes.len() as u64 > max_bytes {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
