@@ -158,6 +158,7 @@ const EXPECTED_WRAPPER_COMMANDS = {
   packAdd: { kind: "command", command: "pack_add" },
   packUpdate: { kind: "command", command: "pack_update" },
   packRemove: { kind: "command", command: "pack_remove" },
+  packExport: { kind: "command", command: "pack_export" },
   parkSkill: { kind: "command", command: "park_skill" },
   unparkSkill: { kind: "command", command: "unpark_skill" },
   parkCheck: { kind: "command", command: "park_check" },

@@ -530,6 +530,7 @@ export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeVie
       {selectedSkills.length > 0 && (
         <SkillListSelectionBar
           selectedSkills={selectedSkills}
+          packProjectPath={null}
           onCancel={clearSkillSelection}
           onAct={(label, skill) => void handleAct(label, skill)}
           onOpen={(skill) => onSelectSkill(skill.name)}

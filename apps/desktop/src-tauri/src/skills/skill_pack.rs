@@ -1,7 +1,8 @@
 // ============================================================================
 // Skills Module - skill_pack
-// The Packs page's commands: thin adapters over `skill_studio_core::ops`'s
-// `pack_list`, `pack_add`, `pack_update` and `pack_remove`, the same calls the
+// The Packs page's commands, and the selection bar's Pack: thin adapters over
+// `skill_studio_core::ops`'s `pack_list`, `pack_add`, `pack_update`,
+// `pack_remove` and `pack_export`, the same calls the
 // CLI's `pack` subcommands and the MCP `pack_*` tools make. The core plans
 // each action (a dry run returns only the plan) and hands each step to the
 // owner tool, so the app writes no lock or manifest file itself.
@@ -141,6 +142,22 @@ pub async fn pack_remove(
     .await
 }
 
+/// Plans (`dry_run`) or writes a new pack folder from installed skills. It
+/// changes no managed file, so no snapshot is rebuilt.
+#[tauri::command]
+pub async fn pack_export(
+    trace: crate::timing_log::IpcTrace,
+    request: skill_studio_core::pack_export::PackExportRequest,
+    app: tauri::AppHandle,
+) -> Result<skill_studio_core::pack_export::PackExportReport, String> {
+    crate::timing_log::time_command_blocking(&app, trace, "pack_export", move || {
+        run_pack_op(Operation::PackExport, false, |rt, ctx, _| {
+            ops::pack_export(rt, ctx, &request)
+        })
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,5 +193,55 @@ mod tests {
         .expect_err("a plan without Node");
 
         assert_eq!(shown, NODE_MISSING);
+    }
+
+    /// Pack on the selection bar, through the same runtime and error
+    /// conversion as the `pack_export` command, against a real home: the
+    /// selected skill's files land in the new folder with a README, and a
+    /// second export into the same folder is refused with the sentence the
+    /// dialog shows. Fails if the command path writes nothing or overwrites.
+    #[test]
+    fn pack_export_writes_the_selected_skills_then_refuses_the_same_folder() {
+        use skill_studio_core::pack_export::PackExportRequest;
+        let home = tempfile::tempdir().expect("temp home");
+        let _opencode_home = crate::skills::test_support::OpencodeHomeGuard::new(home.path());
+        let skill = home.path().join(".agents/skills/alpha");
+        std::fs::create_dir_all(&skill).expect("skill folder");
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: alpha\ndescription: Alpha.\n---\nBody.\n",
+        )
+        .expect("SKILL.md");
+        let rt = super::super::core_runtime::build_runtime_write_at_with_search_dirs(
+            home.path(),
+            &home.path().join(".skill-studio"),
+            Vec::new(),
+        )
+        .expect("desktop runtime");
+        let request = PackExportRequest {
+            dir: home.path().join("my-pack"),
+            skills: vec!["alpha".to_string()],
+            source: Some("me/my-skills".to_string()),
+            ..PackExportRequest::default()
+        };
+        let export = || {
+            run_pack_op_on(&rt, Operation::PackExport, false, |rt, ctx, _| {
+                ops::pack_export(rt, ctx, &request)
+            })
+        };
+
+        let report = export().expect("export");
+
+        assert_eq!(
+            report.install_command,
+            "npx skills add me/my-skills --skill alpha"
+        );
+        assert_eq!(
+            std::fs::read(request.dir.join("skills/alpha/SKILL.md")).expect("copy"),
+            std::fs::read(skill.join("SKILL.md")).expect("original")
+        );
+        assert!(request.dir.join("README.md").is_file());
+        let shown = export().expect_err("the folder now holds the pack");
+        assert!(shown.contains("not empty"), "{shown}");
     }
 }
