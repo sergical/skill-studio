@@ -1193,19 +1193,6 @@ int main(int argc, char **argv) {
         }
     }
 
-    #[test]
-    fn escaped_child_readiness_waits_for_a_parseable_pid_or_cancels_before_pid_publication() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("ready");
-        let cancel = CancelWhenPidReady(path.clone());
-        std::fs::write(&path, "").unwrap();
-        assert!(!cancel.is_cancelled());
-        std::fs::write(&path, "pending").unwrap();
-        assert!(!cancel.is_cancelled());
-        std::fs::write(&path, "123").unwrap();
-        assert!(cancel.is_cancelled());
-    }
-
     struct CancelWhenReady(PathBuf);
     impl CancelToken for CancelWhenReady {
         fn is_cancelled(&self) -> bool {

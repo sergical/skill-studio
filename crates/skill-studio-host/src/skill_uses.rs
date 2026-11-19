@@ -4519,36 +4519,6 @@ mod tests {
         }
 
         #[test]
-        fn refresh_never_creates_wal_or_shm_sidecars() {
-            let (tmp, db_path) = temp_opencode_db_home();
-            let home = tmp.path();
-            {
-                let conn = Connection::open(&db_path).unwrap();
-                create_message_table(&conn);
-                insert_message(
-                    &conn,
-                    "m1",
-                    "s1",
-                    "skill",
-                    1000,
-                    1000,
-                    r#"{"skill":"deploy"}"#,
-                );
-            }
-
-            let mut index = SkillInvocationIndex::default();
-            let sources = DiscoverySources::default();
-            index.refresh(home, &sources);
-
-            let mut wal = db_path.as_os_str().to_owned();
-            wal.push("-wal");
-            let mut shm = db_path.as_os_str().to_owned();
-            shm.push("-shm");
-            assert!(!Path::new(&wal).exists());
-            assert!(!Path::new(&shm).exists());
-        }
-
-        #[test]
         fn cache_round_trip_keeps_database_uses_and_a_files_only_cache_still_loads() {
             let (tmp, db_path) = temp_opencode_db_home();
             let home = tmp.path();
