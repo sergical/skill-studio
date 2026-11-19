@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
   describeFrontmatterRepair,
@@ -31,15 +32,30 @@ describe("proposeFrontmatterQuoteRepair", () => {
   });
 
   /**
-   * Flow: the value holds double quotes and backslashes.
-   * Expect: both are escaped, so the unquoted value equals the original.
-   * Failure: the quoted scalar ends early or changes the text.
+   * Flow: any single-line description that needs quotes (it holds ": "), with any mix of
+   * double quotes, backslashes, single quotes, hashes and tabs.
+   * Expect: the quoted value unescapes to the original, and only that line changes.
+   * Failure: the quoted scalar ends early, changes the text, or the fix edits other lines.
    */
-  it("escapes backslashes and double quotes", () => {
-    const value = 'Use "quotes" and C:\\dir: now';
-    const repair = proposeFrontmatterQuoteRepair(`---\nname: a\ndescription: ${value}\n---\n`, 3);
-    expect(repair).not.toBeNull();
-    expect(unquote(repair!.after.slice("description: ".length))).toBe(value);
+  it("quotes any value that needs it so it unescapes to the same text and only its line changes", () => {
+    const text = fc.string({
+      unit: fc.oneof(
+        fc.constantFrom('"', "\\", "'", "#", ":", " ", "\t", "é", "\\n"),
+        fc.string({ minLength: 1, maxLength: 1 }),
+      ),
+    });
+    fc.assert(
+      fc.property(text, text, (head, tail) => {
+        const value = `x${head}: ${tail}y`;
+        const file = `---\nname: a\ndescription: ${value}\nother: z\n---\nBody.\n`;
+        const repair = proposeFrontmatterQuoteRepair(file, 3);
+        expect(repair).not.toBeNull();
+        expect(unquote(repair!.after.slice("description: ".length))).toBe(value);
+        const before = file.split("\n");
+        const after = repair!.fixedContent.split("\n");
+        expect(after.filter((_, i) => i !== 2)).toEqual(before.filter((_, i) => i !== 2));
+      }),
+    );
   });
 
   /**

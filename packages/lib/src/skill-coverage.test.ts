@@ -2,16 +2,20 @@
 // Skill Studio - skill-coverage tests
 // ============================================================================
 
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
+  AGENT_MATRIX_LABELS,
   agentMatrix,
   agentIdFromDeploymentLabel,
+  deploymentLabelFromAgentId,
   driftingCopies,
   locationSummary,
   pickCompareDefaults,
   resolveCompareSelection,
   skillVisibleToAgent,
 } from "./skill-coverage";
+import { INSTALL_HARNESSES } from "./skill-install-destination";
 import type { Deployment, InstalledSkill } from "./skill-types";
 
 function fixtureDeployment(overrides: Partial<Deployment> = {}): Deployment {
@@ -96,13 +100,30 @@ describe("resolveCompareSelection", () => {
   });
 });
 
-describe("agentIdFromDeploymentLabel", () => {
-  it("maps Cursor to cursor", () => {
-    expect(agentIdFromDeploymentLabel("Cursor")).toBe("cursor");
+describe("agent label <-> id", () => {
+  it("round-trips every first-class agent label through its id, or a chip and its filter name different agents", () => {
+    for (const label of AGENT_MATRIX_LABELS) {
+      const id = agentIdFromDeploymentLabel(label);
+      expect(id, label).not.toBeNull();
+      expect(deploymentLabelFromAgentId(id ?? ""), label).toBe(label);
+    }
   });
 
-  it("maps Grok Build to grok-build", () => {
-    expect(agentIdFromDeploymentLabel("Grok Build")).toBe("grok-build");
+  it("round-trips every installable harness id through its label", () => {
+    for (const { id } of INSTALL_HARNESSES) {
+      expect(agentIdFromDeploymentLabel(deploymentLabelFromAgentId(id)), id).toBe(id);
+    }
+  });
+
+  it("maps an unknown label to no agent and shows an unknown id as itself", () => {
+    const known = new Set<string>([...AGENT_MATRIX_LABELS, "shared"]);
+    const knownIds = new Set<string>(INSTALL_HARNESSES.map((h) => h.id));
+    fc.assert(
+      fc.property(fc.string(), (text) => {
+        if (!known.has(text)) expect(agentIdFromDeploymentLabel(text)).toBeNull();
+        if (!knownIds.has(text)) expect(deploymentLabelFromAgentId(text)).toBe(text);
+      }),
+    );
   });
 });
 
