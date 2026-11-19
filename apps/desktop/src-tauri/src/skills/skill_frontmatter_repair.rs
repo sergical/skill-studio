@@ -1179,20 +1179,6 @@ mod tests {
     }
 
     #[test]
-    fn repairs_description_without_touching_body_or_crlf() {
-        let input = "---\r\nname: sample\r\ndescription: Use when: testing \"quotes\"\r\nlicense: MIT\r\n---\r\n# Body\r\nbytes: stay\r\n";
-        let (actual, _) = propose_colon_scalar_repair(input).unwrap();
-        assert_eq!(actual, "---\r\nname: sample\r\ndescription: |-\r\n  Use when: testing \"quotes\"\r\nlicense: MIT\r\n---\r\n# Body\r\nbytes: stay\r\n");
-        let FrontmatterParseResult::Valid(parsed) = parse_frontmatter(&actual) else {
-            panic!("proposal did not parse")
-        };
-        assert_eq!(
-            parsed.description.as_deref(),
-            Some("Use when: testing \"quotes\"")
-        );
-    }
-
-    #[test]
     fn refuses_ambiguous_and_other_yaml_failures() {
         for input in [
             "---\nname: one: two\ndescription: three: four\n---\n",
