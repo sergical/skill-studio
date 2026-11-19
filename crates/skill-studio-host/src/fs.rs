@@ -439,6 +439,11 @@ impl ScopeFs for BoundFs {
     fn fsops_bind_root(&self, root: &Path) -> io::Result<Option<Box<dyn ScopeFs + '_>>> {
         RealFs.fsops_bind_root(root)
     }
+    fn fsops_root_identity(&self) -> io::Result<Option<(u64, u64)>> {
+        use cap_std::fs::MetadataExt as _;
+        let meta = self.dir.dir_metadata()?;
+        Ok(Some((meta.dev(), meta.ino())))
+    }
     fn fsops_read_capped(&self, path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
         use std::io::Read as _;
         let file = self.dir.open(self.relative(path)?)?;

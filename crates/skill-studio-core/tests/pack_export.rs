@@ -244,3 +244,125 @@ fn pack_export_quotes_each_install_argument_for_the_shell() {
     assert!(!readme.contains("--skill my skill;id"), "{readme}");
     std::fs::remove_dir_all(&home).ok();
 }
+
+/// The real file system, except that binding `target` swaps it for a link to
+/// `outside` while the handle opens, then puts it back: the race between
+/// checking a folder by path and opening it, made deterministic.
+struct SwapOnBind {
+    real: RealFs,
+    target: PathBuf,
+    outside: PathBuf,
+}
+
+macro_rules! delegate {
+    ($($name:ident(&self $(, $arg:ident: $ty:ty)*) -> $ret:ty;)*) => {
+        $(fn $name(&self $(, $arg: $ty)*) -> $ret { self.real.$name($($arg),*) })*
+    };
+}
+
+impl skill_studio_core::ports::ScopeFs for SwapOnBind {
+    delegate! {
+        canonicalize(&self, path: &Path) -> std::io::Result<PathBuf>;
+        symlink_metadata(&self, path: &Path) -> std::io::Result<skill_studio_core::ports::FileFacts>;
+        read_link(&self, path: &Path) -> std::io::Result<PathBuf>;
+        ancestor_holds(&self, start: &Path, name: &str) -> std::io::Result<bool>;
+        read_dir(&self, path: &Path) -> std::io::Result<Vec<skill_studio_core::ports::DirEntryFacts>>;
+        read_capped(&self, path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>>;
+        read_prefix(&self, path: &Path, limit: u64) -> std::io::Result<(Vec<u8>, bool)>;
+        write_atomic(&self, guard: &skill_studio_core::ports::ExclusiveGuard, path: &skill_studio_core::ports::ScopedPath, bytes: &[u8]) -> std::io::Result<()>;
+        rename(&self, guard: &skill_studio_core::ports::ExclusiveGuard, from: &skill_studio_core::ports::ScopedPath, to: &skill_studio_core::ports::ScopedPath) -> std::io::Result<()>;
+        remove_file(&self, guard: &skill_studio_core::ports::ExclusiveGuard, path: &skill_studio_core::ports::ScopedPath) -> std::io::Result<()>;
+        create_dir_all(&self, guard: &skill_studio_core::ports::ExclusiveGuard, path: &skill_studio_core::ports::ScopedPath) -> std::io::Result<()>;
+        symlink(&self, guard: &skill_studio_core::ports::ExclusiveGuard, target: &skill_studio_core::ports::ScopedPath, link: &skill_studio_core::ports::ScopedPath) -> std::io::Result<()>;
+        symlink_relative(&self, guard: &skill_studio_core::ports::ExclusiveGuard, target: &skill_studio_core::ports::ScopedPath, relative_target: &Path, link: &skill_studio_core::ports::ScopedPath) -> std::io::Result<()>;
+        fsops_device_inode(&self, path: &Path) -> std::io::Result<(u64, u64)>;
+        fsops_fsync_file(&self, path: &Path) -> std::io::Result<()>;
+        fsops_fsync_dir(&self, path: &Path) -> std::io::Result<()>;
+        fsops_create_dir(&self, path: &Path) -> std::io::Result<()>;
+        fsops_write_new_file(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()>;
+        fsops_write_new_file_with_mode(&self, path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()>;
+        fsops_rename(&self, from: &Path, to: &Path) -> std::io::Result<()>;
+        fsops_symlink(&self, target: &Path, link: &Path) -> std::io::Result<()>;
+        fsops_remove_dir(&self, path: &Path) -> std::io::Result<()>;
+        fsops_remove_file(&self, path: &Path) -> std::io::Result<()>;
+        fsops_exchange(&self, a: &Path, b: &Path) -> std::io::Result<()>;
+    }
+
+    fn fsops_bind_root(
+        &self,
+        root: &Path,
+    ) -> std::io::Result<Option<Box<dyn skill_studio_core::ports::ScopeFs + '_>>> {
+        if root != self.target {
+            return self.real.fsops_bind_root(root);
+        }
+        let aside = root.with_extension("aside");
+        std::fs::rename(root, &aside)?;
+        std::os::unix::fs::symlink(&self.outside, root)?;
+        let bound = self.real.fsops_bind_root(root);
+        std::fs::remove_file(root)?;
+        std::fs::rename(&aside, root)?;
+        bound
+    }
+}
+
+fn runtime_with(home: &Path, fs: SwapOnBind) -> Runtime {
+    let ports = Ports {
+        fs: Arc::new(fs),
+        clock: Arc::new(FakeClock::at(0)),
+        ids: Arc::new(FakeIds::default()),
+        leases: Arc::new(FileLease::new(home.join(".leases"))),
+        history: Arc::new(SqliteHistoryOpener::new(
+            home.join(".history/events.sqlite3"),
+        )),
+        sink: Arc::new(RecordingSink::default()),
+        spawner: Some(Arc::new(PanicOnSpawn)),
+        discovery: None,
+        tools: None,
+        catalog: Arc::new(HarnessCatalog::builtin()),
+        telemetry: Arc::new(skill_studio_core::ports::NoopTelemetry),
+    };
+    Runtime::new(&RuntimeScope::fixture(home), ports).unwrap()
+}
+
+/// The pack folder is swapped for a link to an outside folder while its
+/// handle opens. Fails when the export writes through that handle into the
+/// outside folder instead of refusing.
+#[test]
+fn pack_export_refuses_a_pack_folder_swapped_while_its_handle_opens() {
+    let home = home("pack_export_swap_dest");
+    let out = home.join("pack");
+    let outside = home.join("elsewhere");
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let rt = runtime_with(
+        &home,
+        SwapOnBind { real: RealFs::new(), target: out.clone(), outside: outside.clone() },
+    );
+
+    let err = ops::pack_export(&rt, &ctx(), &export(&out, &["alpha"], false)).unwrap_err();
+
+    assert!(err.message.contains("changed while the export opened it"), "{err:?}");
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0, "wrote outside the pack");
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// A skill folder is swapped for a link to an outside folder while its
+/// handle opens. Fails when the export reads the outside files instead of
+/// refusing.
+#[test]
+fn pack_export_refuses_a_skill_folder_swapped_while_its_handle_opens() {
+    let home = home("pack_export_swap_source");
+    let outside = home.join("elsewhere");
+    write(&outside.join("SKILL.md"), "outside bytes\n");
+    let skill = std::fs::canonicalize(home.join(".agents/skills/alpha")).unwrap();
+    let rt = runtime_with(
+        &home,
+        SwapOnBind { real: RealFs::new(), target: skill, outside },
+    );
+
+    let err = ops::pack_export(&rt, &ctx(), &export(&home.join("pack"), &["alpha"], true))
+        .unwrap_err();
+
+    assert!(err.message.contains("changed while the export opened it"), "{err:?}");
+    std::fs::remove_dir_all(&home).ok();
+}

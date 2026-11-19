@@ -283,9 +283,7 @@ fn collect(
     let root = fs
         .canonicalize(folder)
         .map_err(|e| CoreError::io(folder, e))?;
-    let bound = fs
-        .fsops_bind_root(&root)
-        .map_err(|e| CoreError::io(&root, e))?;
+    let (bound, _) = bind_checked(fs, &root, "the skill folder")?;
     let reader = bound.as_deref().unwrap_or(fs);
     let mut walk = Walk {
         fs,
@@ -399,6 +397,33 @@ impl Walk<'_> {
     }
 }
 
+/// Binds a handle to `dir` ([`ScopeFs::fsops_bind_root`]) and checks that
+/// it holds the real folder the path named a moment before: a folder or an
+/// ancestor swapped for a link between the check and the open would bind
+/// the wrong folder. Returns the view and the folder's device and inode.
+fn bind_checked<'a>(
+    fs: &'a dyn ScopeFs,
+    dir: &Path,
+    what: &str,
+) -> Result<(Option<Box<dyn ScopeFs + 'a>>, (u64, u64)), CoreError> {
+    let changed = || Walk::refuse(dir, &format!("{what} changed while the export opened it"));
+    if !fs
+        .symlink_metadata(dir)
+        .is_ok_and(|facts| facts.kind == FileKind::Dir)
+    {
+        return Err(changed());
+    }
+    let expected = fs.fsops_device_inode(dir).map_err(|e| CoreError::io(dir, e))?;
+    let bound = fs.fsops_bind_root(dir).map_err(|e| CoreError::io(dir, e))?;
+    if let Some(view) = &bound {
+        let opened = view.fsops_root_identity().map_err(|e| CoreError::io(dir, e))?;
+        if opened.is_some_and(|opened| opened != expected) {
+            return Err(changed());
+        }
+    }
+    Ok((bound, expected))
+}
+
 /// Writes the pack through a handle bound to `dir`, so no write can leave it,
 /// even through a folder swapped for a link after the checks: creates `dir`
 /// when it does not exist, checks again that it is a real, empty folder,
@@ -411,20 +436,16 @@ fn write_pack(fs: &dyn ScopeFs, dir: &Path, planned: &[PlannedFile]) -> Result<(
         fs.fsops_create_dir(dir)
             .map_err(|e| CoreError::io(dir, e))?;
     }
-    let is_real_dir = |fs: &dyn ScopeFs| {
-        fs.symlink_metadata(dir)
-            .is_ok_and(|facts| facts.kind == FileKind::Dir)
-    };
-    if !is_real_dir(fs) {
-        return Err(Walk::refuse(dir, "the pack folder is no longer a folder"));
-    }
-    let bound = fs.fsops_bind_root(dir).map_err(|e| CoreError::io(dir, e))?;
+    let (bound, identity) = bind_checked(fs, dir, "the pack folder")?;
     let writer = bound.as_deref().unwrap_or(fs);
+    // The listing is by path, so it counts only when the path still names
+    // the folder the handle holds.
     let empty = fs
         .read_dir(dir)
         .map_err(|e| CoreError::io(dir, e))?
         .is_empty();
-    if !is_real_dir(fs) || !empty {
+    let same = fs.fsops_device_inode(dir).ok() == Some(identity);
+    if !same || !empty {
         return Err(Walk::refuse(
             dir,
             "the pack folder changed while the export read the skills; choose a new or empty folder",

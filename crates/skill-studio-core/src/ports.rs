@@ -483,6 +483,13 @@ pub trait ScopeFs: Send + Sync {
     fn fsops_read_capped(&self, path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
         self.read_capped(path, max_bytes)
     }
+    /// The device and inode of the folder a bound view
+    /// ([`Self::fsops_bind_root`]) really opened, from its own handle, so a
+    /// caller can check it is the folder it checked by path. `None` for an
+    /// unbound view.
+    fn fsops_root_identity(&self) -> std::io::Result<Option<(u64, u64)>> {
+        Ok(None)
+    }
 }
 
 /// Finds the projects a scope covers under [`ProjectSelection::Discover`].
