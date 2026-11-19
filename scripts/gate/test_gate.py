@@ -277,6 +277,10 @@ class GateTests(unittest.TestCase):
             'ALTER TABLE "other"."old" ADD COLUMN "note" text;',
             'CREATE TABLE IF NOT EXISTS "old" ("id" uuid);--> statement-breakpoint\nCREATE UNIQUE INDEX "u" ON "old" ("id");',
             'CREATE TABLE "grids" ("id" uuid) INHERITS ("old");',
+            "ALTER TABLE \"old\" ADD COLUMN \"n\" text DEFAULT 'x'::text UNIQUE;",
+            "ALTER TABLE \"old\" ADD COLUMN \"n\" text DEFAULT 'x'::counter;",
+            'CREATE TABLE "grids" ("id" integer);-- --> statement-breakpoint DROP TABLE "old";',
+            'CREATE TABLE "grids" ("id" integer);-- comment\rDROP TABLE "old";',
         ]:
             with self.subTest(sql=sql):
                 self.migrate(sql)
@@ -286,7 +290,19 @@ class GateTests(unittest.TestCase):
     def test_a_migration_stops_when_the_files_around_it_are_not_new_or_in_order(self):
         self.migrations()
         adds = 'ALTER TABLE "old" ADD COLUMN "note" text;'
+
+        def journal(edit):
+            data = json.loads(Path('drizzle/meta/_journal.json').read_text())
+            edit(data['entries'])
+            self.write('drizzle/meta/_journal.json', json.dumps(data))
+
+        def second(when):
+            self.write('drizzle/0002_more.sql', adds)
+            journal(lambda e: e.append({'idx': 2, 'tag': '0002_more', 'when': when}))
         cases = {
+            'two new entries run backwards': lambda: (self.migrate(adds, when=300), second(200)),
+            'two new entries share a time': lambda: (self.migrate(adds, when=200), second(200)),
+            'an old journal entry changed': lambda: (self.migrate(adds), journal(lambda e: e[0].update(when=1))),
             'runs before an older migration': lambda: self.migrate(adds, when=50),
             'journal tag names another file': lambda: (self.migrate(adds), self.write('drizzle/0001_other.sql', adds)),
             'old migration edited': lambda: (self.migrate(adds), self.write('drizzle/0000_base.sql', 'DROP TABLE "old";')),

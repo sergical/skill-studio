@@ -96,19 +96,32 @@ def classify(cfg, base, head='HEAD', raise_to=None, reason=None, author=''):
 
 
 TABLE = r'(?:"public"\.)?"(?P<t>\w+)"'
-CONSTANT = r"-?\d+(?:\.\d+)?|'\?'(?:::[a-z ]+(?:\[\])?)?|true|false|null"
 COLUMN_TYPE = (r'(?:text|uuid|boolean|integer|bigint|smallint|real|double precision|jsonb|json|date|bytea|interval'
                r'|timestamptz|timestamp(?: \(\d\))?(?: with(?:out)? time zone)?'
                r'|(?:varchar|character varying|char|numeric)(?: ?\(\d+(?:, ?\d+)?\))?)(?:\[\])?')
+CONSTANT = rf"-?\d+(?:\.\d+)?|'\?'(?:::{COLUMN_TYPE})?|true|false|null"
 
 
 def statements(sql):
-    """Split SQL the way PostgreSQL reads it: drop `--` comments, keep quoted text
-    whole, and write each string literal as '?'. None when the text holds what
-    this reader does not model: block comments, dollar quotes, backslashes, or a
-    quoted name that is not letters, digits and underscores."""
-    if re.search(r'/\*|\$|\\', sql):
+    """Split SQL the way drizzle and then PostgreSQL read it: drizzle sends each
+    chunk between `--> statement-breakpoint` markers as its own command, even a
+    marker inside a comment or string. PostgreSQL drops `--` comments and keeps
+    quoted text whole. Each string literal comes back as '?'. None when the text
+    holds what this reader does not model: anything but printable ASCII, tabs and
+    line breaks, block comments, dollar quotes, backslashes, or a quoted name
+    that is not letters, digits and underscores."""
+    if re.search(r'[^\t\n\r\x20-\x7e]|/\*|\$|\\', sql):
         return None
+    out = []
+    for chunk in sql.split('--> statement-breakpoint'):
+        part = chunk_statements(chunk)
+        if part is None:
+            return None
+        out += part
+    return out
+
+
+def chunk_statements(sql):
     out, current, i = [], '', 0
     while i < len(sql):
         c = sql[i]
@@ -126,7 +139,8 @@ def statements(sql):
             current += sql[i:j + 1] if c == '"' else "'?'"
             i = j + 1
         elif sql.startswith('--', i):
-            i = len(sql) if sql.find('\n', i) < 0 else sql.find('\n', i)
+            end = re.compile(r'[\r\n]').search(sql, i)
+            i = end.start() if end else len(sql)
         elif c == ';':
             out.append(current)
             current, i = '', i + 1
@@ -186,8 +200,9 @@ def additive_migration(spec, base, head, files):
         before = json.loads(read_at(base, journal))['entries']
         after = json.loads(read_at(head, journal))['entries']
         added = after[len(before):]
+        times = [max((e['when'] for e in before), default=float('-inf'))] + [e['when'] for e in added]
         return (after[:len(before)] == before and sorted(str(folder / f"{e['tag']}.sql") for e in added) == sorted(sql)
-                and min(e['when'] for e in added) > max((e['when'] for e in before), default=float('-inf')))
+                and all(a < b for a, b in zip(times, times[1:])))
     except (ValueError, KeyError, TypeError):
         return False
 
