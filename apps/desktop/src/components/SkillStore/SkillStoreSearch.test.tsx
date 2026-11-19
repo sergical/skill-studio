@@ -2,14 +2,33 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { PaginatedSkillsResponse, SkillSearchResult } from "@skill-studio/lib";
 import { SkillStore } from "./SkillStore";
+
+// Fake timers that still advance with real time, so Testing Library's polling works while a test
+// can jump past the search box's debounce without sleeping.
+beforeEach(() => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+});
 
 afterEach(() => {
   cleanup();
   clearMocks();
+  vi.useRealTimers();
 });
+
+/** Longer than the search box's debounce. */
+const PAST_DEBOUNCE_MS = 1_000;
+
+function typist() {
+  return userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+}
+
+/** Runs every timer the component has queued, so a late retry would have fired. */
+async function flushTimers(): Promise<void> {
+  await act(() => vi.runAllTimersAsync());
+}
 
 function result(name: string): SkillSearchResult {
   return {
@@ -50,17 +69,18 @@ it("a slow earlier search cannot replace the results of the query in the box", a
     }
     return null;
   });
-  const user = userEvent.setup();
+  const user = typist();
   render(<SkillStore />);
   const box = await screen.findByRole("textbox", { name: "Search skills.sh" });
 
   await user.type(box, "react");
-  await new Promise((resolve) => setTimeout(resolve, 400));
+  await act(() => vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS));
   await user.type(box, " hooks");
-  expect(await screen.findByText("react-hooks-guide", {}, { timeout: 2000 })).toBeTruthy();
+  await act(() => vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS));
+  expect(await screen.findByText("react-hooks-guide")).toBeTruthy();
 
-  releaseFirst({ skills: [result("react-stale-result")], has_more: false });
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await act(async () => releaseFirst({ skills: [result("react-stale-result")], has_more: false }));
+  await flushTimers();
   expect(screen.queryByText("react-stale-result")).toBeNull();
   expect(screen.getByText("react-hooks-guide")).toBeTruthy();
 });
@@ -77,7 +97,7 @@ it("a server-down first load keeps its error and makes only one popular request"
   });
   render(<SkillStore />);
   await screen.findByText("server down");
-  await act(() => new Promise((resolve) => setTimeout(resolve, 400)));
+  await flushTimers();
   expect(requests).toBe(1);
   expect(screen.getByText("server down")).toBeTruthy();
 });
@@ -98,8 +118,8 @@ it("a late initial failure cannot replace an active search or stop its spinner",
     return null;
   });
   render(<SkillStore />);
-  await userEvent.setup().type(screen.getByRole("textbox", { name: "Search skills.sh" }), "react");
-  await act(() => new Promise((resolve) => setTimeout(resolve, 400)));
+  await typist().type(screen.getByRole("textbox", { name: "Search skills.sh" }), "react");
+  await act(() => vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS));
   await act(async () => rejectPopular(new Error("stale failure")));
   expect(screen.queryByText("stale failure")).toBeNull();
   expect(screen.getByText("Searching skills.sh…")).toBeTruthy();
