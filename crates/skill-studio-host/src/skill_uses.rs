@@ -2524,9 +2524,15 @@ mod tests {
             "write-tests"
         );
 
+        // Regrow past the old length, so refresh reaches the tail-sample
+        // check instead of the shorter-file branch: the bytes before the old
+        // end no longer match, so the file is parsed again from the start.
+        let old_len = fs::metadata(&path).unwrap().len();
         let mut new_content = String::from("short\n");
         new_content.push_str(&skill_line("lint-code", "2026-08-02T12:00:00Z", "/other"));
         new_content.push('\n');
+        new_content.push_str(&"\n".repeat(old_len as usize));
+        assert!(new_content.len() as u64 > old_len);
         fs::write(&path, &new_content).unwrap();
 
         index.refresh(home, &sources);
