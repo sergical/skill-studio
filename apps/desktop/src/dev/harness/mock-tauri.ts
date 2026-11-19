@@ -14,6 +14,7 @@ import { z } from "zod";
 import { deploymentLabelFromAgentId, isProjectPattern } from "@skill-studio/lib";
 import type {
   AddSkillOperationEvent,
+  BackgroundStatus,
   Deployment,
   DiscoverySourceSetting,
   InstalledSkill,
@@ -56,6 +57,8 @@ interface HarnessControl {
   publish(next: SkillSnapshot): Promise<void>;
   /** Publishes `snapshot` with one skill replaced by `transform`'s result. */
   updateSkill(name: string, transform: (skill: InstalledSkill) => InstalledSkill): Promise<void>;
+  /** Replaces the background status and emits `skills://background-status`, like a worker starting or finishing. */
+  publishBackgroundStatus(next: BackgroundStatus): Promise<void>;
 }
 
 declare global {
@@ -243,6 +246,13 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
     return rows;
   }
 
+  let currentBackgroundStatus: BackgroundStatus = { revision: 0, tasks: [] };
+
+  async function publishBackgroundStatus(next: BackgroundStatus): Promise<void> {
+    currentBackgroundStatus = next;
+    await emit("skills://background-status", currentBackgroundStatus);
+  }
+
   async function publish(next: SkillSnapshot): Promise<void> {
     currentSnapshot = {
       ...next,
@@ -344,7 +354,7 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
           };
           return currentSnapshot.update_check;
         case "get_background_status":
-          return { revision: 0, tasks: [] };
+          return currentBackgroundStatus;
         case "get_skill_snapshot":
           return currentSnapshot;
         case "get_installed_skills":
@@ -962,5 +972,6 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
     snapshot: () => currentSnapshot,
     publish,
     updateSkill,
+    publishBackgroundStatus,
   };
 }
