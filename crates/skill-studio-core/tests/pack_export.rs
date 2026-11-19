@@ -179,6 +179,9 @@ fn pack_export_refuses_bad_requests_before_it_writes_anything() {
     std::os::unix::fs::symlink("../../../outside.md", foxtrot.join("notes.md")).unwrap();
     std::fs::create_dir_all(home.join(".claude/skills")).unwrap();
     std::os::unix::fs::symlink(home.join("gone/hotel"), home.join(".claude/skills/hotel")).unwrap();
+    let india = home.join(".agents/skills/india");
+    write(&india.join("SKILL.md"), &skill_md("india"));
+    std::os::unix::fs::symlink("SKILL.md/", india.join("notes")).unwrap();
     let rt = runtime(&home);
     let out = home.join("pack");
 
@@ -204,6 +207,7 @@ fn pack_export_refuses_bad_requests_before_it_writes_anything() {
         ),
         (export(&out, &["foxtrot"], false), "leaves its folder"),
         (export(&out, &["hotel"], false), "broken link"),
+        (export(&out, &["india"], false), "names nothing"),
     ];
     for (req, expected) in cases {
         let err = ops::pack_export(&rt, &ctx(), &req).unwrap_err();
@@ -294,6 +298,9 @@ enum When {
     /// Just after the export lists a folder under `at` that holds the entry
     /// named here: after it read each entry's kind, before it opens one.
     AfterListing(&'static str),
+    /// Not a swap: writing the file named here under `at` creates it with
+    /// half its bytes, then fails, as a full disk would.
+    FailWriting(&'static str),
 }
 
 /// The real file system, with one swap made at an exact moment of the
@@ -350,6 +357,10 @@ impl ScopeFs for Racing {
                 swap_for_link(&self.from, &self.to);
                 self.real.fsops_open_dir(path)
             }
+            When::FailWriting(name) => Ok(self
+                .real
+                .fsops_open_dir(path)?
+                .map(|inner| Box::new(FailWriting { inner, name }) as Box<dyn DirHandle>)),
             When::AfterListing(after) => Ok(self.real.fsops_open_dir(path)?.map(|inner| {
                 Box::new(SwapAfterListing {
                     inner,
@@ -409,6 +420,53 @@ impl DirHandle for SwapAfterListing {
     }
     fn write_new_file(&self, name: &str, bytes: &[u8], mode: u32) -> std::io::Result<()> {
         self.inner.write_new_file(name, bytes, mode)
+    }
+}
+
+/// A held folder whose write of `name`, in it or in a folder made through
+/// it, stops half way with an error.
+struct FailWriting {
+    inner: Box<dyn DirHandle>,
+    name: &'static str,
+}
+
+impl DirHandle for FailWriting {
+    fn identity(&self) -> std::io::Result<(u64, u64)> {
+        self.inner.identity()
+    }
+    fn entries(&self) -> std::io::Result<Vec<DirEntryFacts>> {
+        self.inner.entries()
+    }
+    fn kind(&self, name: &str) -> std::io::Result<FileKind> {
+        self.inner.kind(name)
+    }
+    fn open_dir(&self, name: &str) -> std::io::Result<Box<dyn DirHandle>> {
+        let inner = self.inner.open_dir(name)?;
+        Ok(Box::new(FailWriting {
+            inner,
+            name: self.name,
+        }))
+    }
+    fn read_file(&self, name: &str, max_bytes: u64) -> std::io::Result<(Vec<u8>, u32)> {
+        self.inner.read_file(name, max_bytes)
+    }
+    fn read_link(&self, name: &str) -> std::io::Result<PathBuf> {
+        self.inner.read_link(name)
+    }
+    fn create_dir(&self, name: &str) -> std::io::Result<Box<dyn DirHandle>> {
+        let inner = self.inner.create_dir(name)?;
+        Ok(Box::new(FailWriting {
+            inner,
+            name: self.name,
+        }))
+    }
+    fn write_new_file(&self, name: &str, bytes: &[u8], mode: u32) -> std::io::Result<()> {
+        if name != self.name {
+            return self.inner.write_new_file(name, bytes, mode);
+        }
+        self.inner
+            .write_new_file(name, &bytes[..bytes.len() / 2], mode)?;
+        Err(std::io::Error::other("no space left on the disk"))
     }
 }
 
@@ -614,5 +672,38 @@ fn pack_export_follows_a_link_through_the_folder_it_holds_not_the_path() {
         std::fs::read_to_string(out.join("skills/alpha/scripts/ref")).unwrap(),
         "#!/bin/sh\necho run\n"
     );
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// A write fails after it created its file, into a folder that existed and
+/// was empty. Fails when the error's cleanup list leaves out that partial
+/// file, so following it leaves the folder not empty.
+#[test]
+fn pack_export_lists_a_partial_file_in_the_cleanup_text() {
+    let home = home("pack_export_partial");
+    let parent = std::fs::canonicalize(&home).unwrap();
+    std::fs::create_dir_all(parent.join("pack")).unwrap();
+    let rt = runtime_with(
+        &home,
+        Racing {
+            real: RealFs::new(),
+            at: parent.clone(),
+            from: PathBuf::new(),
+            to: PathBuf::new(),
+            when: When::FailWriting("README.md"),
+        },
+    );
+
+    let err = ops::pack_export(
+        &rt,
+        &ctx(),
+        &export(&parent.join("pack"), &["alpha"], false),
+    )
+    .unwrap_err();
+
+    let detail = err.detail.unwrap_or_default();
+    assert!(parent.join("pack/README.md").is_file(), "{detail}");
+    assert!(detail.contains("README.md"), "{detail}");
+    assert!(detail.contains("skills/alpha/SKILL.md"), "{detail}");
     std::fs::remove_dir_all(&home).ok();
 }

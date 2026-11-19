@@ -339,13 +339,18 @@ fn follow(
             "a link in the skill loops back into its own folder",
         ));
     }
+    let names_nothing = || refuse(link, "a link in the skill names nothing");
     let io = |e: std::io::Error| match e.kind() {
         std::io::ErrorKind::NotADirectory | std::io::ErrorKind::InvalidInput => changed(link),
-        std::io::ErrorKind::NotFound => refuse(link, "a link in the skill names nothing"),
+        std::io::ErrorKind::NotFound => names_nothing(),
         _ => CoreError::io(link, e),
     };
     let mut chain = chain.to_vec();
     let names: Vec<Component<'_>> = target.components().collect();
+    // `Path::components` drops a trailing `/` and `/.`, but the file system
+    // then needs a folder: `run.sh/` names nothing when `run.sh` is a file.
+    let raw = target.as_os_str().as_encoded_bytes();
+    let wants_folder = raw.ends_with(b"/") || raw.ends_with(b"/.");
     for (index, component) in names.iter().enumerate() {
         let last = index + 1 == names.len();
         match component {
@@ -365,7 +370,7 @@ fn follow(
                 };
                 match here.kind(name).map_err(io)? {
                     FileKind::Dir => chain.push(Rc::from(here.open_dir(name).map_err(io)?)),
-                    FileKind::File if last => {
+                    FileKind::File if last && !wants_folder => {
                         let (bytes, mode) = here.read_file(name, MAX_FILE_BYTES).map_err(io)?;
                         return Ok(Reached::File(bytes, mode));
                     }
@@ -373,11 +378,11 @@ fn follow(
                         let next = here.read_link(name).map_err(io)?;
                         match follow(&chain, &next, link, hops)? {
                             Reached::Dir(reached) => chain = reached,
-                            file @ Reached::File(..) if last => return Ok(file),
-                            Reached::File(..) => return Err(changed(link)),
+                            file @ Reached::File(..) if last && !wants_folder => return Ok(file),
+                            Reached::File(..) => return Err(names_nothing()),
                         }
                     }
-                    FileKind::File => return Err(changed(link)),
+                    FileKind::File => return Err(names_nothing()),
                     FileKind::Other => return Err(refuse(link, NOT_A_FILE)),
                 }
             }
@@ -609,11 +614,16 @@ impl PackTarget {
                 written.push(at.clone());
                 made.insert(at.clone(), opened);
             }
-            made.get(&at)
+            let wrote = made
+                .get(&at)
                 .map_or(root.as_ref(), AsRef::as_ref)
-                .write_new_file(&leaf.to_string_lossy(), &file.bytes, file.mode)
-                .map_err(|e| stopped(&file.relative, e, &written))?;
-            written.push(file.relative.clone());
+                .write_new_file(&leaf.to_string_lossy(), &file.bytes, file.mode);
+            // Only `AlreadyExists` proves the create made nothing; after any
+            // other failure a partial file may be there, so it is listed.
+            if !matches!(&wrote, Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists) {
+                written.push(file.relative.clone());
+            }
+            wrote.map_err(|e| stopped(&file.relative, e, &written))?;
         }
         Ok(())
     }

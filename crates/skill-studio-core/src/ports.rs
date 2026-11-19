@@ -513,8 +513,8 @@ pub trait DirHandle {
     /// Creates the folder `name` and opens it.
     fn create_dir(&self, name: &str) -> std::io::Result<Box<dyn DirHandle>>;
     /// Creates the file `name`, failing when anything is there, even a
-    /// link, and writes `bytes` with exactly the `mode` permission bits. A
-    /// write that fails after the create removes the file again.
+    /// link, and writes `bytes` with exactly the `mode` permission bits. Any
+    /// failure but `AlreadyExists` may leave a created, partial file.
     fn write_new_file(&self, name: &str, bytes: &[u8], mode: u32) -> std::io::Result<()>;
 }
 

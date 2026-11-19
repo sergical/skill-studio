@@ -469,18 +469,16 @@ impl DirHandle for HeldDir {
         // CREATE | EXCL fails on any entry, a link included.
         let flags =
             OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-        let name = one_name(name)?;
-        let fd = openat(&self.0, name, flags, Mode::from_bits_truncate(mode as _))?;
+        let fd = openat(
+            &self.0,
+            one_name(name)?,
+            flags,
+            Mode::from_bits_truncate(mode as _),
+        )?;
         let mut file = fs::File::from(fd);
+        file.write_all(bytes)?;
         // The umask already masked the create mode above.
-        let written = file
-            .write_all(bytes)
-            .and_then(|()| file.set_permissions(fs::Permissions::from_mode(mode)));
-        if written.is_err() {
-            // This call created the file, so a partial one is not the user's.
-            let _ = rustix::fs::unlinkat(&self.0, name, rustix::fs::AtFlags::empty());
-        }
-        written
+        file.set_permissions(fs::Permissions::from_mode(mode))
     }
 }
 
