@@ -579,9 +579,22 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
               dir: z.string(),
               skills: z.array(z.string()),
               source: z.string().nullish(),
+              project_path: z.string().nullish(),
               dry_run: z.boolean(),
             })
             .parse(payload.request);
+          // The core takes each copy from the request's project, else the home.
+          const project = request.project_path ?? null;
+          const missing = request.skills.find((name) =>
+            currentSnapshot.skills.some(
+              (skill) =>
+                skill.name === name &&
+                !skill.deployments.some((d) =>
+                  project === null ? d.scope === "global" : d.project_path === project,
+                ),
+            ),
+          );
+          if (missing) throw new Error(`${missing} has no copy in this scope`);
           const unknown = request.skills.find(
             (name) => !currentSnapshot.skills.some((skill) => skill.name === name),
           );

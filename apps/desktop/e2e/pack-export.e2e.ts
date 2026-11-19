@@ -38,3 +38,28 @@ test("Pack on the selection bar plans the new pack folder, and Export gives the 
   await dialog.getByRole("button", { name: "Close" }).click();
   await expect(dialog).toHaveCount(0);
 });
+
+test("Pack on Home takes the home copies even when the Skills page is scoped to a project", async ({
+  page,
+}) => {
+  await openApp(page);
+  await page.getByRole("button", { name: /^Skills \d+$/ }).click();
+  await page.getByRole("button", { name: "Project: Project" }).click();
+  await page.getByRole("menuitemradio", { name: "agent-studio" }).click();
+  await expect(page.getByRole("button", { name: "Project: agent-studio" })).toBeVisible();
+  await page.getByRole("button", { name: "Home", exact: true }).first().click();
+  await expect(page.getByRole("grid", { name: "Home" })).toBeVisible();
+
+  const rows = page.getByRole("grid", { name: "Home" }).locator(SKILL_ROW);
+  const row = rows.first();
+  const name = (await row.locator('[role="gridcell"]:nth-child(2) span.truncate').textContent())!;
+  await row.hover();
+  await page.getByRole("checkbox", { name: `Select ${name}` }).click();
+  await page.getByRole("button", { name: "Pack", exact: true }).click();
+
+  // A home-only skill: exported from the project, the plan would fail with "has no copy".
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog.getByRole("status")).toHaveText(
+    /^Would write 1 skill and a README to .*my-skills\.$/,
+  );
+});

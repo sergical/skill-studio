@@ -23,9 +23,7 @@ import {
   AlertDialogTitle,
   Button,
 } from "@skill-studio/ui";
-import { isProjectScope } from "@skill-studio/lib";
 import type { InstalledSkill } from "@skill-studio/lib";
-import { useAppStore } from "../../store/appStore";
 import { PackExportDialog } from "../Packs/PackExportDialog";
 import { INVOCATION_POLICY_OPTIONS } from "../SkillDetail/skill-location-status";
 import { MenuControl, MenuItem } from "../ui/MenuControl";
@@ -37,6 +35,9 @@ import { UpdateOverwritesEditsDialog } from "../SkillDetail/UpdateOverwritesEdit
 import { useSkillBulkActions } from "./useSkillBulkActions";
 
 interface SkillListSelectionBarProps {
+  /** The project Pack takes each skill's copy from: the project the owning list is scoped to,
+   * or null for the home. Passed in, not read from the store, because Home shows the bar too. */
+  packProjectPath: string | null;
   /** The skills whose rows are checked, in list order. */
   selectedSkills: InstalledSkill[];
   onCancel: () => void;
@@ -94,6 +95,7 @@ export function SkillListSelectionBar({
   onActionFinished,
   onAct,
   onOpen,
+  packProjectPath,
 }: SkillListSelectionBarProps) {
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const [packing, setPacking] = useState<{
@@ -101,7 +103,6 @@ export function SkillListSelectionBar({
     dir: string;
     projectPath: string | null;
   } | null>(null);
-  const listScope = useAppStore((s) => s.skillListFilter.scope);
 
   // The pack folder must be new: the save panel asks for a name and a place.
   const handlePack = async () => {
@@ -110,7 +111,7 @@ export function SkillListSelectionBar({
     setPacking({
       skills: selectedSkills.map((skill) => skill.name),
       dir,
-      projectPath: isProjectScope(listScope) ? listScope.project : null,
+      projectPath: packProjectPath,
     });
   };
   const { running, progress, run, updatePrompt } = useSkillBulkActions(onActionFinished);

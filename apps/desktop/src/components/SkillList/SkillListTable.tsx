@@ -126,6 +126,8 @@ interface SkillListTableProps {
   active: boolean;
   /** Resolves which deployment a row's click should open in the detail drawer, when the caller knows it. */
   deploymentPathForSkill?: (skill: InstalledSkill) => string | undefined;
+  /** The project Pack on the selection bar exports from; null or absent for the home. */
+  packProjectPath?: string | null;
   /** False when the caller's underlying list (before any filter) is empty, for the right empty state. */
   hasAnySkills?: boolean;
   /** Resets the caller's filter, for the "No skills match" empty state. */
@@ -154,6 +156,7 @@ export function SkillListTable({
   initialCursorSkillName: initialCursorSkillNameProp,
   active,
   deploymentPathForSkill,
+  packProjectPath = null,
   hasAnySkills: hasAnySkillsProp,
   onClearFilters,
   onAddSkill,
@@ -394,6 +397,7 @@ export function SkillListTable({
         {selectedPaths.size > 0 && (
           <SkillListSelectionBar
             selectedSkills={rows.filter((skill) => selectedPaths.has(rowPath(skill) ?? ""))}
+            packProjectPath={packProjectPath}
             onCancel={clearSkillSelection}
             onAct={(label, skill) => void handleAct(label, skill)}
             onOpen={(skill) => onSelectSkill(skill.name, deploymentPathForSkill?.(skill))}
