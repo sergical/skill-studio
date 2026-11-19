@@ -14,6 +14,7 @@ import { z } from "zod";
 import { deploymentLabelFromAgentId, isProjectPattern } from "@skill-studio/lib";
 import type {
   AddSkillOperationEvent,
+  BackgroundStatus,
   Deployment,
   DiscoverySourceSetting,
   InstalledSkill,
@@ -56,6 +57,8 @@ interface HarnessControl {
   publish(next: SkillSnapshot): Promise<void>;
   /** Publishes `snapshot` with one skill replaced by `transform`'s result. */
   updateSkill(name: string, transform: (skill: InstalledSkill) => InstalledSkill): Promise<void>;
+  /** Replaces the background status and emits `skills://background-status`, like a worker starting or finishing. */
+  publishBackgroundStatus(next: BackgroundStatus): Promise<void>;
 }
 
 declare global {
@@ -243,6 +246,13 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
     return rows;
   }
 
+  let currentBackgroundStatus: BackgroundStatus = { revision: 0, tasks: [] };
+
+  async function publishBackgroundStatus(next: BackgroundStatus): Promise<void> {
+    currentBackgroundStatus = next;
+    await emit("skills://background-status", currentBackgroundStatus);
+  }
+
   async function publish(next: SkillSnapshot): Promise<void> {
     currentSnapshot = {
       ...next,
@@ -344,7 +354,7 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
           };
           return currentSnapshot.update_check;
         case "get_background_status":
-          return { revision: 0, tasks: [] };
+          return currentBackgroundStatus;
         case "get_skill_snapshot":
           return currentSnapshot;
         case "get_installed_skills":
@@ -497,6 +507,20 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
             claude_reads_shared_folder: false,
           };
         case "list_github_skills":
+          // `getsentry/skills` holds `sentry-triage`, already installed in the
+          // fixture, beside two that are not.
+          if (payload.repo === "getsentry/skills") {
+            return {
+              repo: "getsentry/skills",
+              git_ref: "main",
+              commit: "fixture",
+              skills: ["sentry-triage", "sentry-setup", "sentry-review"].map((name) => ({
+                name,
+                path: `skills/${name}`,
+              })),
+              truncated: false,
+            };
+          }
           return {
             repo: "anthropics/skills",
             git_ref: "main",
@@ -878,24 +902,23 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
         case "start_add_skill_operation":
         case "start_add_skills_operation": {
           const request = addRequestSchema.parse(payload.request);
-          const name =
-            request.skills?.[0]?.name ??
-            request.source.skillName ??
-            request.source.repo?.split("/").pop() ??
-            "added-skill";
-          const added = buildAddedSkill(
-            request,
-            name,
-            "A skill added through the harness fixture.",
+          // A batch adds every requested skill; a single add, the one it names.
+          const names = request.skills?.map((entry) => entry.name) ?? [
+            request.source.skillName ?? request.source.repo?.split("/").pop() ?? "added-skill",
+          ];
+          const added = names.map((skillName) =>
+            buildAddedSkill(request, skillName, "A skill added through the harness fixture."),
           );
-          await publish({ ...currentSnapshot, skills: [...currentSnapshot.skills, added] });
-          const result = {
-            name,
+          await publish({ ...currentSnapshot, skills: [...currentSnapshot.skills, ...added] });
+          const results = added.map((skill) => ({
+            name: skill.name,
             tool: "dotagents",
-            command: `dotagents add ${request.source.repo ?? name}`,
-            deployments_created: added.deployments.map((entry) => entry.path),
+            command: `dotagents add ${request.source.repo ?? skill.name}`,
+            deployments_created: skill.deployments.map((entry) => entry.path),
             warning: null,
-          };
+          }));
+          const result = results[0];
+          const name = result.name;
           if (command === "add_skill") return result;
           const operationId = z.string().parse(payload.operationId);
           const completed: AddSkillOperationEvent = {
@@ -904,7 +927,9 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
             phase: "completed",
             message: `Added ${name}`,
             ...(command === "start_add_skills_operation"
-              ? { outcomes: [{ name, result, error: null }] }
+              ? {
+                  outcomes: results.map((each) => ({ name: each.name, result: each, error: null })),
+                }
               : { result }),
           };
           addOperations.set(operationId, completed);
@@ -995,5 +1020,6 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
     snapshot: () => currentSnapshot,
     publish,
     updateSkill,
+    publishBackgroundStatus,
   };
 }

@@ -3,6 +3,7 @@
 //! Real-disk tests for `pack_export`: installed skills become a new folder
 //! laid out as a pack, and nothing is ever overwritten.
 
+use std::cell::Cell;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -10,7 +11,9 @@ use std::sync::Arc;
 use skill_studio_core::dto::ListEventsRequest;
 use skill_studio_core::harness::HarnessCatalog;
 use skill_studio_core::pack_export::PackExportRequest;
-use skill_studio_core::ports::{Ports, Runtime};
+use skill_studio_core::ports::{
+    DirEntryFacts, DirHandle, ExclusiveGuard, OpenedEntry, Ports, Runtime, ScopeFs, ScopedPath,
+};
 use skill_studio_core::scope::RuntimeScope;
 use skill_studio_core::testing::golden::{ctx, unique_temp_dir};
 use skill_studio_core::testing::{FakeClock, FakeIds, PanicOnSpawn, RecordingSink};
@@ -170,6 +173,9 @@ fn pack_export_refuses_bad_requests_before_it_writes_anything() {
     let delta = home.join(".agents/skills/delta");
     write(&delta.join("SKILL.md"), &skill_md("delta"));
     std::os::unix::fs::symlink(&outside, delta.join("notes.md")).unwrap();
+    let foxtrot = home.join(".agents/skills/foxtrot");
+    write(&foxtrot.join("SKILL.md"), &skill_md("foxtrot"));
+    std::os::unix::fs::symlink("../../../outside.md", foxtrot.join("notes.md")).unwrap();
     let rt = runtime(&home);
     let out = home.join("pack");
 
@@ -193,6 +199,7 @@ fn pack_export_refuses_bad_requests_before_it_writes_anything() {
             export(&out, &["alpha", "delta"], false),
             "leaves its folder",
         ),
+        (export(&out, &["foxtrot"], false), "leaves its folder"),
     ];
     for (req, expected) in cases {
         let err = ops::pack_export(&rt, &ctx(), &req).unwrap_err();
@@ -200,6 +207,30 @@ fn pack_export_refuses_bad_requests_before_it_writes_anything() {
         assert!(err.message.contains(expected), "{expected}: {err:?}");
         assert!(!out.exists(), "{expected}: refused after writing");
     }
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// A link that stays inside its skill is copied as the file or folder it
+/// names. Fails when the export refuses or drops it.
+#[test]
+fn pack_export_copies_what_a_link_inside_the_skill_names() {
+    let home = home("pack_export_inner_link");
+    let skill = home.join(".agents/skills/golf");
+    write(&skill.join("SKILL.md"), &skill_md("golf"));
+    write(&skill.join("docs/guide.md"), "guide\n");
+    std::os::unix::fs::symlink("docs/guide.md", skill.join("guide.md")).unwrap();
+    std::os::unix::fs::symlink("docs", skill.join("more")).unwrap();
+    let rt = runtime(&home);
+    let out = home.join("pack");
+
+    let report = ops::pack_export(&rt, &ctx(), &export(&out, &["golf"], false)).unwrap();
+
+    for copy in ["guide.md", "more/guide.md", "docs/guide.md"] {
+        let path = out.join("skills/golf").join(copy);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "guide\n", "{copy}");
+        assert!(!path.is_symlink(), "{copy} is a link in the pack");
+    }
+    assert_eq!(report.skills[0].files, 4, "{:?}", report.files);
     std::fs::remove_dir_all(&home).ok();
 }
 
@@ -243,4 +274,247 @@ fn pack_export_quotes_each_install_argument_for_the_shell() {
     let readme = std::fs::read_to_string(out.join("README.md")).unwrap();
     assert!(!readme.contains("--skill my skill;id"), "{readme}");
     std::fs::remove_dir_all(&home).ok();
+}
+
+/// Replaces `from` with a link to `to`, as another process could.
+fn swap_for_link(from: &Path, to: &Path) {
+    std::fs::rename(from, from.with_extension("aside")).unwrap();
+    std::os::unix::fs::symlink(to, from).unwrap();
+}
+
+/// When [`Racing`] swaps `from` for a link to `to`.
+enum When {
+    /// Just before the export opens the folder `at`: after it resolved the
+    /// path, before it holds the folder.
+    BeforeOpen,
+    /// Just after the export lists the folder `at`: after it read each
+    /// entry's kind, before it opens the entry.
+    AfterListing,
+}
+
+/// The real file system, with one swap made at an exact moment of the
+/// export, so a race with another process is deterministic.
+struct Racing {
+    real: RealFs,
+    at: PathBuf,
+    from: PathBuf,
+    to: PathBuf,
+    when: When,
+}
+
+macro_rules! delegate {
+    ($($name:ident(&self $(, $arg:ident: $ty:ty)*) -> $ret:ty;)*) => {
+        $(fn $name(&self $(, $arg: $ty)*) -> $ret { self.real.$name($($arg),*) })*
+    };
+}
+
+impl ScopeFs for Racing {
+    delegate! {
+        canonicalize(&self, path: &Path) -> std::io::Result<PathBuf>;
+        symlink_metadata(&self, path: &Path) -> std::io::Result<skill_studio_core::ports::FileFacts>;
+        read_link(&self, path: &Path) -> std::io::Result<PathBuf>;
+        ancestor_holds(&self, start: &Path, name: &str) -> std::io::Result<bool>;
+        read_dir(&self, path: &Path) -> std::io::Result<Vec<DirEntryFacts>>;
+        read_capped(&self, path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>>;
+        read_prefix(&self, path: &Path, limit: u64) -> std::io::Result<(Vec<u8>, bool)>;
+        write_atomic(&self, guard: &ExclusiveGuard, path: &ScopedPath, bytes: &[u8]) -> std::io::Result<()>;
+        rename(&self, guard: &ExclusiveGuard, from: &ScopedPath, to: &ScopedPath) -> std::io::Result<()>;
+        remove_file(&self, guard: &ExclusiveGuard, path: &ScopedPath) -> std::io::Result<()>;
+        create_dir_all(&self, guard: &ExclusiveGuard, path: &ScopedPath) -> std::io::Result<()>;
+        symlink(&self, guard: &ExclusiveGuard, target: &ScopedPath, link: &ScopedPath) -> std::io::Result<()>;
+        symlink_relative(&self, guard: &ExclusiveGuard, target: &ScopedPath, relative_target: &Path, link: &ScopedPath) -> std::io::Result<()>;
+        fsops_device_inode(&self, path: &Path) -> std::io::Result<(u64, u64)>;
+        fsops_fsync_file(&self, path: &Path) -> std::io::Result<()>;
+        fsops_fsync_dir(&self, path: &Path) -> std::io::Result<()>;
+        fsops_create_dir(&self, path: &Path) -> std::io::Result<()>;
+        fsops_write_new_file(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()>;
+        fsops_write_new_file_with_mode(&self, path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()>;
+        fsops_rename(&self, from: &Path, to: &Path) -> std::io::Result<()>;
+        fsops_symlink(&self, target: &Path, link: &Path) -> std::io::Result<()>;
+        fsops_remove_dir(&self, path: &Path) -> std::io::Result<()>;
+        fsops_remove_file(&self, path: &Path) -> std::io::Result<()>;
+        fsops_exchange(&self, a: &Path, b: &Path) -> std::io::Result<()>;
+        fsops_bind_root(&self, root: &Path) -> std::io::Result<Option<Box<dyn ScopeFs + '_>>>;
+    }
+
+    fn fsops_open_dir(&self, path: &Path) -> std::io::Result<Option<Box<dyn DirHandle>>> {
+        if path != self.at {
+            return self.real.fsops_open_dir(path);
+        }
+        match self.when {
+            When::BeforeOpen => {
+                swap_for_link(&self.from, &self.to);
+                self.real.fsops_open_dir(path)
+            }
+            When::AfterListing => Ok(self.real.fsops_open_dir(path)?.map(|inner| {
+                Box::new(SwapAfterListing {
+                    inner,
+                    swap: Cell::new(Some((self.from.clone(), self.to.clone()))),
+                }) as Box<dyn DirHandle>
+            })),
+        }
+    }
+}
+
+struct SwapAfterListing {
+    inner: Box<dyn DirHandle>,
+    swap: Cell<Option<(PathBuf, PathBuf)>>,
+}
+
+impl DirHandle for SwapAfterListing {
+    fn identity(&self) -> std::io::Result<(u64, u64)> {
+        self.inner.identity()
+    }
+    fn entries(&self) -> std::io::Result<Vec<DirEntryFacts>> {
+        let entries = self.inner.entries()?;
+        if let Some((from, to)) = self.swap.take() {
+            swap_for_link(&from, &to);
+        }
+        Ok(entries)
+    }
+    fn open_dir(&self, name: &str) -> std::io::Result<Box<dyn DirHandle>> {
+        self.inner.open_dir(name)
+    }
+    fn read_file(&self, name: &str, max_bytes: u64) -> std::io::Result<(Vec<u8>, u32)> {
+        self.inner.read_file(name, max_bytes)
+    }
+    fn open_within(&self, relative: &Path, max: u64) -> std::io::Result<OpenedEntry> {
+        self.inner.open_within(relative, max)
+    }
+    fn create_dir(&self, name: &str) -> std::io::Result<Box<dyn DirHandle>> {
+        self.inner.create_dir(name)
+    }
+    fn write_new_file(&self, name: &str, bytes: &[u8], mode: u32) -> std::io::Result<()> {
+        self.inner.write_new_file(name, bytes, mode)
+    }
+}
+
+fn runtime_with(home: &Path, fs: Racing) -> Runtime {
+    let ports = Ports {
+        fs: Arc::new(fs),
+        clock: Arc::new(FakeClock::at(0)),
+        ids: Arc::new(FakeIds::default()),
+        leases: Arc::new(FileLease::new(home.join(".leases"))),
+        history: Arc::new(SqliteHistoryOpener::new(
+            home.join(".history/events.sqlite3"),
+        )),
+        sink: Arc::new(RecordingSink::default()),
+        spawner: Some(Arc::new(PanicOnSpawn)),
+        discovery: None,
+        tools: None,
+        catalog: Arc::new(HarnessCatalog::builtin()),
+        telemetry: Arc::new(skill_studio_core::ports::NoopTelemetry),
+    };
+    Runtime::new(&RuntimeScope::fixture(home), ports).unwrap()
+}
+
+/// The pack folder's parent turns into a link to an outside tree that
+/// holds an empty folder of the same name, after the export resolved the
+/// path and before it opened it. Fails when the export follows the link and
+/// writes into the outside folder instead of refusing.
+#[test]
+fn pack_export_refuses_a_pack_folder_whose_parent_turns_into_a_link() {
+    let home = home("pack_export_swap_dest");
+    let parent = std::fs::canonicalize(&home).unwrap().join("out");
+    let outside = home.join("elsewhere");
+    std::fs::create_dir_all(parent.join("pack")).unwrap();
+    std::fs::create_dir_all(outside.join("pack")).unwrap();
+    let rt = runtime_with(
+        &home,
+        Racing {
+            real: RealFs::new(),
+            at: parent.clone(),
+            from: parent.clone(),
+            to: outside.clone(),
+            when: When::BeforeOpen,
+        },
+    );
+
+    let err = ops::pack_export(
+        &rt,
+        &ctx(),
+        &export(&parent.join("pack"), &["alpha"], false),
+    )
+    .unwrap_err();
+
+    assert!(
+        err.message.contains("changed while the export read it"),
+        "{err:?}"
+    );
+    assert_eq!(
+        std::fs::read_dir(outside.join("pack")).unwrap().count(),
+        0,
+        "wrote outside the pack"
+    );
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// A skill folder's parent turns into a link to an outside tree that holds
+/// a skill of the same name, after the export resolved the path and before
+/// it opened it. Fails when the export reads the outside files instead of
+/// refusing.
+#[test]
+fn pack_export_refuses_a_skill_folder_whose_parent_turns_into_a_link() {
+    let home = home("pack_export_swap_source");
+    let outside = home.join("elsewhere/skills");
+    write(&outside.join("alpha/SKILL.md"), "outside bytes\n");
+    let skills = std::fs::canonicalize(home.join(".agents/skills")).unwrap();
+    let rt = runtime_with(
+        &home,
+        Racing {
+            real: RealFs::new(),
+            at: skills.join("alpha"),
+            from: skills,
+            to: outside,
+            when: When::BeforeOpen,
+        },
+    );
+
+    let err =
+        ops::pack_export(&rt, &ctx(), &export(&home.join("pack"), &["alpha"], true)).unwrap_err();
+
+    assert!(
+        err.message.contains("changed while the export read it"),
+        "{err:?}"
+    );
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// A folder and a file in a skill each turn into a link after the export
+/// listed them as a folder and a file: the folder into a link to an empty
+/// folder in the skill, the file into a link to a file outside it. Fails
+/// when the export follows either link, so the pack silently misses the
+/// folder's files or holds the outside bytes, instead of refusing.
+#[test]
+fn pack_export_refuses_an_entry_that_turns_into_a_link_after_the_listing() {
+    for (entry, to) in [("scripts", "empty"), ("SKILL.md", "../../../outside.md")] {
+        let home = home("pack_export_swap_entry");
+        write(&home.join("outside.md"), "outside bytes\n");
+        let skill = std::fs::canonicalize(home.join(".agents/skills/alpha")).unwrap();
+        std::fs::create_dir_all(skill.join("empty")).unwrap();
+        let rt = runtime_with(
+            &home,
+            Racing {
+                real: RealFs::new(),
+                at: skill.clone(),
+                from: skill.join(entry),
+                to: PathBuf::from(to),
+                when: When::AfterListing,
+            },
+        );
+
+        let err = ops::pack_export(&rt, &ctx(), &export(&home.join("pack"), &["alpha"], true))
+            .unwrap_err();
+
+        assert!(
+            err.message.contains("changed while the export read it"),
+            "{entry}: {err:?}"
+        );
+        assert_eq!(
+            err.path.as_deref(),
+            Some(skill.join(entry).as_path()),
+            "{entry}"
+        );
+        std::fs::remove_dir_all(&home).ok();
+    }
 }

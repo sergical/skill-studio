@@ -10,7 +10,7 @@
 //! and only into the folder the request names: that folder must be new or
 //! empty, and every file is created with create-new, so nothing is ever
 //! overwritten.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use schemars::JsonSchema;
@@ -20,7 +20,7 @@ use crate::dto::{DeploymentDto, Inventory};
 use crate::error::{CoreError, ErrorCode, ErrorEntry};
 use crate::identity::{RootKind, RootScope};
 use crate::ops::{OpStatus, Operation, Outcome};
-use crate::ports::{FileKind, OpContext, Runtime, ScopeFs};
+use crate::ports::{DirHandle, FileKind, OpContext, OpenedEntry, Runtime, ScopeFs};
 
 /// Largest single file the export copies.
 const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
@@ -121,20 +121,20 @@ pub fn pack_export(
         let inventory = crate::pack::scan(rt, ctx)?;
         let mut skills = Vec::new();
         let mut planned = Vec::new();
+        let mut walk = Walk {
+            open: Vec::new(),
+            planned: &mut planned,
+            total: 0,
+        };
         for name in &req.skills {
             ctx.checkpoint()?;
             let copy = live_copy(&inventory, name, &scope)?;
-            let before = planned.len();
-            collect(
-                fs,
-                &copy.path,
-                &Path::new("skills").join(name),
-                &mut planned,
-            )?;
+            let before = walk.planned.len();
+            collect(fs, &copy.path, &Path::new("skills").join(name), &mut walk)?;
             skills.push(PackExportSkill {
                 skill: name.clone(),
                 from: copy.path.clone(),
-                files: planned.len() - before,
+                files: walk.planned.len() - before,
             });
         }
         let source = req.source.as_deref().unwrap_or(SOURCE_PLACEHOLDER);
@@ -167,7 +167,8 @@ pub fn pack_export(
 
 /// Refuses a request that could write outside its folder or over a file:
 /// no skills, a repeated or path-like name, a relative folder, or a folder
-/// that holds anything.
+/// that holds anything. [`write_pack`] checks the folder again through the
+/// handle it writes with.
 fn check_request(fs: &dyn ScopeFs, req: &PackExportRequest) -> Result<(), CoreError> {
     let invalid = |message: String| CoreError::new(ErrorCode::InvalidRequest, message);
     if req.skills.is_empty() {
@@ -197,35 +198,7 @@ fn check_request(fs: &dyn ScopeFs, req: &PackExportRequest) -> Result<(), CoreEr
             invalid("give the pack folder as an absolute path without `..`".into()).at(&req.dir),
         );
     }
-    match fs.symlink_metadata(&req.dir) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let parent = req.dir.parent().unwrap_or(&req.dir);
-            match fs.symlink_metadata(parent) {
-                Ok(facts) if facts.kind == FileKind::Dir => Ok(()),
-                _ => {
-                    Err(invalid("the pack folder's parent folder does not exist".into()).at(parent))
-                }
-            }
-        }
-        Err(e) => Err(CoreError::io(&req.dir, e)),
-        Ok(facts) if facts.kind != FileKind::Dir => Err(invalid(
-            "the pack folder path is a file or a link, not a folder".into(),
-        )
-        .at(&req.dir)),
-        Ok(_) => {
-            let entries = fs
-                .read_dir(&req.dir)
-                .map_err(|e| CoreError::io(&req.dir, e))?;
-            if entries.is_empty() {
-                Ok(())
-            } else {
-                Err(
-                    invalid("the pack folder is not empty; choose a new or empty folder".into())
-                        .at(&req.dir),
-                )
-            }
-        }
-    }
+    open_pack_dir(fs, &req.dir, false).map(|_| ())
 }
 
 /// The copy of `name` to export from `scope`: the shared `.agents/skills`
@@ -267,97 +240,134 @@ fn live_copy<'a>(
         })
 }
 
+/// Opens `path` through the port's handles ([`ScopeFs::fsops_open_dir`]).
+fn open_dir(fs: &dyn ScopeFs, path: &Path) -> Result<Box<dyn DirHandle>, CoreError> {
+    match fs.fsops_open_dir(path) {
+        Ok(Some(handle)) => Ok(handle),
+        Ok(None) => Err(CoreError::new(
+            ErrorCode::Unsupported,
+            "this file system cannot hold folders open, so the export cannot read safely",
+        )),
+        Err(e) if e.kind() == std::io::ErrorKind::NotADirectory => Err(changed(path)),
+        Err(e) => Err(CoreError::io(path, e)),
+    }
+}
+
+/// A folder or file that turned into something else between the moment the
+/// export saw it and the moment it opened it.
+fn changed(path: &Path) -> CoreError {
+    CoreError::new(
+        ErrorCode::InvalidRequest,
+        "it changed while the export read it; run the export again",
+    )
+    .at(path)
+}
+
+fn refuse(path: &Path, message: &str) -> CoreError {
+    CoreError::new(ErrorCode::InvalidRequest, message.to_string()).at(path)
+}
+
 /// Adds every file under `folder` to `planned`, at `into/<relative path>`.
 /// The folder itself may be a link (a linked install): its resolved folder
-/// is the boundary. Files are read through a handle bound to that folder
-/// ([`ScopeFs::fsops_read_capped`]), so a link to outside it, even one
-/// swapped in after the checks here, fails the read. A link that leaves the
-/// folder or loops back into a folder being walked is refused. `.git` is
-/// left out.
+/// is the boundary. The walk holds each folder open and reads every entry
+/// through its folder's handle, so what it checks is what it reads: a link
+/// swapped in after the listing fails the open instead of redirecting it,
+/// and a link inside the skill is followed only while it stays inside the
+/// skill. A link that leaves the skill, or loops back into a folder being
+/// walked, is refused. `.git` is left out.
 fn collect(
     fs: &dyn ScopeFs,
     folder: &Path,
     into: &Path,
-    planned: &mut Vec<PlannedFile>,
+    walk: &mut Walk<'_>,
 ) -> Result<(), CoreError> {
-    let root = fs
+    let resolved = fs
         .canonicalize(folder)
         .map_err(|e| CoreError::io(folder, e))?;
-    let bound = fs
-        .fsops_bind_root(&root)
-        .map_err(|e| CoreError::io(&root, e))?;
-    let reader = bound.as_deref().unwrap_or(fs);
-    let mut walk = Walk {
-        fs,
-        reader,
-        root: &root,
-        open: vec![root.clone()],
-        planned,
-    };
-    walk.dir(&root, into)
+    let root = open_dir(fs, &resolved)?;
+    let identity = root.identity().map_err(|e| CoreError::io(&resolved, e))?;
+    walk.open = vec![identity];
+    walk.dir(root.as_ref(), root.as_ref(), &resolved, Path::new(""), into)
 }
 
+/// Walk state shared across the skills of one export.
 struct Walk<'a> {
-    fs: &'a dyn ScopeFs,
-    reader: &'a dyn ScopeFs,
-    root: &'a Path,
-    /// Resolved folders on the current path, to refuse a link back into one.
-    open: Vec<PathBuf>,
+    /// Device and inode of each folder on the current path, to refuse a link
+    /// back into one.
+    open: Vec<(u64, u64)>,
     planned: &'a mut Vec<PlannedFile>,
+    /// Bytes in `planned`.
+    total: u64,
 }
 
 impl Walk<'_> {
-    fn refuse(path: &Path, message: &str) -> CoreError {
-        CoreError::new(ErrorCode::InvalidRequest, message.to_string()).at(path)
-    }
-
-    fn dir(&mut self, dir: &Path, into: &Path) -> Result<(), CoreError> {
-        let mut entries = self.fs.read_dir(dir).map_err(|e| CoreError::io(dir, e))?;
+    /// Walks `dir`, which is `relative` below the skill folder `root`;
+    /// `shown` is its path, for messages only.
+    fn dir(
+        &mut self,
+        root: &dyn DirHandle,
+        dir: &dyn DirHandle,
+        shown: &Path,
+        relative: &Path,
+        into: &Path,
+    ) -> Result<(), CoreError> {
+        let mut entries = dir.entries().map_err(|e| CoreError::io(shown, e))?;
         entries.sort_by(|a, b| a.name.cmp(&b.name));
         for entry in entries {
             if entry.name == ".git" {
                 continue;
             }
-            let path = dir.join(&entry.name);
-            let target = if entry.kind == FileKind::Symlink {
-                let resolved = self
-                    .fs
-                    .canonicalize(&path)
-                    .map_err(|e| CoreError::io(&path, e))?;
-                if !resolved.starts_with(self.root) {
-                    return Err(Self::refuse(
-                        &path,
-                        "a link in the skill leaves its folder; the pack would not hold what it names",
-                    ));
+            let path = shown.join(&entry.name);
+            let opened = match entry.kind {
+                FileKind::Dir => dir.open_dir(&entry.name).map(OpenedEntry::Dir),
+                FileKind::File => dir
+                    .read_file(&entry.name, MAX_FILE_BYTES)
+                    .map(|(bytes, mode)| OpenedEntry::File { bytes, mode }),
+                FileKind::Symlink => {
+                    match root.open_within(&relative.join(&entry.name), MAX_FILE_BYTES) {
+                        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                            return Err(refuse(
+                                &path,
+                                "a link in the skill leaves its folder; the pack would not hold what it names",
+                            ))
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => {
+                            return Err(refuse(&path, NOT_A_FILE))
+                        }
+                        other => other,
+                    }
                 }
-                resolved
-            } else {
-                path.clone()
+                FileKind::Other => return Err(refuse(&path, NOT_A_FILE)),
             };
-            let facts = self
-                .fs
-                .symlink_metadata(&target)
-                .map_err(|e| CoreError::io(&target, e))?;
-            let relative = into.join(&entry.name);
-            match facts.kind {
-                FileKind::Dir => {
-                    if self.open.contains(&target) {
-                        return Err(Self::refuse(
+            // The kind the listing gave no longer holds: a folder or file
+            // became a link, or the other way round.
+            let opened = opened.map_err(|e| match e.kind() {
+                std::io::ErrorKind::NotADirectory | std::io::ErrorKind::InvalidInput => {
+                    changed(&path)
+                }
+                _ => CoreError::io(&path, e),
+            })?;
+            let target = into.join(&entry.name);
+            match opened {
+                OpenedEntry::Dir(child) => {
+                    let identity = child.identity().map_err(|e| CoreError::io(&path, e))?;
+                    if self.open.contains(&identity) {
+                        return Err(refuse(
                             &path,
                             "a link in the skill loops back into its own folder",
                         ));
                     }
-                    self.open.push(target.clone());
-                    self.dir(&target, &relative)?;
+                    self.open.push(identity);
+                    self.dir(
+                        root,
+                        child.as_ref(),
+                        &path,
+                        &relative.join(&entry.name),
+                        &target,
+                    )?;
                     self.open.pop();
                 }
-                FileKind::File => self.file(&path, &target, relative, facts.mode)?,
-                FileKind::Symlink | FileKind::Other => {
-                    return Err(Self::refuse(
-                        &path,
-                        "the skill holds something that is not a file or a folder",
-                    ));
-                }
+                OpenedEntry::File { bytes, mode } => self.file(&path, target, bytes, mode)?,
             }
         }
         Ok(())
@@ -366,70 +376,93 @@ impl Walk<'_> {
     fn file(
         &mut self,
         path: &Path,
-        target: &Path,
         relative: PathBuf,
-        mode: Option<u32>,
+        bytes: Vec<u8>,
+        mode: u32,
     ) -> Result<(), CoreError> {
         if self.planned.len() >= MAX_FILES {
-            return Err(Self::refuse(
-                path,
-                "the pack would hold more than 10,000 files",
-            ));
+            return Err(refuse(path, "the pack would hold more than 10,000 files"));
         }
-        let bytes = self
-            .reader
-            .fsops_read_capped(target, MAX_FILE_BYTES)
-            .map_err(|e| CoreError::io(path, e))?;
-        let total: u64 = self
-            .planned
-            .iter()
-            .map(|f| f.bytes.len() as u64)
-            .sum::<u64>()
-            + bytes.len() as u64;
-        if total > MAX_TOTAL_BYTES {
-            return Err(Self::refuse(path, "the pack would hold more than 256 MB"));
+        self.total += bytes.len() as u64;
+        if self.total > MAX_TOTAL_BYTES {
+            return Err(refuse(path, "the pack would hold more than 256 MB"));
         }
-        let executable = mode.is_some_and(|mode| mode & 0o111 != 0);
         self.planned.push(PlannedFile {
             relative,
             bytes,
-            mode: if executable { 0o755 } else { 0o644 },
+            mode: if mode & 0o111 != 0 { 0o755 } else { 0o644 },
         });
         Ok(())
     }
 }
 
-/// Writes the pack through a handle bound to `dir`, so no write can leave it,
-/// even through a folder swapped for a link after the checks: creates `dir`
-/// when it does not exist, checks again that it is a real, empty folder,
-/// then creates every folder and file with create-new. On a failure the
-/// error lists what was written and what to remove: the folder when this
-/// export created it, else only the listed files.
-fn write_pack(fs: &dyn ScopeFs, dir: &Path, planned: &[PlannedFile]) -> Result<(), CoreError> {
-    let created = fs.symlink_metadata(dir).is_err();
-    if created {
-        fs.fsops_create_dir(dir)
-            .map_err(|e| CoreError::io(dir, e))?;
-    }
-    let is_real_dir = |fs: &dyn ScopeFs| {
-        fs.symlink_metadata(dir)
-            .is_ok_and(|facts| facts.kind == FileKind::Dir)
+const NOT_A_FILE: &str = "the skill holds something that is not a file or a folder";
+
+/// The pack folder, held open.
+struct PackDir {
+    handle: Box<dyn DirHandle>,
+    /// This export created the folder.
+    created: bool,
+}
+
+/// Opens the pack folder: its parent by its link-free path, then the folder
+/// by name, never through a link. `None` when the folder does not exist and
+/// `create` is false. Refuses a folder that holds anything.
+fn open_pack_dir(fs: &dyn ScopeFs, dir: &Path, create: bool) -> Result<Option<PackDir>, CoreError> {
+    let invalid = |message: &str| refuse(dir, message);
+    let (Some(parent), Some(name)) = (dir.parent(), dir.file_name().and_then(|n| n.to_str()))
+    else {
+        return Err(invalid(
+            "give the pack folder a name inside a parent folder",
+        ));
     };
-    if !is_real_dir(fs) {
-        return Err(Walk::refuse(dir, "the pack folder is no longer a folder"));
-    }
-    let bound = fs.fsops_bind_root(dir).map_err(|e| CoreError::io(dir, e))?;
-    let writer = bound.as_deref().unwrap_or(fs);
-    let empty = fs
-        .read_dir(dir)
-        .map_err(|e| CoreError::io(dir, e))?
-        .is_empty();
-    if !is_real_dir(fs) || !empty {
-        return Err(Walk::refuse(
-            dir,
-            "the pack folder changed while the export read the skills; choose a new or empty folder",
+    let parent = match fs.canonicalize(parent) {
+        Ok(parent) => parent,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(refuse(
+                parent,
+                "the pack folder's parent folder does not exist",
+            ))
+        }
+        Err(e) => return Err(CoreError::io(parent, e)),
+    };
+    let parent = open_dir(fs, &parent)?;
+    let (handle, created) = match parent.open_dir(name) {
+        Ok(folder) => (folder, false),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !create => return Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (
+            parent.create_dir(name).map_err(|e| CoreError::io(dir, e))?,
+            true,
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotADirectory => {
+            return Err(invalid(
+                "the pack folder path is a file or a link, not a folder",
+            ))
+        }
+        Err(e) => return Err(CoreError::io(dir, e)),
+    };
+    let entries = handle.entries().map_err(|e| CoreError::io(dir, e))?;
+    if !entries.is_empty() {
+        return Err(invalid(
+            "the pack folder is not empty; choose a new or empty folder",
         ));
     }
+    Ok(Some(PackDir { handle, created }))
+}
+
+/// Writes the pack through the handle [`open_pack_dir`] returns, so no write
+/// can leave the folder, even through a folder swapped for a link after the
+/// checks; every folder and file is created with create-new. On a failure
+/// the error lists what was written and what to remove: the folder when
+/// this export created it, else only the listed files.
+fn write_pack(fs: &dyn ScopeFs, dir: &Path, planned: &[PlannedFile]) -> Result<(), CoreError> {
+    let Some(PackDir {
+        handle: root,
+        created,
+    }) = open_pack_dir(fs, dir, true)?
+    else {
+        return Err(changed(dir));
+    };
     let mut written: Vec<PathBuf> = Vec::new();
     let stopped = |path: &Path, e: std::io::Error, written: &[PathBuf]| {
         let undo = if created {
@@ -447,30 +480,33 @@ fn write_pack(fs: &dyn ScopeFs, dir: &Path, planned: &[PlannedFile]) -> Result<(
                     .join(", ")
             )
         };
-        CoreError::io(path, e).with_detail(format!("the export stopped here; {undo}"))
+        CoreError::io(dir.join(path), e).with_detail(format!("the export stopped here; {undo}"))
     };
-    let mut made: BTreeSet<PathBuf> = BTreeSet::new();
+    // Folders this export created, by path relative to `dir`, held open.
+    let mut made: BTreeMap<PathBuf, Box<dyn DirHandle>> = BTreeMap::new();
     for file in planned {
-        let mut parents: Vec<&Path> = file
-            .relative
-            .ancestors()
-            .skip(1)
-            .filter(|p| !p.as_os_str().is_empty())
-            .collect();
-        parents.reverse();
-        for parent in parents {
-            if made.insert(parent.to_path_buf()) {
-                let folder = dir.join(parent);
-                writer
-                    .fsops_create_dir(&folder)
-                    .map_err(|e| stopped(&folder, e, &written))?;
-                written.push(parent.to_path_buf());
+        let mut at = PathBuf::new();
+        let parts: Vec<&std::ffi::OsStr> = file.relative.iter().collect();
+        let Some((leaf, folders)) = parts.split_last() else {
+            continue;
+        };
+        for folder in folders {
+            let parent = at.clone();
+            at.push(folder);
+            if made.contains_key(&at) {
+                continue;
             }
+            let holder = made.get(&parent).map_or(root.as_ref(), AsRef::as_ref);
+            let opened = holder
+                .create_dir(&folder.to_string_lossy())
+                .map_err(|e| stopped(&at, e, &written))?;
+            written.push(at.clone());
+            made.insert(at.clone(), opened);
         }
-        let path = dir.join(&file.relative);
-        writer
-            .fsops_write_new_file_with_mode(&path, &file.bytes, file.mode)
-            .map_err(|e| stopped(&path, e, &written))?;
+        made.get(&at)
+            .map_or(root.as_ref(), AsRef::as_ref)
+            .write_new_file(&leaf.to_string_lossy(), &file.bytes, file.mode)
+            .map_err(|e| stopped(&file.relative, e, &written))?;
         written.push(file.relative.clone());
     }
     Ok(())

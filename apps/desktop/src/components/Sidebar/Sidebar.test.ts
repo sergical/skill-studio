@@ -3,7 +3,9 @@
 // ============================================================================
 
 import { describe, expect, it } from "vitest";
+import type { BackgroundTaskStatus } from "@skill-studio/lib";
 import {
+  backgroundRefreshError,
   hasNewerSkillSnapshotEmission,
   relativeScanTime,
   rescanTooltip,
@@ -43,5 +45,40 @@ describe("hasNewerSkillSnapshotEmission", () => {
 
   it("completes when a listener delivers a newer backend revision", () => {
     expect(hasNewerSkillSnapshotEmission(4, 5)).toBe(true);
+  });
+});
+
+describe("backgroundRefreshError", () => {
+  const task = (
+    worker: BackgroundTaskStatus["worker"],
+    running: boolean,
+    lastError: string | null,
+  ): BackgroundTaskStatus => ({
+    worker,
+    running,
+    last_started_at: null,
+    last_finished_at: null,
+    last_error: lastError,
+  });
+
+  it("reports nothing for a refresh that is only running", () => {
+    expect(
+      backgroundRefreshError({
+        revision: 1,
+        tasks: [task("scan", true, null), task("invocations", true, null)],
+      }),
+    ).toBeNull();
+  });
+
+  it("reports a failed scan or usage refresh", () => {
+    expect(
+      backgroundRefreshError({ revision: 1, tasks: [task("invocations", false, "index locked")] }),
+    ).toBe("index locked");
+  });
+
+  it("leaves a failed update check to Home", () => {
+    expect(
+      backgroundRefreshError({ revision: 1, tasks: [task("update_check", false, "offline")] }),
+    ).toBeNull();
   });
 });

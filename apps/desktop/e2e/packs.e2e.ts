@@ -139,3 +139,25 @@ test("an app shortcut does not leave Packs while a pack dialog is open", async (
   await expect(dialog).toBeHidden();
   await expect(page.getByRole("heading", { name: "Packs", level: 1 })).toBeVisible();
 });
+
+test("Add from a repo opens the Add Skill sheet, where a skill installed here shows as Installed and is not added again", async ({
+  page,
+}) => {
+  const skillsNav = page.getByRole("navigation").getByRole("button", { name: /^Skills \d+$/ });
+  const countBefore = Number((await skillsNav.textContent())?.match(/\d+/)?.[0]);
+  await page.getByRole("button", { name: "Add from a repo" }).click();
+
+  const sheet = page.getByRole("dialog");
+  await sheet.getByRole("textbox", { name: "Source" }).fill("getsentry/skills");
+  await expect(sheet.getByText("3 skills · 1 installed")).toBeVisible();
+  const installed = sheet.getByRole("listitem").filter({ hasText: "sentry-triage" });
+  await expect(installed).toContainText("Installed");
+  await expect(installed.getByRole("checkbox")).toBeDisabled();
+  await expect(installed.getByRole("checkbox")).not.toBeChecked();
+
+  await sheet.getByRole("button", { name: "Install 2 skills" }).click();
+
+  await expect(sheet).toHaveCount(0);
+  // Only the two new skills were added; `sentry-triage` was not sent again.
+  await expect(skillsNav).toHaveText(new RegExp(`${countBefore + 2}$`));
+});
