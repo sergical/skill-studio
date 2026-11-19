@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PackSwitchSourceRequest",
+  "description": "Input for `pack_switch_source`.",
+  "type": "object",
+  "properties": {
+    "source": {
+      "description": "Pack source as `pack_list` reports it.",
+      "type": "string"
+    },
+    "to": {
+      "description": "Git source to install the skills from instead, usually your fork of\nthe pack: `owner/repo` or a git URL, with `#ref` to pin a branch or tag.",
+      "type": "string"
+    },
+    "skills": {
+      "description": "Only these skills of the pack. Empty: every skill of the pack.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "project_path": {
+      "description": "Only this tracked project. Absent: the home and every tracked project.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "dry_run": {
+      "description": "Return the plan and change nothing.",
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "required": [
+    "source",
+    "to"
+  ]
+}

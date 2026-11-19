@@ -797,6 +797,25 @@ impl SkillStudioServer {
     }
 
     #[tool(
+        description = "Move the skills of one skills.sh pack (source as pack_list reports it) to another git source, usually your GitHub fork of the pack: each skill is installed from `to` over its copy, and the old source stays recorded as the pack's original, so pack_show of `to` with remote lists the skills that differ and the skills only the original has. Name skills to move only some. Skips skills with local edits. Set dry_run to get the plan only. Undo one skill with restore_event and its event_id.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
+    async fn pack_switch_source(
+        &self,
+        Parameters(req): Parameters<skill_studio_core::pack_action::PackSwitchSourceRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op_in_project(
+            Operation::PackSwitchSource,
+            true,
+            req.project_path.as_deref(),
+            &context,
+            |rt, ctx| ops::pack_switch_source(rt, ctx, &req),
+        )
+        .await
+    }
+
+    #[tool(
         description = "Remove the skills of one pack (source as pack_list reports it) through the tool that installed them. Skips plugin and npm packs, and skills with local edits. Set dry_run to get the plan only. Undo one skill with restore_event and its event_id.",
         annotations(read_only_hint = false, destructive_hint = true)
     )]

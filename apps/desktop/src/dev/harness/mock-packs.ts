@@ -89,6 +89,7 @@ export function mockPackReport(snapshot: SkillSnapshot, remote: boolean): PackRe
       edited_count: 0,
       behind_count: 0,
       remote: { state: "not_checked" },
+      original: null,
       summary: "",
     };
     for (const row of packSkills(item)) {
@@ -143,8 +144,15 @@ function skipReason(pack: Pack, row: PackSkill, action: StepAction, snapshot: Sk
 function report(dryRun: boolean, action: StepAction, steps: PackStep[]): PackActionReport {
   const count = (state: PackStep["state"]["state"]) =>
     steps.filter((s) => s.state.state === state).length;
-  const verb = { install: "install", update: "update", remove: "remove" }[action];
-  const past = { install: "Installed", update: "Updated", remove: "Removed" }[action];
+  const verb = { install: "install", update: "update", remove: "remove", switch_source: "switch" }[
+    action
+  ];
+  const past = {
+    install: "Installed",
+    update: "Updated",
+    remove: "Removed",
+    switch_source: "Switched",
+  }[action];
   const summary = dryRun
     ? `Would ${verb} ${plural(count("planned"), "skill")}; ${count("skipped")} skipped.`
     : `${past} ${plural(count("done"), "skill")}; ${count("skipped")} skipped; ${count("failed")} failed.`;

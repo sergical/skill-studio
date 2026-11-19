@@ -35,7 +35,7 @@ fn cli_package(method: InstallMethod) -> Option<&'static str> {
 /// from `skill_add.rs`'s `add_via_dotagents` (`npx -y @sentry/dotagents
 /// [--project] add <source> [--name <n>]`, also with the process cwd set to
 /// the project path for a project scope).
-fn cli_args_and_cwd(
+pub(crate) fn cli_args_and_cwd(
     method: InstallMethod,
     source: &str,
     skill: &SkillName,

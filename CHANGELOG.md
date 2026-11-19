@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added
+
+- `skill-studio pack switch-source <source> <to>` (MCP `pack_switch_source`) moves the skills of a skills.sh pack to another git source, such as your GitHub fork, with `npx skills add`, and keeps the old source as the pack's original. `pack show <to> --remote` then lists the skills that differ from the original and the skills only the original has. Each skill gets its own undo event. Before, you had to remove the pack and add it again from the fork, and the link to the original was lost.
+
+### Fixed
+
+- Undo of a skills.sh update in a project no longer fails with `drift_conflict`. It compared the home lock file, not the project's `skills-lock.json`.
+
 ## v0.3.0
 
 ### Added

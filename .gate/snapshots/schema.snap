@@ -4723,6 +4723,11 @@
             "const": "remove",
             "description": "Remove the skill.",
             "type": "string"
+          },
+          {
+            "const": "switch_source",
+            "description": "Install the skill from another source over its current copy.",
+            "type": "string"
           }
         ]
       },
@@ -5016,6 +5021,17 @@
             "type": "array",
             "x-untrusted": true
           },
+          "original": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PackOriginal"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The source this pack's skills moved away from with\n`pack_switch_source`, such as the repo the pack's source is a fork\nof, and how the pack compares with it. Absent for a pack that never\nmoved."
+          },
           "ref_pin": {
             "description": "Branch, tag, commit, or plugin version the install is pinned to.",
             "type": [
@@ -5098,6 +5114,43 @@
             "type": "string"
           }
         ]
+      },
+      "PackOriginal": {
+        "description": "The source a pack moved away from, and how the pack compares with it.",
+        "properties": {
+          "differs": {
+            "description": "Installed skills whose folder in the original differs from the\nfolder in the pack's own source: one of the two changed it.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "x-untrusted": true
+          },
+          "not_in_source": {
+            "description": "Skills of the original that the pack's own source does not have.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "x-untrusted": true
+          },
+          "remote": {
+            "$ref": "#/$defs/RemoteState",
+            "description": "`checked` only when the remote check read both the pack's own source\nand the original; otherwise the state of the read that did not happen\nor failed, and the two lists are empty."
+          },
+          "source": {
+            "description": "The source the pack's skills came from before they moved to the\npack's own source.",
+            "type": "string",
+            "x-untrusted": true
+          }
+        },
+        "required": [
+          "source",
+          "remote",
+          "differs",
+          "not_in_source"
+        ],
+        "type": "object"
       },
       "PackSkill": {
         "description": "One installed skill of a pack, at one scope.",
@@ -5318,6 +5371,47 @@
       "source"
     ],
     "title": "PackShowRequest",
+    "type": "object"
+  },
+  "crates/skill-studio-core/schema/pack_switch_source_request.schema.json": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Input for `pack_switch_source`.",
+    "properties": {
+      "dry_run": {
+        "default": false,
+        "description": "Return the plan and change nothing.",
+        "type": "boolean"
+      },
+      "project_path": {
+        "default": null,
+        "description": "Only this tracked project. Absent: the home and every tracked project.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "skills": {
+        "default": [],
+        "description": "Only these skills of the pack. Empty: every skill of the pack.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "source": {
+        "description": "Pack source as `pack_list` reports it.",
+        "type": "string"
+      },
+      "to": {
+        "description": "Git source to install the skills from instead, usually your fork of\nthe pack: `owner/repo` or a git URL, with `#ref` to pin a branch or tag.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "source",
+      "to"
+    ],
+    "title": "PackSwitchSourceRequest",
     "type": "object"
   },
   "crates/skill-studio-core/schema/pack_update_request.schema.json": {
