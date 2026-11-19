@@ -123,6 +123,21 @@ test("Try again from the keyboard leaves focus on the Sync button", async ({ pag
   await expect(page.getByRole("button", { name: "Syncing installed skills" })).toBeFocused();
 });
 
+test("a long error scrolls with the keyboard", async ({ page }) => {
+  const longError = Array.from({ length: 80 }, (_, i) => `line ${i}: permission denied`).join("\n");
+  await page.evaluate(
+    (next) => window.__harness?.publishBackgroundStatus(next),
+    status(2, false, longError),
+  );
+  await page.getByRole("button", { name: "Sync failed, show error" }).click();
+  const details = page.getByRole("region", { name: "Error details" });
+
+  await details.focus();
+  await expect(details).toBeFocused();
+  await page.keyboard.press("PageDown");
+  await expect.poll(() => details.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+});
+
 test("Sync without an error starts a rescan and opens nothing", async ({ page }) => {
   const revisionBefore = await page.evaluate(() => window.__harness!.snapshot().revision);
   const sync = page.getByRole("button", { name: "Sync installed skills" });

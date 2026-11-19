@@ -281,9 +281,15 @@ function SyncButton({ scannedAt, spinning, refreshError, onRefresh }: SyncButton
         className="w-72 gap-2 bg-bg-elevated text-small text-text-primary ring-border"
       >
         <p className="m-0 font-medium">Couldn't refresh your skills</p>
-        <p className="m-0 max-h-40 select-text overflow-y-auto break-words text-text-secondary">
+        {/* A long error scrolls; the region takes focus so the keyboard can scroll it too. */}
+        <div
+          role="region"
+          aria-label="Error details"
+          tabIndex={0}
+          className="max-h-40 select-text overflow-y-auto break-words rounded-sm text-text-secondary focus-visible:outline-2 focus-visible:outline-accent"
+        >
           {refreshError}
-        </p>
+        </div>
         <p className="m-0 text-text-tertiary">The lists show the last results that loaded.</p>
         <Button
           size="sm"
