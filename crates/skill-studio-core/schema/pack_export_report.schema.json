@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PackExportReport",
+  "description": "Result of `pack_export`.",
+  "type": "object",
+  "properties": {
+    "dry_run": {
+      "description": "The call wrote nothing.",
+      "type": "boolean"
+    },
+    "dir": {
+      "description": "The pack folder.",
+      "type": "string",
+      "x-untrusted": true
+    },
+    "skills": {
+      "description": "One entry per skill, in request order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PackExportSkill"
+      }
+    },
+    "files": {
+      "description": "Every file written, or to write on a dry run, relative to `dir`.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "x-untrusted": true
+    },
+    "install_command": {
+      "description": "The command that installs every skill of the pack once it is pushed.",
+      "type": "string",
+      "x-untrusted": true
+    },
+    "summary": {
+      "description": "One line for a person or agent.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "dry_run",
+    "dir",
+    "skills",
+    "files",
+    "install_command",
+    "summary"
+  ],
+  "$defs": {
+    "PackExportSkill": {
+      "description": "One skill in the pack.",
+      "type": "object",
+      "properties": {
+        "skill": {
+          "description": "Skill name, and its folder under `skills/`.",
+          "type": "string",
+          "x-untrusted": true
+        },
+        "from": {
+          "description": "The installed copy its files come from.",
+          "type": "string",
+          "x-untrusted": true
+        },
+        "files": {
+          "description": "How many files it holds.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "skill",
+        "from",
+        "files"
+      ]
+    }
+  }
+}

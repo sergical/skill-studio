@@ -1205,6 +1205,7 @@ const WRITE_TOOLS: &[&str] = &[
     "pack_update",
     "pack_remove",
     "pack_switch_source",
+    "pack_export",
     "recovery_drop",
 ];
 

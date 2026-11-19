@@ -762,6 +762,23 @@ enum PackCommand {
         #[command(flatten)]
         args: PackWriteArgs,
     },
+    /// Copy installed skills into a new folder laid out as a pack:
+    /// skills/<name>/ for each and a README with the install lines. Push the
+    /// folder to git and anyone can install it with npx skills add. Writes
+    /// nothing else and never overwrites a file.
+    Export {
+        /// New or empty folder to create the pack in.
+        dir: PathBuf,
+        /// Skill to put in the pack. Repeat for more than one.
+        #[arg(long = "skill", value_name = "SKILL", required = true)]
+        skills: Vec<String>,
+        /// Where the pack will live, as owner/repo or a git URL, for the
+        /// README's install lines. Default: <owner>/<repo>.
+        #[arg(long)]
+        source: Option<String>,
+        #[command(flatten)]
+        args: PackWriteArgs,
+    },
 }
 
 #[derive(clap::Args)]
@@ -2936,6 +2953,12 @@ fn run_pack(action: PackCommand, time: bool) -> ExitCode {
     let (source, args) = match action {
         PackCommand::List { args } => (None, args),
         PackCommand::Show { source, args } => (Some(source), args),
+        PackCommand::Export {
+            dir,
+            skills,
+            source,
+            args,
+        } => return run_pack_export(dir, skills, source, &args, time),
         write => return run_pack_action(write, time),
     };
     let operation = if source.is_some() {
@@ -3003,7 +3026,9 @@ fn run_pack_action(action: PackCommand, time: bool) -> ExitCode {
         PackCommand::Update { args, .. } => (Operation::PackUpdate, args),
         PackCommand::Remove { args, .. } => (Operation::PackRemove, args),
         PackCommand::SwitchSource { args, .. } => (Operation::PackSwitchSource, args),
-        PackCommand::List { .. } | PackCommand::Show { .. } => unreachable!("read commands"),
+        PackCommand::List { .. } | PackCommand::Show { .. } | PackCommand::Export { .. } => {
+            unreachable!("handled by run_pack")
+        }
     };
     let rt = match build_runtime_write_with_project::<PackActionReport>(
         &args.scope,
@@ -3081,10 +3106,52 @@ fn run_pack_action(action: PackCommand, time: bool) -> ExitCode {
                 dry_run,
             },
         ),
-        PackCommand::List { .. } | PackCommand::Show { .. } => unreachable!("read commands"),
+        PackCommand::List { .. } | PackCommand::Show { .. } | PackCommand::Export { .. } => {
+            unreachable!("handled by run_pack")
+        }
     };
     let envelope = ResultEnvelope::from_result(operation, &rt.scope, &ctx, result);
     finish(&envelope, json, time, output::print_pack_action)
+}
+
+fn run_pack_export(
+    dir: PathBuf,
+    skills: Vec<String>,
+    source: Option<String>,
+    args: &PackWriteArgs,
+    time: bool,
+) -> ExitCode {
+    use skill_studio_core::pack_export::{PackExportReport, PackExportRequest};
+    let rt = match build_runtime_write_with_project::<PackExportReport>(
+        &args.scope,
+        Operation::PackExport,
+        args.json,
+        args.project_path.as_deref(),
+    ) {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+    // The core takes an absolute folder; a relative one is the user's
+    // current folder.
+    let dir = if dir.is_absolute() {
+        dir
+    } else {
+        std::env::current_dir().map_or(dir.clone(), |cwd| cwd.join(&dir))
+    };
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let result = ops::pack_export(
+        &rt,
+        &ctx,
+        &PackExportRequest {
+            dir,
+            skills,
+            source,
+            project_path: args.project_path.clone(),
+            dry_run: args.dry_run,
+        },
+    );
+    let envelope = ResultEnvelope::from_result(Operation::PackExport, &rt.scope, &ctx, result);
+    finish(&envelope, args.json, time, output::print_pack_export)
 }
 
 fn run_recovery(action: RecoveryCommand, time: bool) -> ExitCode {
