@@ -1,13 +1,14 @@
 import argparse
 import json
 from pathlib import Path
+import unittest
 from unittest.mock import patch
 
-from test_gate import GateTests
+from git_fixture import GitRepoFixture
 import proof
 
 
-class ProofTests(GateTests):
+class ProofTests(GitRepoFixture, unittest.TestCase):
     def test_review_fails_unresolved_high_and_refuses_same_model(self):
         path = Path('findings.json')
         sha = self.git('rev-parse', 'HEAD')
