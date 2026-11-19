@@ -721,7 +721,7 @@ fn pack_switch_source_moves_clean_skills_to_the_fork_and_keeps_the_original() {
     assert_eq!(lock_source(&home, "alpha"), "me/fork");
     assert_eq!(lock_source(&home, "edited"), "owner/pack");
     assert_eq!(
-        pack_originals(&home)["global"]["alpha"]["original"],
+        pack_originals(&home)["global"]["alpha"][0]["original"],
         "owner/pack"
     );
     assert_eq!(
@@ -908,5 +908,51 @@ fn pack_switch_source_refuses_bad_targets_and_a_failed_move_shows_no_original() 
     assert_eq!(report.status(), OpStatus::Partial);
     assert_eq!(lock_source(&home, "alpha"), "owner/pack");
     assert_eq!(shown_original(&rt, "owner/pack"), None);
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// A move from the fork to a second fork that failed, or that was undone,
+/// overwrote the skill's only record, so the first fork lost its original.
+/// Fails if the skill, back on the first fork, does not show the original
+/// it moved away from.
+#[test]
+fn pack_switch_source_a_failed_or_undone_second_move_keeps_the_first_original() {
+    let home = home("pack_switch_chain");
+    installed_from_pack(&home, "alpha", "deadbeef");
+    let cli = FakeSkillsCli::new(&home);
+    cli.lock_on_add.store(true, Ordering::SeqCst);
+    let rt = runtime(&home, cli.clone());
+    ops::pack_switch_source(&rt, &ctx(), &switch("owner/pack", "me/fork", false)).unwrap();
+
+    *cli.fail_auth.lock().unwrap() = Some("ERR_AUTH");
+    let failed =
+        ops::pack_switch_source(&rt, &ctx(), &switch("me/fork", "me/other", false)).unwrap();
+    assert_eq!(states(&failed), [("alpha".into(), "failed")]);
+    assert_eq!(
+        shown_original(&rt, "me/fork").as_deref(),
+        Some("owner/pack")
+    );
+
+    *cli.fail_auth.lock().unwrap() = None;
+    let moved =
+        ops::pack_switch_source(&rt, &ctx(), &switch("me/fork", "me/other", false)).unwrap();
+    assert_eq!(shown_original(&rt, "me/other").as_deref(), Some("me/fork"));
+    let PackStepState::Done { event_id } = &moved.steps[0].state else {
+        unreachable!()
+    };
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: event_id.clone(),
+            force: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(lock_source(&home, "alpha"), "me/fork");
+    assert_eq!(
+        shown_original(&rt, "me/fork").as_deref(),
+        Some("owner/pack")
+    );
     std::fs::remove_dir_all(&home).ok();
 }

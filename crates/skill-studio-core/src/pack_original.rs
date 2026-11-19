@@ -1,9 +1,10 @@
 //! A pack's original source. When `pack_switch_source` moves a skill to
 //! another git source, usually the user's GitHub fork, it records the old
 //! source as that skill's original in `~/.agents/skill-studio.json`
-//! (`pack_originals`, by scope and skill name). A record counts only while
-//! the skill's lock row still names the source it moved to, so a failed
-//! step, an undo, or a later move makes it stale without a rollback. A
+//! (`pack_originals`, by scope and skill name, one record per source the
+//! skill moved to). A record counts only while the skill's lock row names
+//! its source, so a failed step, an undo, or a later move picks the record
+//! that matches the lock row, with no rollback and no lost record. A
 //! remote pack check reads the original too and reports which skills differ
 //! from it and which skills only it has.
 //!
@@ -52,9 +53,10 @@ struct Record {
     original: String,
 }
 
-/// Every record, by scope key and skill name.
+/// Every record, by scope key and skill name: one per source the skill
+/// moved to.
 #[derive(Debug, Default)]
-pub(crate) struct Records(BTreeMap<String, BTreeMap<String, Record>>);
+pub(crate) struct Records(BTreeMap<String, BTreeMap<String, Vec<Record>>>);
 
 /// The key a scope's records sit under.
 fn scope_key(scope: &RootScope) -> String {
@@ -90,8 +92,12 @@ impl Records {
     /// The original of a skill installed in `scope` from `source`, when a
     /// record for it is still current.
     pub(crate) fn original(&self, scope: &RootScope, skill: &str, source: &str) -> Option<&str> {
-        let record = self.0.get(&scope_key(scope))?.get(skill)?;
-        same_source(&record.source, source).then_some(record.original.as_str())
+        self.0
+            .get(&scope_key(scope))?
+            .get(skill)?
+            .iter()
+            .find(|record| same_source(&record.source, source))
+            .map(|record| record.original.as_str())
     }
 }
 
@@ -143,10 +149,11 @@ pub(crate) struct Move<'a> {
 }
 
 /// Records, before the skills move from `from` to `to`, that each one's
-/// original is `from`. A skill whose current record already names `to` as
-/// its original is moving back, so its record stays as it is: it goes stale
-/// once the lock row names `to`, and counts again if that move is undone.
-/// Returns true when every skill is moving back.
+/// original on `to` is `from`, replacing only an older record for `to`. A
+/// skill with a record of moving from `to` to `from` is moving back, so it
+/// gets no reverse record. Records for other sources stay, so a failed or
+/// undone move finds the one its lock row names. Returns true when every
+/// skill is moving back.
 pub(crate) fn record_moves(
     rt: &Runtime,
     from: &str,
@@ -173,17 +180,28 @@ pub(crate) fn record_moves(
         let Some(scope) = scope.as_object_mut() else {
             continue;
         };
-        let current = scope
+        let mut rows: Vec<serde_json::Value> = scope
             .get(step.skill)
-            .and_then(|row| serde_json::from_value::<Record>(row.clone()).ok());
-        if current.is_some_and(|r| same_source(&r.source, from) && same_source(&r.original, to)) {
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let source_of = |row: &serde_json::Value, key: &str| {
+            row.get(key)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        let moving_back = rows.iter().any(|row| {
+            same_source(&source_of(row, "source"), from)
+                && same_source(&source_of(row, "original"), to)
+        });
+        if moving_back {
             continue;
         }
         all_back = false;
-        scope.insert(
-            step.skill.to_string(),
-            serde_json::json!({ "source": to, "original": from, "linked_at": linked_at }),
-        );
+        rows.retain(|row| !same_source(&source_of(row, "source"), to));
+        rows.push(serde_json::json!({ "source": to, "original": from, "linked_at": linked_at }));
+        scope.insert(step.skill.to_string(), serde_json::Value::Array(rows));
     }
     document.insert(
         PACK_ORIGINALS_KEY.to_string(),
