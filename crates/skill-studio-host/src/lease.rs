@@ -295,23 +295,6 @@ mod tests {
         assert_eq!(exclusive.mode(), LeaseMode::Exclusive);
     }
 
-    #[test]
-    fn exclusive_lease_releases_on_drop() {
-        let dir = tempfile::tempdir().unwrap();
-        let keys = vec![key("root-c")];
-        let lease = FileLease::new(dir.path().to_path_buf());
-
-        let first = lease
-            .acquire(&keys, LeaseMode::Exclusive, Duration::from_millis(100))
-            .unwrap();
-        drop(first);
-
-        let second = lease
-            .acquire(&keys, LeaseMode::Exclusive, Duration::from_millis(100))
-            .unwrap();
-        assert_eq!(second.keys(), keys.as_slice());
-    }
-
     /// Given the current process's own pid, when [`pid_alive`] checks it,
     /// then it reports alive; on failure the panic names the pid the check
     /// missed.

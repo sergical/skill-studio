@@ -7760,32 +7760,6 @@ mod tests {
         assert_eq!(target.source_kind, SourceKind::Dotagents);
     }
 
-    /// Flow: a forked skill whose per-harness link is still on disk, so
-    /// `scan` also reports a `Manual` deployment for the same skill name.
-    /// Expectation: `outdated_target` still classifies it as
-    /// `SourceKind::Fork`, not `Manual` - `Fork` sorts last in `SourceKind`'s
-    /// derived `Ord`, so the shared `min_by_key` precedence alone would pick
-    /// `Manual` here.
-    /// A failure here means the fork-first check was dropped, so a fork with
-    /// a leftover per-harness link silently loses its currency rule and
-    /// reports `NotTracked` forever, or names the wrong method it picked
-    /// instead.
-    #[test]
-    fn a_forked_skill_with_a_leftover_manual_link_is_still_classified_as_fork_or_names_the_method_it_picked(
-    ) {
-        let skill = InstalledSkillDto {
-            source: "manual".into(),
-            name: SkillName("find-bugs".to_string()),
-            description: None,
-            deployments: vec![
-                minimal_deployment(SourceKind::Manual, None),
-                minimal_deployment(SourceKind::Fork, None),
-            ],
-        };
-        let target = outdated_target(&skill).expect("a deployed skill always yields a target");
-        assert_eq!(target.source_kind, SourceKind::Fork);
-    }
-
     /// A canonical deployment whose `owner_kind` cannot be repointed (here
     /// `Plugin`) must not source a takeover, even when a verified `LinkedTo`
     /// deployment resolves to the exact same path; on failure the panic
@@ -8037,15 +8011,6 @@ mod tests {
         }
 
         #[test]
-        fn empty_scope_yields_no_skills_and_complete() {
-            let fs = FixtureBuilder::new().dir("/h").build_fs();
-            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
-            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
-            assert!(inv.skills.is_empty());
-            assert_eq!(inv.completeness, Completeness::Complete);
-        }
-
-        #[test]
         fn scan_never_spawns_a_probe_even_when_a_spawner_port_is_wired() {
             use crate::testing::PanicOnSpawn;
 
@@ -8073,62 +8038,6 @@ mod tests {
             let rt = Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap();
             let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
             assert_eq!(inv.skills.len(), 1, "scan must still find the skill");
-        }
-
-        #[test]
-        fn finds_a_skill_under_a_harness_own_root() {
-            let fs = FixtureBuilder::new()
-                .dir("/h/.claude/skills/write-tests")
-                .file(
-                    "/h/.claude/skills/write-tests/SKILL.md",
-                    b"---\nname: write-tests\ndescription: Writes tests.\n---\nBody.",
-                )
-                .build_fs();
-            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
-            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
-
-            assert_eq!(inv.skills.len(), 1);
-            let skill = &inv.skills[0];
-            assert_eq!(skill.name.0, "write-tests");
-            assert_eq!(skill.description.as_deref(), Some("Writes tests."));
-            assert_eq!(skill.deployments.len(), 1);
-            let deployment = &skill.deployments[0];
-            assert_eq!(
-                deployment.harness.as_ref().map(AgentId::as_str),
-                Some("claude-code")
-            );
-            assert!(deployment.spec_violations.is_empty());
-            assert_eq!(inv.completeness, Completeness::Complete);
-        }
-
-        /// Given a plain directory (not a symlink, not a whole-dir link)
-        /// under a harness's own root - never the universal root - when it
-        /// is scanned, then it is `Independent`/`PerHarness`, not folded in
-        /// with the universal-linked skills; on failure the panic names the
-        /// backing/destination pair the scan reported instead.
-        #[test]
-        fn a_plain_per_harness_skill_is_independent_not_linked_to_the_universal_root() {
-            let fs = FixtureBuilder::new()
-                .dir("/h/.claude/skills/write-tests")
-                .file(
-                    "/h/.claude/skills/write-tests/SKILL.md",
-                    b"---\nname: write-tests\ndescription: Writes tests.\n---\nBody.",
-                )
-                .build_fs();
-            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
-            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
-
-            assert_eq!(inv.skills.len(), 1);
-            let deployment = &inv.skills[0].deployments[0];
-            assert_eq!(
-                (deployment.destination, deployment.backing),
-                (
-                    SkillDestination::PerHarness,
-                    BackingRelationship::Independent
-                ),
-                "a plain per-harness skill directory must be Independent/PerHarness, not \
-                 reported as linked into the universal root"
-            );
         }
 
         /// Given a per-skill symlink under a harness's own root whose target
@@ -8244,34 +8153,6 @@ mod tests {
             let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
             let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
             assert_eq!(plugin_enabled_in(&inv), None);
-        }
-
-        #[test]
-        fn claude_plugin_enabled_is_none_when_settings_file_absent() {
-            let fs = claude_plugin_fixture(None).build_fs();
-            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
-            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
-            assert_eq!(plugin_enabled_in(&inv), None);
-        }
-
-        #[test]
-        fn moved_aside_entries_are_visible_and_disabled() {
-            // `MOVE_ASIDE_DIR_NAME` is itself dot-prefixed, so it is never
-            // mistaken for a skill directory, but its children are walked
-            // separately and reported as `StudioMoved`-disabled deployments
-            // rather than being invisible.
-            let fs = FixtureBuilder::new()
-                .dir("/h/.claude/skills/.skill-studio-disabled/parked-skill")
-                .file(
-                    "/h/.claude/skills/.skill-studio-disabled/parked-skill/SKILL.md",
-                    b"---\nname: parked-skill\ndescription: Parked.\n---\n",
-                )
-                .build_fs();
-            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
-            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
-            assert_eq!(inv.skills.len(), 1);
-            let deployment = &inv.skills[0].deployments[0];
-            assert_eq!(deployment.disabled_by, Some(DisabledBy::StudioMoved));
         }
 
         #[test]

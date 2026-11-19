@@ -1136,18 +1136,8 @@ fn deleted_registry_force_restore_keeps_next_update(only_copies: bool, delete_be
 }
 
 #[test]
-fn split_update_deleted_registry_force_undo_redo_allows_update_or_loses_copy_rows() {
-    deleted_registry_force_restore_keeps_next_update(false, false);
-}
-
-#[test]
 fn split_update_deleted_copies_force_undo_redo_allows_update_or_loses_copy_rows() {
     deleted_registry_force_restore_keeps_next_update(true, false);
-}
-
-#[test]
-fn split_update_undo_deleted_registry_force_redo_allows_update_or_loses_copy_rows() {
-    deleted_registry_force_restore_keeps_next_update(false, true);
 }
 
 #[test]

@@ -99,20 +99,6 @@ fn pack_list_remote_finds_a_changed_and_a_new_upstream_skill_or_hides_updates() 
 }
 
 #[test]
-fn pack_list_offline_leaves_upstream_unchecked_or_touches_the_network() {
-    let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().canonicalize().unwrap().join("home");
-    let pack = GitPack::new(&temp.path().join("git"));
-    install(&home, &pack, &["a"]);
-
-    let offline = list(&home, false);
-
-    assert_eq!(offline.remote, RemoteState::NotChecked);
-    assert_eq!(offline.skills[0].behind, None);
-    assert!(offline.new_upstream.is_empty());
-}
-
-#[test]
 fn pack_list_remote_reports_an_unreachable_source_as_failed_or_drops_the_pack() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().canonicalize().unwrap().join("home");

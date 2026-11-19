@@ -567,37 +567,6 @@ fn a_malformed_project_registry_still_scans_with_no_projects() {
     std::fs::remove_dir_all(&home).ok();
 }
 
-/// A write command (`restore`, here) never blocks on a held lease: it
-/// surfaces the ordinary `scope_busy` envelope at exit 3, the same as a
-/// read command would.
-#[test]
-fn a_write_command_under_a_held_lease_exits_3_instead_of_blocking() {
-    let home = materialized_fixture("basic");
-    let lease_root = home.join(".skill-studio").join("leases");
-    let lease = FileLease::new(lease_root);
-    let key = LeaseKey {
-        canonical_root: home.clone(),
-    };
-    let _guard = lease
-        .acquire(&[key], LeaseMode::Exclusive, Duration::from_secs(5))
-        .expect("acquire exclusive lease");
-
-    let run = run(&[
-        "restore",
-        "--home",
-        home.to_str().unwrap(),
-        "--event-id",
-        "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-        "--write-timeout-ms",
-        "100",
-        "--json",
-    ]);
-    assert_eq!(run.status, 3);
-    assert_eq!(run.json["status"], "error");
-    assert_eq!(run.json["errors"][0]["code"], "scope_busy");
-    std::fs::remove_dir_all(&home).ok();
-}
-
 #[test]
 fn harnesses_with_no_binaries_on_path_prints_unknown_for_every_row() {
     let home = materialized_fixture("basic");

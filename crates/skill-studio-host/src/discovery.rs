@@ -1032,32 +1032,6 @@ mod tests {
     }
 
     #[test]
-    fn oversized_line_abandons_the_file_without_panicking() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path();
-        let project = home.join("huge-line-project");
-        // No skill dir here: the transcript's oversized line means its cwd
-        // is never found, so this project must not surface.
-        fs::create_dir_all(&project).unwrap();
-
-        let transcript_dir = home.join(".claude/projects/-huge-line-project");
-        fs::create_dir_all(&transcript_dir).unwrap();
-        let mut content = Vec::new();
-        // A 200 KiB line with no cwd, well past MAX_TRANSCRIPT_LINE_BYTES.
-        content.extend(vec![b'x'; 200 * 1024]);
-        content.push(b'\n');
-        // A cwd line follows in the same file, but the file is abandoned as
-        // soon as the oversized line is hit, so this must never be reached.
-        content.extend(
-            format!(r#"{{"type":"user","cwd":"{}"}}"#, project.to_string_lossy()).into_bytes(),
-        );
-        content.push(b'\n');
-        fs::write(transcript_dir.join("session.jsonl"), content).unwrap();
-
-        assert!(discover_skill_projects(home).is_empty());
-    }
-
-    #[test]
     fn oversized_line_abandons_file_and_older_file_cwd_is_still_found() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();

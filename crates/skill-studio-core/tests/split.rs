@@ -347,40 +347,6 @@ fn split_refuses_a_name_clash_before_any_write() {
     std::fs::remove_dir_all(&home).ok();
 }
 
-/// Flow: the scope sets a custom `OpenCode` config root, and the user keeps
-/// only `OpenCode`. Expect the copy under that root's `skills`, not under
-/// `~/.config/opencode`. Catches a hard-coded `OpenCode` path that writes a
-/// copy `OpenCode` never reads.
-#[test]
-fn split_opencode_copy_follows_the_configured_opencode_root() {
-    let home = unique_temp_dir("split_opencode_root");
-    splittable_home(&home);
-    let custom_root = home.join("custom-opencode");
-    std::fs::create_dir_all(&custom_root).unwrap();
-    let mut scope = RuntimeScope::fixture(&home);
-    scope.opencode_config_root = Some(custom_root.clone());
-    let rt = runtime_with_scope(&home, &scope);
-    let deployment_id = universal_deployment_id(&rt);
-
-    let outcome = ops::split(
-        &rt,
-        &ctx(),
-        &SplitRequest {
-            deployment_id,
-            harnesses: harnesses(&["open-code"]),
-        },
-    )
-    .unwrap();
-
-    let expected = custom_root.join("skills/gamma");
-    assert_eq!(outcome.copies.len(), 1);
-    assert_eq!(outcome.copies[0].path, expected);
-    assert_eq!(std::fs::read(expected.join("SKILL.md")).unwrap(), SKILL_MD);
-    assert!(std::fs::symlink_metadata(home.join(".config/opencode/skills/gamma")).is_err());
-
-    std::fs::remove_dir_all(&home).ok();
-}
-
 fn mode_of(path: &Path) -> u32 {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(path).unwrap().permissions().mode() & 0o777

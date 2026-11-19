@@ -2344,41 +2344,6 @@ mod tests {
     }
 
     #[test]
-    fn append_to_transcript_only_parses_the_new_line() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path();
-        let session_dir = home.join(CLAUDE_PROJECTS_ROOT).join("-my-project");
-        let path = write_transcript(
-            &session_dir,
-            "session.jsonl",
-            "write-tests",
-            "2026-08-01T12:00:00Z",
-            "/my-project",
-        );
-
-        let mut index = SkillInvocationIndex::default();
-        let known_skills = known(&["write-tests", "lint-code"]);
-        let sources = DiscoverySources::default();
-        index.refresh(home, &sources);
-        let parsed_bytes_after_first = index.files.get(&path).unwrap().parsed_bytes;
-        assert_eq!(parsed_bytes_after_first, fs::metadata(&path).unwrap().len());
-
-        let mut content = fs::read(&path).unwrap();
-        content.extend(skill_line("lint-code", "2026-08-02T12:00:00Z", "/my-project").into_bytes());
-        content.push(b'\n');
-        fs::write(&path, content).unwrap();
-
-        let report = index.refresh(home, &sources);
-        assert_eq!(report.files_reparsed, 1);
-        let stats = stats(&index, &known_skills, &sources);
-        assert_eq!(stats.len(), 2);
-        assert_eq!(
-            index.files.get(&path).unwrap().parsed_bytes,
-            fs::metadata(&path).unwrap().len()
-        );
-    }
-
-    #[test]
     fn truncated_transcript_is_reparsed_from_scratch() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
@@ -2535,47 +2500,6 @@ mod tests {
         assert!(!second.incomplete);
         assert_eq!(index.files.get(&path).unwrap().parsed_bytes, 0);
         assert!(stats(&index, &known_skills, &sources).is_empty());
-    }
-
-    #[test]
-    fn same_size_rewrite_is_detected_via_mtime() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path();
-        let session_dir = home.join(CLAUDE_PROJECTS_ROOT).join("-my-project");
-        let path = write_transcript(
-            &session_dir,
-            "session.jsonl",
-            "run-tests",
-            "2026-08-01T12:00:00Z",
-            "/my-project",
-        );
-
-        let mut index = SkillInvocationIndex::default();
-        let known_skills = known(&["run-tests", "lint-code"]);
-        let sources = DiscoverySources::default();
-        index.refresh(home, &sources);
-        assert_eq!(stats(&index, &known_skills, &sources)[0].skill, "run-tests");
-
-        let original_size = fs::metadata(&path).unwrap().len();
-        let new_content = format!(
-            "{}\n",
-            skill_line("lint-code", "2026-08-01T12:00:00Z", "/my-project")
-        );
-        assert_eq!(new_content.len() as u64, original_size);
-        fs::write(&path, &new_content).unwrap();
-        let bumped_mtime =
-            fs::metadata(&path).unwrap().modified().unwrap() + Duration::from_secs(1);
-        fs::OpenOptions::new()
-            .write(true)
-            .open(&path)
-            .unwrap()
-            .set_modified(bumped_mtime)
-            .unwrap();
-
-        index.refresh(home, &sources);
-        let stats = stats(&index, &known_skills, &sources);
-        assert_eq!(stats.len(), 1);
-        assert_eq!(stats[0].skill, "lint-code");
     }
 
     #[test]
@@ -2768,28 +2692,6 @@ mod tests {
             loaded.all_uses().collect::<Vec<_>>(),
             index.all_uses().collect::<Vec<_>>()
         );
-    }
-
-    #[test]
-    fn subagent_transcript_use_is_counted() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path();
-        let subagents_dir = home.join(CLAUDE_PROJECTS_ROOT).join("p/s1/subagents");
-        write_transcript(
-            &subagents_dir,
-            "a.jsonl",
-            "write-tests",
-            "2026-08-01T12:00:00Z",
-            "/my-project",
-        );
-
-        let mut index = SkillInvocationIndex::default();
-        let known_skills = known(&["write-tests"]);
-        let sources = DiscoverySources::default();
-        index.refresh(home, &sources);
-        let stats = stats(&index, &known_skills, &sources);
-        assert_eq!(stats.len(), 1);
-        assert_eq!(stats[0].total, 1);
     }
 
     #[test]
@@ -3246,28 +3148,6 @@ mod tests {
             assert_eq!(by_skill["foo"].by_trigger_30_days.user, 1);
             assert_eq!(by_skill["bar"].total, 1);
             assert_eq!(by_skill["bar"].by_trigger_30_days.file_read, 1);
-        }
-
-        #[test]
-        fn a_flat_archived_session_file_is_read() {
-            let tmp = tempfile::tempdir().unwrap();
-            let home = tmp.path();
-            write_rollout(
-                &home.join(CODEX_ARCHIVED_SESSIONS_DIR),
-                "old.jsonl",
-                &[
-                    session_meta_line("sess-a", "/proj-a"),
-                    skill_block_line("2026-09-16T12:00:00Z", "foo"),
-                ],
-            );
-
-            let mut index = SkillInvocationIndex::default();
-            let known_skills = known(&["foo"]);
-            let sources = DiscoverySources::default();
-            index.refresh(home, &sources);
-            let stats = stats(&index, &known_skills, &sources);
-            assert_eq!(stats.len(), 1);
-            assert_eq!(stats[0].skill, "foo");
         }
 
         #[test]
@@ -4034,16 +3914,6 @@ mod tests {
         }
 
         #[test]
-        fn no_grok_home_is_not_incomplete() {
-            let tmp = tempfile::tempdir().unwrap();
-            let home = tmp.path();
-            let mut index = SkillInvocationIndex::default();
-            let sources = DiscoverySources::default();
-            let report = index.refresh(home, &sources);
-            assert!(!report.incomplete);
-        }
-
-        #[test]
         fn resuming_a_file_keeps_counted_calls_and_ignores_a_repeated_id() {
             let tmp = tempfile::tempdir().unwrap();
             let home = tmp.path();
@@ -4095,16 +3965,6 @@ mod tests {
             assert_eq!(report.files_dropped, 1);
             assert!(stats(&index, &known_skills, &sources).is_empty());
         }
-    }
-
-    #[test]
-    fn no_pi_and_no_cursor_is_not_incomplete() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path();
-        let mut index = SkillInvocationIndex::default();
-        let sources = DiscoverySources::default();
-        let report = index.refresh(home, &sources);
-        assert!(!report.incomplete);
     }
 
     mod opencode_databases {

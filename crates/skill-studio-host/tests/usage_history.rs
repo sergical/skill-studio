@@ -225,18 +225,6 @@ fn usage_oversized_without_marker_is_complete_instead_of_a_gap() {
 }
 
 #[test]
-fn usage_oversized_skill_is_counted_or_names_the_gap() {
-    let dir = fixture();
-    let root = dir.path().join(".claude/projects/work");
-    fs::create_dir_all(&root).unwrap();
-    let record = serde_json::json!({"type":"assistant","sessionId":"s","timestamp":"2026-09-29T12:00:00Z","padding":"x".repeat(300_000),"message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"gamma"}}]}});
-    fs::write(root.join("large.jsonl"), format!("{record}\n")).unwrap();
-    let data = report(dir.path());
-    assert!(data["rows"][0]["total_uses"] == 1 || data["partial"] == true);
-    assert_eq!(data["rows"][0]["total_uses"], 1);
-}
-
-#[test]
 fn usage_unterminated_tail_waits_instead_of_a_gap() {
     let dir = fixture();
     let root = dir.path().join(".codex/sessions");

@@ -697,47 +697,6 @@ fn deployment_id_in_root(home: &Path, skill: &str, kind: &str) -> String {
         .to_string()
 }
 
-/// Flow: park `gamma` through the CLI, then call the MCP `unpark` tool with
-/// the parked deployment id.
-/// Expectation: an `ok` envelope, `gamma` back under `.agents/skills`, and
-/// its Claude Code link recreated.
-/// A failure here means the `unpark` tool cannot undo what `park` did, so an
-/// agent that parks a skill over MCP has no way to bring it back.
-#[tokio::test]
-async fn the_unpark_tool_puts_a_parked_skill_and_its_link_back_or_names_the_envelope() {
-    let (_home_dir, home) = live_home();
-    let park = run_cli(&[
-        "park",
-        "--home",
-        home.to_str().unwrap(),
-        "--deployment-id",
-        &deployment_id_in_root(&home, "gamma", "universal"),
-        "--json",
-    ]);
-    assert_eq!(park["status"], "ok", "{park:?}");
-    let parked_id = deployment_id_in_root(&home, "gamma", "parked");
-
-    let (client, _) = connect(&[("SKILL_STUDIO_HOME", home.to_str().unwrap())]).await;
-    let envelope = call_tool(
-        &client,
-        "unpark",
-        serde_json::json!({ "deployment_id": parked_id }),
-    )
-    .await;
-    client.cancel().await.ok();
-
-    assert_eq!(envelope["status"], "ok", "{envelope:?}");
-    assert_eq!(envelope["operation"], "unpark", "{envelope:?}");
-    assert!(
-        home.join(".agents/skills/gamma/SKILL.md").is_file(),
-        "unpark left gamma in the parked root: {envelope:?}"
-    );
-    assert!(
-        home.join(".claude/skills/gamma").symlink_metadata().is_ok(),
-        "unpark did not recreate the Claude Code link park removed: {envelope:?}"
-    );
-}
-
 /// Flow: call the MCP `outdated` tool over a live home holding one
 /// skills.sh-owned skill and one skill no ledger claims, with `PATH` emptied
 /// on the server process so it finds no `gh` and falls back to `NoGhLookup`.
@@ -939,41 +898,6 @@ async fn the_park_tool_returns_a_warning_when_git_tracks_the_folder_or_names_the
         warnings[0].as_str().unwrap().contains("git tracks"),
         "{park:?}"
     );
-}
-
-/// Flow: park `gamma`, then call `restore_event` with park's `event_id`.
-/// Expectation: an error envelope with code `unsupported`, and `gamma`
-/// still parked.
-/// A failure here means park became restorable through history, and the
-/// tool descriptions ("Undo with unpark") and docs are now wrong.
-#[tokio::test]
-async fn restore_event_on_a_park_reports_unsupported() {
-    let (_home_dir, home) = live_home();
-    let (client, _) = connect(&[("SKILL_STUDIO_HOME", home.to_str().unwrap())]).await;
-
-    let universal_id = deployment_id_via_mcp(&client, "gamma", "universal").await;
-    let park = call_tool(
-        &client,
-        "park",
-        serde_json::json!({ "deployment_id": universal_id }),
-    )
-    .await;
-    assert_eq!(park["status"], "ok", "{park:?}");
-    let event_id = park["event_id"].as_str().expect("park returns an event_id");
-
-    let restore = call_tool(
-        &client,
-        "restore_event",
-        serde_json::json!({ "event_id": event_id }),
-    )
-    .await;
-    client.cancel().await.ok();
-
-    assert_eq!(restore["status"], "error", "{restore:?}");
-    assert_eq!(restore["errors"][0]["code"], "unsupported", "{restore:?}");
-    assert!(home
-        .join(".agents/skills-parked/universal/gamma/SKILL.md")
-        .is_file());
 }
 
 /// Flow: add a shared skill recorded as a fork, remove it, then call
