@@ -194,4 +194,54 @@ mod tests {
 
         assert_eq!(shown, NODE_MISSING);
     }
+
+    /// Pack on the selection bar, through the same runtime and error
+    /// conversion as the `pack_export` command, against a real home: the
+    /// selected skill's files land in the new folder with a README, and a
+    /// second export into the same folder is refused with the sentence the
+    /// dialog shows. Fails if the command path writes nothing or overwrites.
+    #[test]
+    fn pack_export_writes_the_selected_skills_then_refuses_the_same_folder() {
+        use skill_studio_core::pack_export::PackExportRequest;
+        let home = tempfile::tempdir().expect("temp home");
+        let _opencode_home = crate::skills::test_support::OpencodeHomeGuard::new(home.path());
+        let skill = home.path().join(".agents/skills/alpha");
+        std::fs::create_dir_all(&skill).expect("skill folder");
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: alpha\ndescription: Alpha.\n---\nBody.\n",
+        )
+        .expect("SKILL.md");
+        let rt = super::super::core_runtime::build_runtime_write_at_with_search_dirs(
+            home.path(),
+            &home.path().join(".skill-studio"),
+            Vec::new(),
+        )
+        .expect("desktop runtime");
+        let request = PackExportRequest {
+            dir: home.path().join("my-pack"),
+            skills: vec!["alpha".to_string()],
+            source: Some("me/my-skills".to_string()),
+            ..PackExportRequest::default()
+        };
+        let export = || {
+            run_pack_op_on(&rt, Operation::PackExport, false, |rt, ctx, _| {
+                ops::pack_export(rt, ctx, &request)
+            })
+        };
+
+        let report = export().expect("export");
+
+        assert_eq!(
+            report.install_command,
+            "npx skills add me/my-skills --skill alpha"
+        );
+        assert_eq!(
+            std::fs::read(request.dir.join("skills/alpha/SKILL.md")).expect("copy"),
+            std::fs::read(skill.join("SKILL.md")).expect("original")
+        );
+        assert!(request.dir.join("README.md").is_file());
+        let shown = export().expect_err("the folder now holds the pack");
+        assert!(shown.contains("not empty"), "{shown}");
+    }
 }
