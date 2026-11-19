@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-pub struct TestHome(tempfile::TempDir);
+pub struct TestHome(pub tempfile::TempDir);
 
 impl Default for TestHome {
     fn default() -> Self {
@@ -29,7 +29,7 @@ pub fn command(program: impl AsRef<std::ffi::OsStr>, home: impl AsRef<Path>) -> 
     command
 }
 
-fn os_user_home() -> &'static Path {
+pub fn os_user_home() -> &'static Path {
     static OS_HOME: OnceLock<PathBuf> = OnceLock::new();
     OS_HOME.get_or_init(|| {
         let output = Command::new("/bin/sh")
@@ -45,7 +45,7 @@ fn os_user_home() -> &'static Path {
     })
 }
 
-fn assert_not_os_home(home: &Path, os_home: &Path) {
+pub fn assert_not_os_home(home: &Path, os_home: &Path) {
     let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
     let os_home = os_home
         .canonicalize()
@@ -62,56 +62,4 @@ pub fn assert_temporary_home(home: &Path) {
         "test HOME must be a private temporary directory: {}",
         home.display()
     );
-}
-
-fn assert_home_refused(result: std::thread::Result<()>) {
-    let panic = result.unwrap_err();
-    let message = panic
-        .downcast_ref::<String>()
-        .map(String::as_str)
-        .or_else(|| panic.downcast_ref::<&str>().copied())
-        .unwrap();
-    assert!(
-        message.contains("tests must refuse the real OS user home"),
-        "{message}"
-    );
-}
-
-#[test]
-fn setup_refuses_the_os_user_home() {
-    assert_home_refused(std::panic::catch_unwind(|| {
-        assert_temporary_home(os_user_home());
-    }));
-}
-
-#[test]
-fn setup_accepts_a_temporary_home() {
-    let home = tempfile::tempdir().unwrap();
-    assert_temporary_home(home.path());
-}
-
-#[test]
-fn child_uses_a_temporary_home_without_inherited_config() {
-    let home = TestHome::default();
-    let output = home
-        .command("/bin/sh")
-        .args([
-            "-c",
-            "printf '%s' \"$HOME\"; test -z \"$CODEX_HOME$CLAUDE_CONFIG_DIR$PI_CODING_AGENT_DIR$GROK_HOME$XDG_CONFIG_HOME$XDG_DATA_HOME$XDG_STATE_HOME$DOTAGENTS_HOME$SKILL_STUDIO_HOME$SKILL_STUDIO_FIXTURE\"",
-        ])
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let child_home = PathBuf::from(String::from_utf8(output.stdout).unwrap());
-    assert_eq!(child_home, home.0.path());
-    assert_temporary_home(&child_home);
-}
-
-#[test]
-fn setup_refuses_a_missing_os_home_for_its_identity() {
-    let temporary = tempfile::tempdir().unwrap();
-    let missing = temporary.path().join("missing-user-home");
-    assert_home_refused(std::panic::catch_unwind(|| {
-        assert_not_os_home(&missing, &missing);
-    }));
 }
