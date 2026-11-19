@@ -1,71 +1,9 @@
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-
 import { describe, expect, it } from "vitest";
-import { z } from "zod";
 
 import { createTypeEnvironment } from "./dictionary-types.ts";
+import { diagnosticCount, lintAntiSlopFixture } from "./lint-fixture.ts";
 
 import type { ESTree } from "@oxlint/plugins";
-
-interface OxlintJsonDiagnostic {
-	readonly code: string;
-	readonly message: string;
-}
-
-const oxlintJsonOutputSchema = z.object({
-	diagnostics: z.array(z.object({ code: z.string(), message: z.string() })),
-});
-
-function parseOxlintDiagnostics(stdout: string): readonly OxlintJsonDiagnostic[] {
-	return oxlintJsonOutputSchema.parse(JSON.parse(stdout)).diagnostics;
-}
-
-function lintAntiSlopFixture(
-	source: string,
-	rules: readonly string[],
-): readonly OxlintJsonDiagnostic[] {
-	const fixtureDirectory = mkdtempSync(join(tmpdir(), "anti-slop-dictionary-types-"));
-	const fixturePath = join(fixtureDirectory, "fixture.ts");
-	const configPath = join(fixtureDirectory, "oxlint.json");
-	writeFileSync(fixturePath, source);
-	writeFileSync(
-		configPath,
-		JSON.stringify({
-			categories: { correctness: "off" },
-			jsPlugins: [
-				{
-					name: "anti-slop",
-					specifier: resolve("tools/oxlint/anti-slop/index.ts"),
-				},
-			],
-			rules: Object.fromEntries(rules.map((rule) => [`anti-slop/${rule}`, "error"])),
-		}),
-	);
-
-	try {
-		const result = spawnSync(
-			resolve("node_modules/.bin/oxlint"),
-			["--config", configPath, "--format", "json", fixturePath],
-			{ encoding: "utf8", timeout: 10_000 },
-		);
-		if (result.error !== undefined) throw result.error;
-		if (result.status !== 0 && result.status !== 1) {
-			throw new Error(`Anti-slop Oxlint fixture failed: ${result.stderr || result.stdout}`);
-		}
-		return parseOxlintDiagnostics(result.stdout).filter((diagnostic) =>
-			diagnostic.code.startsWith("anti-slop("),
-		);
-	} finally {
-		rmSync(fixtureDirectory, { recursive: true, force: true });
-	}
-}
-
-function diagnosticCount(diagnostics: readonly OxlintJsonDiagnostic[], code: string): number {
-	return diagnostics.filter((diagnostic) => diagnostic.code === `anti-slop(${code})`).length;
-}
 
 describe("anti-slop interface dictionary rules", () => {
 	it("binds unknown, any, and default generic interface arguments", () => {
