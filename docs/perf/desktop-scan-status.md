@@ -4,9 +4,12 @@ The release baseline is in PR #477. Its 378-skill fixture has a fresh core
 median of 76.72 ms and p95 of 112.33 ms. A fixture is not the owner's live
 home. These numbers do not prove a 100 ms real-home target.
 
-A slow refresh keeps the published inventory visible. Skills and Activity
-show “Still scanning” while scan or invocation work runs. A failed refresh
-returns an error to the caller and leaves the previous snapshot visible.
+A slow refresh keeps the published inventory visible. A running background
+refresh shows nothing: agent transcripts change all the time, and a status
+line that came and went moved the Skills and Activity lists. A failed scan or
+usage refresh turns the sidebar's Sync icon into a warning; its popover shows
+the error and a Try again button. A failed refresh returns an error to the
+caller and leaves the previous snapshot visible.
 `get_background_status` and `skills://background-status` report each scan,
 invocation refresh, and update check's running state, timestamps, and last
 error. Overlapping runs remain busy until both finish.
@@ -20,8 +23,10 @@ error. Overlapping runs remain busy until both finish.
 - `skill_refresh.rs::failed_rebuild_returns_its_error_and_preserves_the_published_snapshot_or_silently_clears_the_list`
   fails if a failed build publishes or loses its error.
 - `background_work.rs` tests cover errors and overlapping workers.
-- `ScanProgress.test.tsx` renders the real Skills and Activity views. The
-  hook tests cover failed requests and unmounted views.
+- `e2e/background-refresh.e2e.ts` runs the whole app: a running refresh
+  leaves the Skills list in place, and a failed one shows its error on Sync.
+  `Sidebar.test.ts` covers which task errors Sync reports. The hook tests
+  cover failed requests and unmounted views.
 - `timing_log.rs::every_tauri_command_dispatches_off_main_or_names_the_command_that_can_block_the_ui`
   checks every Rust command source. A synchronous command must have Tauri's
   async dispatch attribute. Its parser test covers intervening comments and

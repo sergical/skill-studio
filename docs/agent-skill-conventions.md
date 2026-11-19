@@ -150,6 +150,15 @@ loads their events.
 | Universal   | `.agents/skills/`                     | `~/.agents/skills/`                                     | Canonical deployment. Codex, OpenCode, pi, Cursor and Grok Build read it directly. Claude Code needs a symlink.                                                                    |
 | parked      | n/a (global only)                     | `~/.agents/skills-parked/`                              | Skill Studio's own root for parked (disabled globally) skills - see "Parking" above; excluded from coverage                                                                        |
 
+Plugin caches also hold the harness's bookkeeping, which is never a plugin.
+Claude Code writes `<plugin>/<version>/.in_use/<pid>` each time one of its
+processes starts or stops, and clones a marketplace into `temp_git_<ms>_<id>`
+before it moves a plugin into place. Codex writes
+`.codex-remote-plugin-install.json` through a `.tmp*` file. The plugin walk
+skips dot-named entries (except the `.claude-plugin`, `.codex-plugin` and
+`.cursor-plugin` manifest folders) and `temp_git_*`, and the desktop watcher
+does not rescan when they change (`harness::is_plugin_cache_bookkeeping`).
+
 ## Local data sources Skill Studio reads
 
 | Purpose                            | Location                                                                                           | Shape                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |

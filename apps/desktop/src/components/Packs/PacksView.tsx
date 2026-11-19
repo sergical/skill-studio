@@ -1,13 +1,14 @@
 // ============================================================================
 // PacksView - The Packs place: one row per source that ships installed
 // skills, from the core's `pack_list`. Each change (add, update, remove)
-// opens PackPlanDialog, which shows the plan before it runs anything.
+// opens PackPlanDialog, which shows the plan before it runs anything. Adding
+// skills from a repo goes through the Add Skill sheet, the one add flow.
 // ============================================================================
 
 import { useEffect, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
-import { RefreshCw } from "lucide-react";
-import { Button, Input } from "@skill-studio/ui";
+import type { ReactNode } from "react";
+import { Plus, RefreshCw } from "lucide-react";
+import { Button } from "@skill-studio/ui";
 import type { Pack, PackReport } from "@skill-studio/lib";
 import { PageShell } from "../Shell/PageShell";
 import { ROW_CLASS } from "../SkillList/skill-row-format";
@@ -116,11 +117,18 @@ type ListState =
 
 export function PacksView() {
   const listPacks = useAppStore((s) => s.listPacks);
+  const openAddSkillSheet = useAppStore((s) => s.openAddSkillSheet);
+  const addSheetOpen = useAppStore((s) => s.addSkillSheet.open);
   const [list, setList] = useState<ListState>({ kind: "loading" });
   const [checking, setChecking] = useState(false);
   const [intent, setIntent] = useState<PackIntent | null>(null);
-  const [addSource, setAddSource] = useState("");
   const [request, setRequest] = useState({ remote: false, serial: 0 });
+  // The sheet may have added skills from a new source: list again once it closes.
+  const [sheetWasOpen, setSheetWasOpen] = useState(addSheetOpen);
+  if (sheetWasOpen !== addSheetOpen) {
+    setSheetWasOpen(addSheetOpen);
+    if (!addSheetOpen) setRequest((current) => ({ ...current, serial: current.serial + 1 }));
+  }
 
   useEffect(() => {
     let live = true;
@@ -145,12 +153,6 @@ export function PacksView() {
   const closeDialog = () => {
     setIntent(null);
     setRequest((current) => ({ ...current, serial: current.serial + 1 }));
-  };
-
-  const submitAdd = (event: FormEvent) => {
-    event.preventDefault();
-    const source = addSource.trim();
-    if (source) setIntent({ kind: "add", source, skills: [], refPin: null });
   };
 
   const packs = list.kind === "ready" ? list.report.packs : [];
@@ -181,21 +183,16 @@ export function PacksView() {
           >
             Update all
           </Button>
-        </>
-      }
-      toolbar={
-        <form className="flex min-w-0 flex-1 items-center gap-2" onSubmit={submitAdd}>
-          <Input
-            aria-label="Pack source"
-            placeholder="owner/repo or git URL"
-            value={addSource}
-            onChange={(event) => setAddSource(event.target.value)}
-            className="max-w-80"
-          />
-          <Button type="submit" variant="outline" size="sm" disabled={addSource.trim() === ""}>
-            Add pack
+          <Button
+            variant="outline"
+            size="sm"
+            className="rounded-sm px-2 text-text-secondary"
+            onClick={() => openAddSkillSheet()}
+          >
+            <Plus size={12} />
+            Add from a repo
           </Button>
-        </form>
+        </>
       }
     >
       {list.kind === "loading" ? (
@@ -206,7 +203,7 @@ export function PacksView() {
         </p>
       ) : packs.length === 0 ? (
         <p className="m-0 text-small text-text-secondary">
-          No installed skill comes from a pack yet. Add one by its source above.
+          No installed skill comes from a pack yet. Add skills with Add from a repo.
         </p>
       ) : (
         <section className="flex flex-col gap-2">
