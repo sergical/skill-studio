@@ -10,7 +10,8 @@ use cap_std::ambient_authority;
 use cap_std::fs::{Dir, OpenOptionsExt as _, PermissionsExt as _};
 use chrono::{DateTime, Utc};
 use skill_studio_core::ports::{
-    DirEntryFacts, ExclusiveGuard, FileFacts, FileKind, OpenedFile, ScopeFs, ScopedPath,
+    DirEntryFacts, DirHandle, ExclusiveGuard, FileFacts, FileKind, OpenedEntry, OpenedFile,
+    ScopeFs, ScopedPath,
 };
 
 /// A counter mixed into temp file names so concurrent writers on the same
@@ -293,6 +294,191 @@ impl ScopeFs for RealFs {
             dir: Dir::open_ambient_dir(root, ambient_authority())?,
         })))
     }
+
+    fn fsops_open_dir(&self, path: &Path) -> io::Result<Option<Box<dyn DirHandle>>> {
+        let mut held = HeldDir(Dir::open_ambient_dir("/", ambient_authority())?);
+        for component in path.components() {
+            match component {
+                std::path::Component::RootDir => {}
+                std::path::Component::Normal(name) => held = held.open_dir_nofollow(name)?,
+                _ => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("{} is not a plain absolute path", path.display()),
+                    ))
+                }
+            }
+        }
+        if !path.has_root() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} is not an absolute path", path.display()),
+            ));
+        }
+        Ok(Some(Box::new(held)))
+    }
+}
+
+/// [`DirHandle`] over one open folder. Opens by one name use `openat` with
+/// `O_NOFOLLOW`, so the kind a caller listed is the kind it gets; the one
+/// call that follows links, [`DirHandle::open_within`], goes through
+/// cap-std, which refuses a link out of the folder.
+struct HeldDir(Dir);
+
+fn one_name(name: &(impl AsRef<std::ffi::OsStr> + ?Sized)) -> io::Result<&std::ffi::OsStr> {
+    let name = name.as_ref();
+    let plain =
+        !name.is_empty() && name != "." && name != ".." && !name.as_encoded_bytes().contains(&b'/');
+    if plain {
+        Ok(name)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is not one file name", name.display()),
+        ))
+    }
+}
+
+/// Reads an open file, failing when it holds more than `max_bytes`.
+fn read_capped_from(file: impl io::Read, what: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    file.take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{} is larger than {max_bytes} bytes", what.display()),
+        ));
+    }
+    Ok(bytes)
+}
+
+impl HeldDir {
+    fn open_dir_nofollow(&self, name: &std::ffi::OsStr) -> io::Result<HeldDir> {
+        use rustix::fs::{openat, Mode, OFlags};
+        let name = one_name(name)?;
+        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        match openat(&self.0, name, flags, Mode::empty()) {
+            Ok(fd) => Ok(HeldDir(Dir::from_std_file(fs::File::from(fd)))),
+            Err(e) if e == rustix::io::Errno::NOTDIR || e == rustix::io::Errno::LOOP => {
+                Err(io::Error::new(
+                    io::ErrorKind::NotADirectory,
+                    format!("{} is a link or a file, not a folder", name.display()),
+                ))
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+}
+
+impl DirHandle for HeldDir {
+    fn identity(&self) -> io::Result<(u64, u64)> {
+        use cap_std::fs::MetadataExt as _;
+        let meta = self.0.dir_metadata()?;
+        Ok((meta.dev(), meta.ino()))
+    }
+
+    fn entries(&self) -> io::Result<Vec<DirEntryFacts>> {
+        let mut entries = Vec::new();
+        for entry in self.0.entries()? {
+            let entry = entry?;
+            let name = entry.file_name().into_string().map_err(|name| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("{} is not a UTF-8 file name", name.display()),
+                )
+            })?;
+            let file_type = entry.file_type()?;
+            let kind = if file_type.is_symlink() {
+                FileKind::Symlink
+            } else if file_type.is_dir() {
+                FileKind::Dir
+            } else if file_type.is_file() {
+                FileKind::File
+            } else {
+                FileKind::Other
+            };
+            entries.push(DirEntryFacts { name, kind });
+        }
+        Ok(entries)
+    }
+
+    fn open_dir(&self, name: &str) -> io::Result<Box<dyn DirHandle>> {
+        Ok(Box::new(self.open_dir_nofollow(name.as_ref())?))
+    }
+
+    fn read_file(&self, name: &str, max_bytes: u64) -> io::Result<(Vec<u8>, u32)> {
+        use rustix::fs::{openat, Mode, OFlags};
+        let not_a_file = || {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{name} is a link, a folder or a device, not a file"),
+            )
+        };
+        // NONBLOCK: a FIFO swapped in after the listing must not hang the open.
+        let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+        let fd = match openat(&self.0, one_name(name)?, flags, Mode::empty()) {
+            Ok(fd) => fd,
+            Err(e) if e == rustix::io::Errno::LOOP => return Err(not_a_file()),
+            Err(e) => return Err(e.into()),
+        };
+        let file = fs::File::from(fd);
+        let meta = file.metadata()?;
+        if !meta.is_file() {
+            return Err(not_a_file());
+        }
+        let bytes = read_capped_from(&file, Path::new(name), max_bytes)?;
+        Ok((bytes, meta.mode() & 0o7777))
+    }
+
+    fn open_within(&self, relative: &Path, max_file_bytes: u64) -> io::Result<OpenedEntry> {
+        let mut options = cap_std::fs::OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed());
+        let file = self.0.open_with(relative, &options)?.into_std();
+        let meta = file.metadata()?;
+        if meta.is_dir() {
+            return Ok(OpenedEntry::Dir(Box::new(HeldDir(Dir::from_std_file(
+                file,
+            )))));
+        }
+        if !meta.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} is a device, not a file", relative.display()),
+            ));
+        }
+        let bytes = read_capped_from(&file, relative, max_file_bytes)?;
+        Ok(OpenedEntry::File {
+            bytes,
+            mode: meta.mode() & 0o7777,
+        })
+    }
+
+    fn create_dir(&self, name: &str) -> io::Result<Box<dyn DirHandle>> {
+        self.0.create_dir(one_name(name)?)?;
+        self.open_dir(name)
+    }
+
+    fn write_new_file(&self, name: &str, bytes: &[u8], mode: u32) -> io::Result<()> {
+        use rustix::fs::{openat, Mode, OFlags};
+        use std::io::Write as _;
+        // CREATE | EXCL fails on any entry, a link included.
+        let flags =
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let fd = openat(
+            &self.0,
+            one_name(name)?,
+            flags,
+            Mode::from_bits_truncate(mode as _),
+        )?;
+        let mut file = fs::File::from(fd);
+        file.write_all(bytes)?;
+        // The umask already masked the create mode above.
+        file.set_permissions(fs::Permissions::from_mode(mode))
+    }
 }
 
 /// [`RealFs`] whose `fsops_*` writes resolve inside one open root folder.
@@ -438,25 +624,6 @@ impl ScopeFs for BoundFs {
     }
     fn fsops_bind_root(&self, root: &Path) -> io::Result<Option<Box<dyn ScopeFs + '_>>> {
         RealFs.fsops_bind_root(root)
-    }
-    fn fsops_root_identity(&self) -> io::Result<Option<(u64, u64)>> {
-        use cap_std::fs::MetadataExt as _;
-        let meta = self.dir.dir_metadata()?;
-        Ok(Some((meta.dev(), meta.ino())))
-    }
-    fn fsops_read_capped(&self, path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
-        use std::io::Read as _;
-        let file = self.dir.open(self.relative(path)?)?;
-        let mut bytes = Vec::new();
-        file.take(max_bytes.saturating_add(1))
-            .read_to_end(&mut bytes)?;
-        if bytes.len() as u64 > max_bytes {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("{} is larger than {max_bytes} bytes", path.display()),
-            ));
-        }
-        Ok(bytes)
     }
 }
 

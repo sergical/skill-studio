@@ -476,20 +476,57 @@ pub trait ScopeFs: Send + Sync {
     /// in-memory fake, or a test wrapper that must see each write. A
     /// wrapper over a real filesystem forwards this to its inner one.
     fn fsops_bind_root(&self, root: &Path) -> std::io::Result<Option<Box<dyn ScopeFs + '_>>>;
-    /// [`Self::read_capped`] through the root this view is bound to
-    /// ([`Self::fsops_bind_root`]): a path that leaves the root through a
-    /// link or `..`, even one swapped in after a check, fails. An unbound
-    /// view reads the plain path.
-    fn fsops_read_capped(&self, path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
-        self.read_capped(path, max_bytes)
-    }
-    /// The device and inode of the folder a bound view
-    /// ([`Self::fsops_bind_root`]) really opened, from its own handle, so a
-    /// caller can check it is the folder it checked by path. `None` for an
-    /// unbound view.
-    fn fsops_root_identity(&self) -> std::io::Result<Option<(u64, u64)>> {
+    /// Opens the folder at `path`, an absolute path with no link in it, one
+    /// folder at a time from `/`, and refuses a link at any step: the
+    /// handle holds the folder the path names, never one a link points to.
+    /// Fails with `NotADirectory` when a step is a link or not a folder.
+    /// `None`: this port cannot hold folders open (an in-memory fake).
+    fn fsops_open_dir(&self, path: &Path) -> std::io::Result<Option<Box<dyn DirHandle>>> {
+        let _ = path;
         Ok(None)
     }
+}
+
+/// What [`DirHandle::open_within`] opened.
+pub enum OpenedEntry {
+    /// A folder, held open.
+    Dir(Box<dyn DirHandle>),
+    /// A regular file's bytes and permission bits.
+    File {
+        /// The whole file.
+        bytes: Vec<u8>,
+        /// Permission bits.
+        mode: u32,
+    },
+}
+
+/// One folder held open ([`ScopeFs::fsops_open_dir`]). Every call resolves
+/// names against the handle, never against a path, so a folder renamed or
+/// swapped for a link after the open cannot redirect a read or a write. A
+/// name is one path component.
+pub trait DirHandle {
+    /// Device and inode of the folder.
+    fn identity(&self) -> std::io::Result<(u64, u64)>;
+    /// The folder's entries, each kind as it is: a link is a link.
+    fn entries(&self) -> std::io::Result<Vec<DirEntryFacts>>;
+    /// Opens the entry `name`, which must be a folder now: a link or a file
+    /// fails with `NotADirectory`, so a kind read from [`Self::entries`]
+    /// cannot go stale between the listing and the open.
+    fn open_dir(&self, name: &str) -> std::io::Result<Box<dyn DirHandle>>;
+    /// Reads the entry `name`, which must be a regular file now: a link, a
+    /// folder or a device fails with `InvalidInput`. A file over
+    /// `max_bytes` fails with `InvalidData`. Returns the bytes and the
+    /// permission bits.
+    fn read_file(&self, name: &str, max_bytes: u64) -> std::io::Result<(Vec<u8>, u32)>;
+    /// Opens `relative` below this folder and follows the links on the way,
+    /// but only links that stay inside it: one that leaves, or an absolute
+    /// one, fails with `PermissionDenied`.
+    fn open_within(&self, relative: &Path, max_file_bytes: u64) -> std::io::Result<OpenedEntry>;
+    /// Creates the folder `name` and opens it.
+    fn create_dir(&self, name: &str) -> std::io::Result<Box<dyn DirHandle>>;
+    /// Creates the file `name`, failing when anything is there, even a
+    /// link, and writes `bytes` with exactly the `mode` permission bits.
+    fn write_new_file(&self, name: &str, bytes: &[u8], mode: u32) -> std::io::Result<()>;
 }
 
 /// Finds the projects a scope covers under [`ProjectSelection::Discover`].
