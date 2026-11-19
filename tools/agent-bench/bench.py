@@ -389,6 +389,7 @@ def cell_row(task: str, harness: str, model: str, method: str, runs: list[dict])
         "task": task, "harness": harness, "model": model, "label": runs[0]["label"], "method": method,
         "runs": len(runs), "errors": sum(1 for r in runs if r["error"]),
         "fixture_changed": sum(1 for r in runs if not r["fixture_intact"]),
+        "scored": len(valid),
         "questions": len(questions),
         "correct": spread([r["score"]["correct"] for r in valid]),
         "correct_share": spread([r["score"]["correct"] / len(questions) for r in valid]),

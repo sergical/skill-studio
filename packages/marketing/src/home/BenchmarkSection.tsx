@@ -159,48 +159,48 @@ const SUMMARIES = TASKS.flatMap((task) => {
   return summary ? [{ ...task, pairs: summary.pairs, measures: measuresFor(summary) }] : [];
 });
 
-function prefersReducedMotion() {
-  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-}
+const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 
 // Milliseconds since the bars of one measure began to grow. Starts finished, so the server render
 // and a reader with reduced motion see the result; rewinds on mount and plays once the measure
-// scrolls into view. Each measure has its own clock: on a phone they are a screen apart.
+// scrolls into view. Each measure has its own clock: on a phone they are a screen apart. Reduced
+// motion turned on at any point ends the animation at once.
 function useGrowClock(target: RefObject<HTMLElement | null>, total: number) {
   const [elapsed, setElapsed] = useState(Infinity);
 
   useLayoutEffect(() => {
     const node = target.current;
-    if (!node || prefersReducedMotion() || !("IntersectionObserver" in window)) return;
+    const reduced = window.matchMedia(REDUCED_MOTION_QUERY);
+    if (!node || reduced.matches || !("IntersectionObserver" in window)) return;
     setElapsed(0);
     let frame = 0;
-    const play = () => {
-      // The reader can turn on reduced motion after the page loads.
-      if (prefersReducedMotion()) {
-        setElapsed(Infinity);
-        return;
-      }
-      const start = performance.now();
-      const tick = (now: number) => {
-        const ms = now - start;
-        setElapsed(ms < total ? ms : Infinity);
-        if (ms < total) frame = requestAnimationFrame(tick);
-      };
-      frame = requestAnimationFrame(tick);
+    const tick = (start: number) => (now: number) => {
+      const ms = now - start;
+      setElapsed(ms < total ? ms : Infinity);
+      if (ms < total) frame = requestAnimationFrame(tick(start));
     };
     const observer = new IntersectionObserver(
-      ([entry]) => {
-        // `isIntersecting` is also true below the threshold, when only an edge shows.
-        if (entry.intersectionRatio < MEASURE_IN_VIEW) return;
+      (entries) => {
+        // The newest entry is the current state. `isIntersecting` is also true below the
+        // threshold, when only an edge shows, so the ratio decides.
+        if (entries[entries.length - 1].intersectionRatio < MEASURE_IN_VIEW) return;
         observer.disconnect();
-        play();
+        frame = requestAnimationFrame(tick(performance.now()));
       },
       { threshold: MEASURE_IN_VIEW },
     );
+    const finish = () => {
+      if (!reduced.matches) return;
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+      setElapsed(Infinity);
+    };
     observer.observe(node);
+    reduced.addEventListener("change", finish);
     return () => {
       observer.disconnect();
       cancelAnimationFrame(frame);
+      reduced.removeEventListener("change", finish);
     };
   }, [target, total]);
 

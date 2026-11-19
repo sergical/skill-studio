@@ -22,8 +22,9 @@ export interface BenchCell {
   method: BenchMethod;
   runs: number;
   errors: number;
-  /** Runs that changed the fixture. They are not scored, as runs with an error are not. */
   fixture_changed: number;
+  /** Runs with no error that left the fixture as it was. Only these are scored. */
+  scored: number;
   questions: number;
   /** Share of the scored runs that got each question right, by question id. */
   per_question: Partial<Record<string, number | null>>;
@@ -79,10 +80,8 @@ export interface BenchSummary {
   studio: BenchSide;
 }
 
-// A run can both fail and change the fixture, so this can count too few scored runs, never too many.
-const scoredRuns = (cell: BenchCell) => cell.runs - cell.errors - cell.fixture_changed;
 const isScored = (cell: BenchCell) =>
-  scoredRuns(cell) >= MIN_SCORED_RUNS && cell.duration_s !== null && cell.tool_calls !== null;
+  cell.scored >= MIN_SCORED_RUNS && cell.duration_s !== null && cell.tool_calls !== null;
 
 function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
@@ -94,7 +93,7 @@ function side(cells: BenchCell[]): BenchSide {
   let answers = 0;
   let wrong = 0;
   for (const cell of cells) {
-    const runs = scoredRuns(cell);
+    const runs = cell.scored;
     for (const share of Object.values(cell.per_question)) {
       answers += runs;
       wrong += runs - Math.round((share ?? 0) * runs);

@@ -251,6 +251,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -300,6 +301,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -349,6 +351,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 3,
@@ -398,6 +401,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -447,6 +451,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -496,6 +501,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -545,6 +551,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -594,6 +601,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -643,6 +651,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 3,
@@ -692,6 +701,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -741,6 +751,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -790,6 +801,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -839,6 +851,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -888,6 +901,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -937,6 +951,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 1,
@@ -986,6 +1001,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -1035,6 +1051,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -1084,6 +1101,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -1133,6 +1151,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -1182,6 +1201,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -1231,6 +1251,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 3,
@@ -1280,6 +1301,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -1329,6 +1351,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -1378,6 +1401,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 3,
@@ -1427,6 +1451,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -1476,6 +1501,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -1525,6 +1551,7 @@
    "runs": 3,
    "errors": 2,
    "fixture_changed": 1,
+   "scored": 0,
    "questions": 4,
    "correct": null,
    "correct_share": null,
@@ -1550,6 +1577,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -1599,6 +1627,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -1648,6 +1677,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 3,
@@ -1697,6 +1727,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -1746,6 +1777,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 4,
@@ -1795,6 +1827,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 4,
    "correct": {
     "median": 3,
@@ -1844,6 +1877,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -1891,6 +1925,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -1938,6 +1973,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -1985,6 +2021,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -2032,6 +2069,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -2079,6 +2117,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -2126,6 +2165,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -2173,6 +2213,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -2220,6 +2261,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -2267,6 +2309,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -2314,6 +2357,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -2361,6 +2405,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -2408,6 +2453,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -2455,6 +2501,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -2502,6 +2549,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -2549,6 +2597,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -2596,6 +2645,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -2643,6 +2693,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -2690,6 +2741,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -2737,6 +2789,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -2784,6 +2837,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -2831,6 +2885,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -2878,6 +2933,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,
@@ -2925,6 +2981,7 @@
    "runs": 3,
    "errors": 0,
    "fixture_changed": 0,
+   "scored": 3,
    "questions": 2,
    "correct": {
     "median": 2,

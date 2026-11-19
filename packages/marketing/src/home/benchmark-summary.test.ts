@@ -14,6 +14,7 @@ function cell(model: string, method: BenchCell["method"], seconds: number, toolC
     runs: 3,
     errors: 0,
     fixture_changed: 0,
+    scored: 3,
     questions: 2,
     per_question: { q1: 1, q2: 1 },
     cost_source: "harness",
@@ -80,7 +81,7 @@ describe("agent benchmark summary", () => {
   it("leaves out a pair when one side has fewer than three scored runs", () => {
     const summary = benchSummary(
       data([
-        { ...cell("a", "raw", 900, 99), errors: 2 },
+        { ...cell("a", "raw", 900, 99), errors: 2, scored: 1 },
         cell("a", "mcp", 10, 2),
         cell("b", "raw", 60, 10),
         cell("b", "mcp", 20, 3),
@@ -90,12 +91,12 @@ describe("agent benchmark summary", () => {
     expect(summary).toMatchObject({ pairs: 1, byHand: { seconds: 60 }, studio: { seconds: 20 } });
   });
 
-  it("does not score a run that changed the fixture", () => {
+  it("counts the runs that bench.py scored, also when one run both failed and changed the fixture", () => {
     const summary = benchSummary(
       data([
-        { ...cell("a", "raw", 900, 99), errors: 1, fixture_changed: 1 },
+        { ...cell("a", "raw", 900, 99), errors: 1, fixture_changed: 1, scored: 2 },
         cell("a", "mcp", 10, 2),
-        { ...cell("b", "raw", 60, 10), runs: 4, fixture_changed: 1 },
+        { ...cell("b", "raw", 60, 10), runs: 4, errors: 1, fixture_changed: 1 },
         cell("b", "mcp", 20, 3),
       ]),
       "usage",

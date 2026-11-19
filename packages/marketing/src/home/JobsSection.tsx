@@ -64,7 +64,7 @@ const jobs: ReadonlyArray<Job> = [
     studioStep: "Click Update all on Home.",
     studioNotes: [
       "Home already lists each skill that has a new version. With only one, its row has Update. If you edited a skill, Home asks before it replaces your edits.",
-      "Each agent that links the skill gets the new version. A copy that you edited shows in Warnings, next to the new one.",
+      "Each agent that links the skill gets the new version.",
     ],
     command: "skill-studio outdated",
   },
@@ -84,7 +84,7 @@ const jobs: ReadonlyArray<Job> = [
     ],
     byHandRepeat: "each time someone asks",
     byHandCost: "The lock file knows only one installer. Your own skills are not in it.",
-    studioStep: "Your teammate pastes your repo in Packs and clicks Add pack.",
+    studioStep: "Your teammate adds your repo in Packs.",
     studioNotes: [
       "Your skills live in one git repo, such as acme-labs/review-skills. Packs lists the skills it will add, and one more click adds them.",
       "Check upstream finds new versions and new skills. Update skips each skill your teammate edited, and says why.",
@@ -135,7 +135,7 @@ const jobs: ReadonlyArray<Job> = [
       "Each skill's description goes into your agent's prompt, used or not. No agent shows which skills it used, so the list only gets longer.",
     studioStep: "Click Park on the skills you do not need.",
     studioNotes: [
-      "Home already lists each skill that no agent used in the last 30 days, with Park on each one that can be parked.",
+      "Home already lists each skill that no agent used in the last 30 days. Park it from its row on Home, or from its skill page.",
       "A parked skill leaves your agents' lists. Nothing is deleted, and Unpark brings it back.",
     ],
     command: "skill-studio usage",
