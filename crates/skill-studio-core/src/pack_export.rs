@@ -389,22 +389,25 @@ fn install_line(source: &str, skills: &[String]) -> String {
 }
 
 fn readme(source: &str, skills: &[String], install_command: &str) -> String {
-    let mut text = String::from("# Skills\n\nAgent skills, one folder each under `skills/`.\n\n");
-    text.push_str("## Install\n\nEvery skill:\n\n```bash\n");
-    text.push_str(install_command);
-    text.push_str("\n```\n\nOne skill:\n\n```bash\n");
+    use std::fmt::Write as _;
+    let mut text = format!(
+        "# Skills\n\nAgent skills, one folder each under `skills/`.\n\n## Install\n\n\
+         Every skill:\n\n```bash\n{install_command}\n```\n\nOne skill:\n\n```bash\n"
+    );
+    // Writing to a `String` cannot fail.
     for skill in skills {
-        text.push_str(&format!("npx skills add {source} --skill {skill}\n"));
+        let _ = writeln!(text, "npx skills add {source} --skill {skill}");
     }
     text.push_str("```\n");
     if source == SOURCE_PLACEHOLDER {
-        text.push_str(&format!(
-            "\nReplace `{SOURCE_PLACEHOLDER}` with this repository once it is pushed.\n"
-        ));
+        let _ = writeln!(
+            text,
+            "\nReplace `{SOURCE_PLACEHOLDER}` with this repository once it is pushed."
+        );
     }
     text.push_str("\n## Skills\n\n");
     for skill in skills {
-        text.push_str(&format!("- [`{skill}`](skills/{skill}/SKILL.md)\n"));
+        let _ = writeln!(text, "- [`{skill}`](skills/{skill}/SKILL.md)");
     }
     text
 }
