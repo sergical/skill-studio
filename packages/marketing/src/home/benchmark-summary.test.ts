@@ -13,6 +13,7 @@ function cell(model: string, method: BenchCell["method"], seconds: number, toolC
     method,
     runs: 3,
     errors: 0,
+    fixture_changed: 0,
     questions: 2,
     per_question: { q1: 1, q2: 1 },
     cost_source: "harness",
@@ -87,6 +88,19 @@ describe("agent benchmark summary", () => {
       "usage",
     );
     expect(summary).toMatchObject({ pairs: 1, byHand: { seconds: 60 }, studio: { seconds: 20 } });
+  });
+
+  it("does not score a run that changed the fixture", () => {
+    const summary = benchSummary(
+      data([
+        { ...cell("a", "raw", 900, 99), errors: 1, fixture_changed: 1 },
+        cell("a", "mcp", 10, 2),
+        { ...cell("b", "raw", 60, 10), runs: 4, fixture_changed: 1 },
+        cell("b", "mcp", 20, 3),
+      ]),
+      "usage",
+    );
+    expect(summary).toMatchObject({ pairs: 1, byHand: { seconds: 60, answers: 6 } });
   });
 
   it("compares by hand with the MCP server, not the CLI", () => {

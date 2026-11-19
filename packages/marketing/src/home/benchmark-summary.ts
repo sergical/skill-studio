@@ -22,6 +22,8 @@ export interface BenchCell {
   method: BenchMethod;
   runs: number;
   errors: number;
+  /** Runs that changed the fixture. They are not scored, as runs with an error are not. */
+  fixture_changed: number;
   questions: number;
   /** Share of the scored runs that got each question right, by question id. */
   per_question: Partial<Record<string, number | null>>;
@@ -77,7 +79,8 @@ export interface BenchSummary {
   studio: BenchSide;
 }
 
-const scoredRuns = (cell: BenchCell) => cell.runs - cell.errors;
+// A run can both fail and change the fixture, so this can count too few scored runs, never too many.
+const scoredRuns = (cell: BenchCell) => cell.runs - cell.errors - cell.fixture_changed;
 const isScored = (cell: BenchCell) =>
   scoredRuns(cell) >= MIN_SCORED_RUNS && cell.duration_s !== null && cell.tool_calls !== null;
 

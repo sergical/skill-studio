@@ -785,13 +785,14 @@ export function SkillThrow() {
       setCopiesRemaining(PILE_COUNTS.copies);
       parked.current = 0;
       setCollectedCount(0);
-      resetBodies();
     } else {
       PILE.forEach((_, index) => collected.current.add(index));
       parked.current = PILE_COUNTS.parked;
       setCopiesRemaining(0);
       setCollectedCount(PILE.length);
     }
+    // Sorted chips leave the physics, so the pointer cannot push them back into the pile.
+    resetBodies();
     showMessy(g);
   };
 

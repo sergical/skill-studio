@@ -175,6 +175,11 @@ function useGrowClock(target: RefObject<HTMLElement | null>, total: number) {
     setElapsed(0);
     let frame = 0;
     const play = () => {
+      // The reader can turn on reduced motion after the page loads.
+      if (prefersReducedMotion()) {
+        setElapsed(Infinity);
+        return;
+      }
       const start = performance.now();
       const tick = (now: number) => {
         const ms = now - start;
@@ -185,7 +190,8 @@ function useGrowClock(target: RefObject<HTMLElement | null>, total: number) {
     };
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (!entry.isIntersecting) return;
+        // `isIntersecting` is also true below the threshold, when only an edge shows.
+        if (entry.intersectionRatio < MEASURE_IN_VIEW) return;
         observer.disconnect();
         play();
       },
