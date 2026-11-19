@@ -191,7 +191,6 @@ function App() {
           isLoading={isLoading}
           error={snapshotError}
           onRetry={() => void requestRescan().catch(() => {})}
-          backgroundStatus={backgroundStatus}
           snapshot={snapshot}
           onSelectSkill={onSelectSkill}
           active={isShown}
@@ -213,7 +212,6 @@ function App() {
           isLoading={isLoading}
           error={snapshotError}
           onRetry={() => void requestRescan().catch(() => {})}
-          backgroundStatus={backgroundStatus}
           snapshot={snapshot}
           onSelectSkill={onSelectSkill}
         />
@@ -292,6 +290,7 @@ function App() {
         <Sidebar
           snapshot={snapshot}
           emittedSnapshotRevision={emittedSnapshotRevision}
+          backgroundStatus={backgroundStatus}
           requestRescan={requestRescan}
         />
         <div className="flex min-w-0 flex-1 flex-col pr-2 pb-2">

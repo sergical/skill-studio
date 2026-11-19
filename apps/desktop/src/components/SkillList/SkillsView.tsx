@@ -1,6 +1,4 @@
 import { FirstScanState, type FirstScanStateProps } from "../SkillList/FirstScanState";
-import { ScanStatusNote } from "../SkillList/ScanStatusNote";
-import type { BackgroundStatus } from "@skill-studio/lib";
 // ============================================================================
 // SkillsView - The unified, filterable skill list. Replaces SkillsScopeView,
 // PluginSkillsView, SkillCoverageView, and SkillIssuesView: the sidebar holds
@@ -24,7 +22,6 @@ import { useAppStore } from "../../store/appStore";
 
 interface SkillsViewProps extends FirstScanStateProps {
   snapshot: SkillSnapshot | undefined;
-  backgroundStatus?: BackgroundStatus;
   onSelectSkill: (name: string, deploymentPath?: string) => void;
   /** Whether Skills is the view on screen right now - `false` while it's kept mounted but hidden
    * behind an open skill's page, so its window-level keyboard shortcuts stay off. */
@@ -39,7 +36,6 @@ interface SkillsViewProps extends FirstScanStateProps {
  */
 export function SkillsView({
   snapshot,
-  backgroundStatus,
   onSelectSkill,
   active,
   isLoading,
@@ -112,7 +108,6 @@ export function SkillsView({
         />
       }
     >
-      <ScanStatusNote status={backgroundStatus} />
       <SkillListActiveFilters
         filter={filter}
         onChange={setSkillListFilter}
