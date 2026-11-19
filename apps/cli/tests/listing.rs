@@ -79,7 +79,7 @@ fn claude_listing_keeps_descriptions_of_used_skills_at_the_catalog_window_instea
     write(
         home,
         ".claude/settings.json",
-        r#"{"model":"opus","skillListingBudgetFraction":0.00006}"#,
+        r#"{"model":"opus","skillListingBudgetFraction":0.00006,"skillOverrides":{"dataviz":"off"}}"#,
     );
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -120,14 +120,16 @@ fn claude_listing_keeps_descriptions_of_used_skills_at_the_catalog_window_instea
     assert_eq!(state(&claude, "b"), "described");
     assert_eq!(state(&claude, "a"), "name_only");
     assert_eq!(state(&claude, "c"), "name_only");
-    let dataviz = claude["entries"]
+    // Turned off now, so the session's bundled `dataviz` is hidden, not listed.
+    let dataviz: Vec<_> = claude["entries"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|e| e["name"] == "dataviz")
-        .unwrap();
-    assert_eq!(dataviz["scanned"], false);
-    assert_eq!(dataviz["state"], "described");
+        .filter(|e| e["name"] == "dataviz")
+        .collect();
+    assert_eq!(dataviz.len(), 1);
+    assert_eq!(dataviz[0]["scanned"], false);
+    assert_eq!(dataviz[0]["state"], "hidden");
     assert_eq!(
         claude["entries"][1]["observed"], "described",
         "b, listed second, had a description in the session"

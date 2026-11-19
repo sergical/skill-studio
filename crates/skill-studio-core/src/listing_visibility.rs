@@ -655,6 +655,24 @@ fn claude_listing(
                 order.push(name.clone());
             } else if !other_project_names.contains(name) && hidden.iter().all(|h| &h.name != name)
             {
+                // Current settings can turn off an entry the session listed.
+                if matches!(
+                    settings.overrides.get(name).map(String::as_str),
+                    Some("off" | "user-invocable-only")
+                ) {
+                    hidden.push(ListingEntry {
+                        name: name.clone(),
+                        path: None,
+                        state: ListingState::Hidden,
+                        hidden_reason: Some("off in agent settings".into()),
+                        shown_description_chars: 0,
+                        full_description_chars: 0,
+                        usage_score: None,
+                        observed: None,
+                        scanned: false,
+                    });
+                    continue;
+                }
                 unscanned.insert(name.clone(), seen.get(name).cloned().unwrap_or_default());
                 order.push(name.clone());
             }
