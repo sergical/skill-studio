@@ -8,7 +8,7 @@
     ".": {
       "entry": [
         "doctor.config.ts",
-        ".cursor/skills/verify-skill-studio/playwright.config.ts",
+        "scripts/verify/ui.mjs",
         "tools/oxlint/anti-slop/shared/*.integration.test.ts"
       ],
       "project": ["tools/oxlint/anti-slop/**/*.ts", "*.ts"]
