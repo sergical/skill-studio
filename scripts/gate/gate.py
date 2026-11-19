@@ -241,7 +241,10 @@ def dependencies(path, text):
                 else:
                     result[prefix if key == '.' else f'{prefix}/{key}'] = str(value)
         pnpm = data.get('pnpm')
-        for prefix, node in [('overrides', data.get('overrides')), ('resolutions', data.get('resolutions')), ('pnpm/overrides', pnpm.get('overrides') if isinstance(pnpm, dict) else None)]:
+        # A patched dependency is outside code we changed by hand.
+        pnpm = pnpm if isinstance(pnpm, dict) else {}
+        for prefix, node in [('overrides', data.get('overrides')), ('resolutions', data.get('resolutions')),
+                             ('pnpm/overrides', pnpm.get('overrides')), ('pnpm/patchedDependencies', pnpm.get('patchedDependencies'))]:
             if isinstance(node, dict):
                 flatten(node, prefix)
         return result

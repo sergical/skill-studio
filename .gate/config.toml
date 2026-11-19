@@ -62,6 +62,13 @@ id = "release"
 tier = "stop"
 paths = ["**/release.yml", "packages/npm/**", "**/tauri.release.conf.json", "scripts/release/**"]
 
+# pnpm overrides, build permissions, install hooks and patches can swap in or
+# change outside code without a package.json change.
+[[rules]]
+id = "dependencies"
+tier = "stop"
+paths = ["pnpm-workspace.yaml", ".npmrc", "**/.npmrc", ".pnpmfile.cjs", "**/.pnpmfile.cjs", "patches/**"]
+
 [[rules]]
 id = "gate"
 tier = "show"

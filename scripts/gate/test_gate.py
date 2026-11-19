@@ -315,6 +315,22 @@ class GateTests(unittest.TestCase):
                 self.commit()
                 self.assertEqual(self.risk()['tier'], 'stop')
 
+    def test_a_patched_dependency_stops(self):
+        self.write('package.json', json.dumps({'dependencies': {'left-pad': '1.0.0'}}))
+        self.commit()
+        self.base = self.git('rev-parse', 'HEAD')
+        self.write('package.json', json.dumps({'dependencies': {'left-pad': '1.0.0'}, 'pnpm': {'patchedDependencies': {'left-pad@1.0.0': 'patches/left-pad.patch'}}}))
+        self.commit()
+        self.assertEqual(self.risk()['tier'], 'stop')
+
+    def test_the_repo_config_stops_pnpm_hooks_and_patches(self):
+        import tomllib
+        cfg = tomllib.loads((Path(__file__).resolve().parents[2] / '.gate/config.toml').read_text())
+        stop = [p for r in cfg['rules'] if r['tier'] == 'stop' for p in r['paths']]
+        for path in ['.pnpmfile.cjs', 'apps/web/.pnpmfile.cjs', 'patches/left-pad.patch', 'pnpm-workspace.yaml', '.npmrc']:
+            with self.subTest(path):
+                self.assertTrue(gate.matches(path, stop))
+
     def test_every_stop_rule_in_the_repo_config_has_owner_text(self):
         import tomllib
         cfg = tomllib.loads((Path(__file__).resolve().parents[2] / '.gate/config.toml').read_text())
