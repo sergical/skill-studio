@@ -2776,10 +2776,6 @@ mod tests {
 
     #[test]
     fn skill_use_watch_paths_covers_claude_projects_and_opencode_data() {
-        // `opencode_watch_dirs` (folded into `skill_use_watch_paths` for
-        // OpenCode) reads `OPENCODE_DB`/`XDG_DATA_HOME` via
-        // `opencode_databases`, so this needs the same cross-test env lock
-        // every other OpenCode-env-reading test in the crate takes.
         let home = PathBuf::from("/home/tester");
         let paths = skill_use_watch_paths(&home);
         assert!(paths.contains(&SkillUseWatchPath {
@@ -2814,9 +2810,6 @@ mod tests {
 
     #[test]
     fn is_skill_use_change_matches_opencode_databases_and_claude_transcripts() {
-        // `is_opencode_skill_use_change` reads `OPENCODE_DB`/`XDG_DATA_HOME`
-        // via `opencode_databases`, so this needs the same cross-test env
-        // lock every other OpenCode-env-reading test in the crate takes.
         let home = PathBuf::from("/home/tester");
         assert!(is_skill_use_change(
             &home,
@@ -4639,10 +4632,6 @@ mod tests {
 
         #[test]
         fn an_unreadable_database_file_reads_nothing_and_never_sets_incomplete() {
-            // `refresh` reads `OPENCODE_DB`/`XDG_DATA_HOME` via
-            // `opencode_databases` even for this non-OpenCode-shaped file, so
-            // this test races `a_custom_opencode_db_path_is_watched_...`
-            // (which sets `OPENCODE_DB` process-wide) without this lock.
             let tmp = tempfile::tempdir().unwrap();
             let home = tmp.path();
             // An existing (empty) Claude Code projects dir, so this test's

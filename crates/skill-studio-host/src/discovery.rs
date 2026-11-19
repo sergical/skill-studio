@@ -31,7 +31,7 @@ use crate::opencode_db::{open_opencode_database, opencode_data_dir, opencode_dat
 /// sessions, and the `SQLite` state; every Codex path in the app must honour
 /// it").
 pub fn codex_home(home: &Path) -> PathBuf {
-    match std::env::var_os("CODEX_HOME") {
+    match crate::opencode_db::agent_env_var("CODEX_HOME") {
         Some(value) if !value.is_empty() => PathBuf::from(value),
         _ => home.join(".codex"),
     }
@@ -451,12 +451,12 @@ fn cursor_workspace_folder(path: &Path) -> Option<PathBuf> {
 /// harness scan silently reads/writes the real user's `OpenCode` config when
 /// `XDG_CONFIG_HOME`/`OPENCODE_CONFIG_DIR` happen to be set.
 pub fn opencode_config_dir(home: &Path) -> PathBuf {
-    if let Some(dir) = std::env::var_os("OPENCODE_CONFIG_DIR") {
+    if let Some(dir) = crate::opencode_db::agent_env_var("OPENCODE_CONFIG_DIR") {
         if !dir.is_empty() {
             return PathBuf::from(dir);
         }
     }
-    match std::env::var_os("XDG_CONFIG_HOME") {
+    match crate::opencode_db::agent_env_var("XDG_CONFIG_HOME") {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir).join("opencode"),
         _ => home.join(".config").join("opencode"),
     }
