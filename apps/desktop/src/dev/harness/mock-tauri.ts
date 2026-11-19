@@ -95,6 +95,7 @@ const addRequestSchema = z
     method: z.enum(["dotagents", "skills-sh", "copy"]),
     source: z
       .object({
+        kind: z.enum(["github", "git", "local"]),
         skillName: z.string().nullable(),
         repo: z.string().nullable(),
         url: z.string().nullable(),
@@ -152,12 +153,10 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
   let telemetryEnabled = false;
   const addOperations = new Map<string, AddSkillOperationEvent>();
   const pausedForTrust = new Map<string, { request: AddRequestLike; batch: boolean }>();
-  // Mirrors `trusted_dotagents_sources`: every repository a fixture skill came from through
-  // dotagents was trusted when it was added.
+  // Mirrors `trusted_dotagents_sources`: every repository a fixture skill came from was trusted
+  // when it was added.
   const trustedSources = new Set<string>();
-  for (const item of initial.skills) {
-    if (item.source_kind === "dotagents") trustedSources.add(item.source.toLowerCase());
-  }
+  for (const item of initial.skills) trustedSources.add(item.source.toLowerCase());
   // Mirrors the backend's `~/.agents/skill-studio.json` `projects` key - the register/unregister/
   // import handlers below mutate it with the same track/untrack rules as `TrackedProjects` in
   // `crates/skill-studio-core`, and `get_tracked_projects` reads it back.
@@ -315,7 +314,8 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
     return event;
   }
 
-  /** Mirrors the core's park: each target folder moves under `~/.agents/skills-parked/`, and the
+  /** Mirrors the core's park: each target folder moves under `~/.agents/skills-parked/` (a project
+   * copy under `projects/<project-key>/`, so global and project copies never share a slot), and the
    * links that pointed at it go with it. The skill is parked once no live copy is left. */
   function parkCopies(item: InstalledSkill, targetIds: Set<string>): InstalledSkill {
     const parkedAt = new Date().toISOString();
@@ -328,10 +328,13 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
     const parked = moved.map((entry) => {
       const agent = agentIdFromDeploymentLabel(entry.agent);
       const kind = agent === "shared" ? "universal" : (agent ?? entry.agent);
+      const slot = entry.project_path
+        ? `projects/${entry.project_path.replace(/[^A-Za-z0-9_-]/g, "-")}/${kind}`
+        : kind;
       const copy = deployment({
         agent: "parked",
         scope: "parked",
-        path: `${HARNESS_HOME}/.agents/skills-parked/${kind}/${item.name}`,
+        path: `${HARNESS_HOME}/.agents/skills-parked/${slot}/${item.name}`,
         parked_origin: { kind, scope: entry.scope, project_path: entry.project_path ?? null },
       });
       parkedFrom.set(
@@ -405,13 +408,14 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
     return name;
   }
 
-  /** Mirrors `skill_trust_policy`: a dotagents add from a repository the user has not trusted
-   * pauses until they confirm it. Copy and skills.sh adds are never gated. */
+  /** Mirrors `normalize_dotagents_source_identity`: an add from a GitHub or git repository the
+   * user has not trusted pauses until they confirm it, for every method. Local folders are never
+   * gated. */
   function untrustedIdentity(request: AddRequestLike): string | null {
-    if (request.method !== "dotagents") return null;
-    const identity = (request.source.repo ?? request.source.url)
+    const { kind, repo, url } = request.source;
+    const raw = kind === "github" ? repo : kind === "git" ? url?.trim().replace(/\/+$/, "") : null;
+    const identity = raw
       ?.trim()
-      .replace(/\/$/, "")
       .replace(/\.git$/, "")
       .toLowerCase();
     return identity && !trustedSources.has(identity) ? identity : null;

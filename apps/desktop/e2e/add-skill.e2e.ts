@@ -5,14 +5,14 @@ import { openApp, openSkillsPage, skillPageTitle, skillRow } from "./app-harness
 const REPO = "acme/agent-skills";
 const SKILL = "frontend-design";
 
-/** Opens Add skill and fills in a dotagents add from a repository the user has not trusted. */
-async function startUntrustedAdd(page: Page): Promise<Locator> {
+/** Opens Add skill and fills in an add, by `method`, from a repository the user has not trusted. */
+async function startUntrustedAdd(page: Page, method = "dotagents"): Promise<Locator> {
   await page.getByRole("navigation").getByRole("button", { name: "Add skill" }).click();
   const sheet = page.getByRole("dialog", { name: "Add skill" });
   await sheet.getByRole("textbox", { name: "Source" }).fill(REPO);
   await sheet
     .getByRole("group", { name: "Install method" })
-    .getByRole("button", { name: "dotagents" })
+    .getByRole("button", { name: method, exact: true })
     .click();
   await sheet.getByRole("button", { name: "Add skill", exact: true }).click();
   await expect(sheet.getByRole("button", { name: "Trust repository and retry" })).toBeVisible();
@@ -24,18 +24,20 @@ test.beforeEach(async ({ page }) => {
   await openApp(page);
 });
 
-test("adding from an untrusted repository asks for trust first, and Trust repository and retry installs the skill", async ({
-  page,
-}) => {
-  const sheet = await startUntrustedAdd(page);
+for (const method of ["dotagents", "skills.sh", "Copy"]) {
+  test(`adding by ${method} from an untrusted repository asks for trust first, and Trust repository and retry installs the skill`, async ({
+    page,
+  }) => {
+    const sheet = await startUntrustedAdd(page, method);
 
-  await sheet.getByRole("button", { name: "Trust repository and retry" }).click();
+    await sheet.getByRole("button", { name: "Trust repository and retry" }).click();
 
-  await expect(sheet).toHaveCount(0);
-  await expect(skillPageTitle(page, SKILL)).toBeVisible();
-  await openSkillsPage(page, "Skills", SKILL);
-  await expect(skillRow(page, SKILL)).toHaveCount(1);
-});
+    await expect(sheet).toHaveCount(0);
+    await expect(skillPageTitle(page, SKILL)).toBeVisible();
+    await openSkillsPage(page, "Skills", SKILL);
+    await expect(skillRow(page, SKILL)).toHaveCount(1);
+  });
+}
 
 test("Close on the trust prompt installs nothing", async ({ page }) => {
   const sheet = await startUntrustedAdd(page);
