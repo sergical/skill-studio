@@ -120,6 +120,22 @@ describe("anti-slop interface dictionary rules", () => {
 		).toHaveLength(1);
 	});
 
+	it("flags a generic alias with an unsafe default once where it is used without type arguments", () => {
+		// 218934ec: a bare use of a generic alias resolves its `unknown` default, so it must not pass as a
+		// plain alias use. The generic declaration and the explicit safe argument stay clean.
+		const diagnostics = lintAntiSlopFixture(
+			`type DefaultRecord<Value = unknown> = Record<string, Value>;
+			const bare: DefaultRecord = {};
+			const safe: DefaultRecord<string> = {};
+			void bare;
+			void safe;`,
+			["no-unsafe-dictionary-type"],
+		);
+
+		expect(diagnosticCount(diagnostics, "no-unsafe-dictionary-type")).toBe(1);
+		expect(diagnostics[0]?.message).toContain("unknown value type");
+	});
+
 	it("classifies generic and plain alias wrappers around interface dictionaries", () => {
 		const diagnostics = lintAntiSlopFixture(
 			`interface GenericDictionary<Value> {
