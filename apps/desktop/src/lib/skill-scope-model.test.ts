@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { Deployment, InstalledSkill } from "@skill-studio/lib";
-import { otherScopeNote, scopeMarker, scopePresence } from "./skill-scope-model";
+import { isInstalledIn, otherScopeNote, scopeMarker, scopePresence } from "./skill-scope-model";
 
 function dep(scope: string, projectPath?: string): Deployment {
   // SAFETY: the model reads only `scope` and `project_path`.
@@ -107,5 +107,20 @@ describe("scopeMarker", () => {
   it("does not count a parked copy", () => {
     const parked = scopePresence([dep("global"), dep("parked", "/a/one")]);
     expect(scopeMarker(parked, { isGlobal: true })).toBeNull();
+  });
+});
+
+describe("isInstalledIn", () => {
+  it("is true for a live copy in the chosen scope only", () => {
+    const skills = [skill("tidy", [dep("global"), dep("project", "/work/app")])];
+    expect(isInstalledIn(skills, "tidy", "global")).toBe(true);
+    expect(isInstalledIn(skills, "tidy", "project", "/work/app")).toBe(true);
+    expect(isInstalledIn(skills, "tidy", "project", "/work/other")).toBe(false);
+    expect(isInstalledIn(skills, "other", "global")).toBe(false);
+  });
+
+  it("ignores parked and plugin copies, which an install does not overwrite", () => {
+    const skills = [skill("tidy", [dep("parked"), dep("plugin")])];
+    expect(isInstalledIn(skills, "tidy", "global")).toBe(false);
   });
 });

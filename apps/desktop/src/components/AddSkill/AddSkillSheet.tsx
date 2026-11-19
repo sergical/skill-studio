@@ -67,7 +67,7 @@ import {
 } from "@skill-studio/lib";
 import type { AddSkillOperationEvent, ParsedSkillSource } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
-import { otherScopeNote } from "../../lib/skill-scope-model";
+import { isInstalledIn, otherScopeNote } from "../../lib/skill-scope-model";
 import type {
   AddMethod,
   AddMethodDefaults,
@@ -453,10 +453,13 @@ function GithubSkillPicker({
   state,
   selectedPaths,
   onSelectedPathsChange,
+  isInstalled,
 }: {
   state: ListingState & { retry: () => void };
   selectedPaths: string[];
   onSelectedPathsChange: (paths: string[]) => void;
+  /** True for a skill already installed in the chosen scope: shown, never ticked. */
+  isInstalled: (name: string) => boolean;
 }) {
   if (state.status === "idle") return null;
 
@@ -484,8 +487,11 @@ function GithubSkillPicker({
   }
 
   const { skills, truncated } = state.listing;
-  const allSelected = selectedPaths.length === skills.length;
+  const installable = skills.filter((skill) => !isInstalled(skill.name));
+  const installedCount = skills.length - installable.length;
   const selectedPathSet = new Set(selectedPaths);
+  const allSelected =
+    installable.length > 0 && installable.every((skill) => selectedPathSet.has(skill.path));
 
   return (
     <div className="flex flex-col gap-2">
@@ -500,42 +506,53 @@ function GithubSkillPicker({
       {skills.length === 1 && (
         <div className="flex h-9 items-center gap-2">
           <Folder size={14} className="shrink-0 text-text-tertiary" />
-          <SkillRow entry={skills[0]} />
+          <SkillRow
+            entry={skills[0]}
+            trailing={isInstalled(skills[0].name) ? "Installed" : undefined}
+          />
         </div>
       )}
 
       {skills.length > 1 && (
         <>
           <div className="flex h-9 items-center justify-between gap-2">
-            <span className="text-caption text-text-tertiary">{skills.length} skills</span>
+            <span className="text-caption text-text-tertiary">
+              {skills.length} skills
+              {installedCount > 0 && ` · ${installedCount} installed`}
+            </span>
             <Button
               variant="link"
               className="h-auto p-0 text-caption font-medium"
+              disabled={installable.length === 0}
               onClick={() =>
-                onSelectedPathsChange(allSelected ? [] : skills.map((skill) => skill.path))
+                onSelectedPathsChange(allSelected ? [] : installable.map((skill) => skill.path))
               }
             >
               {allSelected ? "Select none" : "Select all"}
             </Button>
           </div>
           <ul className="m-0 flex list-none flex-col p-0">
-            {skills.map((skill) => (
-              <li key={skill.path} className="flex h-9 items-center gap-2">
-                <label className="flex min-w-0 flex-1 items-center gap-2">
-                  <CheckboxControl
-                    checked={selectedPathSet.has(skill.path)}
-                    onCheckedChange={(checked) =>
-                      onSelectedPathsChange(
-                        checked
-                          ? [...selectedPaths, skill.path]
-                          : selectedPaths.filter((path) => path !== skill.path),
-                      )
-                    }
-                  />
-                  <SkillRow entry={skill} />
-                </label>
-              </li>
-            ))}
+            {skills.map((skill) => {
+              const installed = isInstalled(skill.name);
+              return (
+                <li key={skill.path} className="flex h-9 items-center gap-2">
+                  <label className="flex min-w-0 flex-1 items-center gap-2">
+                    <CheckboxControl
+                      checked={!installed && selectedPathSet.has(skill.path)}
+                      disabled={installed}
+                      onCheckedChange={(checked) =>
+                        onSelectedPathsChange(
+                          checked
+                            ? [...selectedPaths, skill.path]
+                            : selectedPaths.filter((path) => path !== skill.path),
+                        )
+                      }
+                    />
+                    <SkillRow entry={skill} trailing={installed ? "Installed" : undefined} />
+                  </label>
+                </li>
+              );
+            })}
           </ul>
         </>
       )}
@@ -1095,7 +1112,10 @@ function deriveMethodAndVisibility(
  * which of them are checked. Pulled out of `AddSkillSheet` since it bundles
  * its own `useState` (the checked paths) with the listing hook above it.
  */
-function useAddSkillGithubSelection(parsed: ParsedSkillSource | { error: string }) {
+function useAddSkillGithubSelection(
+  parsed: ParsedSkillSource | { error: string },
+  isInstalled: (name: string) => boolean,
+) {
   const listingEnabled = !("error" in parsed) && parsed.kind === "github";
   const listingState = useGithubSkillListing(parsed, listingEnabled);
   const listedSkills = listingState.listing?.skills ?? [];
@@ -1104,15 +1124,17 @@ function useAddSkillGithubSelection(parsed: ParsedSkillSource | { error: string 
     listing: GithubSkillListing | null;
     paths: string[];
   }>({ listing: null, paths: [] });
-  // Every new listing starts checked without synchronizing derived state in an effect.
+  // Every new listing starts with each skill not installed yet checked,
+  // without synchronizing derived state in an effect.
   const selectedPaths =
     selection.listing === listingState.listing
       ? selection.paths
-      : listedSkills.map((skill) => skill.path);
+      : listedSkills.flatMap((skill) => (isInstalled(skill.name) ? [] : [skill.path]));
   const selectedPathSet = new Set(selectedPaths);
 
+  // An installed skill never installs, even when the scope changed after it was checked.
   const githubEntries = listingEnabled
-    ? listedSkills.filter((skill) => selectedPathSet.has(skill.path))
+    ? listedSkills.filter((skill) => selectedPathSet.has(skill.path) && !isInstalled(skill.name))
     : null;
   const listingBlocks = listingEnabled && listingState.status !== "ready";
 
@@ -1227,8 +1249,10 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
       ? { ...parsed, skillName: gitSkillName.trim() || undefined }
       : parsed;
 
+  const isInstalled = (name: string) =>
+    isInstalledIn(skills, name, scope, projectPath ?? undefined);
   const { listingState, githubEntries, selectedPaths, setSelectedPaths, listingBlocks } =
-    useAddSkillGithubSelection(submitParsed);
+    useAddSkillGithubSelection(submitParsed, isInstalled);
 
   const {
     isValid,
@@ -1357,6 +1381,7 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
               state={listingState}
               selectedPaths={selectedPaths}
               onSelectedPathsChange={setSelectedPaths}
+              isInstalled={isInstalled}
             />
 
             <MethodPicker
