@@ -227,7 +227,8 @@ of redirecting it. It does not run git: push the folder yourself.
 In the desktop, Pack on the selection bar asks for the new folder's name and
 place (a save panel, so the folder does not exist yet), shows the plan, takes
 the repository for the install lines, writes the folder, and shows the
-install line with Copy.
+install line with Copy. On Skills scoped to a project it takes each skill's
+copy from that project; everywhere else, from the home.
 
 `pack switch-source <source> <to>` moves the skills of a skills.sh pack to
 another git source, usually the user's GitHub fork of it. Each skill runs
