@@ -1605,52 +1605,47 @@ fn covered_by_install(req: &UpdateRequest, batch: &DotagentsBatch, rt: &Runtime)
     }
 }
 
-/// Runs each scope's `SkillsSh` requests (two or more, no ref pin) as one
-/// `npx skills update a b c` (#687), and returns their results by request
-/// index; `None` for a request it left to the caller. Stops before a group
-/// once cancelled, so the caller reports the rest as not run.
-fn update_skills_sh_batches(
+/// How many requests from `start` share one `npx skills update` (#687):
+/// consecutive `SkillsSh` requests with no ref pin, in `start`'s scope, with
+/// distinct names. Only consecutive ones, so batching never reorders
+/// requests that may write the same paths.
+fn skills_sh_run(requests: &[UpdateRequest], start: usize) -> usize {
+    let batchable =
+        |req: &UpdateRequest| req.method == InstallMethod::SkillsSh && req.ref_pin.is_none();
+    let first = &requests[start];
+    if !batchable(first) {
+        return 0;
+    }
+    let mut len = 1;
+    while let Some(next) = requests.get(start + len) {
+        let duplicate = requests[start..start + len]
+            .iter()
+            .any(|req| req.skill == next.skill);
+        if !batchable(next) || next.scope != first.scope || duplicate {
+            break;
+        }
+        len += 1;
+    }
+    len
+}
+
+/// [`update_skills_sh_group`] for one run from [`skills_sh_run`], one result
+/// per request. A failure before any row, such as a busy lease, is each
+/// request's result.
+fn update_skills_sh_run(
     rt: &Runtime,
     ctx: &OpContext,
-    requests: &[UpdateRequest],
-) -> Vec<Option<Result<UpdateOutcome, CoreError>>> {
-    let mut results: Vec<Option<Result<UpdateOutcome, CoreError>>> =
-        requests.iter().map(|_| None).collect();
-    let mut groups: Vec<(RootScope, Vec<usize>)> = Vec::new();
-    for (index, req) in requests.iter().enumerate() {
-        if req.method != InstallMethod::SkillsSh || req.ref_pin.is_some() {
-            continue;
-        }
-        match groups.iter_mut().find(|(scope, members)| {
-            *scope == req.scope && members.iter().all(|&i| requests[i].skill != req.skill)
-        }) {
-            Some((_, members)) => members.push(index),
-            None => groups.push((req.scope.clone(), vec![index])),
-        }
+    run: &[UpdateRequest],
+) -> Vec<Result<UpdateOutcome, CoreError>> {
+    let batch: Vec<&UpdateRequest> = run.iter().collect();
+    // Each skill files its own `Operation::Update` record in a single
+    // update; the run files one for the call it shares.
+    match rt.run(Operation::Update, ctx, || {
+        update_skills_sh_group(rt, ctx, &batch)
+    }) {
+        Ok(outcomes) => outcomes,
+        Err(e) => run.iter().map(|_| Err(e.for_each_item())).collect(),
     }
-    for (_, members) in groups {
-        if members.len() < 2 || ctx.cancel.is_cancelled() {
-            continue;
-        }
-        let batch: Vec<&UpdateRequest> = members.iter().map(|&i| &requests[i]).collect();
-        // Each skill files its own `Operation::Update` record in a single
-        // update; the batch files one for the call it shares.
-        match rt.run(Operation::Update, ctx, || {
-            update_skills_sh_group(rt, ctx, &batch)
-        }) {
-            Ok(outcomes) => {
-                for (&i, outcome) in members.iter().zip(outcomes) {
-                    results[i] = Some(outcome);
-                }
-            }
-            Err(e) => {
-                for &i in &members {
-                    results[i] = Some(Err(e.for_each_item()));
-                }
-            }
-        }
-    }
-    results
 }
 
 /// One scope's `SkillsSh` updates under one lease: each skill is checked
@@ -1780,8 +1775,22 @@ fn update_all_body(
     // requests the install covered reuse its row instead of installing again.
     let mut installed: Vec<DotagentsBatch> = Vec::new();
     let mut not_run = Vec::new();
-    let mut batched = update_skills_sh_batches(rt, ctx, requests);
+    let mut batched: Vec<Option<Result<UpdateOutcome, CoreError>>> =
+        requests.iter().map(|_| None).collect();
     for (index, req) in requests.iter().enumerate() {
+        // A run of skills.sh requests starts here: one `npx skills update`
+        // for the whole run, in request order. Its outcomes are reported as
+        // the loop reaches them, before the next run or request starts.
+        let run = skills_sh_run(requests, index);
+        if batched[index].is_none() && run > 1 && !ctx.cancel.is_cancelled() {
+            let members = &requests[index..index + run];
+            for (slot, outcome) in batched[index..index + run]
+                .iter_mut()
+                .zip(update_skills_sh_run(rt, ctx, members))
+            {
+                *slot = Some(outcome);
+            }
+        }
         let is_dotagents = req.method == InstallMethod::Dotagents;
         let result = if let Some(done) = batched[index].take() {
             // The batch wrote this scope, so a cached dotagents install no

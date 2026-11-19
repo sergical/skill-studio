@@ -182,9 +182,11 @@ git to list its skills, also on a dry run. A real run gives each skill to
 `add`, `update` or `remove`, so the tool that installed it writes the files,
 and each skill gets its own event to undo with `restore`. Skills that share
 a source and scope cost one `npx` call: `npx skills add <source> --skill a
---skill b` for add, and `npx skills update a b --global|--project` for every
-skills.sh update in `update_all` (#687). Each skill still gets its own backup
-and event before the call, and a failed call fails each skill it covered.
+--skill b` for add, and `npx skills update a b --global|--project` for each run of
+consecutive skills.sh updates of one scope in `update_all` (#687). Requests
+keep their order, and cancel is checked before each run. Each skill still
+gets its own backup and event before the call, and a failed call fails each
+skill it covered.
 `crates/skill-studio-core/tests/write_spawn_count.rs` counts the calls. One exception:
 `dotagents install` refreshes every declared skill in its scope, so the
 dotagents skills of one scope share one event, and restoring it undoes all of
