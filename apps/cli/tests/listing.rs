@@ -64,6 +64,12 @@ fn claude_listing_keeps_descriptions_of_used_skills_at_the_catalog_window_instea
     for name in ["a", "b", "c"] {
         skill(home, ".claude/skills", name, &text);
     }
+    // Manual-only now, but the recorded session still listed it.
+    write(
+        home,
+        ".claude/skills/m/SKILL.md",
+        "---\nname: m\ndescription: manual\ndisable-model-invocation: true\n---\n",
+    );
     write(
         home,
         ".claude/cache/model-catalog/cc.json",
@@ -85,14 +91,17 @@ fn claude_listing_keeps_descriptions_of_used_skills_at_the_catalog_window_instea
         &format!(r#"{{"skillUsage":{{"b":{{"usageCount":5,"lastUsedAt":{now}}}}}}}"#),
     );
     // A recorded session: the bundled `dataviz` keeps its description.
-    let content = format!("- a\\n- b: {text}\\n- c\\n- dataviz: {}", "y".repeat(50));
+    let content = format!(
+        "- a\\n- b: {text}\\n- c\\n- m\\n- dataviz: {}",
+        "y".repeat(50)
+    );
     write(
         home,
         ".claude/projects/-work/s.jsonl",
         &format!(
             "{}\n{}\n",
             format_args!(
-                r#"{{"type":"attachment","timestamp":"2026-11-19T00:00:00Z","attachment":{{"type":"skill_listing","isInitial":true,"names":["a","b","c","dataviz"],"content":"{content}"}}}}"#
+                r#"{{"type":"attachment","timestamp":"2026-11-19T00:00:00Z","attachment":{{"type":"skill_listing","isInitial":true,"names":["a","b","c","m","dataviz"],"content":"{content}"}}}}"#
             ),
             r#"{"type":"assistant","message":{"model":"claude-opus-5-5"}}"#
         ),
@@ -124,6 +133,18 @@ fn claude_listing_keeps_descriptions_of_used_skills_at_the_catalog_window_instea
         "b, listed second, had a description in the session"
     );
     assert_eq!(claude["observed_session"]["model"], "claude-opus-5-5");
+    let m: Vec<_> = claude["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["name"] == "m")
+        .collect();
+    assert_eq!(
+        m.len(),
+        1,
+        "a hidden skill came back from the session: {m:?}"
+    );
+    assert_eq!(m[0]["state"], "hidden");
     assert!(claude["setting"]["chezmoi_source"]
         .as_str()
         .unwrap()
@@ -134,6 +155,28 @@ fn claude_listing_keeps_descriptions_of_used_skills_at_the_catalog_window_instea
     assert_eq!(
         wider["setting"]["snippet"],
         "\"skillListingBudgetFraction\": 1"
+    );
+
+    let outside = dir.path().join("elsewhere.jsonl");
+    std::fs::copy(home.join(".claude/projects/-work/s.jsonl"), &outside).unwrap();
+    let mut cmd = test_home::command(env!("CARGO_BIN_EXE_skill-studio"), home);
+    let out = cmd
+        .args([
+            "listing",
+            "--fixture",
+            home.to_str().unwrap(),
+            "--json",
+            "--claude-session",
+        ])
+        .arg(&outside)
+        .env("HOME", home)
+        .env("SKILL_STUDIO_TELEMETRY", "0")
+        .output()
+        .unwrap();
+    let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        envelope["status"], "error",
+        "a transcript outside Claude's projects was read"
     );
 
     let mcp = headless::mcp_with_env(
@@ -155,6 +198,11 @@ fn codex_listing_shortens_descriptions_then_omits_entries_instead_of_reporting_o
     for name in ["x", "y"] {
         skill(home, ".codex/skills", name, &"d".repeat(400));
     }
+    write(
+        home,
+        ".codex/skills/bad/SKILL.md",
+        "---\nname: bad\ndescription: Triggers on: video\n---\n",
+    );
     write(home, ".codex/config.toml", "model = \"m\"\n");
     write(
         home,
@@ -167,6 +215,7 @@ fn codex_listing_shortens_descriptions_then_omits_entries_instead_of_reporting_o
     assert_eq!(codex["budget_unit"], "tokens");
     assert_eq!(state(&codex, "x"), "truncated");
     assert_eq!(state(&codex, "y"), "truncated");
+    assert_eq!(state(&codex, "bad"), "hidden", "Codex rejects invalid YAML");
 
     let tight = row(&listing(home, &["--codex-max-tokens", "1"]), "codex");
     assert_eq!(state(&tight, "x"), "omitted");

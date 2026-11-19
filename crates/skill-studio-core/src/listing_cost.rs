@@ -443,6 +443,9 @@ pub(crate) fn listed_skills(
                         "name" => f.name.clone(),
                         _ => f.description.clone(),
                     },
+                    // Codex rejects a document that is not valid YAML;
+                    // Claude Code and others still read its plain lines.
+                    None if harness == AgentId::CODEX => None,
                     None => deployment.frontmatter_fields.get(key).cloned(),
                 };
                 let name = field("name").unwrap_or_else(|| skill.name.0.clone());

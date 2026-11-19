@@ -49,7 +49,8 @@
         },
         "budget_source": {
           "description": "How the budget was resolved.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "context_window_tokens": {
           "description": "Context window in tokens, when known.",
@@ -62,7 +63,8 @@
         },
         "context_source": {
           "description": "Where the context window came from.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         },
         "uses_default_context_window": {
           "description": "True when no model or context size was found.",
@@ -174,7 +176,8 @@
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-untrusted": true
         },
         "file": {
           "description": "File to edit.",
@@ -191,7 +194,8 @@
         },
         "snippet": {
           "description": "The text to put in `file` for the requested budget.",
-          "type": "string"
+          "type": "string",
+          "x-untrusted": true
         }
       },
       "required": [

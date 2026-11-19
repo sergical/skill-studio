@@ -50,6 +50,14 @@ type Load =
 const hasDescription = (state: ListingState | undefined) =>
   state === "described" || state === "truncated";
 
+/** One entry per deployment: Codex keeps same-name skills from different paths. */
+const entryKey = (entry: ListingEntry) => `${entry.name}\u0000${entry.path ?? ""}`;
+
+/** Any difference the model would see: state or description length. */
+const differs = (now: ListingEntry, tried: ListingEntry | undefined) =>
+  tried !== undefined &&
+  (tried.state !== now.state || tried.shown_description_chars !== now.shown_description_chars);
+
 function scopeKey(row: HarnessListing): string {
   return row.scope.scope === "global" ? GLOBAL : row.scope.project;
 }
@@ -152,8 +160,7 @@ function SettingCard({ row, tried }: { row: HarnessListing; tried: HarnessListin
 }
 
 function EntryRow({ entry, tried }: { entry: ListingEntry; tried: ListingEntry | undefined }) {
-  const changed =
-    tried !== undefined && hasDescription(tried.state) !== hasDescription(entry.state);
+  const changed = differs(entry, tried);
   return (
     <li
       aria-label={entry.name}
@@ -219,14 +226,16 @@ export function ListingView({ snapshot }: ListingViewProps) {
     report?.listings.find((r) => r.harness === harness && scopeKey(r) === scope) ?? null;
   const row = load.kind === "ready" ? pick(load.now) : null;
   const tried = load.kind === "ready" ? pick(load.tried) : null;
-  const triedByName = new Map(tried?.entries.map((e) => [e.name, e]) ?? []);
-  const changes = row?.entries.filter((e) => {
-    const t = triedByName.get(e.name);
-    return t !== undefined && hasDescription(t.state) !== hasDescription(e.state);
-  });
-  const gained = changes?.filter((e) => !hasDescription(e.state)).length ?? 0;
+  const triedByKey = new Map(tried?.entries.map((e) => [entryKey(e), e]) ?? []);
+  const changes = row?.entries.filter((e) => differs(e, triedByKey.get(entryKey(e)))) ?? [];
+  const gained = changes.filter(
+    (e) => !hasDescription(e.state) && hasDescription(triedByKey.get(entryKey(e))?.state),
+  ).length;
+  const lost = changes.filter(
+    (e) => hasDescription(e.state) && !hasDescription(triedByKey.get(entryKey(e))?.state),
+  ).length;
   const hiddenCount = row?.entries.filter((e) => e.state === "hidden").length ?? 0;
-  const shown = (onlyChanges && tried ? (changes ?? []) : (row?.entries ?? [])).filter(
+  const shown = (onlyChanges && tried ? changes : (row?.entries ?? [])).filter(
     (e) => showHidden || e.state !== "hidden",
   );
   const harnesses =
@@ -308,8 +317,8 @@ export function ListingView({ snapshot }: ListingViewProps) {
               {tried && (
                 <>
                   <span className="text-small text-text-secondary">
-                    At {tried.budget?.toLocaleString()} {tried.budget_unit}: {gained} gain a
-                    description, {(changes?.length ?? 0) - gained} lose one.
+                    At {tried.budget?.toLocaleString()} {tried.budget_unit}: {changes.length}{" "}
+                    change: {gained} gain a description, {lost} lose one.
                   </span>
                   <Button
                     type="button"
@@ -339,9 +348,9 @@ export function ListingView({ snapshot }: ListingViewProps) {
             <ul aria-label="Listing" className="m-0 list-none p-0">
               {shown.map((entry) => (
                 <EntryRow
-                  key={`${entry.name}:${entry.path ?? ""}`}
+                  key={entryKey(entry)}
                   entry={entry}
-                  tried={triedByName.get(entry.name)}
+                  tried={triedByKey.get(entryKey(entry))}
                 />
               ))}
             </ul>

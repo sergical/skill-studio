@@ -65,6 +65,7 @@ pub struct ListingSetting {
     /// Setting key.
     pub key: String,
     /// Current value, when set.
+    #[schemars(extend("x-untrusted" = true))]
     pub current: Option<String>,
     /// File to edit.
     #[schemars(extend("x-untrusted" = true))]
@@ -74,6 +75,7 @@ pub struct ListingSetting {
     #[schemars(extend("x-untrusted" = true))]
     pub chezmoi_source: Option<PathBuf>,
     /// The text to put in `file` for the requested budget.
+    #[schemars(extend("x-untrusted" = true))]
     pub snippet: String,
 }
 
@@ -109,10 +111,12 @@ pub struct HarnessListing {
     /// The whole listing with every description, in `budget_unit`.
     pub full_size: u64,
     /// How the budget was resolved.
+    #[schemars(extend("x-untrusted" = true))]
     pub budget_source: String,
     /// Context window in tokens, when known.
     pub context_window_tokens: Option<u64>,
     /// Where the context window came from.
+    #[schemars(extend("x-untrusted" = true))]
     pub context_source: String,
     /// True when no model or context size was found.
     pub uses_default_context_window: bool,
@@ -546,6 +550,21 @@ fn claude_listing(
     let settings = claude_settings(rt, scope)?;
     let mut history = recorded_listings(rt, scope);
     if let Some(path) = &req.claude_transcript {
+        let projects = rt.scope.global_root_path(Path::new(".claude/projects"));
+        let inside = match (
+            rt.ports.fs.canonicalize(path),
+            rt.ports.fs.canonicalize(&projects),
+        ) {
+            (Ok(file), Ok(root)) => file.starts_with(&root),
+            _ => false,
+        };
+        if !inside {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                "The transcript must be a Claude Code session file in this home",
+            )
+            .at(path));
+        }
         let chosen = read_recorded_listing(rt, path).ok_or_else(|| {
             CoreError::new(
                 ErrorCode::InvalidRequest,
@@ -634,7 +653,8 @@ fn claude_listing(
         for (name, _, _) in &recorded.lines {
             if by_name.contains_key(name) {
                 order.push(name.clone());
-            } else if !other_project_names.contains(name) {
+            } else if !other_project_names.contains(name) && hidden.iter().all(|h| &h.name != name)
+            {
                 unscanned.insert(name.clone(), seen.get(name).cloned().unwrap_or_default());
                 order.push(name.clone());
             }
@@ -747,11 +767,16 @@ fn claude_listing(
         notes.push("No recorded session was found, so bundled skills are not counted.".into());
     }
     let requested = req.claude_budget_fraction;
+    // The file that supplies the value now; a project layer overrides the user file.
+    let claude_file = settings
+        .fraction
+        .as_ref()
+        .map_or_else(|| settings.user_path.clone(), |(_, path)| path.clone());
     let setting = ListingSetting {
         key: "skillListingBudgetFraction".into(),
         current: settings.fraction.as_ref().map(|(f, _)| f.to_string()),
-        file: settings.user_path.clone(),
-        chezmoi_source: chezmoi_source(rt, &settings.user_path),
+        file: claude_file.clone(),
+        chezmoi_source: chezmoi_source(rt, &claude_file),
         snippet: format!(
             "\"skillListingBudgetFraction\": {}",
             requested.unwrap_or(budget.fraction)
@@ -941,14 +966,19 @@ fn codex_listing(
     let requested = req
         .codex_max_context_tokens
         .or(settings.max_context_tokens.as_ref().map(|(v, _)| *v));
+    // The file that supplies the value now; a trusted project layer overrides the user file.
+    let codex_file = settings
+        .max_context_tokens
+        .as_ref()
+        .map_or_else(|| settings.user_path.clone(), |(_, path)| path.clone());
     let setting = ListingSetting {
         key: "skills.max_context_tokens".into(),
         current: settings
             .max_context_tokens
             .as_ref()
             .map(|(v, _)| v.to_string()),
-        file: settings.user_path.clone(),
-        chezmoi_source: chezmoi_source(rt, &settings.user_path),
+        file: codex_file.clone(),
+        chezmoi_source: chezmoi_source(rt, &codex_file),
         snippet: format!(
             "[skills]\nmax_context_tokens = {}",
             requested.unwrap_or(max).min(10_000)

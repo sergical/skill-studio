@@ -4525,7 +4525,8 @@
           },
           "budget_source": {
             "description": "How the budget was resolved.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "budget_unit": {
             "description": "`characters` or `tokens` (UTF-8 bytes divided by four).",
@@ -4533,7 +4534,8 @@
           },
           "context_source": {
             "description": "Where the context window came from.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           },
           "context_window_tokens": {
             "description": "Context window in tokens, when known.",
@@ -4700,7 +4702,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "x-untrusted": true
           },
           "file": {
             "description": "File to edit.",
@@ -4713,7 +4716,8 @@
           },
           "snippet": {
             "description": "The text to put in `file` for the requested budget.",
-            "type": "string"
+            "type": "string",
+            "x-untrusted": true
           }
         },
         "required": [

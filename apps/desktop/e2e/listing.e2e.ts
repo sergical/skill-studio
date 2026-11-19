@@ -22,7 +22,7 @@ test("a larger budget marks the skills that gain a description and gives the set
   await budget.press("Enter");
 
   await expect(
-    page.getByText(/^At 60,000 characters: \d+ gain a description, 0 lose one\.$/),
+    page.getByText(/^At 60,000 characters: \d+ change: \d+ gain a description, 0 lose one\.$/),
   ).toBeVisible();
   await expect(page.locator("li[data-changed]")).toHaveCount(nameOnlyBefore);
 
