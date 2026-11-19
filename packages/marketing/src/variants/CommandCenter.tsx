@@ -1,5 +1,4 @@
 import * as stylex from "@stylexjs/stylex";
-import { Dithering } from "@paper-design/shaders-react";
 import { Check, Copy, Download } from "lucide-react";
 import { AGENT_SETUP_PROMPT } from "@skill-studio/lib/agent-setup";
 
@@ -8,9 +7,9 @@ import { ProductMock, type ThemeToggleOrigin } from "../ProductMock";
 import { Arrow } from "../MarketingBrand";
 import { SiteFooter, SiteHeader, siteLayout } from "../SiteChrome";
 import { lightSiteTheme, siteTokens, type SiteTheme } from "../SiteTheme.stylex";
-import { useReducedMotion } from "../use-reduced-motion";
 import { SidecarWalkthrough } from "../walkthrough/SidecarWalkthrough";
 import { ClosingFinale, DITHER_COLORS } from "../home/ClosingFinale";
+import { WarpDither } from "../home/WarpDither";
 import { finaleCtaMarker } from "../home/ClosingFinale.stylex";
 import { BenchmarkSection } from "../home/BenchmarkSection";
 import { FaqSection } from "../home/FaqSection";
@@ -122,21 +121,9 @@ function HeaderDownload() {
 }
 
 function TopDither({ theme }: { theme: SiteTheme }) {
-  const reducedMotion = useReducedMotion();
   return (
     <div aria-hidden="true" {...stylex.props(styles.topDither)}>
-      <Dithering
-        width="100%"
-        height="100%"
-        colorBack="#00000000"
-        colorFront={DITHER_COLORS[theme].front}
-        // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- Paper Shaders' own prop name
-        shape="warp"
-        type="4x4"
-        size={3}
-        scale={0.8}
-        speed={reducedMotion ? 0 : 0.35}
-      />
+      <WarpDither colorBack="#00000000" colorFront={DITHER_COLORS[theme].front} />
     </div>
   );
 }

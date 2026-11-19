@@ -4,12 +4,12 @@
 // glows up from the bottom and fills a giant "Skill Studio" cut off by the page edge
 // ============================================================================
 
-import { useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import * as stylex from "@stylexjs/stylex";
-import { Dithering } from "@paper-design/shaders-react";
 
 import { siteLayout } from "../SiteChrome";
 import { finaleCtaMarker } from "./ClosingFinale.stylex";
+import { WarpDither } from "./WarpDither";
 import type { SiteTheme } from "../SiteTheme.stylex";
 
 const WORDMARK_TEXT = "Skill Studio";
@@ -17,7 +17,6 @@ const WORDMARK_FONT =
   'system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif';
 // The share of the letters' height that the page edge cuts off.
 const WORDMARK_CROP = 0.28;
-const DITHER_SPEED = 0.35;
 
 // Same colours as the desktop app's welcome screen (apps/desktop FirstRunScreen).
 export const DITHER_COLORS = {
@@ -109,12 +108,6 @@ function useWordmark(
   return wordmark;
 }
 
-const subscribeReducedMotion = (onChange: () => void) => {
-  const media = window.matchMedia("(prefers-reduced-motion: reduce)");
-  media.addEventListener("change", onChange);
-  return () => media.removeEventListener("change", onChange);
-};
-
 interface ClosingFinaleProps {
   theme: SiteTheme;
   children: ReactNode;
@@ -124,11 +117,6 @@ export function ClosingFinale({ theme, children }: ClosingFinaleProps) {
   const finaleRef = useRef<HTMLDivElement>(null);
   const slotRef = useRef<HTMLDivElement>(null);
   const wordmark = useWordmark(finaleRef, slotRef);
-  const reducedMotion = useSyncExternalStore(
-    subscribeReducedMotion,
-    () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-    () => true,
-  );
   const colors = DITHER_COLORS[theme];
 
   return (
@@ -146,18 +134,7 @@ export function ClosingFinale({ theme, children }: ClosingFinaleProps) {
             maskSize: `${wordmark.width}px ${wordmark.height}px, 100% 100%`,
           }}
         >
-          <Dithering
-            width="100%"
-            height="100%"
-            colorBack={colors.back}
-            colorFront={colors.front}
-            // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- Paper Shaders' own prop name
-            shape="warp"
-            type="4x4"
-            size={3}
-            scale={0.8}
-            speed={reducedMotion ? 0 : DITHER_SPEED}
-          />
+          <WarpDither colorBack={colors.back} colorFront={colors.front} />
         </div>
       )}
       {children}
