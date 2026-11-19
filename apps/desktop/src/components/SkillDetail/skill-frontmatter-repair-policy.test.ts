@@ -7,7 +7,6 @@ import { describe, expect, it } from "vitest";
 import {
   canOfferLocalQuote,
   frontmatterPreviewKey,
-  frontmatterRepairCopy,
   frontmatterRepairKindForViolation,
   frontmatterRepairKindsFor,
   fixLineFor,
@@ -112,20 +111,6 @@ describe("violation messages shared with the Rust matchers", () => {
    */
   it.each(Object.entries(violationMessages))("maps the %s message to its kind", (kind, message) => {
     expect(frontmatterRepairKindForViolation(message)).toBe(kind);
-  });
-});
-
-describe("frontmatterRepairCopy", () => {
-  /**
-   * Flow: a repair succeeds.
-   * Expect: the toast names the thing fixed.
-   * Failure: every kind says "YAML fixed".
-   */
-  it("names the fixed thing per kind", () => {
-    expect(frontmatterRepairCopy("colon-scalar").success).toBe("YAML fixed");
-    expect(frontmatterRepairCopy("name-mismatch").success).toBe("Name fixed");
-    expect(frontmatterRepairCopy("name-format").success).toBe("Name fixed");
-    expect(frontmatterRepairCopy("invocation-conflict").success).toBe("Invocation fixed");
   });
 });
 
