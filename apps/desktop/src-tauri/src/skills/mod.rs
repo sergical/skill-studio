@@ -36,6 +36,7 @@ pub mod skill_install;
 pub mod skill_install_counts;
 pub mod skill_invocation;
 pub mod skill_lifecycle;
+pub mod skill_listing;
 pub mod skill_local_edits;
 pub mod skill_materialize;
 pub mod skill_mcp_connect;

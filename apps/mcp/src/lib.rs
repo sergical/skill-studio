@@ -91,6 +91,7 @@ use skill_studio_core::dto::{
 use skill_studio_core::extras::ExtrasRequest;
 use skill_studio_core::harness::HarnessCatalog;
 use skill_studio_core::identity::CorrelationId;
+use skill_studio_core::listing_visibility::ListingRequest;
 use skill_studio_core::ops::{self, Operation, Outcome, ResultEnvelope};
 use skill_studio_core::ports::{OpContext, Runtime};
 use skill_studio_core::view::ViewRequest;
@@ -1072,6 +1073,26 @@ impl SkillStudioServer {
             &view,
             &context,
             |rt, ctx| ops::extras(rt, ctx, &req),
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Show which skills each harness lists for the model with a description, with a name only, truncated, omitted, or hidden. Optional inputs predict a different Claude Code skillListingBudgetFraction, context window, or Codex skills.max_context_tokens. This writes nothing.",
+        annotations(read_only_hint = true)
+    )]
+    async fn listing(
+        &self,
+        Parameters(Viewed { request: req, view }): Parameters<Viewed<ListingRequest>>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op_viewed(
+            Operation::Listing,
+            false,
+            None,
+            &view,
+            &context,
+            |rt, ctx| skill_studio_core::listing_visibility::listing(rt, ctx, &req),
         )
         .await
     }

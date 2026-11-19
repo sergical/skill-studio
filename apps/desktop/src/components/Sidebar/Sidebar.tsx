@@ -12,6 +12,7 @@ import {
   Boxes,
   Layers,
   LayoutDashboard,
+  ListTree,
   Moon,
   PackageOpen,
   Plus,
@@ -151,6 +152,15 @@ function SidebarNavItems({
       >
         <Boxes size={14} />
         <span className="min-w-0 truncate">Packs</span>
+      </Button>
+      <Button
+        variant="ghost"
+        className={itemClass(anchorView.kind === "listing")}
+        aria-current={anchorView.kind === "listing" ? "page" : undefined}
+        onClick={() => setActiveView({ kind: "listing" })}
+      >
+        <ListTree size={14} />
+        <span className="min-w-0 truncate">Model listing</span>
       </Button>
       <Button
         variant="ghost"

@@ -4505,6 +4505,406 @@
     "title": "ListEventsRequest",
     "type": "object"
   },
+  "crates/skill-studio-core/schema/listing_report.schema.json": {
+    "$defs": {
+      "AgentIdentity": {
+        "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
+        "type": "string"
+      },
+      "HarnessListing": {
+        "description": "One harness listing in one scope.",
+        "properties": {
+          "budget": {
+            "description": "Budget, or null when the harness has no known limit.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "budget_source": {
+            "description": "How the budget was resolved.",
+            "type": "string"
+          },
+          "budget_unit": {
+            "description": "`characters` or `tokens` (UTF-8 bytes divided by four).",
+            "type": "string"
+          },
+          "context_source": {
+            "description": "Where the context window came from.",
+            "type": "string"
+          },
+          "context_window_tokens": {
+            "description": "Context window in tokens, when known.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "entries": {
+            "description": "Entries in listing order; hidden entries last.",
+            "items": {
+              "$ref": "#/$defs/ListingEntry"
+            },
+            "type": "array"
+          },
+          "full_size": {
+            "description": "The whole listing with every description, in `budget_unit`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "harness": {
+            "$ref": "#/$defs/AgentIdentity",
+            "description": "Harness id."
+          },
+          "notes": {
+            "description": "What Skill Studio infers instead of reading.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "observed_session": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ObservedSession"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The session that supplied `observed` states."
+          },
+          "scope": {
+            "$ref": "#/$defs/RootScope",
+            "description": "Project sessions include global skills."
+          },
+          "setting": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ListingSetting"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The setting that controls the budget."
+          },
+          "uses_default_context_window": {
+            "description": "True when no model or context size was found.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "harness",
+          "scope",
+          "budget_unit",
+          "full_size",
+          "budget_source",
+          "context_source",
+          "uses_default_context_window",
+          "notes",
+          "entries"
+        ],
+        "type": "object"
+      },
+      "ListingEntry": {
+        "description": "One skill in one harness listing.",
+        "properties": {
+          "full_description_chars": {
+            "description": "Description characters before any cut.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hidden_reason": {
+            "description": "Why a hidden skill is hidden.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Name as the harness lists it. Claude Code prefixes plugin skills.",
+            "type": "string",
+            "x-untrusted": true
+          },
+          "observed": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ListingState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "State in the last recorded session, when one was found."
+          },
+          "path": {
+            "description": "Deployment folder. Null for entries known only from a session.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
+          "scanned": {
+            "description": "False for entries Skill Studio does not scan, such as bundled skills.",
+            "type": "boolean"
+          },
+          "shown_description_chars": {
+            "description": "Description characters the model sees.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/$defs/ListingState",
+            "description": "Predicted state."
+          },
+          "usage_score": {
+            "description": "Claude Code's usage score: uses times a 7-day half-life decay, at least 10%.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "state",
+          "shown_description_chars",
+          "full_description_chars",
+          "scanned"
+        ],
+        "type": "object"
+      },
+      "ListingSetting": {
+        "description": "The setting that controls the budget, and how to change it.",
+        "properties": {
+          "chezmoi_source": {
+            "description": "chezmoi source file when chezmoi manages `file`: edit this one, or\nchezmoi reverts the change.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
+          "current": {
+            "description": "Current value, when set.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "file": {
+            "description": "File to edit.",
+            "type": "string",
+            "x-untrusted": true
+          },
+          "key": {
+            "description": "Setting key.",
+            "type": "string"
+          },
+          "snippet": {
+            "description": "The text to put in `file` for the requested budget.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "file",
+          "snippet"
+        ],
+        "type": "object"
+      },
+      "ListingState": {
+        "description": "What one harness shows the model for one skill.",
+        "oneOf": [
+          {
+            "const": "described",
+            "description": "Name and full description.",
+            "type": "string"
+          },
+          {
+            "const": "truncated",
+            "description": "Name and a shortened description.",
+            "type": "string"
+          },
+          {
+            "const": "name_only",
+            "description": "Name only.",
+            "type": "string"
+          },
+          {
+            "const": "omitted",
+            "description": "Not listed: the budget ran out.",
+            "type": "string"
+          },
+          {
+            "const": "hidden",
+            "description": "Not listed: manual-only, off, parked, or rejected.",
+            "type": "string"
+          }
+        ]
+      },
+      "ObservedSession": {
+        "description": "The session the observed states come from.",
+        "properties": {
+          "at": {
+            "description": "Time of the listing, as recorded.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
+          "described": {
+            "description": "Entries with a description.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "listed": {
+            "description": "Entries in that listing.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "model": {
+            "description": "Model id that answered in that session.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
+          "transcript": {
+            "description": "Transcript file.",
+            "type": "string",
+            "x-untrusted": true
+          }
+        },
+        "required": [
+          "transcript",
+          "listed",
+          "described"
+        ],
+        "type": "object"
+      },
+      "ProjectRef": {
+        "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
+        "type": "string",
+        "x-untrusted": true
+      },
+      "RootScope": {
+        "description": "Where a root lives.",
+        "oneOf": [
+          {
+            "description": "Under the scope home.",
+            "properties": {
+              "scope": {
+                "const": "global",
+                "type": "string"
+              }
+            },
+            "required": [
+              "scope"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Under one tracked project.",
+            "properties": {
+              "project": {
+                "$ref": "#/$defs/ProjectRef"
+              },
+              "scope": {
+                "const": "project",
+                "type": "string"
+              }
+            },
+            "required": [
+              "scope",
+              "project"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Every harness listing for the global scope and the requested project.",
+    "properties": {
+      "listings": {
+        "description": "Rows in scope, then harness, order.",
+        "items": {
+          "$ref": "#/$defs/HarnessListing"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "listings"
+    ],
+    "title": "ListingReport",
+    "type": "object"
+  },
+  "crates/skill-studio-core/schema/listing_request.schema.json": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Input for `listing`.",
+    "properties": {
+      "claude_budget_fraction": {
+        "description": "Predict Claude Code at this `skillListingBudgetFraction` (0 to 1).",
+        "format": "double",
+        "type": [
+          "number",
+          "null"
+        ]
+      },
+      "claude_context_window_tokens": {
+        "description": "Predict Claude Code with this context window in tokens.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "claude_transcript": {
+        "description": "Compare Claude Code with this session transcript instead of the newest one.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "x-untrusted": true
+      },
+      "codex_max_context_tokens": {
+        "description": "Predict Codex at this `skills.max_context_tokens` (capped at 10000).",
+        "format": "uint64",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "project_path": {
+        "description": "Also report this project. It must be in the runtime scope.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "x-untrusted": true
+      }
+    },
+    "title": "ListingRequest",
+    "type": "object"
+  },
   "crates/skill-studio-core/schema/outdated_result.schema.json": {
     "$defs": {
       "Currency": {

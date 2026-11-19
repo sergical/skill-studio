@@ -486,6 +486,31 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Show which skills each agent lists for the model with a description,
+    /// with a name only, or not at all. This writes nothing.
+    Listing {
+        #[command(flatten)]
+        scope: ScopeArgs,
+        #[command(flatten)]
+        view: ViewArgs,
+        /// Also show this project's sessions. It must be in the scope.
+        #[arg(long = "for-project")]
+        for_project: Option<PathBuf>,
+        /// Predict Claude Code at this `skillListingBudgetFraction`, for example 0.02.
+        #[arg(long = "claude-fraction")]
+        claude_fraction: Option<f64>,
+        /// Predict Claude Code with this context window, in tokens.
+        #[arg(long = "claude-context")]
+        claude_context: Option<u64>,
+        /// Predict Codex at this `skills.max_context_tokens`.
+        #[arg(long = "codex-max-tokens")]
+        codex_max_tokens: Option<u64>,
+        /// Compare Claude Code with this session transcript (.jsonl) instead of the newest one.
+        #[arg(long = "claude-session")]
+        claude_session: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Check skill state and model listing budgets. This writes nothing.
     Doctor {
         #[command(flatten)]
@@ -1033,6 +1058,25 @@ fn main() -> ExitCode {
             run_diagnose_conflict(&scope, &view.into(), json, time)
         }
         Command::Extras { scope, view, json } => run_extras(&scope, &view.into(), json, time),
+        Command::Listing {
+            scope,
+            view,
+            for_project,
+            claude_fraction,
+            claude_context,
+            codex_max_tokens,
+            claude_session,
+            json,
+        } => {
+            let request = skill_studio_core::listing_visibility::ListingRequest {
+                project_path: for_project.map(|p| std::fs::canonicalize(&p).unwrap_or(p)),
+                claude_budget_fraction: claude_fraction,
+                claude_context_window_tokens: claude_context,
+                codex_max_context_tokens: codex_max_tokens,
+                claude_transcript: claude_session,
+            };
+            run_listing(&scope, &request, &view.into(), json, time)
+        }
         Command::Invocation {
             scope,
             mismatches: true,
@@ -2868,6 +2912,27 @@ fn run_extras(scope: &ScopeArgs, view: &ViewRequest, json: bool, time: bool) -> 
     );
     let envelope = ResultEnvelope::from_result(Operation::Extras, &rt.scope, &ctx, result);
     finish_view(&envelope, view, json, time, output::print_extras_table)
+}
+
+fn run_listing(
+    scope: &ScopeArgs,
+    request: &skill_studio_core::listing_visibility::ListingRequest,
+    view: &ViewRequest,
+    json: bool,
+    time: bool,
+) -> ExitCode {
+    let rt = match build_runtime::<skill_studio_core::listing_visibility::ListingReport>(
+        scope,
+        Operation::Listing,
+        json,
+    ) {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let result = skill_studio_core::listing_visibility::listing(&rt, &ctx, request);
+    let envelope = ResultEnvelope::from_result(Operation::Listing, &rt.scope, &ctx, result);
+    finish_view(&envelope, view, json, time, output::print_listing_table)
 }
 
 fn run_invocation(

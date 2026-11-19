@@ -1170,6 +1170,7 @@ async fn skill_usage_counts_a_transcript_use_and_lists_the_unused_skill() {
 /// this list changes what every client loads into context.
 const READ_TOOLS: &[&str] = &[
     "extras",
+    "listing",
     "doctor",
     "turn_off_check",
     "scan",

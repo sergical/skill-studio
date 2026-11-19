@@ -1,6 +1,6 @@
 //! Estimated model-visible skill listing cost, before budget reduction.
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -145,9 +145,15 @@ fn codex_settings(
 fn manual_only(rt: &Runtime, deployment: &DeploymentDto, harness: &str) -> Result<bool, CoreError> {
     let fm = deployment.frontmatter.as_ref();
     match harness {
-        AgentId::CLAUDE_CODE | AgentId::PI | AgentId::CURSOR => {
-            Ok(fm.and_then(|f| f.disable_model_invocation) == Some(true))
-        }
+        AgentId::CLAUDE_CODE | AgentId::PI | AgentId::CURSOR => Ok(match fm {
+            Some(f) => f.disable_model_invocation == Some(true),
+            // YAML that does not parse strictly (a duplicate key) still
+            // carries the field; Claude Code honors it.
+            None => deployment
+                .frontmatter_fields
+                .get("disable-model-invocation")
+                .is_some_and(|v| v.trim() == "true"),
+        }),
         AgentId::OPEN_CODE => Ok(fm
             .and_then(|f| f.metadata.as_ref())
             .and_then(|m| m.get("opencode/autoinvoke"))
@@ -176,6 +182,614 @@ fn manual_only(rt: &Runtime, deployment: &DeploymentDto, harness: &str) -> Resul
     }
 }
 
+/// Claude Code settings that shape the skill listing, merged from user,
+/// project, and local settings in that order.
+#[derive(Debug, Default)]
+pub(crate) struct ClaudeListingSettings {
+    /// `skillListingBudgetFraction` and the file that set it.
+    pub fraction: Option<(f64, PathBuf)>,
+    /// `skillListingMaxDescChars`, default 1536.
+    pub max_desc_chars: usize,
+    /// `enabledPlugins` switches, keyed `plugin@marketplace`.
+    pub enabled_plugins: BTreeMap<String, bool>,
+    /// `model`, as written (an alias such as `opus` or a model id).
+    pub model: Option<String>,
+    /// `skillOverrides` values by skill name.
+    pub overrides: BTreeMap<String, String>,
+    /// The user settings file.
+    pub user_path: PathBuf,
+    /// Plugin installs from `plugins/installed_plugins.json`, keyed
+    /// `plugin@marketplace`: `None` for a user install, else the project.
+    pub plugin_installs: BTreeMap<String, Vec<Option<PathBuf>>>,
+    /// The project these settings are for.
+    pub project: Option<PathBuf>,
+}
+
+impl ClaudeListingSettings {
+    /// True when Claude Code loads this plugin in this session scope.
+    fn plugin_off(&self, plugin: &crate::dto::PluginSourceDto) -> Option<&'static str> {
+        let key = format!("{}@{}", plugin.plugin, plugin.marketplace);
+        if self.enabled_plugins.get(&key).copied().or(plugin.enabled) == Some(false) {
+            return Some("plugin turned off");
+        }
+        let installs = self.plugin_installs.get(&key)?;
+        let here = installs
+            .iter()
+            .any(|p| p.is_none() || p.as_deref() == self.project.as_deref());
+        (!here).then_some("plugin installed for another project")
+    }
+}
+
+fn claude_plugin_installs(rt: &Runtime) -> BTreeMap<String, Vec<Option<PathBuf>>> {
+    let path = rt
+        .scope
+        .global_root_path(Path::new(".claude/plugins/installed_plugins.json"));
+    let Ok(value) = json(rt, &path) else {
+        return BTreeMap::new();
+    };
+    value
+        .get("plugins")
+        .and_then(serde_json::Value::as_object)
+        .map(|plugins| {
+            plugins
+                .iter()
+                .filter_map(|(key, installs)| {
+                    let installs = installs
+                        .as_array()?
+                        .iter()
+                        .map(
+                            |i| match i.get("scope").and_then(serde_json::Value::as_str) {
+                                Some("project" | "local") => i
+                                    .get("projectPath")
+                                    .and_then(serde_json::Value::as_str)
+                                    .map(PathBuf::from)
+                                    .or_else(|| Some(PathBuf::new())),
+                                _ => None,
+                            },
+                        )
+                        .collect();
+                    Some((key.clone(), installs))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) fn claude_settings(
+    rt: &Runtime,
+    scope: &RootScope,
+) -> Result<ClaudeListingSettings, CoreError> {
+    let user_path = rt
+        .scope
+        .global_root_path(Path::new(".claude/settings.json"));
+    let mut out = ClaudeListingSettings {
+        max_desc_chars: 1536,
+        user_path: user_path.clone(),
+        plugin_installs: claude_plugin_installs(rt),
+        project: match scope {
+            RootScope::Project(project) => Some(project.0.clone()),
+            RootScope::Global => None,
+        },
+        ..Default::default()
+    };
+    let mut paths = vec![user_path];
+    if let RootScope::Project(project) = scope {
+        paths.extend([
+            project.0.join(".claude/settings.json"),
+            project.0.join(".claude/settings.local.json"),
+        ]);
+    }
+    for path in paths {
+        let settings = json(rt, &path)?;
+        if let Some(plugins) = settings
+            .get("enabledPlugins")
+            .and_then(serde_json::Value::as_object)
+        {
+            out.enabled_plugins
+                .extend(plugins.iter().filter_map(|(name, value)| {
+                    value.as_bool().map(|enabled| (name.clone(), enabled))
+                }));
+        }
+        if let Some(overrides) = settings
+            .get("skillOverrides")
+            .and_then(serde_json::Value::as_object)
+        {
+            out.overrides.extend(
+                overrides
+                    .iter()
+                    .filter_map(|(name, v)| v.as_str().map(|v| (name.clone(), v.to_string()))),
+            );
+        }
+        if let Some(model) = settings.get("model").and_then(serde_json::Value::as_str) {
+            out.model = Some(model.to_string());
+        }
+        if let Some(value) = settings.get("skillListingBudgetFraction") {
+            let fraction = value
+                .as_f64()
+                .filter(|v| *v > 0.0 && *v <= 1.0)
+                .ok_or_else(|| {
+                    CoreError::new(
+                        ErrorCode::InvalidRequest,
+                        "Invalid skillListingBudgetFraction",
+                    )
+                    .at(&path)
+                })?;
+            out.fraction = Some((fraction, path.clone()));
+        }
+        if let Some(value) = settings.get("skillListingMaxDescChars") {
+            out.max_desc_chars = value
+                .as_u64()
+                .filter(|v| *v > 0)
+                .and_then(|v| usize::try_from(v).ok())
+                .ok_or_else(|| {
+                    CoreError::new(
+                        ErrorCode::InvalidRequest,
+                        "Invalid skillListingMaxDescChars",
+                    )
+                    .at(&path)
+                })?;
+        }
+    }
+    Ok(out)
+}
+
+/// Codex settings that shape the skill listing, from the user layer and
+/// trusted project layers.
+#[derive(Debug)]
+pub(crate) struct CodexListingSettings {
+    /// `model_context_window` and the file that set it.
+    pub context_window: Option<(u64, PathBuf)>,
+    /// `skills.max_context_tokens`, before the 10000 cap, and its file.
+    pub max_context_tokens: Option<(u64, PathBuf)>,
+    /// `model`.
+    pub model: Option<String>,
+    /// The user config file.
+    pub user_path: PathBuf,
+}
+
+pub(crate) fn codex_listing_settings(
+    rt: &Runtime,
+    scope: &RootScope,
+) -> Result<CodexListingSettings, CoreError> {
+    let user_path = rt.scope.codex_home.join("config.toml");
+    let mut out = CodexListingSettings {
+        context_window: None,
+        max_context_tokens: None,
+        model: None,
+        user_path,
+    };
+    for (path, layer) in codex_settings(rt, scope)? {
+        if let Some(window) = layer.get("model_context_window") {
+            // A non-positive window is ignored, like an absent one.
+            out.context_window = window
+                .as_integer()
+                .and_then(|v| u64::try_from(v).ok())
+                .filter(|v| *v > 0)
+                .map(|v| (v, path.clone()));
+        }
+        if let Some(model) = layer.get("model").and_then(toml::Value::as_str) {
+            out.model = Some(model.to_string());
+        }
+        if let Some(max) = layer
+            .get("skills")
+            .and_then(|skills| skills.get("max_context_tokens"))
+        {
+            let value = max
+                .as_integer()
+                .and_then(|v| u64::try_from(v).ok())
+                .filter(|v| *v > 0)
+                .ok_or_else(|| {
+                    CoreError::new(
+                        ErrorCode::InvalidRequest,
+                        "Invalid skills.max_context_tokens",
+                    )
+                    .at(&path)
+                })?;
+            out.max_context_tokens = Some((value, path.clone()));
+        }
+    }
+    Ok(out)
+}
+
+/// One model-visible skill entry, or a skill the harness hides.
+#[derive(Debug, Clone)]
+pub(crate) struct ListedSkill {
+    /// Frontmatter name, or the skill name.
+    pub name: String,
+    /// Plugin name for plugin-shipped deployments.
+    pub plugin: Option<String>,
+    /// Raw description, before any cap.
+    pub description: String,
+    /// Claude Code's `when_to_use` frontmatter text.
+    pub when_to_use: Option<String>,
+    /// Deployment folder.
+    pub path: PathBuf,
+    /// True for a project root, false for a global root.
+    pub project_root: bool,
+    /// Why the harness does not list it, or `None` when it does.
+    pub hidden: Option<&'static str>,
+}
+
+/// Every deployment `facts` reads in `scope`, keyed by the harness's
+/// identity rule. Hidden skills stay in the map with a reason, so callers
+/// that only count listed skills filter on `hidden.is_none()`.
+pub(crate) fn listed_skills(
+    rt: &Runtime,
+    inventory: &Inventory,
+    facts: &crate::harness::HarnessFacts,
+    scope: &RootScope,
+    claude: Option<&ClaudeListingSettings>,
+) -> Result<BTreeMap<String, ListedSkill>, CoreError> {
+    let harness = facts.id.as_str();
+    let mut entries = BTreeMap::new();
+    for selected_scope in
+        std::iter::once(&RootScope::Global).chain((*scope != RootScope::Global).then_some(scope))
+    {
+        for skill in &inventory.skills {
+            for deployment in &skill.deployments {
+                if &deployment.root.scope != selected_scope || deployment.symlink_is_broken {
+                    continue;
+                }
+                let visible = deployment.harness.as_ref() == Some(&facts.id)
+                    || deployment.root.kind == RootKind::Universal
+                        && facts.reads_universal_root.is_yes()
+                    || harness == AgentId::CURSOR
+                        && matches!(&deployment.root.kind, RootKind::Harness(id) if id.as_str() == AgentId::CLAUDE_CODE || id.as_str() == AgentId::CODEX);
+                if !visible && deployment.root.kind != RootKind::Parked {
+                    continue;
+                }
+                let field = |key: &str| match &deployment.frontmatter {
+                    Some(f) => match key {
+                        "name" => f.name.clone(),
+                        _ => f.description.clone(),
+                    },
+                    None => deployment.frontmatter_fields.get(key).cloned(),
+                };
+                let name = field("name").unwrap_or_else(|| skill.name.0.clone());
+                let key = if matches!(harness, AgentId::CODEX | AgentId::CLAUDE_CODE) {
+                    rt.ports
+                        .fs
+                        .canonicalize(&deployment.path)
+                        .unwrap_or_else(|_| deployment.path.clone())
+                        .to_string_lossy()
+                        .into_owned()
+                } else {
+                    name.clone()
+                };
+                let description = field("description").unwrap_or_default();
+                let entry = ListedSkill {
+                    name,
+                    plugin: deployment.plugin.as_ref().map(|p| p.plugin.clone()),
+                    description,
+                    when_to_use: deployment
+                        .frontmatter_fields
+                        .get("when_to_use")
+                        .filter(|v| !v.trim().is_empty())
+                        .cloned(),
+                    path: deployment.path.clone(),
+                    project_root: *selected_scope != RootScope::Global,
+                    hidden: None,
+                };
+                let filtered = if deployment.root.kind == RootKind::Parked {
+                    // A parked copy is listed only when the harness reads it.
+                    if !parked_copy_was_read_by(deployment, &facts.id) {
+                        continue;
+                    }
+                    Some("parked")
+                } else if deployment.studio_disabled {
+                    Some("off in Skill Studio")
+                } else if deployment
+                    .disabled_by
+                    .is_some_and(|by| disables_reader(by, &facts.id))
+                    || deployment.disabled_readers.contains(&facts.id)
+                {
+                    Some("off in agent settings")
+                } else if let Some(plugin) = &deployment.plugin {
+                    match claude {
+                        Some(claude) if harness == AgentId::CLAUDE_CODE => {
+                            claude.plugin_off(plugin)
+                        }
+                        _ => (plugin.enabled == Some(false)).then_some("plugin turned off"),
+                    }
+                } else {
+                    None
+                };
+                if let Some(reason) = filtered {
+                    entries.entry(key).or_insert(ListedSkill {
+                        hidden: Some(reason),
+                        ..entry
+                    });
+                    continue;
+                }
+                if manual_only(rt, deployment, harness)? {
+                    entries.insert(
+                        key,
+                        ListedSkill {
+                            hidden: Some("manual-only"),
+                            ..entry
+                        },
+                    );
+                    continue;
+                }
+                if harness == AgentId::CODEX && entry.description.trim().is_empty() {
+                    entries.entry(key).or_insert(ListedSkill {
+                        hidden: Some("no description"),
+                        ..entry
+                    });
+                    continue;
+                }
+                entries.insert(key, entry);
+            }
+        }
+    }
+    Ok(entries)
+}
+
+/// Parked deployments sit in Skill Studio's own root. They count for a
+/// harness only to show that it lost them, so they belong to the harness
+/// whose folder they came from, or to every reader of Universal.
+fn parked_copy_was_read_by(deployment: &DeploymentDto, reader: &AgentId) -> bool {
+    deployment
+        .harness
+        .as_ref()
+        .is_none_or(|harness| harness == reader)
+}
+
+/// Claude Code's character budget for the listing, resolved the way the
+/// installed binary does it (see docs/agent-skill-conventions.md).
+#[derive(Debug, Clone)]
+pub(crate) struct ClaudeBudget {
+    /// Budget in characters.
+    pub chars: u64,
+    /// Context window in tokens.
+    pub context_tokens: u64,
+    /// Characters per token for the model: 4 for older models, else 3.
+    pub chars_per_token: u64,
+    /// Fraction that applied.
+    pub fraction: f64,
+    /// Where the fraction came from.
+    pub fraction_source: String,
+    /// Where the context window came from.
+    pub context_source: String,
+    /// True when no model or catalog entry was found.
+    pub default_context: bool,
+}
+
+/// Models that Claude Code 2.1.327 (`Ky`) counts at 4 characters per token.
+/// Newer models count at 3.
+const CLAUDE_FOUR_CHAR_MODELS: [&str; 14] = [
+    "claude-3-opus",
+    "claude-3-sonnet",
+    "claude-3-haiku",
+    "claude-3-5-sonnet",
+    "claude-3-5-haiku",
+    "claude-3-7-sonnet",
+    "claude-opus-4-0",
+    "claude-opus-4-1",
+    "claude-opus-4-5",
+    "claude-opus-4-6",
+    "claude-sonnet-4-0",
+    "claude-sonnet-4-5",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+];
+
+pub(crate) fn claude_chars_per_token(model: &str) -> u64 {
+    let mut id = model.to_ascii_lowercase().replace(['.', '_'], "-");
+    if let Some((head, tail)) = id.rsplit_once('-') {
+        if tail.len() == 8 && tail.bytes().all(|b| b.is_ascii_digit()) {
+            id = head.to_string();
+        }
+    }
+    if CLAUDE_FOUR_CHAR_MODELS.contains(&id.as_str()) {
+        4
+    } else {
+        3
+    }
+}
+
+/// Resolves a model alias or id against Claude Code's cached model catalog
+/// (`~/.claude/cache/model-catalog/*.json`) and returns the id and its
+/// `runtime.max_input_tokens`.
+pub(crate) fn claude_model_window(rt: &Runtime, model: &str) -> Option<(String, u64, PathBuf)> {
+    let (model, one_million) = match model.strip_suffix("[1m]") {
+        Some(base) => (base.trim().to_ascii_lowercase(), true),
+        None => (model.trim().to_ascii_lowercase(), false),
+    };
+    let dir = rt
+        .scope
+        .global_root_path(Path::new(".claude/cache/model-catalog"));
+    let mut newest: Option<(i64, serde_json::Value, PathBuf)> = None;
+    for entry in rt.ports.fs.read_dir(&dir).ok()? {
+        if !Path::new(&entry.name)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+        {
+            continue;
+        }
+        let path = dir.join(&entry.name);
+        let Ok(value) = json(rt, &path) else { continue };
+        let fetched = value
+            .get("fetchedAt")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        if newest.as_ref().is_none_or(|(at, ..)| fetched > *at) {
+            newest = Some((fetched, value, path));
+        }
+    }
+    let (_, catalog, path) = newest?;
+    let config = catalog.get("catalog")?.get("config")?;
+    let models = config.get("models")?.as_array()?;
+    let base = if model == "opusplan" { "opus" } else { &model };
+    let id = if models
+        .iter()
+        .any(|m| m.get("id").and_then(serde_json::Value::as_str) == Some(base))
+    {
+        base.to_string()
+    } else {
+        config
+            .get("provider_alias_targets")?
+            .get(base)?
+            .get("default")?
+            .as_str()?
+            .to_string()
+    };
+    let window = models
+        .iter()
+        .find(|m| m.get("id").and_then(serde_json::Value::as_str) == Some(id.as_str()))?
+        .get("runtime")?
+        .get("max_input_tokens")?
+        .as_u64()?;
+    Some((id, if one_million { 1_000_000 } else { window }, path))
+}
+
+/// The cached value of the experiment Claude Code applies only when
+/// `skillListingBudgetFraction` is not set (`tengu_typed_pebble`, capped at
+/// 100000 characters).
+fn claude_cached_experiment_floor(rt: &Runtime) -> Option<u64> {
+    let config = json(rt, &rt.scope.global_root_path(Path::new(".claude.json"))).ok()?;
+    config
+        .get("cachedGrowthBookFeatures")?
+        .get("tengu_typed_pebble")?
+        .as_u64()
+        .map(|v| v.min(100_000))
+}
+
+pub(crate) fn claude_budget(
+    rt: &Runtime,
+    settings: &ClaudeListingSettings,
+    observed_model: Option<&str>,
+    fraction_override: Option<f64>,
+    context_override: Option<u64>,
+) -> ClaudeBudget {
+    let model = settings.model.as_deref().or(observed_model);
+    let resolved = model.and_then(|m| claude_model_window(rt, m));
+    let (context_tokens, context_source, default_context) = match (context_override, &resolved) {
+        (Some(tokens), _) => (tokens, "chosen in Skill Studio".to_string(), false),
+        (None, Some((id, window, path))) => (*window, format!("{id} in {}", path.display()), false),
+        (None, None) => (
+            200_000,
+            "Claude Code default: 200000 tokens when the model is unknown".to_string(),
+            true,
+        ),
+    };
+    let model_id = resolved.map(|(id, ..)| id).or(model.map(str::to_string));
+    let chars_per_token = model_id.as_deref().map_or(4, claude_chars_per_token);
+    let (fraction, fraction_source, explicit) = match (fraction_override, &settings.fraction) {
+        (Some(f), _) => (f, "chosen in Skill Studio".to_string(), true),
+        (None, Some((f, path))) => (*f, path.display().to_string(), true),
+        (None, None) => (0.01, "Claude Code default (1%)".to_string(), false),
+    };
+    let base = ((context_tokens * chars_per_token) as f64 * fraction).floor() as u64;
+    let floor = if explicit {
+        0
+    } else {
+        claude_cached_experiment_floor(rt).unwrap_or(0)
+    };
+    let fraction_source = if floor > base {
+        format!("{fraction_source}; an account experiment raises it to {floor} characters")
+    } else {
+        fraction_source
+    };
+    ClaudeBudget {
+        chars: base.max(floor).max(1),
+        context_tokens,
+        chars_per_token,
+        fraction,
+        fraction_source,
+        context_source,
+        default_context,
+    }
+}
+
+/// Codex's budget for the listing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CodexLimit {
+    /// Estimated tokens, UTF-8 bytes divided by four.
+    Tokens(u64),
+    /// Characters, when no context window is known.
+    Chars(u64),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CodexBudget {
+    pub limit: CodexLimit,
+    pub context_tokens: Option<u64>,
+    pub source: String,
+    pub default_context: bool,
+}
+
+/// `context_window`, or `max_context_window`, of `model` in Codex's
+/// `models_cache.json`.
+fn codex_model_window(rt: &Runtime, model: &str) -> Option<(u64, PathBuf)> {
+    let path = rt.scope.codex_home.join("models_cache.json");
+    let cache = json(rt, &path).ok()?;
+    let entry = cache
+        .get("models")?
+        .as_array()?
+        .iter()
+        .find(|m| m.get("slug").and_then(serde_json::Value::as_str) == Some(model))?;
+    let window = entry
+        .get("context_window")
+        .and_then(serde_json::Value::as_u64)
+        .or_else(|| {
+            entry
+                .get("max_context_window")
+                .and_then(serde_json::Value::as_u64)
+        })
+        .filter(|v| *v > 0)?;
+    Some((window, path))
+}
+
+pub(crate) fn codex_budget(
+    rt: &Runtime,
+    settings: &CodexListingSettings,
+    max_tokens_override: Option<u64>,
+) -> CodexBudget {
+    let window = settings
+        .context_window
+        .as_ref()
+        .map(|(v, path)| {
+            (
+                *v,
+                format!("{} (2% of model_context_window)", path.display()),
+            )
+        })
+        .or_else(|| {
+            let model = settings.model.as_deref()?;
+            codex_model_window(rt, model)
+                .map(|(v, path)| (v, format!("2% of {model} context in {}", path.display())))
+        });
+    let mut budget = match &window {
+        Some((tokens, source)) => CodexBudget {
+            limit: CodexLimit::Tokens((tokens * 2 / 100).max(1)),
+            context_tokens: Some(*tokens),
+            source: source.clone(),
+            default_context: false,
+        },
+        None => CodexBudget {
+            limit: CodexLimit::Chars(8000),
+            context_tokens: None,
+            source: "Codex default: 8000 characters when session context is unknown".into(),
+            default_context: true,
+        },
+    };
+    let max = max_tokens_override
+        .map(|v| (v, "chosen in Skill Studio".to_string()))
+        .or_else(|| {
+            settings
+                .max_context_tokens
+                .as_ref()
+                .map(|(v, path)| (*v, path.display().to_string()))
+        });
+    if let Some((tokens, source)) = max {
+        budget.limit = CodexLimit::Tokens(tokens.clamp(1, 10_000));
+        budget.source = source;
+        budget.default_context = false;
+    }
+    budget
+}
+
 /// Uses the scan's deployments, so parked roots never enter the listing.
 pub(crate) fn listing_cost(
     rt: &Runtime,
@@ -197,189 +811,48 @@ pub(crate) fn listing_cost(
             let mut source = "no known limit".to_string();
             let mut context = None;
             let mut fallback = false;
-            let mut enabled_plugins = BTreeMap::new();
+            let mut claude = None;
             if harness == AgentId::CLAUDE_CODE {
-                let mut fraction = 0.01;
-                cap = 1536;
-                source = "Claude Code 2.1.319 default (1%)".into();
-                let mut paths = vec![rt
-                    .scope
-                    .global_root_path(Path::new(".claude/settings.json"))];
-                if let RootScope::Project(project) = &scope {
-                    paths.extend([
-                        project.0.join(".claude/settings.json"),
-                        project.0.join(".claude/settings.local.json"),
-                    ]);
-                }
-                for path in paths {
-                    let settings = json(rt, &path)?;
-                    if let Some(plugins) = settings
-                        .get("enabledPlugins")
-                        .and_then(serde_json::Value::as_object)
-                    {
-                        enabled_plugins.extend(plugins.iter().filter_map(|(name, value)| {
-                            value.as_bool().map(|enabled| (name.clone(), enabled))
-                        }));
-                    }
-                    if let Some(value) = settings.get("skillListingBudgetFraction") {
-                        fraction = value
-                            .as_f64()
-                            .filter(|v| *v > 0.0 && *v <= 1.0)
-                            .ok_or_else(|| {
-                                CoreError::new(
-                                    ErrorCode::InvalidRequest,
-                                    "Invalid skillListingBudgetFraction",
-                                )
-                                .at(&path)
-                            })?;
-                        source = path.display().to_string();
-                    }
-                    if let Some(value) = settings.get("skillListingMaxDescChars") {
-                        cap = value
-                            .as_u64()
-                            .filter(|v| *v > 0)
-                            .and_then(|v| usize::try_from(v).ok())
-                            .ok_or_else(|| {
-                                CoreError::new(
-                                    ErrorCode::InvalidRequest,
-                                    "Invalid skillListingMaxDescChars",
-                                )
-                                .at(&path)
-                            })?;
-                    }
-                }
-                context = Some(200_000);
-                fallback = true;
-                limit = Some((200_000.0 * fraction).floor().max(1.0) as u64);
+                let settings = claude_settings(rt, &scope)?;
+                let budget = claude_budget(rt, &settings, None, None, None);
+                cap = settings.max_desc_chars;
+                source = if settings.fraction.is_some() {
+                    budget.fraction_source
+                } else {
+                    "Claude Code 2.1.327 default (1%)".into()
+                };
+                context = Some(budget.context_tokens);
+                fallback = budget.default_context;
+                limit = Some(budget.chars.div_ceil(4).max(1));
+                claude = Some(settings);
             } else if harness == AgentId::CODEX {
-                let mut window_setting = None;
-                let mut max_setting = None;
-                let mut path = rt.scope.codex_home.join("config.toml");
-                let mut window_path = path.clone();
-                for (layer_path, layer) in codex_settings(rt, &scope)? {
-                    if let Some(window) = layer.get("model_context_window") {
-                        window_setting = Some(window.clone());
-                        window_path.clone_from(&layer_path);
-                    }
-                    if let Some(max) = layer
-                        .get("skills")
-                        .and_then(|skills| skills.get("max_context_tokens"))
-                    {
-                        max_setting = Some(max.clone());
-                        path = layer_path;
-                    }
-                }
+                let budget = codex_budget(rt, &codex_listing_settings(rt, &scope)?, None);
                 cap = 1024;
-                source = "Codex default: 8000 characters when session context is unknown".into();
-                limit = Some(2000);
-                fallback = true;
-                if let Some(window) = window_setting
-                    .as_ref()
-                    .and_then(toml::Value::as_integer)
-                    .and_then(|v| u64::try_from(v).ok())
-                    .filter(|v| *v > 0)
-                {
-                    context = Some(window);
-                    fallback = false;
-                    limit = Some(window.saturating_mul(2).saturating_div(100).max(1));
-                    source = format!("{} (2% of model_context_window)", window_path.display());
-                }
-                if let Some(value) = max_setting.as_ref() {
-                    limit = Some(
-                        value
-                            .as_integer()
-                            .and_then(|v| u64::try_from(v).ok())
-                            .filter(|v| *v > 0)
-                            .map(|v| v.min(10_000))
-                            .ok_or_else(|| {
-                                CoreError::new(
-                                    ErrorCode::InvalidRequest,
-                                    "Invalid skills.max_context_tokens",
-                                )
-                                .at(&path)
-                            })?,
-                    );
-                    source = path.display().to_string();
-                    fallback = false;
-                }
+                source = budget.source;
+                context = budget.context_tokens;
+                fallback = budget.default_context;
+                limit = Some(match budget.limit {
+                    CodexLimit::Tokens(tokens) => tokens,
+                    CodexLimit::Chars(chars) => chars / 4,
+                });
             }
-            let mut entries = BTreeMap::new();
-            for selected_scope in std::iter::once(&RootScope::Global)
-                .chain((scope != RootScope::Global).then_some(&scope))
-            {
-                for skill in &inventory.skills {
-                    for deployment in &skill.deployments {
-                        if &deployment.root.scope != selected_scope
-                            || deployment.root.kind == RootKind::Parked
-                            || deployment.studio_disabled
-                            || deployment
-                                .disabled_by
-                                .is_some_and(|by| disables_reader(by, &facts.id))
-                            || deployment.disabled_readers.contains(&facts.id)
-                            || deployment.plugin.as_ref().is_some_and(|plugin| {
-                                if harness == AgentId::CLAUDE_CODE {
-                                    enabled_plugins
-                                        .get(&format!("{}@{}", plugin.plugin, plugin.marketplace))
-                                        .copied()
-                                        .or(plugin.enabled)
-                                        == Some(false)
-                                } else {
-                                    plugin.enabled == Some(false)
-                                }
-                            })
-                            || deployment.symlink_is_broken
-                        {
-                            continue;
-                        }
-                        let visible = deployment.harness.as_ref() == Some(&facts.id)
-                            || deployment.root.kind == RootKind::Universal
-                                && facts.reads_universal_root.is_yes()
-                            || harness == AgentId::CURSOR
-                                && matches!(&deployment.root.kind, RootKind::Harness(id) if id.as_str() == AgentId::CLAUDE_CODE || id.as_str() == AgentId::CODEX);
-                        if !visible {
-                            continue;
-                        }
-                        let name = deployment
-                            .frontmatter
-                            .as_ref()
-                            .and_then(|f| f.name.as_deref())
-                            .unwrap_or(&skill.name.0)
-                            .to_string();
-                        let key = if matches!(harness, AgentId::CODEX | AgentId::CLAUDE_CODE) {
-                            rt.ports
-                                .fs
-                                .canonicalize(&deployment.path)
-                                .unwrap_or_else(|_| deployment.path.clone())
-                                .to_string_lossy()
-                                .into_owned()
-                        } else {
-                            name.clone()
-                        };
-                        if manual_only(rt, deployment, harness)? {
-                            entries.remove(&key);
-                            continue;
-                        }
-                        let description = deployment
-                            .frontmatter
-                            .as_ref()
-                            .and_then(|f| f.description.as_deref())
-                            .unwrap_or("");
-                        if harness == AgentId::CODEX && description.trim().is_empty() {
-                            continue;
-                        }
-                        let description: String = description.chars().take(cap).collect();
+            let entries: BTreeMap<_, _> =
+                listed_skills(rt, inventory, facts, &scope, claude.as_ref())?
+                    .into_values()
+                    .filter(|e| e.hidden.is_none())
+                    .map(|e| {
+                        let description: String = e.description.chars().take(cap).collect();
                         let chars = if harness == AgentId::CODEX {
-                            name.len()
+                            e.name.len()
                                 + description.len()
-                                + deployment.path.join("SKILL.md").to_string_lossy().len()
+                                + e.path.join("SKILL.md").to_string_lossy().len()
                                 + 15
                         } else {
-                            name.encode_utf16().count() + description.encode_utf16().count() + 5
+                            e.name.encode_utf16().count() + description.encode_utf16().count() + 5
                         };
-                        entries.insert(key, (name, chars as u64));
-                    }
-                }
-            }
+                        (e.path.clone(), (e.name, chars as u64))
+                    })
+                    .collect();
             let total_chars: u64 = entries.values().map(|(_, chars)| chars).sum();
             let estimated = total_chars.div_ceil(4);
             let warning = limit.and_then(|max| {
