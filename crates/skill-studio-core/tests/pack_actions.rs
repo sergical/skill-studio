@@ -80,10 +80,20 @@ impl ProcessSpawner for FakeSkillsCli {
                 timed_out: false,
             });
         }
-        if let Some(skill) = after("--skill") {
-            write_skill(&cwd, &skill);
-            if let (true, Some(source)) = (self.lock_on_add.load(Ordering::SeqCst), after("add")) {
-                set_lock_source(&cwd, &skill, &source);
+        let named: Vec<String> = spec
+            .args
+            .windows(2)
+            .filter(|w| w[0] == "--skill")
+            .map(|w| w[1].clone())
+            .collect();
+        if !named.is_empty() {
+            for skill in &named {
+                write_skill(&cwd, skill);
+                if let (true, Some(source)) =
+                    (self.lock_on_add.load(Ordering::SeqCst), after("add"))
+                {
+                    set_lock_source(&cwd, skill, &source);
+                }
             }
         } else if let Some(skill) = after("remove") {
             std::fs::remove_dir_all(cwd.join(".agents/skills").join(&skill)).ok();
@@ -388,11 +398,15 @@ fn pack_add_installs_each_skill_from_the_pinned_source_with_its_own_undo_event()
         [("alpha".into(), "done"), ("beta".into(), "done")]
     );
     assert_eq!(report.status(), OpStatus::Ok);
+    // One call for both skills: the source is fetched once (#687).
     let calls = cli.calls();
-    assert_eq!(calls.len(), 2);
-    for (call, skill) in calls.iter().zip(["alpha", "beta"]) {
-        assert!(call.contains(&"owner/pack#v1".to_string()), "{call:?}");
-        assert!(call.windows(2).any(|w| w == ["--skill", skill]), "{call:?}");
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert!(calls[0].contains(&"owner/pack#v1".to_string()), "{calls:?}");
+    for skill in ["alpha", "beta"] {
+        assert!(
+            calls[0].windows(2).any(|w| w == ["--skill", skill]),
+            "{calls:?}"
+        );
     }
     let events = ops::list_events(&rt, &ctx(), &ListEventsRequest::default()).unwrap();
     let installs: Vec<_> = events.iter().filter(|e| e.kind == "install").collect();

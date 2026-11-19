@@ -1,9 +1,10 @@
 //! Pack actions: add, update, remove, or switch the source of the skills of
 //! one pack in one call.
 //! Each call plans first and returns only the plan on a dry run. A real run
-//! gives each step to the per-skill op (`install`, `update_all`, `remove`),
+//! gives the steps to the core ops (`install_batch`, `update_all`, `remove`),
 //! so each skill gets its own journal event and undo, and the owner tool
-//! (`npx skills`, dotagents) writes its own files.
+//! (`npx skills`, dotagents) writes its own files. Skills of one source and
+//! scope share one `npx` call (#687).
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
@@ -235,32 +236,7 @@ pub fn pack_add(
             None => req.source.clone(),
         };
         if !req.dry_run {
-            run_each(ctx, &mut steps, |_, step| {
-                let outcome = crate::ops::install(
-                    rt,
-                    ctx,
-                    &InstallRequest {
-                        skill: SkillName(step.skill.clone()),
-                        method: InstallMethod::SkillsSh,
-                        scope: step.scope.clone(),
-                        harnesses: harnesses.clone(),
-                        link_mode: InstallLinkMode::Link,
-                        destination: SkillDestination::Universal,
-                        files: Vec::new(),
-                        source: Some(source.clone()),
-                        trust_identity: None,
-                        trust_confirmed: false,
-                        save_as_preference: false,
-                    },
-                )?;
-                match outcome {
-                    InstallOutcome::Installed { event_id, .. } => Ok(event_id),
-                    InstallOutcome::NeedsTrust { identity } => Err(CoreError::new(
-                        ErrorCode::InvalidRequest,
-                        format!("{identity} is not trusted yet"),
-                    )),
-                }
-            });
+            install_planned(rt, ctx, &mut steps, &harnesses, &source);
         }
         Ok(action_report(req.dry_run, PackStepAction::Install, steps))
     })
@@ -602,14 +578,73 @@ fn run_each(
         }
         step.state = match ctx.checkpoint().and_then(|()| run(index, step)) {
             Ok(event_id) => PackStepState::Done { event_id },
-            Err(err) if err.code == ErrorCode::Cancelled => PackStepState::Skipped {
-                reason: "cancelled".to_string(),
-            },
-            Err(err) => PackStepState::Failed {
-                code: err.code,
-                reason: err.text(),
-            },
+            Err(err) => cancelled_or_failed(&err),
         };
+    }
+}
+
+/// Installs every planned step through [`crate::ops::install_batch`], so the
+/// pack's source is fetched once per scope (#687). Each skill still gets its
+/// own journal event.
+fn install_planned(
+    rt: &Runtime,
+    ctx: &OpContext,
+    steps: &mut [PackStep],
+    harnesses: &[AgentId],
+    source: &str,
+) {
+    if let Err(err) = ctx.checkpoint() {
+        for step in steps.iter_mut() {
+            if step.state == PackStepState::Planned {
+                step.state = cancelled_or_failed(&err);
+            }
+        }
+        return;
+    }
+    let planned: Vec<usize> = (0..steps.len())
+        .filter(|&i| steps[i].state == PackStepState::Planned)
+        .collect();
+    let requests: Vec<InstallRequest> = planned
+        .iter()
+        .map(|&i| InstallRequest {
+            skill: SkillName(steps[i].skill.clone()),
+            method: InstallMethod::SkillsSh,
+            scope: steps[i].scope.clone(),
+            harnesses: harnesses.to_vec(),
+            link_mode: InstallLinkMode::Link,
+            destination: SkillDestination::Universal,
+            files: Vec::new(),
+            source: Some(source.to_string()),
+            trust_identity: None,
+            trust_confirmed: false,
+            save_as_preference: false,
+        })
+        .collect();
+    let outcomes = crate::ops::install_batch(rt, ctx, &requests);
+    for (&i, outcome) in planned.iter().zip(outcomes) {
+        steps[i].state = match outcome {
+            Ok(InstallOutcome::Installed { event_id, .. }) => PackStepState::Done { event_id },
+            Ok(InstallOutcome::NeedsTrust { identity }) => PackStepState::Failed {
+                code: ErrorCode::InvalidRequest,
+                reason: format!("{identity} is not trusted yet"),
+            },
+            Err(err) => cancelled_or_failed(&err),
+        };
+    }
+}
+
+/// A step's state after `err`: skipped when the run was cancelled, failed
+/// otherwise.
+fn cancelled_or_failed(err: &CoreError) -> PackStepState {
+    if err.code == ErrorCode::Cancelled {
+        PackStepState::Skipped {
+            reason: "cancelled".to_string(),
+        }
+    } else {
+        PackStepState::Failed {
+            code: err.code,
+            reason: err.text(),
+        }
     }
 }
 
