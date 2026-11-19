@@ -575,6 +575,59 @@ pub(crate) fn install_one(
     Ok(finish_install(request, outcome))
 }
 
+/// [`install_one`] for several skills, results in request order. Builds
+/// every request first (gathering `Copy` files against the batch's shared
+/// `snapshot`), then makes one `ops::install_batch` call, so skills.sh skills
+/// of one source cost one `npx skills add` (#687).
+pub(crate) fn install_many(
+    rt: &Runtime,
+    requests: &[AddSkillRequest],
+    fetch: &dyn UpstreamFetch,
+    lookup: &dyn CommitLookup,
+    snapshot: Option<&dyn RepoSnapshot>,
+) -> Vec<Result<InstallAdapterOutcome, String>> {
+    let built: Vec<Result<InstallRequest, String>> = requests
+        .iter()
+        .map(|request| {
+            let files = if matches!(request.method, AddMethod::Copy) {
+                let name = derive_and_validate_name(request)?;
+                let scope_root = request_scope_root(request, rt)?;
+                let destination = scope_root.join(UNIVERSAL_ROOT_RELATIVE).join(&name);
+                gather_copy_files(
+                    &request.source,
+                    &scope_root,
+                    &destination,
+                    fetch,
+                    lookup,
+                    snapshot,
+                )?
+            } else {
+                Vec::new()
+            };
+            build_install_request(request, files)
+        })
+        .collect();
+    let ready: Vec<InstallRequest> = built
+        .iter()
+        .filter_map(|b| b.as_ref().ok().cloned())
+        .collect();
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let mut installed = ops::install_batch(rt, &ctx, &ready).into_iter();
+    requests
+        .iter()
+        .zip(built)
+        .map(|(request, built)| {
+            built?;
+            let result = installed
+                .next()
+                .ok_or("install_batch returned too few results")?;
+            let envelope = ResultEnvelope::from_result(Operation::Install, &rt.scope, &ctx, result);
+            let outcome = super::core_runtime::to_command_result(envelope)?;
+            Ok(finish_install(request, outcome))
+        })
+        .collect()
+}
+
 /// The GitHub-facing pair `Copy` needs, same shape `skill_add.rs`'s
 /// `resolve_fetch_and_lookup` used - boxed so a real `add_skill` and a test
 /// can hand this function the same signature.
@@ -1313,5 +1366,86 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["universal"]
         );
+    }
+
+    /// Stands in for `npx skills add`: writes every `--skill` it names into
+    /// the shared folder, and records each call.
+    struct WritingSkillsCli {
+        home: PathBuf,
+        calls: std::sync::Mutex<Vec<Vec<String>>>,
+    }
+
+    impl skill_studio_core::ports::ProcessSpawner for WritingSkillsCli {
+        fn run(
+            &self,
+            spec: &skill_studio_core::ports::ProcessSpec,
+            _cancel: &dyn skill_studio_core::ports::CancelToken,
+        ) -> Result<skill_studio_core::ports::ProcessOutput, skill_studio_core::CoreError> {
+            self.calls.lock().unwrap().push(spec.args.clone());
+            let root = spec.cwd.clone().unwrap_or_else(|| self.home.clone());
+            for pair in spec.args.windows(2).filter(|w| w[0] == "--skill") {
+                let dir = root.join(UNIVERSAL_ROOT_RELATIVE).join(&pair[1]);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(
+                    dir.join("SKILL.md"),
+                    format!("---\nname: {}\ndescription: added\n---\n", pair[1]),
+                )
+                .unwrap();
+            }
+            Ok(skill_studio_core::ports::ProcessOutput {
+                status: Some(0),
+                stdout: String::new(),
+                stderr: String::new(),
+                timed_out: false,
+            })
+        }
+    }
+
+    /// `install_many_adds_skills_sh_skills_of_one_repo_with_one_npx_call_or_names_the_extra_calls`
+    /// (#687): the Add Skill sheet's multi-skill add of three skills from one
+    /// repo runs one `npx skills add` with three `--skill` flags. Fails with
+    /// three calls when the batch installs one skill at a time.
+    #[test]
+    fn install_many_adds_skills_sh_skills_of_one_repo_with_one_npx_call_or_names_the_extra_calls() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        super::super::skill_trust_policy::record_trusted_dotagents_source(home, "owner/pack")
+            .unwrap();
+        let cli = Arc::new(WritingSkillsCli {
+            home: home.to_path_buf(),
+            calls: std::sync::Mutex::new(Vec::new()),
+        });
+        let scope = RuntimeScope::fixture(home.to_path_buf());
+        let db_path = scope.history_root.join("events.sqlite3");
+        let mut ports: Ports = skill_studio_host::default_ports_with_history(
+            home.join("leases"),
+            Arc::new(HarnessCatalog::builtin()),
+            db_path,
+        );
+        ports.spawner = Some(cli.clone());
+        ports.tools = None;
+        let rt = Runtime::new(&scope, ports).unwrap();
+        let requests: Vec<AddSkillRequest> = ["alpha", "bravo", "charlie"]
+            .iter()
+            .map(|name| skills_sh_request("owner/pack", name))
+            .collect();
+
+        let results = install_many(&rt, &requests, &NeverFetch, &NeverLookup, None);
+
+        for result in &results {
+            assert!(
+                matches!(result, Ok(InstallAdapterOutcome::Result(_))),
+                "{:?}",
+                result.as_ref().err()
+            );
+        }
+        let calls = cli.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        for name in ["alpha", "bravo", "charlie"] {
+            assert!(
+                calls[0].windows(2).any(|w| w == ["--skill", name]),
+                "{calls:?}"
+            );
+        }
     }
 }

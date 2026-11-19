@@ -5858,7 +5858,7 @@ fn find_independent_links<'a>(
 pub use crate::extras::extras;
 pub use crate::ops_discard::discard;
 pub use crate::ops_doctor::doctor;
-pub use crate::ops_install::{install, install_preferences};
+pub use crate::ops_install::{install, install_batch, install_preferences};
 /// Stuck recovery plans, shared by CLI and MCP.
 pub use crate::ops_recovery::{recovery_drop, recovery_list};
 pub use crate::ops_remove::{remove, sweep_quarantine};

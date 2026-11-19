@@ -60,11 +60,14 @@ use crate::dto::{
 use crate::error::{CoreError, ErrorCode};
 use crate::events::{EventDraft, EventKind, EventStatus};
 use crate::fsops::{self, Root};
+use crate::identity::EventId;
 use crate::identity::{AgentId, RootScope, SkillDestination, SkillName};
 use crate::install_targets::{self, InstallPlan, StepAction};
 use crate::journal::{FsJournal, PlanWriter};
 use crate::ops::Operation;
-use crate::ops_install_cli::{install_via_cli, validate_cli_project_path};
+use crate::ops_install_cli::{
+    install_via_cli, install_via_cli_batch, validate_cli_project_path, CliTarget,
+};
 use crate::ports::{
     self, ExclusiveGuard, FileKind, MutationSession, OpContext, PlanStatus, Runtime, ScopeFs,
 };
@@ -357,6 +360,272 @@ pub fn install(
     rt.run(Operation::Install, ctx, || install_body(rt, ctx, req))
 }
 
+/// Installs several skills, results in request order. Each group of
+/// `SkillsSh` requests that share a source, scope, agents, link mode and
+/// trust fields runs one `npx skills add` with a `--skill` per skill, so the
+/// source is fetched once (#687). The group holds one lease and records one
+/// journal row per skill, so each skill keeps its own undo. Every other
+/// request, and a group of one, goes through [`install`].
+pub fn install_batch(
+    rt: &Runtime,
+    ctx: &OpContext,
+    requests: &[InstallRequest],
+) -> Vec<Result<InstallOutcome, CoreError>> {
+    let mut results: Vec<Option<Result<InstallOutcome, CoreError>>> =
+        requests.iter().map(|_| None).collect();
+    for group in batch_groups(requests) {
+        if let [only] = group.as_slice() {
+            results[*only] = Some(install(rt, ctx, &requests[*only]));
+            continue;
+        }
+        let batch: Vec<&InstallRequest> = group.iter().map(|&i| &requests[i]).collect();
+        match rt.run(Operation::Install, ctx, || install_group(rt, ctx, &batch)) {
+            Ok(outcomes) => {
+                for (&i, outcome) in group.iter().zip(outcomes) {
+                    results[i] = Some(outcome);
+                }
+            }
+            Err(e) => {
+                for &i in &group {
+                    results[i] = Some(Err(e.for_each_item()));
+                }
+            }
+        }
+    }
+    results
+        .into_iter()
+        .map(|result| {
+            result.unwrap_or_else(|| {
+                Err(CoreError::new(
+                    ErrorCode::Incomplete,
+                    "install_batch left a request without a result",
+                ))
+            })
+        })
+        .collect()
+}
+
+/// Request indexes grouped for [`install_batch`]: requests that can share
+/// one CLI call, each other request alone.
+fn batch_groups(requests: &[InstallRequest]) -> Vec<Vec<usize>> {
+    let batchable = |req: &InstallRequest| {
+        req.method == InstallMethod::SkillsSh
+            && req.source.is_some()
+            && req.destination == SkillDestination::Universal
+            && req.files.is_empty()
+    };
+    let same_call = |a: &InstallRequest, b: &InstallRequest| {
+        a.source == b.source
+            && a.scope == b.scope
+            && a.harnesses == b.harnesses
+            && a.link_mode == b.link_mode
+            && a.trust_identity == b.trust_identity
+            && a.trust_confirmed == b.trust_confirmed
+            && a.save_as_preference == b.save_as_preference
+    };
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for (index, req) in requests.iter().enumerate() {
+        let joined = batchable(req)
+            && groups.iter_mut().any(|group| {
+                let first = &requests[group[0]];
+                let fits = batchable(first)
+                    && same_call(first, req)
+                    && group.iter().all(|&i| requests[i].skill != req.skill);
+                if fits {
+                    group.push(index);
+                }
+                fits
+            });
+        if !joined {
+            groups.push(vec![index]);
+        }
+    }
+    groups
+}
+
+/// One [`batch_groups`] group under one lease: every skill planned and
+/// recorded first, then one CLI call per set of served agents (normally
+/// one), then each skill checked, linked and finished on its own. A failed
+/// call fails every row it covered, as a failed single install does.
+fn install_group(
+    rt: &Runtime,
+    ctx: &OpContext,
+    batch: &[&InstallRequest],
+) -> Result<Vec<Result<InstallOutcome, CoreError>>, CoreError> {
+    let first = batch[0];
+    ctx.checkpoint()?;
+    install_targets::validate_harnesses(&first.harnesses)?;
+    crate::install_tools::require_node(rt)?;
+    validate_cli_project_path(rt, first)?;
+    let clock = rt.ports.clock.as_ref();
+    let op_start = clock.monotonic();
+    let step_start = clock.monotonic();
+    let names: Vec<SkillName> = batch.iter().map(|req| req.skill.clone()).collect();
+    let session = MutationSession::begin_for(rt, ctx, &names);
+    ctx.take_timing();
+    let mut session = session?;
+    let begin_step = crate::timing::step(clock, "begin_session", step_start);
+
+    let fs = rt.ports.fs.as_ref();
+    let root = scope_root(rt, &first.scope);
+    let home_root = rt.scope.home.lexical.clone();
+    let mut document = read_registry_document(fs, &root)?;
+    let mut home_document = if root == home_root {
+        None
+    } else {
+        Some(read_registry_document(fs, &home_root)?)
+    };
+    // Same gate as `install_body`; every request in the group shares the
+    // trust fields, so it runs once.
+    if let Some(identity) = first.trust_identity.as_deref().map(normalize_identity) {
+        let home_doc = home_document.as_mut().unwrap_or(&mut document);
+        if !first.trust_confirmed && !is_trusted(home_doc, &identity) {
+            return Ok(batch
+                .iter()
+                .map(|_| {
+                    Ok(InstallOutcome::NeedsTrust {
+                        identity: identity.clone(),
+                    })
+                })
+                .collect());
+        }
+        if first.trust_confirmed {
+            record_trusted(home_doc, &identity);
+        }
+    }
+
+    let step_start = clock.monotonic();
+    let mut results: Vec<Option<Result<InstallOutcome, CoreError>>> =
+        batch.iter().map(|_| None).collect();
+    let mut prepared: Vec<(usize, PreparedInstall)> = Vec::new();
+    for (index, req) in batch.iter().enumerate() {
+        match prepare_install(rt, &mut session, fs, &root, req) {
+            Ok(ready) => prepared.push((index, ready)),
+            Err(e) => results[index] = Some(Err(e)),
+        }
+    }
+
+    // Each prepared skill's link-step result, in `prepared` order.
+    let mut linked: Vec<Result<LinkedSteps, CoreError>> = Vec::new();
+    if let Some((_, ready)) = prepared.first() {
+        let universal_root = ready.plan.universal_root.clone();
+        let shared = ready.plan.shared.is_some();
+        let made_root = if shared {
+            crate::ops::ensure_dir_all(rt, &mut session, fs, &universal_root)
+        } else {
+            Ok(())
+        };
+        let mut checks: Vec<Option<Result<(), CoreError>>> =
+            prepared.iter().map(|_| None).collect();
+        match made_root {
+            Err(e) => {
+                for check in &mut checks {
+                    *check = Some(Err(e.for_each_item()));
+                }
+            }
+            Ok(()) => {
+                // Skills whose plans serve the same agents share one call.
+                let mut calls: Vec<(Vec<AgentId>, Vec<usize>)> = Vec::new();
+                for (k, (_, ready)) in prepared.iter().enumerate() {
+                    let served = ready.plan.served_harnesses();
+                    match calls.iter_mut().find(|(agents, _)| *agents == served) {
+                        Some((_, members)) => members.push(k),
+                        None => calls.push((served, vec![k])),
+                    }
+                }
+                for (served, members) in calls {
+                    let targets: Vec<CliTarget<'_>> = members
+                        .iter()
+                        .map(|&k| CliTarget {
+                            skill: &batch[prepared[k].0].skill,
+                            destination: &prepared[k].1.destination,
+                        })
+                        .collect();
+                    match install_via_cli_batch(rt, ctx, first, &targets, &served) {
+                        Ok(each) => {
+                            for (&k, check) in members.iter().zip(each) {
+                                checks[k] = Some(check);
+                            }
+                        }
+                        Err(e) => {
+                            for &k in &members {
+                                checks[k] = Some(Err(e.for_each_item()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for ((index, ready), check) in prepared.iter().zip(checks) {
+            let check = check.unwrap_or_else(|| {
+                Err(CoreError::new(
+                    ErrorCode::Incomplete,
+                    "the install call never reached this skill",
+                ))
+            });
+            linked.push(
+                check.and_then(|()| link_steps(rt, &mut session, fs, batch[*index], &ready.plan)),
+            );
+        }
+    }
+
+    // The registry writes `install_and_link` makes for a skills.sh install,
+    // once for the group: the saved preference (every request saves the
+    // same one, so its undo goes on the first finished row, as a run of
+    // single installs leaves it) and the home document of a project install.
+    // Written before any row is marked done, so its failure fails every row
+    // like a single install's would.
+    let original_document = document.clone();
+    let mut preference_undo = RegistryUndo::default();
+    if first.save_as_preference && linked.iter().any(Result::is_ok) {
+        save_preference(first, &mut document, &root, &mut preference_undo);
+    }
+    let registry_write = (|| {
+        if document != original_document {
+            write_registry_document(&session.guard, fs, &root, document)?;
+        }
+        if let Some(home_doc) = home_document {
+            write_registry_document(&session.guard, fs, &home_root, home_doc)?;
+        }
+        Ok::<(), CoreError>(())
+    })();
+    let mut preference_undo = Some(preference_undo);
+    for ((index, ready), steps) in prepared.into_iter().zip(linked) {
+        let steps = match (&registry_write, steps) {
+            (Err(e), _) => Err(e.for_each_item()),
+            (Ok(()), Ok((results, _))) => Ok((results, preference_undo.take().unwrap_or_default())),
+            (Ok(()), Err(e)) => Err(e),
+        };
+        results[index] = Some(finish_install(
+            rt,
+            &mut session,
+            fs,
+            batch[index],
+            ready,
+            steps,
+        ));
+    }
+    session.finish(rt, ctx);
+    let write_step = crate::timing::step(clock, "write_and_link", step_start);
+    ctx.record_timing(crate::timing::op_timing(
+        clock,
+        "install",
+        op_start,
+        vec![begin_step, write_step],
+    ));
+    Ok(results
+        .into_iter()
+        .map(|result| {
+            result.unwrap_or_else(|| {
+                Err(CoreError::new(
+                    ErrorCode::Incomplete,
+                    "install_group left a skill without a result",
+                ))
+            })
+        })
+        .collect())
+}
+
 fn install_body(
     rt: &Runtime,
     ctx: &OpContext,
@@ -420,6 +689,50 @@ fn install_body(
         }
     }
 
+    let step_start = clock.monotonic();
+    let prepared = prepare_install(rt, &mut session, fs, &root, req)?;
+    // F9: `ensure_dir_all`, the writes, the links, and the registry write
+    // all share this one fallible step, so any of their failures - not just
+    // the first write's - marks the row `Failed` instead of leaving it
+    // `Pending`.
+    let documents = RegistryDocuments {
+        scope: document,
+        home: home_document,
+    };
+    let linked = install_and_link(rt, ctx, &mut session, fs, req, &prepared, documents);
+    let outcome = finish_install(rt, &mut session, fs, req, prepared, linked)?;
+    session.finish(rt, ctx);
+    let write_step = crate::timing::step(clock, "write_and_link", step_start);
+    ctx.record_timing(crate::timing::op_timing(
+        clock,
+        "install",
+        op_start,
+        vec![begin_step, write_step],
+    ));
+    Ok(outcome)
+}
+
+/// What [`prepare_install`] decided for one request before its first
+/// write: the plan, every path it writes, and its journal row.
+struct PreparedInstall {
+    id: EventId,
+    root: PathBuf,
+    plan: InstallPlan,
+    /// [`InstallPlan::primary_path`].
+    destination: PathBuf,
+    written_paths: Vec<PathBuf>,
+}
+
+/// Plans `req` under the held lease, refuses an existing copy or a path out
+/// of the scope, and records its journal row - the backup of every path the
+/// plan writes and the inverse - before the first byte moves (F7).
+fn prepare_install(
+    rt: &Runtime,
+    session: &mut MutationSession,
+    fs: &dyn ScopeFs,
+    root: &Path,
+    req: &InstallRequest,
+) -> Result<PreparedInstall, CoreError> {
     let per_harness = req.destination == SkillDestination::PerHarness;
     if per_harness && req.method != InstallMethod::Copy {
         return Err(CoreError::new(
@@ -435,7 +748,7 @@ fn install_body(
     };
     let mut plan = install_targets::plan_install(
         fs,
-        &root,
+        root,
         &req.scope,
         &rt.scope,
         &req.skill,
@@ -460,7 +773,7 @@ fn install_body(
     if served_mode != mode {
         plan = install_targets::plan_install(
             fs,
-            &root,
+            root,
             &req.scope,
             &rt.scope,
             &req.skill,
@@ -495,7 +808,6 @@ fn install_body(
         confine_planned(rt, fs, path)?;
     }
 
-    let step_start = clock.monotonic();
     let id = rt.ports.ids.next_event_id();
     // The row goes down before the first byte moves (F7): its backup is
     // whatever currently sits at every path the plan writes - normally
@@ -535,23 +847,35 @@ fn install_body(
         backup_dir: Some(manifest.backup_dir.clone()),
     };
     session.store.record(&session.guard, &id, &draft)?;
+    Ok(PreparedInstall {
+        id,
+        root: root.to_path_buf(),
+        plan,
+        destination,
+        written_paths,
+    })
+}
 
-    // F9: `ensure_dir_all`, the writes, the links, and the registry write
-    // all share this one fallible step, so any of their failures - not just
-    // the first write's - marks the row `Failed` instead of leaving it
-    // `Pending`.
-    let documents = RegistryDocuments {
-        scope: document,
-        home: home_document,
-    };
-    let targets = InstallTargets {
-        root: &root,
-        destination: &destination,
-        plan: &plan,
-    };
-    match install_and_link(rt, ctx, &mut session, fs, req, &targets, documents) {
+/// Marks `prepared`'s row `Done` with the fingerprints only a finished
+/// install knows, or - when `linked` failed - removes what it wrote and
+/// marks the row `Failed`.
+fn finish_install(
+    rt: &Runtime,
+    session: &mut MutationSession,
+    fs: &dyn ScopeFs,
+    req: &InstallRequest,
+    prepared: PreparedInstall,
+    linked: Result<(Vec<InstallHarnessResult>, RegistryUndo), CoreError>,
+) -> Result<InstallOutcome, CoreError> {
+    let PreparedInstall {
+        id,
+        destination,
+        written_paths,
+        ..
+    } = prepared;
+    match linked {
         Err(e) => {
-            remove_written(rt, &session, fs, &written_paths);
+            remove_written(rt, session, fs, &written_paths);
             let _ = session
                 .store
                 .finish(&session.guard, &id, EventStatus::Failed, None);
@@ -566,14 +890,6 @@ fn install_body(
             session
                 .store
                 .finish(&session.guard, &id, EventStatus::Done, None)?;
-            session.finish(rt, ctx);
-            let write_step = crate::timing::step(clock, "write_and_link", step_start);
-            ctx.record_timing(crate::timing::op_timing(
-                clock,
-                "install",
-                op_start,
-                vec![begin_step, write_step],
-            ));
             Ok(InstallOutcome::Installed {
                 event_id: id,
                 skill: req.skill.clone(),
@@ -655,15 +971,6 @@ fn linked_harnesses(results: &[InstallHarnessResult], method: InstallMethod) -> 
         .collect()
 }
 
-/// What `install_and_link` writes, bundled so it stays under clippy's
-/// argument-count lint.
-struct InstallTargets<'a> {
-    root: &'a Path,
-    /// [`InstallPlan::primary_path`].
-    destination: &'a Path,
-    plan: &'a InstallPlan,
-}
-
 /// `install`'s two registry documents, bundled so `install_and_link` stays
 /// under clippy's argument-count lint. `scope` is `req.scope`'s own
 /// registry (preferences); `home`, when `Some`, is the scope home's, for a
@@ -674,48 +981,19 @@ struct RegistryDocuments {
     home: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
-/// The write-and-link step every `install` call shares, once its journal
-/// row is already recorded: writes `req.method`'s bytes, makes each
-/// harness's link or copy, and writes the registry document(s) back - any
-/// failure here bubbles up so `install` can mark the row `Failed` (F9).
-fn install_and_link(
+/// Each harness's step after the shared copy exists: a link, a copy, a
+/// skip, or a harness that reads the shared folder. Returns one result per
+/// step and every real folder written, with the harness whose own folder
+/// holds it (`None` for the shared copy) - the native method records each in
+/// `copies`.
+fn link_steps(
     rt: &Runtime,
-    ctx: &OpContext,
     session: &mut MutationSession,
     fs: &dyn ScopeFs,
     req: &InstallRequest,
-    targets: &InstallTargets,
-    documents: RegistryDocuments,
-) -> Result<(Vec<InstallHarnessResult>, RegistryUndo), CoreError> {
-    let RegistryDocuments {
-        scope: mut document,
-        home: mut home_document,
-    } = documents;
-    // Compared against after every mutation below, so an install that never
-    // touches `document` itself (no `save_as_preference`, and either not a
-    // `Copy` or a `Copy` whose `copies` entry lands in `home_document`
-    // instead) skips the scope write entirely, rather than creating
-    // `<scope>/.agents/skill-studio.json` holding nothing but a bumped
-    // `write_version`.
-    let original_document = document.clone();
-    let plan = targets.plan;
+    plan: &InstallPlan,
+) -> Result<LinkedSteps, CoreError> {
     let native = req.method == InstallMethod::Copy;
-    if plan.shared.is_some() {
-        crate::ops::ensure_dir_all(rt, session, fs, &plan.universal_root)?;
-    }
-
-    if !native {
-        install_via_cli(rt, ctx, req, &plan.served_harnesses(), targets.destination)?;
-    } else if plan.shared.is_some() {
-        install_copy(
-            rt,
-            &session.guard,
-            &plan.universal_root,
-            &req.skill,
-            &req.files,
-        )?;
-    }
-
     // Every real folder this install wrote, with the harness whose own
     // folder holds it (`None` for the shared copy) - the native method
     // records each in `copies`.
@@ -774,23 +1052,87 @@ fn install_and_link(
         results.push(result);
     }
 
-    let scope_root = targets.root.to_path_buf();
+    Ok((results, real_folders))
+}
+
+/// [`link_steps`]' result: one per harness step, and every real folder.
+type LinkedSteps = (Vec<InstallHarnessResult>, Vec<(PathBuf, Option<AgentId>)>);
+
+/// Writes `req`'s method and agents into `document` as the scope's saved
+/// install preference, recording each key's old value in `undo`.
+fn save_preference(
+    req: &InstallRequest,
+    document: &mut serde_json::Map<String, serde_json::Value>,
+    scope_root: &Path,
+    undo: &mut RegistryUndo,
+) {
+    for (key, value) in [
+        (
+            "preferred_method",
+            serde_json::Value::String(method_wire_name(req.method).to_string()),
+        ),
+        (
+            "preferred_harnesses",
+            serde_json::to_value(&req.harnesses).unwrap_or(serde_json::Value::Array(Vec::new())),
+        ),
+    ] {
+        undo.push(scope_root, key, None, document.get(key));
+        document.insert(key.to_string(), value);
+    }
+}
+
+/// The write-and-link step every `install` call shares, once its journal
+/// row is already recorded: writes `req.method`'s bytes, makes each
+/// harness's link or copy, and writes the registry document(s) back - any
+/// failure here bubbles up so `install` can mark the row `Failed` (F9).
+fn install_and_link(
+    rt: &Runtime,
+    ctx: &OpContext,
+    session: &mut MutationSession,
+    fs: &dyn ScopeFs,
+    req: &InstallRequest,
+    prepared: &PreparedInstall,
+    documents: RegistryDocuments,
+) -> Result<(Vec<InstallHarnessResult>, RegistryUndo), CoreError> {
+    let RegistryDocuments {
+        scope: mut document,
+        home: mut home_document,
+    } = documents;
+    // Compared against after every mutation below, so an install that never
+    // touches `document` itself (no `save_as_preference`, and either not a
+    // `Copy` or a `Copy` whose `copies` entry lands in `home_document`
+    // instead) skips the scope write entirely, rather than creating
+    // `<scope>/.agents/skill-studio.json` holding nothing but a bumped
+    // `write_version`.
+    let original_document = document.clone();
+    let plan = &prepared.plan;
+    let native = req.method == InstallMethod::Copy;
+    if plan.shared.is_some() {
+        crate::ops::ensure_dir_all(rt, session, fs, &plan.universal_root)?;
+    }
+
+    if !native {
+        install_via_cli(
+            rt,
+            ctx,
+            req,
+            &plan.served_harnesses(),
+            &prepared.destination,
+        )?;
+    } else if plan.shared.is_some() {
+        install_copy(
+            rt,
+            &session.guard,
+            &plan.universal_root,
+            &req.skill,
+            &req.files,
+        )?;
+    }
+    let (results, real_folders) = link_steps(rt, session, fs, req, plan)?;
+
     let mut undo = RegistryUndo::default();
     if req.save_as_preference {
-        for (key, value) in [
-            (
-                "preferred_method",
-                serde_json::Value::String(method_wire_name(req.method).to_string()),
-            ),
-            (
-                "preferred_harnesses",
-                serde_json::to_value(&req.harnesses)
-                    .unwrap_or(serde_json::Value::Array(Vec::new())),
-            ),
-        ] {
-            undo.push(&scope_root, key, None, document.get(key));
-            document.insert(key.to_string(), value);
-        }
+        save_preference(req, &mut document, &prepared.root, &mut undo);
     }
     if native {
         let home_root = rt.scope.home.lexical.clone();
@@ -809,7 +1151,7 @@ fn install_and_link(
         }
     }
     if document != original_document {
-        write_registry_document(&session.guard, fs, targets.root, document)?;
+        write_registry_document(&session.guard, fs, &prepared.root, document)?;
     }
     if let Some(home_doc) = home_document {
         // A project-scope install never otherwise touches the home root, but
