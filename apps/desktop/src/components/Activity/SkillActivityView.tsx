@@ -1,6 +1,4 @@
 import { FirstScanState, type FirstScanStateProps } from "../SkillList/FirstScanState";
-import { ScanStatusNote } from "../SkillList/ScanStatusNote";
-import type { BackgroundStatus } from "@skill-studio/lib";
 // ============================================================================
 // SkillActivityView - Docked layout: a year heatmap, by-skill and by-project
 // lists on the left; a right-hand panel that is always there, showing the
@@ -21,7 +19,6 @@ import { useAppStore } from "../../store/appStore";
 
 interface SkillActivityViewProps extends FirstScanStateProps {
   snapshot: SkillSnapshot | undefined;
-  backgroundStatus?: BackgroundStatus;
   onSelectSkill: (name: string) => void;
 }
 
@@ -37,7 +34,6 @@ function activityNow(scannedAt: string | undefined) {
  */
 export function SkillActivityView({
   snapshot,
-  backgroundStatus,
   onSelectSkill,
   isLoading,
   error,
@@ -78,7 +74,6 @@ export function SkillActivityView({
         />
       }
     >
-      <ScanStatusNote status={backgroundStatus} />
       {!snapshot || !hasAnyInvocations ? (
         <>
           <p className="text-wrap-pretty text-body text-text-tertiary">
