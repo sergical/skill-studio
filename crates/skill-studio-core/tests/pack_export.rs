@@ -6,13 +6,14 @@
 use std::cell::Cell;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use skill_studio_core::dto::ListEventsRequest;
 use skill_studio_core::harness::HarnessCatalog;
 use skill_studio_core::pack_export::PackExportRequest;
 use skill_studio_core::ports::{
-    DirEntryFacts, DirHandle, ExclusiveGuard, OpenedEntry, Ports, Runtime, ScopeFs, ScopedPath,
+    DirEntryFacts, DirHandle, ExclusiveGuard, FileKind, Ports, Runtime, ScopeFs, ScopedPath,
 };
 use skill_studio_core::scope::RuntimeScope;
 use skill_studio_core::testing::golden::{ctx, unique_temp_dir};
@@ -178,6 +179,9 @@ fn pack_export_refuses_bad_requests_before_it_writes_anything() {
     std::os::unix::fs::symlink("../../../outside.md", foxtrot.join("notes.md")).unwrap();
     std::fs::create_dir_all(home.join(".claude/skills")).unwrap();
     std::os::unix::fs::symlink(home.join("gone/hotel"), home.join(".claude/skills/hotel")).unwrap();
+    let india = home.join(".agents/skills/india");
+    write(&india.join("SKILL.md"), &skill_md("india"));
+    std::os::unix::fs::symlink("SKILL.md/", india.join("notes")).unwrap();
     let rt = runtime(&home);
     let out = home.join("pack");
 
@@ -203,6 +207,7 @@ fn pack_export_refuses_bad_requests_before_it_writes_anything() {
         ),
         (export(&out, &["foxtrot"], false), "leaves its folder"),
         (export(&out, &["hotel"], false), "broken link"),
+        (export(&out, &["india"], false), "names nothing"),
     ];
     for (req, expected) in cases {
         let err = ops::pack_export(&rt, &ctx(), &req).unwrap_err();
@@ -290,9 +295,12 @@ enum When {
     /// Just before the export opens the folder `at`: after it resolved the
     /// path, before it holds the folder.
     BeforeOpen,
-    /// Just after the export lists the folder `at`: after it read each
-    /// entry's kind, before it opens the entry.
-    AfterListing,
+    /// Just after the export lists a folder under `at` that holds the entry
+    /// named here: after it read each entry's kind, before it opens one.
+    AfterListing(&'static str),
+    /// Not a swap: writing the file named here under `at` creates it with
+    /// half its bytes, then fails, as a full disk would.
+    FailWriting(&'static str),
 }
 
 /// The real file system, with one swap made at an exact moment of the
@@ -349,19 +357,37 @@ impl ScopeFs for Racing {
                 swap_for_link(&self.from, &self.to);
                 self.real.fsops_open_dir(path)
             }
-            When::AfterListing => Ok(self.real.fsops_open_dir(path)?.map(|inner| {
+            When::FailWriting(name) => Ok(self
+                .real
+                .fsops_open_dir(path)?
+                .map(|inner| Box::new(FailWriting { inner, name }) as Box<dyn DirHandle>)),
+            When::AfterListing(after) => Ok(self.real.fsops_open_dir(path)?.map(|inner| {
                 Box::new(SwapAfterListing {
                     inner,
-                    swap: Cell::new(Some((self.from.clone(), self.to.clone()))),
+                    after,
+                    swap: Rc::new(Cell::new(Some((self.from.clone(), self.to.clone())))),
                 }) as Box<dyn DirHandle>
             })),
         }
     }
 }
 
+/// A held folder that makes [`Racing`]'s swap once a listing holds `after`,
+/// and hands the same watch to every folder opened through it.
 struct SwapAfterListing {
     inner: Box<dyn DirHandle>,
-    swap: Cell<Option<(PathBuf, PathBuf)>>,
+    after: &'static str,
+    swap: Rc<Cell<Option<(PathBuf, PathBuf)>>>,
+}
+
+impl SwapAfterListing {
+    fn wrap(&self, inner: Box<dyn DirHandle>) -> Box<dyn DirHandle> {
+        Box::new(SwapAfterListing {
+            inner,
+            after: self.after,
+            swap: Rc::clone(&self.swap),
+        })
+    }
 }
 
 impl DirHandle for SwapAfterListing {
@@ -370,25 +396,77 @@ impl DirHandle for SwapAfterListing {
     }
     fn entries(&self) -> std::io::Result<Vec<DirEntryFacts>> {
         let entries = self.inner.entries()?;
-        if let Some((from, to)) = self.swap.take() {
-            swap_for_link(&from, &to);
+        if entries.iter().any(|entry| entry.name == self.after) {
+            if let Some((from, to)) = self.swap.take() {
+                swap_for_link(&from, &to);
+            }
         }
         Ok(entries)
     }
+    fn kind(&self, name: &str) -> std::io::Result<FileKind> {
+        self.inner.kind(name)
+    }
     fn open_dir(&self, name: &str) -> std::io::Result<Box<dyn DirHandle>> {
-        self.inner.open_dir(name)
+        Ok(self.wrap(self.inner.open_dir(name)?))
     }
     fn read_file(&self, name: &str, max_bytes: u64) -> std::io::Result<(Vec<u8>, u32)> {
         self.inner.read_file(name, max_bytes)
     }
-    fn open_within(&self, relative: &Path, max: u64) -> std::io::Result<OpenedEntry> {
-        self.inner.open_within(relative, max)
+    fn read_link(&self, name: &str) -> std::io::Result<PathBuf> {
+        self.inner.read_link(name)
     }
     fn create_dir(&self, name: &str) -> std::io::Result<Box<dyn DirHandle>> {
-        self.inner.create_dir(name)
+        Ok(self.wrap(self.inner.create_dir(name)?))
     }
     fn write_new_file(&self, name: &str, bytes: &[u8], mode: u32) -> std::io::Result<()> {
         self.inner.write_new_file(name, bytes, mode)
+    }
+}
+
+/// A held folder whose write of `name`, in it or in a folder made through
+/// it, stops half way with an error.
+struct FailWriting {
+    inner: Box<dyn DirHandle>,
+    name: &'static str,
+}
+
+impl DirHandle for FailWriting {
+    fn identity(&self) -> std::io::Result<(u64, u64)> {
+        self.inner.identity()
+    }
+    fn entries(&self) -> std::io::Result<Vec<DirEntryFacts>> {
+        self.inner.entries()
+    }
+    fn kind(&self, name: &str) -> std::io::Result<FileKind> {
+        self.inner.kind(name)
+    }
+    fn open_dir(&self, name: &str) -> std::io::Result<Box<dyn DirHandle>> {
+        let inner = self.inner.open_dir(name)?;
+        Ok(Box::new(FailWriting {
+            inner,
+            name: self.name,
+        }))
+    }
+    fn read_file(&self, name: &str, max_bytes: u64) -> std::io::Result<(Vec<u8>, u32)> {
+        self.inner.read_file(name, max_bytes)
+    }
+    fn read_link(&self, name: &str) -> std::io::Result<PathBuf> {
+        self.inner.read_link(name)
+    }
+    fn create_dir(&self, name: &str) -> std::io::Result<Box<dyn DirHandle>> {
+        let inner = self.inner.create_dir(name)?;
+        Ok(Box::new(FailWriting {
+            inner,
+            name: self.name,
+        }))
+    }
+    fn write_new_file(&self, name: &str, bytes: &[u8], mode: u32) -> std::io::Result<()> {
+        if name != self.name {
+            return self.inner.write_new_file(name, bytes, mode);
+        }
+        self.inner
+            .write_new_file(name, &bytes[..bytes.len() / 2], mode)?;
+        Err(std::io::Error::other("no space left on the disk"))
     }
 }
 
@@ -502,7 +580,7 @@ fn pack_export_refuses_an_entry_that_turns_into_a_link_after_the_listing() {
                 at: skill.clone(),
                 from: skill.join(entry),
                 to: PathBuf::from(to),
-                when: When::AfterListing,
+                when: When::AfterListing(entry),
             },
         );
 
@@ -520,4 +598,112 @@ fn pack_export_refuses_an_entry_that_turns_into_a_link_after_the_listing() {
         );
         std::fs::remove_dir_all(&home).ok();
     }
+}
+
+/// The pack folder's parent turns into a link to an outside tree while the
+/// export reads the skills, after it checked the folder. Fails when the
+/// export resolves the path again and writes into the outside tree instead
+/// of the folder it checked.
+#[test]
+fn pack_export_writes_into_the_folder_it_checked_when_the_parent_turns_into_a_link() {
+    let home = home("pack_export_swap_dest_late");
+    let parent = std::fs::canonicalize(&home).unwrap().join("out");
+    let outside = home.join("elsewhere");
+    std::fs::create_dir_all(&parent).unwrap();
+    std::fs::create_dir_all(outside.join("pack")).unwrap();
+    let rt = runtime_with(
+        &home,
+        Racing {
+            real: RealFs::new(),
+            at: std::fs::canonicalize(home.join(".agents/skills/alpha")).unwrap(),
+            from: parent.clone(),
+            to: outside.clone(),
+            when: When::AfterListing("SKILL.md"),
+        },
+    );
+
+    ops::pack_export(
+        &rt,
+        &ctx(),
+        &export(&parent.join("pack"), &["alpha"], false),
+    )
+    .unwrap();
+
+    assert_eq!(
+        std::fs::read_dir(outside.join("pack")).unwrap().count(),
+        0,
+        "wrote outside the folder it checked"
+    );
+    assert!(parent
+        .with_extension("aside")
+        .join("pack/skills/alpha/SKILL.md")
+        .is_file());
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// A folder in a skill turns into a link to another folder of the skill
+/// after the export listed it, and a link inside it is followed after that.
+/// Fails when the export resolves the link by path from the skill folder,
+/// through the swapped folder, and copies the other folder's file instead
+/// of the one next to the link.
+#[test]
+fn pack_export_follows_a_link_through_the_folder_it_holds_not_the_path() {
+    let home = home("pack_export_swap_link_parent");
+    let skill = std::fs::canonicalize(home.join(".agents/skills/alpha")).unwrap();
+    std::os::unix::fs::symlink("run.sh", skill.join("scripts/ref")).unwrap();
+    write(&skill.join("zz-other/run.sh"), "other bytes\n");
+    std::os::unix::fs::symlink("run.sh", skill.join("zz-other/ref")).unwrap();
+    let rt = runtime_with(
+        &home,
+        Racing {
+            real: RealFs::new(),
+            at: skill.clone(),
+            from: skill.join("scripts"),
+            to: PathBuf::from("zz-other"),
+            when: When::AfterListing("ref"),
+        },
+    );
+    let out = home.join("pack");
+
+    ops::pack_export(&rt, &ctx(), &export(&out, &["alpha"], false)).unwrap();
+
+    assert!(skill.join("scripts").is_symlink(), "the race did not run");
+    assert_eq!(
+        std::fs::read_to_string(out.join("skills/alpha/scripts/ref")).unwrap(),
+        "#!/bin/sh\necho run\n"
+    );
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// A write fails after it created its file, into a folder that existed and
+/// was empty. Fails when the error's cleanup list leaves out that partial
+/// file, so following it leaves the folder not empty.
+#[test]
+fn pack_export_lists_a_partial_file_in_the_cleanup_text() {
+    let home = home("pack_export_partial");
+    let parent = std::fs::canonicalize(&home).unwrap();
+    std::fs::create_dir_all(parent.join("pack")).unwrap();
+    let rt = runtime_with(
+        &home,
+        Racing {
+            real: RealFs::new(),
+            at: parent.clone(),
+            from: PathBuf::new(),
+            to: PathBuf::new(),
+            when: When::FailWriting("README.md"),
+        },
+    );
+
+    let err = ops::pack_export(
+        &rt,
+        &ctx(),
+        &export(&parent.join("pack"), &["alpha"], false),
+    )
+    .unwrap_err();
+
+    let detail = err.detail.unwrap_or_default();
+    assert!(parent.join("pack/README.md").is_file(), "{detail}");
+    assert!(detail.contains("README.md"), "{detail}");
+    assert!(detail.contains("skills/alpha/SKILL.md"), "{detail}");
+    std::fs::remove_dir_all(&home).ok();
 }

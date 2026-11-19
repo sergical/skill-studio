@@ -487,19 +487,6 @@ pub trait ScopeFs: Send + Sync {
     }
 }
 
-/// What [`DirHandle::open_within`] opened.
-pub enum OpenedEntry {
-    /// A folder, held open.
-    Dir(Box<dyn DirHandle>),
-    /// A regular file's bytes and permission bits.
-    File {
-        /// The whole file.
-        bytes: Vec<u8>,
-        /// Permission bits.
-        mode: u32,
-    },
-}
-
 /// One folder held open ([`ScopeFs::fsops_open_dir`]). Every call resolves
 /// names against the handle, never against a path, so a folder renamed or
 /// swapped for a link after the open cannot redirect a read or a write. A
@@ -518,14 +505,16 @@ pub trait DirHandle {
     /// `max_bytes` fails with `InvalidData`. Returns the bytes and the
     /// permission bits.
     fn read_file(&self, name: &str, max_bytes: u64) -> std::io::Result<(Vec<u8>, u32)>;
-    /// Opens `relative` below this folder and follows the links on the way,
-    /// but only links that stay inside it: one that leaves, or an absolute
-    /// one, fails with `PermissionDenied`.
-    fn open_within(&self, relative: &Path, max_file_bytes: u64) -> std::io::Result<OpenedEntry>;
+    /// The kind of the entry `name`, without following a link.
+    fn kind(&self, name: &str) -> std::io::Result<FileKind>;
+    /// The target of the link `name`, as written in the link. An entry that
+    /// is not a link fails with `InvalidInput`.
+    fn read_link(&self, name: &str) -> std::io::Result<PathBuf>;
     /// Creates the folder `name` and opens it.
     fn create_dir(&self, name: &str) -> std::io::Result<Box<dyn DirHandle>>;
     /// Creates the file `name`, failing when anything is there, even a
-    /// link, and writes `bytes` with exactly the `mode` permission bits.
+    /// link, and writes `bytes` with exactly the `mode` permission bits. Any
+    /// failure but `AlreadyExists` may leave a created, partial file.
     fn write_new_file(&self, name: &str, bytes: &[u8], mode: u32) -> std::io::Result<()>;
 }
 
