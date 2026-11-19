@@ -15,7 +15,7 @@ import type { SortMode } from "../../lib/skill-list-sort";
 import { SkillListActiveFilters, SkillListFilterBar } from "./SkillListFilterBar";
 import { useProjectFolderActions } from "../../hooks/useProjectFolderActions";
 import { collectDashboardIssues } from "@skill-studio/lib";
-import { applySkillListFilter } from "@skill-studio/lib";
+import { applySkillListFilter, isProjectScope } from "@skill-studio/lib";
 import { ownSkillsView, ownSkillsWithPluginUpdates } from "@skill-studio/lib";
 import type { SkillSnapshot } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
@@ -135,6 +135,7 @@ export function SkillsView({
           initialCursorSkillName={lastClosedSkillName}
           active={active}
           deploymentPathForSkill={(skill) => deploymentForScope(skill, filter.scope)}
+          packProjectPath={isProjectScope(filter.scope) ? filter.scope.project : null}
           hasAnySkills={baseSkills.length > 0}
           onClearFilters={resetSkillListFilter}
           onAddSkill={() => openAddSkillSheet()}
