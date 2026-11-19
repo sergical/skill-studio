@@ -2763,7 +2763,7 @@ pub(crate) fn deployment_id(
 
 /// Derives the owner id for a skills.sh-owned deployment. Matches the
 /// desktop's `owner_id_for` (`skill_ownership.rs`) byte for byte.
-fn owner_id(scope_label: &str, project_path: Option<&str>, skill_name: &str) -> OwnerId {
+pub(crate) fn owner_id(scope_label: &str, project_path: Option<&str>, skill_name: &str) -> OwnerId {
     let raw = match (scope_label, project_path) {
         ("global", _) => format!("owner:v1/global/{skill_name}"),
         (_, Some(path)) if !path.is_empty() => {

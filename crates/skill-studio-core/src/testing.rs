@@ -2275,3 +2275,37 @@ mod tests {
             .expect("fsync a file reached through the alias");
     }
 }
+
+/// The core's deployment and owner id builders, exposed so the desktop can
+/// prove its own builders produce the same bytes (`apps/desktop/src-tauri/
+/// tests/wire_id_properties.rs`). Both sides document "byte for byte" parity;
+/// these forwarders let a property test check it instead of trusting the doc.
+pub mod wire_ids {
+    use std::path::Path;
+
+    use crate::identity::{DeploymentId, OwnerId, SkillDestination};
+
+    /// Forwards to the builder `ops` uses for every scanned deployment.
+    pub fn deployment_id(
+        name: &str,
+        scope_label: &str,
+        destination: SkillDestination,
+        slot: &str,
+        project_path: Option<&str>,
+        lexical_entry: &Path,
+    ) -> DeploymentId {
+        crate::ops::deployment_id(
+            name,
+            scope_label,
+            destination,
+            slot,
+            project_path,
+            lexical_entry,
+        )
+    }
+
+    /// Forwards to the builder `ops` uses for skills.sh owners.
+    pub fn owner_id(scope_label: &str, project_path: Option<&str>, skill_name: &str) -> OwnerId {
+        crate::ops::owner_id(scope_label, project_path, skill_name)
+    }
+}

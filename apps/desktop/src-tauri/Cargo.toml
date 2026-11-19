@@ -100,6 +100,7 @@ tempfile = "3"
 sentry = { version = "0.49", default-features = false, features = ["test"] }
 skill-studio-core = { path = "../../../crates/skill-studio-core", features = ["testing"] }
 skill-studio = { path = ".", features = ["testing"] }
+proptest = "1"
 skill-studio-mcp = { path = "../../mcp" }
 similar = "3.2.1"
 tokio = { version = "1", features = ["test-util"] }

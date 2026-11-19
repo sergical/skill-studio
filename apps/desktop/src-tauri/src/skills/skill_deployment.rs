@@ -197,41 +197,4 @@ mod tests {
         assert_eq!(parsed.slot, "universal");
         assert!(parsed.project_path.is_none());
     }
-
-    #[test]
-    fn per_harness_id_includes_project_path() {
-        let id = deployment_id(
-            "find-bugs",
-            "project",
-            SkillDestination::PerHarness,
-            "codex",
-            Some("/Users/me/app"),
-            Path::new("/Users/me/app/.codex/skills/find-bugs"),
-        );
-        let parsed = parse_deployment_id(&id).unwrap();
-        assert_eq!(parsed.project_path.as_deref(), Some("/Users/me/app"));
-        assert_eq!(parsed.slot, "codex");
-        assert_eq!(parsed.destination, SkillDestination::PerHarness);
-    }
-
-    #[test]
-    fn same_name_global_and_project_ids_differ() {
-        let global = deployment_id(
-            "find-bugs",
-            "global",
-            SkillDestination::Universal,
-            "universal",
-            None,
-            Path::new("/home/.agents/skills/find-bugs"),
-        );
-        let project = deployment_id(
-            "find-bugs",
-            "project",
-            SkillDestination::Universal,
-            "universal",
-            Some("/work/app"),
-            Path::new("/work/app/.agents/skills/find-bugs"),
-        );
-        assert_ne!(global, project);
-    }
 }
