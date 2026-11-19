@@ -258,7 +258,10 @@ fn open_dir(fs: &dyn ScopeFs, path: &Path) -> Result<Box<dyn DirHandle>, CoreErr
 fn changed(path: &Path) -> CoreError {
     CoreError::new(
         ErrorCode::InvalidRequest,
-        "it changed while the export read it; run the export again",
+        format!(
+            "{} changed while the export read it; run the export again",
+            path.display()
+        ),
     )
     .at(path)
 }
@@ -281,9 +284,16 @@ fn collect(
     into: &Path,
     walk: &mut Walk<'_>,
 ) -> Result<(), CoreError> {
-    let resolved = fs
-        .canonicalize(folder)
-        .map_err(|e| CoreError::io(folder, e))?;
+    let resolved = match fs.canonicalize(folder) {
+        Ok(resolved) => resolved,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(refuse(
+                folder,
+                "the skill is a broken link; fix or remove it before you pack it",
+            ))
+        }
+        Err(e) => return Err(CoreError::io(folder, e)),
+    };
     let root = open_dir(fs, &resolved)?;
     let identity = root.identity().map_err(|e| CoreError::io(&resolved, e))?;
     walk.open = vec![identity];
