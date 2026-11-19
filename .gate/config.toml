@@ -19,6 +19,7 @@ base = "origin/main"
 repository = "sergical/skill-studio"
 version_files = ["**/package.json", "package.json", "**/Cargo.toml", "Cargo.toml", "**/tauri*.json"]
 dependency_files = ["**/package.json", "package.json", "**/Cargo.toml", "Cargo.toml"]
+lock_files = ["pnpm-lock.yaml", "**/pnpm-lock.yaml"]
 patch_bots = ["dependabot[bot]", "app/dependabot"]
 
 # What the owner decides for each stop rule, and why a person must decide it.
@@ -71,6 +72,8 @@ paths = [
   "pnpm-workspace.yaml", "**/pnpm-workspace.yaml", ".npmrc", "**/.npmrc",
   ".pnpmfile.*", "**/.pnpmfile.*", "*.patch", "**/*.patch",
   "package.json5", "**/package.json5", "package.yaml", "**/package.yaml",
+  "package-lock.json", "**/package-lock.json", "npm-shrinkwrap.json", "**/npm-shrinkwrap.json",
+  "yarn.lock", "**/yarn.lock", "bun.lock*", "**/bun.lock*",
 ]
 
 [[rules]]

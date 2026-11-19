@@ -86,6 +86,13 @@ def classify(cfg, base, head='HEAD', raise_to=None, reason=None, author=''):
                 before.get(k) == v or patch_bump(before.get(k, ''), v) for k, v in after.items())
             if added or (author in cfg.get('patch_bots', []) and not patch):
                 hits.append({'rule': 'dependencies', 'tier': 'stop', 'files': [path]})
+    # A lockfile entry can point a package at a tarball, git or a local folder
+    # without a manifest change. A registry entry has only an integrity hash.
+    for path in files:
+        if matches(path, cfg.get('lock_files', [])) and re.search(
+                r'(?m)^\+.*(?:tarball:|type: git|\brepo:|directory:|patchedDependencies|pnpmfileChecksum)',
+                subprocess.check_output(['git', 'diff', base, head, '--', path], text=True)):
+            hits.append({'rule': 'dependencies', 'tier': 'stop', 'files': [path]})
     tier = max((h['tier'] for h in hits), key=TIERS.index, default='ship')
     if raise_to:
         if not reason:

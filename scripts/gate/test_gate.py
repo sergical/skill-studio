@@ -9,6 +9,9 @@ import unittest
 import gate
 
 
+CUSTOM_PATHS = r'(?m)^\s*["\']?(pnpmfile|globalPnpmfile|patchesDir|patchedDependencies|include|configDependencies)["\']?\s*:'
+
+
 class GateTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -344,7 +347,8 @@ class GateTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[2]
         self.cfg = tomllib.loads((root / '.gate/config.toml').read_text())
         for path in ['.pnpmfile.cjs', '.pnpmfile.mjs', 'apps/web/.pnpmfile.mjs', 'patches/a.patch', 'vendor/a.patch',
-                     'pnpm-workspace.yaml', 'apps/web/pnpm-workspace.yaml', '.npmrc', 'package.yaml', 'apps/web/package.json5']:
+                     'pnpm-workspace.yaml', 'apps/web/pnpm-workspace.yaml', '.npmrc', 'package.yaml', 'apps/web/package.json5',
+                     'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'bun.lock']:
             with self.subTest(path):
                 self.git('reset', '-q', '--hard', self.base)
                 self.write(path, 'x')
@@ -356,7 +360,23 @@ class GateTests(unittest.TestCase):
         # and add that path to the dependencies rule in .gate/config.toml.
         workspace = Path(__file__).resolve().parents[2] / 'pnpm-workspace.yaml'
         text = workspace.read_text() if workspace.exists() else ''
-        self.assertIsNone(re.search(r'(?m)^\s*(pnpmfile|globalPnpmfile|patchesDir|include|configDependencies)\s*:', text))
+        self.assertIsNone(re.search(CUSTOM_PATHS, text))
+        for named in ['pnpmfile: hooks.mjs', '"pnpmfile": hooks.mjs', "  'patchesDir': fixes", 'patchedDependencies:', 'include: [a.yaml]']:
+            self.assertRegex(named, CUSTOM_PATHS)
+
+    def test_a_lockfile_entry_from_outside_the_registry_stops(self):
+        self.cfg['lock_files'] = ['pnpm-lock.yaml']
+        self.write('pnpm-lock.yaml', '  left-pad@1.0.0:\n    resolution: {integrity: sha512-a}\n')
+        self.commit()
+        self.base = self.git('rev-parse', 'HEAD')
+        self.write('pnpm-lock.yaml', '  left-pad@1.0.0:\n    resolution: {integrity: sha512-b}\n')
+        self.commit()
+        self.assertEqual(self.risk()['tier'], 'ship')
+        for entry in ['{tarball: https://example.invalid/a.tgz}', '{type: git, repo: https://example.invalid/a, commit: abc}', '{directory: ../a}']:
+            with self.subTest(entry):
+                self.write('pnpm-lock.yaml', f'  left-pad@1.0.0:\n    resolution: {entry}\n')
+                self.commit()
+                self.assertEqual(self.risk()['tier'], 'stop')
 
     def test_every_stop_rule_in_the_repo_config_has_owner_text(self):
         import tomllib
