@@ -87,13 +87,13 @@ describe("add skill operation phase policy", () => {
     expect(shouldConsumeAddSkillOperation(event("op-1", 4, "needs-trust"), undefined)).toBe(false);
   });
 
-  it("shows batch item progress and distinct terminal copy", () => {
+  it("shows the batch progress message and distinct terminal copy", () => {
     expect(
       addSkillOperationProgressCopy({
         ...event("op-1", 3, "installing"),
-        item: { current: 2, total: 5, name: "visual-recap" },
+        message: "Installing 5 skills",
       }),
-    ).toBe("Installing · 2 of 5");
+    ).toBe("Installing 5 skills");
     expect(addSkillOperationTerminalCopy(event("op-1", 6, "cancelled"))).toBe("Cancelled");
     expect(addSkillOperationTerminalCopy(event("op-1", 6, "timed-out"))).toBe("Timed out");
     expect(

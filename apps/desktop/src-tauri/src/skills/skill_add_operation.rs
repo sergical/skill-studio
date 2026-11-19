@@ -82,14 +82,6 @@ impl AddSkillOperationPhase {
     }
 }
 
-/// Batch item progress: 1-based `current` of `total`, plus the skill name.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AddSkillItemProgress {
-    pub current: usize,
-    pub total: usize,
-    pub name: String,
-}
-
 /// Normalized repository identity that needs an explicit trust confirmation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AddSkillUntrustedSource {
@@ -103,8 +95,6 @@ pub struct AddSkillOperationEvent {
     pub sequence: u64,
     pub phase: AddSkillOperationPhase,
     pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub item: Option<AddSkillItemProgress>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<AddSkillResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -180,7 +170,6 @@ impl AddSkillOperationState {
             sequence: 1,
             phase: AddSkillOperationPhase::Queued,
             message: "Waiting to add skill".to_string(),
-            item: None,
             result: None,
             outcomes: None,
             error: None,
@@ -569,36 +558,38 @@ fn run_operation_body(
                 return;
             };
             let total = request.skills.len();
+            let _ = publish(
+                app,
+                state,
+                operation_id,
+                AddSkillOperationPhase::Installing,
+                format!(
+                    "Installing {total} skill{}",
+                    if total == 1 { "" } else { "s" }
+                ),
+                |_| {},
+            );
+            let entry_requests: Vec<_> = request
+                .skills
+                .iter()
+                .map(|entry| skill_install::request_for_entry(&request, entry))
+                .collect();
+            // One call for the whole batch: skills.sh skills of one source
+            // share one `npx skills add` (#687).
+            let installed = skill_install::install_many(
+                &rt,
+                &entry_requests,
+                fetch,
+                lookup,
+                snapshot.as_deref(),
+            );
             let mut outcomes = Vec::with_capacity(total);
             let mut names = Vec::new();
-            for (index, entry) in request.skills.iter().enumerate() {
-                let _ = publish(
-                    app,
-                    state,
-                    operation_id,
-                    AddSkillOperationPhase::Installing,
-                    format!("Installing {} ({} of {total})", entry.name, index + 1),
-                    |event| {
-                        event.item = Some(AddSkillItemProgress {
-                            current: index + 1,
-                            total,
-                            name: entry.name.clone(),
-                        });
-                    },
-                );
-                let entry_request = skill_install::request_for_entry(&request, entry);
-                let outcome = skill_install::install_one(
-                    &rt,
-                    &entry_request,
-                    fetch,
-                    lookup,
-                    snapshot.as_deref(),
-                );
+            for (entry, outcome) in request.skills.iter().zip(installed) {
                 // A per-entry NeedsTrust has no single retry target in a
                 // batch, so `untrusted_source` (the operation-level phase
                 // event's own field) is discarded here; it is reported as
-                // this entry's `error` text below instead, and the loop
-                // continues to the next entry.
+                // this entry's `error` text below instead.
                 let (_, _, result, error, _untrusted_source) = terminal_for_result(outcome);
                 if let Some(result) = &result {
                     names.push(result.name.clone());
@@ -928,7 +919,6 @@ fn confirm_add_skill_trust_with(
             sequence: 1,
             phase: AddSkillOperationPhase::Queued,
             message: "Waiting to add skill".to_string(),
-            item: None,
             result: None,
             outcomes: None,
             error: None,
