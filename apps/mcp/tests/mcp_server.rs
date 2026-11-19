@@ -70,10 +70,19 @@ fn cli_bin() -> PathBuf {
     if let Some(binary) = std::env::var_os("SKILL_STUDIO_TEST_BINARY") {
         return binary.into();
     }
+    // Same command shape as `cargo test --workspace --all-features`, so this
+    // is a no-op after that build. A different feature set would rebuild
+    // `target/debug/skill-studio` while other test binaries run it.
     let status = std::process::Command::new(env!("CARGO"))
-        .args(["build", "-p", "skill-studio-cli", "--bin", "skill-studio"])
+        .args([
+            "build",
+            "--workspace",
+            "--all-features",
+            "--bin",
+            "skill-studio",
+        ])
         .status()
-        .expect("run cargo build -p skill-studio-cli");
+        .expect("run cargo build --bin skill-studio");
     assert!(status.success(), "failed to build skill-studio-cli");
     Path::new(&mcp_bin())
         .parent()
@@ -541,7 +550,9 @@ async fn watch_and_a_fresh_mcp_scan_agree_after_a_cli_mutation() {
         }
     });
     let recv_line = |rx: &std::sync::mpsc::Receiver<String>| {
-        rx.recv_timeout(std::time::Duration::from_secs(5))
+        // A hang guard, not a speed check: a loaded machine can take
+        // seconds for the first scan.
+        rx.recv_timeout(std::time::Duration::from_secs(30))
             .expect("watch line before timeout")
     };
 
