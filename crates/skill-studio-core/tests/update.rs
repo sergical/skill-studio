@@ -119,7 +119,15 @@ impl ProcessSpawner for FakeNpxUpdateSpawner {
                 .chain(self.installs_new.iter().map(|s| (*s).to_string()))
                 .collect()
         } else {
-            vec![spec.args.get(2).expect("skills update <name>").clone()]
+            // `skills update <name>... --global|--project`: every name before
+            // the first flag.
+            let names: Vec<String> = spec.args[2..]
+                .iter()
+                .take_while(|a| !a.starts_with("--"))
+                .cloned()
+                .collect();
+            assert!(!names.is_empty(), "skills update <name>: {:?}", spec.args);
+            names
         };
         for skill in skills {
             let dir = cwd.join(UNIVERSAL_ROOT_RELATIVE).join(&skill);
@@ -2648,19 +2656,22 @@ impl CancelToken for FlagToken {
     }
 }
 
-/// `update_all_stops_after_the_running_request_and_reports_the_rest_as_not_run_or_keeps_going`:
-/// Cancel is set while the first skill's `npx skills update` runs. That skill
-/// finishes (its folder is updated, its journal row exists) and the next two
-/// never start. Fails if the loop ignores the token (the spawner runs three
-/// times), if the running request is cut short (no outcome for `one`), or if
-/// the unstarted skills are missing from `not_run`.
+/// `update_all_finishes_the_running_call_and_reports_the_unstarted_requests_as_not_run_or_keeps_going`:
+/// Cancel is set while the one `npx skills update one two` runs (skills.sh
+/// skills of one scope share a call, #687). That call finishes: both skills
+/// are updated and have a journal row. The Copy request for `three` never
+/// starts. Fails if the loop ignores the token (`three` is updated), if the
+/// running call is cut short (no outcome for `one` or `two`), or if `three`
+/// is missing from `not_run`.
 #[test]
-fn update_all_stops_after_the_running_request_and_reports_the_rest_as_not_run_or_keeps_going() {
+fn update_all_finishes_the_running_call_and_reports_the_unstarted_requests_as_not_run_or_keeps_going(
+) {
     let home = unique_temp_dir("update_all_cancel_between_requests");
     std::fs::create_dir_all(&home).unwrap();
-    for name in ["one", "two", "three"] {
+    for name in ["one", "two"] {
         seed_installed_skill(&home, name, "v1");
     }
+    seed_installed_skill_two_files(&home, "three", "v1");
     let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let spawner = Arc::new(CancelsDuringRun {
         inner: FakeNpxUpdateSpawner::new(home.clone(), "v2"),
@@ -2672,23 +2683,21 @@ fn update_all_stops_after_the_running_request_and_reports_the_rest_as_not_run_or
         Arc::new(FlagToken(cancelled)),
     );
 
-    let requests: Vec<UpdateRequest> = ["one", "two", "three"]
-        .iter()
-        .map(|name| cli_request(name, InstallMethod::SkillsSh))
-        .collect();
+    let requests = vec![
+        cli_request("one", InstallMethod::SkillsSh),
+        cli_request("two", InstallMethod::SkillsSh),
+        copy_request_two_files("three", "v2"),
+    ];
     let mut seen = Vec::new();
     let result =
         ops::update_all(&rt, &ctx, &requests, |skill, _| seen.push(skill.0.clone())).unwrap();
 
     assert_eq!(spawner.inner.recorded.lock().unwrap().len(), 1);
-    assert_eq!(seen, vec!["one"]);
-    assert_eq!(result.items.len(), 1);
-    assert!(result.items[0].outcome.is_some());
+    assert_eq!(seen, vec!["one", "two"]);
+    assert_eq!(result.items.len(), 2);
+    assert!(result.items.iter().all(|item| item.outcome.is_some()));
     assert!(result.errors.is_empty(), "{:?}", result.errors);
-    assert_eq!(
-        result.not_run,
-        vec![SkillName("two".into()), SkillName("three".into())]
-    );
+    assert_eq!(result.not_run, vec![SkillName("three".into())]);
     let body = |name: &str| {
         std::fs::read_to_string(
             home.join(UNIVERSAL_ROOT_RELATIVE)
@@ -2698,8 +2707,90 @@ fn update_all_stops_after_the_running_request_and_reports_the_rest_as_not_run_or
         .unwrap()
     };
     assert!(body("one").contains("v2"));
-    assert!(body("two").contains("v1"));
+    assert!(body("two").contains("v2"));
+    assert!(body("three").contains("v1"));
 
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// `update_all_keeps_request_order_across_a_batched_skills_sh_run_or_lets_an_earlier_write_win`:
+/// a Copy update of `alpha`, then skills.sh updates of `alpha` and `bravo`.
+/// The skills.sh run is batched into one call (#687) but runs after the
+/// Copy, as listed, so `alpha` ends with the skills.sh version. Fails when
+/// batching runs the skills.sh requests first and the Copy overwrites them.
+#[test]
+fn update_all_keeps_request_order_across_a_batched_skills_sh_run_or_lets_an_earlier_write_win() {
+    let home = unique_temp_dir("update_all_batch_order");
+    std::fs::create_dir_all(&home).unwrap();
+    for name in ["alpha", "bravo"] {
+        seed_installed_skill(&home, name, "v1");
+    }
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+    let requests = vec![
+        copy_request("alpha", "copied"),
+        cli_request("alpha", InstallMethod::SkillsSh),
+        cli_request("bravo", InstallMethod::SkillsSh),
+    ];
+
+    let result = ops::update_all(&rt, &ctx(), &requests, |_, _| {}).unwrap();
+
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 1);
+    let alpha = std::fs::read_to_string(
+        home.join(UNIVERSAL_ROOT_RELATIVE)
+            .join("alpha")
+            .join("SKILL.md"),
+    )
+    .unwrap();
+    assert!(alpha.contains("v2"), "{alpha}");
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// `update_all_checks_cancel_before_each_batched_run_or_runs_every_run_first`:
+/// two skills.sh runs split by a Copy request. The caller cancels on the
+/// first outcome. The first run's outcomes arrive before anything else
+/// starts, so the Copy and the second run never start. Fails when every run
+/// executes before the first outcome is reported.
+#[test]
+fn update_all_checks_cancel_before_each_batched_run_or_runs_every_run_first() {
+    let home = unique_temp_dir("update_all_cancel_between_runs");
+    std::fs::create_dir_all(&home).unwrap();
+    for name in ["one", "two", "three", "four", "five"] {
+        seed_installed_skill(&home, name, "v1");
+    }
+    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let ctx = skill_studio_core::ports::OpContext::with_cancel(
+        skill_studio_core::identity::CorrelationId("cancel-between-runs".into()),
+        Arc::new(FlagToken(cancelled.clone())),
+    );
+    let requests = vec![
+        cli_request("one", InstallMethod::SkillsSh),
+        cli_request("two", InstallMethod::SkillsSh),
+        copy_request("three", "v2"),
+        cli_request("four", InstallMethod::SkillsSh),
+        cli_request("five", InstallMethod::SkillsSh),
+    ];
+    let mut seen = Vec::new();
+
+    let result = ops::update_all(&rt, &ctx, &requests, |skill, _| {
+        seen.push(skill.0.clone());
+        cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+    })
+    .unwrap();
+
+    assert_eq!(spawner.recorded.lock().unwrap().len(), 1);
+    assert_eq!(seen, vec!["one", "two"]);
+    assert_eq!(
+        result.not_run,
+        vec![
+            SkillName("three".into()),
+            SkillName("four".into()),
+            SkillName("five".into())
+        ]
+    );
     std::fs::remove_dir_all(&home).ok();
 }
 

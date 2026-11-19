@@ -7,6 +7,7 @@
 import { useEffect, useState } from "react";
 import {
   Activity as ActivityIcon,
+  AlertTriangle,
   BookOpen,
   Boxes,
   Layers,
@@ -20,10 +21,11 @@ import {
   Settings as SettingsIcon,
   Sun,
 } from "lucide-react";
-import { Button } from "@skill-studio/ui";
+import { Button, Popover, PopoverContent, PopoverTrigger } from "@skill-studio/ui";
 import { ownSkillsView, pluginSkillsView } from "@skill-studio/lib";
 import { SHORTCUTS } from "../../lib/app-shortcuts";
 import {
+  backgroundRefreshError,
   hasNewerSkillSnapshotEmission,
   rescanTooltip,
   sidebarAnchorView,
@@ -32,11 +34,12 @@ import { useAppStore } from "../../store/appStore";
 import type { ActiveView } from "../../store/appStore";
 import { TooltipControl } from "../ui/TooltipControl";
 import type { ResolvedTheme, Theme } from "../../lib/theme";
-import type { SkillListFilter, SkillSnapshot } from "@skill-studio/lib";
+import type { BackgroundStatus, SkillListFilter, SkillSnapshot } from "@skill-studio/lib";
 
 interface SidebarProps {
   snapshot: SkillSnapshot | undefined;
   emittedSnapshotRevision: number | undefined;
+  backgroundStatus?: BackgroundStatus;
   requestRescan: () => Promise<void>;
 }
 
@@ -205,10 +208,103 @@ interface SidebarFooterProps {
   anchorView: ActiveView;
   scannedAt: string | undefined;
   spinning: boolean;
+  /** The last background refresh's error; the Sync button turns into a warning that shows it. */
+  refreshError: string | null;
   onRefresh: () => void;
   setActiveView: (view: ActiveView) => void;
   resolvedTheme: ResolvedTheme;
   setTheme: (theme: Theme) => void;
+}
+
+interface SyncButtonProps {
+  scannedAt: string | undefined;
+  spinning: boolean;
+  refreshError: string | null;
+  onRefresh: () => void;
+}
+
+/**
+ * Manual rescan. Background refreshes never show here, so the app stays still while agents write
+ * transcripts. Only a failed refresh does: the icon turns into a warning that opens the error.
+ * One button serves both states, so focus stays on it when a retry starts or the error clears.
+ */
+function SyncButton({ scannedAt, spinning, refreshError, onRefresh }: SyncButtonProps) {
+  const showError = refreshError !== null && !spinning;
+  const [isErrorOpen, setIsErrorOpen] = useState(false);
+  // An open error closes with the error, so the next failure never opens it without a click.
+  if (isErrorOpen && !showError) setIsErrorOpen(false);
+
+  return (
+    <Popover
+      open={isErrorOpen}
+      onOpenChange={(open) => {
+        if (!showError) {
+          if (open) onRefresh();
+          return;
+        }
+        setIsErrorOpen(open);
+      }}
+    >
+      <TooltipControl content={showError ? "Show why sync failed" : rescanTooltip(scannedAt)}>
+        <PopoverTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="xs"
+              className="shrink-0 gap-1.5 rounded-sm px-1.5 text-text-tertiary"
+              aria-disabled={spinning}
+              // Without an error the click only starts a sync, so it opens no dialog.
+              aria-haspopup={showError ? "dialog" : undefined}
+              aria-expanded={showError ? isErrorOpen : undefined}
+              aria-label={
+                showError
+                  ? "Sync failed, show error"
+                  : spinning
+                    ? "Syncing installed skills"
+                    : "Sync installed skills"
+              }
+            />
+          }
+        >
+          {showError ? (
+            <AlertTriangle size={13} className="text-warning" />
+          ) : (
+            <RefreshCw size={13} className={spinning ? "animate-spin" : ""} />
+          )}
+          <span className="whitespace-nowrap">Sync</span>
+        </PopoverTrigger>
+      </TooltipControl>
+      <PopoverContent
+        side="top"
+        align="start"
+        aria-label="Sync error"
+        className="w-72 gap-2 bg-bg-elevated text-small text-text-primary ring-border"
+      >
+        <p className="m-0 font-medium">Couldn't refresh your skills</p>
+        {/* A long error scrolls; the region takes focus so the keyboard can scroll it too. */}
+        <div
+          role="region"
+          aria-label="Error details"
+          tabIndex={0}
+          className="max-h-40 select-text overflow-y-auto break-words rounded-sm text-text-secondary focus-visible:outline-2 focus-visible:outline-accent"
+        >
+          {refreshError}
+        </div>
+        <p className="m-0 text-text-tertiary">The lists show the last results that loaded.</p>
+        <Button
+          size="sm"
+          variant="outline"
+          className="self-start"
+          onClick={() => {
+            setIsErrorOpen(false);
+            onRefresh();
+          }}
+        >
+          Try again
+        </Button>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 /** The snapshot's age and a manual rescan button, plus Learn, Settings, and the theme toggle. */
@@ -216,6 +312,7 @@ function SidebarFooter({
   anchorView,
   scannedAt,
   spinning,
+  refreshError,
   onRefresh,
   setActiveView,
   resolvedTheme,
@@ -223,19 +320,12 @@ function SidebarFooter({
 }: SidebarFooterProps) {
   return (
     <div className="mt-auto flex select-none items-center justify-between gap-2 px-2 py-1.5">
-      <TooltipControl content={rescanTooltip(scannedAt)}>
-        <Button
-          variant="ghost"
-          size="xs"
-          className="shrink-0 gap-1.5 rounded-sm px-1.5 text-text-tertiary"
-          onClick={onRefresh}
-          aria-disabled={spinning}
-          aria-label={spinning ? "Syncing installed skills" : "Sync installed skills"}
-        >
-          <RefreshCw size={13} className={spinning ? "animate-spin" : ""} />
-          <span className="whitespace-nowrap">Sync</span>
-        </Button>
-      </TooltipControl>
+      <SyncButton
+        scannedAt={scannedAt}
+        spinning={spinning}
+        refreshError={refreshError}
+        onRefresh={onRefresh}
+      />
       <div className="flex items-center gap-0.5">
         <TooltipControl content="Learn">
           <Button
@@ -285,7 +375,12 @@ function SidebarFooter({
  * non-empty), and a footer with the snapshot's age and a manual rescan
  * button.
  */
-export function Sidebar({ snapshot, emittedSnapshotRevision, requestRescan }: SidebarProps) {
+export function Sidebar({
+  snapshot,
+  emittedSnapshotRevision,
+  backgroundStatus,
+  requestRescan,
+}: SidebarProps) {
   // Forces the footer to re-render so "just now" ages into "1m ago" and
   // beyond without waiting for the next snapshot - relativeScanTime() itself
   // stays a pure function of scannedAt and the current clock.
@@ -386,6 +481,7 @@ export function Sidebar({ snapshot, emittedSnapshotRevision, requestRescan }: Si
         anchorView={anchorView}
         scannedAt={snapshot?.scanned_at}
         spinning={spinning}
+        refreshError={backgroundRefreshError(backgroundStatus)}
         onRefresh={handleRefresh}
         setActiveView={setActiveView}
         resolvedTheme={resolvedTheme}

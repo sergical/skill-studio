@@ -135,6 +135,20 @@ pub struct CoreError {
 }
 
 impl CoreError {
+    /// The same error for each item of a batch that one failure ended, such
+    /// as one `npx` call for several skills: every field but the I/O cause,
+    /// which is not `Clone`.
+    pub(crate) fn for_each_item(&self) -> CoreError {
+        CoreError {
+            code: self.code,
+            message: self.message.clone(),
+            path: self.path.clone(),
+            source: None,
+            busy: self.busy,
+            detail: self.detail.clone(),
+        }
+    }
+
     /// Builds an error with a code and a message.
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
         CoreError {
