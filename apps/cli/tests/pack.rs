@@ -109,6 +109,18 @@ fn pack_dry_runs_give_the_same_plan_on_cli_and_mcp_and_change_nothing_or_the_sur
             json!({ "source": "owner/repo", "dry_run": true }),
             json!([["tracked", "skipped"]]),
         ),
+        (
+            vec![
+                "pack",
+                "switch-source",
+                "owner/repo",
+                "me/fork",
+                "--dry-run",
+            ],
+            "pack_switch_source",
+            json!({ "source": "owner/repo", "to": "me/fork", "dry_run": true }),
+            json!([["tracked", "skipped"]]),
+        ),
     ];
     for (args, tool, arguments, expected) in cases {
         let cli = headless::cli(home.path(), &args);
@@ -130,4 +142,5 @@ fn pack_dry_runs_give_the_same_plan_on_cli_and_mcp_and_change_nothing_or_the_sur
         std::fs::read(home.path().join(".agents/.skill-lock.json")).unwrap(),
         lock
     );
+    assert!(!home.path().join(".agents/skill-studio.json").exists());
 }

@@ -167,6 +167,8 @@ pub enum Operation {
     PackUpdate,
     /// Remove the skills of one pack.
     PackRemove,
+    /// Move the skills of one pack to another source.
+    PackSwitchSource,
     /// List the recovery plans that did not finish or were dropped.
     RecoveryList,
     /// Give up one interrupted recovery plan.
@@ -5074,21 +5076,8 @@ fn restore_event_body(
             }
         }
         crate::ops_install::check_registry_drift(fs, inverse)?;
-        if let Some(edit) = inverse.get("lock_row_undo").filter(|v| !v.is_null()) {
-            let lock = crate::lock_file::lock_file_path(&rt.scope.home.lexical);
-            let live = crate::lock_file::read_lock_entry_value(
-                fs,
-                &lock,
-                edit["skill"].as_str().unwrap_or_default(),
-            )?;
-            if live.as_ref().unwrap_or(&serde_json::Value::Null) != &edit["expected"] {
-                return Err(CoreError::new(
-                    ErrorCode::DriftConflict,
-                    "the updated lock row changed; pass force to restore anyway",
-                )
-                .at(lock));
-            }
-        }
+        // `LockRowUndo::check` above already compared the lock row at the
+        // path the event recorded, global or project.
     }
     let mut write_back_plans: Vec<(PathBuf, RestorePlan)> = Vec::new();
     if !write_back.is_empty() {
@@ -5877,7 +5866,7 @@ pub use crate::ops_split::split;
 pub use crate::ops_update::{update, update_all, update_all_unbounded, update_split_copies};
 /// Pack read operations shared by CLI and MCP.
 pub use crate::pack::{pack_list, pack_show};
-pub use crate::pack_action::{pack_add, pack_remove, pack_update};
+pub use crate::pack_action::{pack_add, pack_remove, pack_switch_source, pack_update};
 
 /// Moves one real copy's directory into the parked root, in the slot for
 /// where it came from ([`crate::park_layout`]).
@@ -8695,6 +8684,7 @@ mod tests {
                 Operation::PackAdd,
                 Operation::PackUpdate,
                 Operation::PackRemove,
+                Operation::PackSwitchSource,
                 Operation::RecoveryList,
                 Operation::RecoveryDrop,
             ];
@@ -8733,6 +8723,7 @@ mod tests {
                     Operation::PackAdd => "pack_add",
                     Operation::PackUpdate => "pack_update",
                     Operation::PackRemove => "pack_remove",
+                    Operation::PackSwitchSource => "pack_switch_source",
                     Operation::RecoveryList => "recovery_list",
                     Operation::RecoveryDrop => "recovery_drop",
                 };

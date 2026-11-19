@@ -1,4 +1,5 @@
-//! Pack actions: add, update, or remove the skills of one pack in one call.
+//! Pack actions: add, update, remove, or switch the source of the skills of
+//! one pack in one call.
 //! Each call plans first and returns only the plan on a dry run. A real run
 //! gives each step to the per-skill op (`install`, `update_all`, `remove`),
 //! so each skill gets its own journal event and undo, and the owner tool
@@ -20,7 +21,7 @@ use crate::identity::{
 };
 use crate::install_targets::UNIVERSAL_TARGET;
 use crate::ops::{OpStatus, Operation, Outcome};
-use crate::pack::{self, Pack, PackKind, PackRemote, PackSkill, RemoteError};
+use crate::pack::{self, git_url, Pack, PackKind, PackRemote, PackSkill, RemoteError};
 use crate::ports::{OpContext, Runtime};
 
 /// Input for `pack_add`.
@@ -78,6 +79,25 @@ pub struct PackRemoveRequest {
     pub dry_run: bool,
 }
 
+/// Input for `pack_switch_source`.
+#[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
+pub struct PackSwitchSourceRequest {
+    /// Pack source as `pack_list` reports it.
+    pub source: String,
+    /// Git source to install the skills from instead, usually your fork of
+    /// the pack: `owner/repo` or a git URL, with `#ref` to pin a branch or tag.
+    pub to: String,
+    /// Only these skills of the pack. Empty: every skill of the pack.
+    #[serde(default)]
+    pub skills: Vec<String>,
+    /// Only this tracked project. Absent: the home and every tracked project.
+    #[serde(default)]
+    pub project_path: Option<PathBuf>,
+    /// Return the plan and change nothing.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
 /// What one step does to one skill.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -88,6 +108,8 @@ pub enum PackStepAction {
     Update,
     /// Remove the skill.
     Remove,
+    /// Install the skill from another source over its current copy.
+    SwitchSource,
 }
 
 /// Where one step is.
@@ -347,6 +369,138 @@ pub fn pack_remove(
     })
 }
 
+/// Moves the skills of one skills.sh pack to another git source, such as
+/// the user's fork. Each skill runs `npx skills add <to> --skill <name>`
+/// over its copy, which moves its lock row to `to`; undo one with its
+/// event. The old source is recorded as the pack's original, so a remote
+/// `pack_show` of `to` compares the two. Skips skills with local edits,
+/// which the new copy would overwrite.
+pub fn pack_switch_source(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &PackSwitchSourceRequest,
+) -> Result<PackActionReport, CoreError> {
+    rt.run(Operation::PackSwitchSource, ctx, || {
+        let base = req.to.split_once('#').map_or(req.to.as_str(), |(base, _)| base);
+        if git_url(base).is_none() {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                format!("give the new source {} as owner/repo or a git URL", req.to),
+            ));
+        }
+        if crate::pack_original::same_source(&req.to, &req.source) {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                format!("the pack already comes from {}", req.to),
+            ));
+        }
+        let (report, inventory) = pack::build(
+            rt,
+            ctx,
+            req.project_path.as_deref(),
+            Some(&req.source),
+            false,
+            None,
+        )?;
+        if report.packs.is_empty() {
+            return Err(pack::no_pack(&req.source));
+        }
+        let unknown: Vec<&str> = req
+            .skills
+            .iter()
+            .filter(|name| {
+                !report
+                    .packs
+                    .iter()
+                    .any(|pack| pack.skills.iter().any(|skill| &&skill.name == name))
+            })
+            .map(String::as_str)
+            .collect();
+        if !unknown.is_empty() {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                format!(
+                    "{} has no installed skill named {}",
+                    req.source,
+                    unknown.join(", ")
+                ),
+            ));
+        }
+        let mut steps = Vec::new();
+        for pack in &report.packs {
+            for skill in &pack.skills {
+                if !req.skills.is_empty() && !req.skills.contains(&skill.name) {
+                    continue;
+                }
+                let skip = match pack.kind {
+                    PackKind::SkillsSh if removable(&inventory, skill).is_none() => {
+                        Some("no copy in .agents/skills to switch".to_string())
+                    }
+                    PackKind::SkillsSh => edited_reason(skill),
+                    PackKind::Dotagents => Some(
+                        "installed by dotagents, which keeps the source in agents.toml; change it there"
+                            .to_string(),
+                    ),
+                    PackKind::Plugin => Some("a plugin; the agent picks its source".to_string()),
+                    PackKind::Npm => Some(format!(
+                        "comes from the npm package {}; change the package instead",
+                        pack.source
+                    )),
+                };
+                steps.push(step(pack, skill, PackStepAction::SwitchSource, skip));
+            }
+        }
+        require_node_for(rt, &steps)?;
+        let moves: Vec<crate::pack_original::Move<'_>> = steps
+            .iter()
+            .filter(|s| s.state == PackStepState::Planned)
+            .map(|s| crate::pack_original::Move {
+                scope: &s.scope,
+                skill: &s.skill,
+            })
+            .collect();
+        let from = report.packs[0].source.clone();
+        let mut all_back = false;
+        if !req.dry_run && !moves.is_empty() {
+            // Recorded first, so a skill never sits on `to` without its
+            // original. A record whose skill did not move stays stale: it
+            // counts only while the lock row names `to`.
+            all_back = crate::pack_original::record_moves(rt, &from, &req.to, &moves)?;
+        }
+        drop(moves);
+        if !req.dry_run {
+            run_each(ctx, &mut steps, |_, step| {
+                let request = UpdateRequest {
+                    skill: SkillName(step.skill.clone()),
+                    method: InstallMethod::SkillsSh,
+                    scope: step.scope.clone(),
+                    files: Vec::new(),
+                    source: Some(step.source.clone()),
+                    ref_pin: None,
+                };
+                crate::ops_update::update_from_source(rt, ctx, &request, &req.to)
+                    .map(|outcome| outcome.event_id)
+            });
+        }
+        let moved = steps
+            .iter()
+            .any(|s| matches!(s.state, PackStepState::Done { .. }));
+        let mut report = action_report(req.dry_run, PackStepAction::SwitchSource, steps);
+        if moved && all_back {
+            report.summary = format!(
+                "{} {} was their original, so they show no original now.",
+                report.summary, req.to
+            );
+        } else if moved {
+            report.summary = format!(
+                "{} {from} stays recorded as their original; pack show {} --remote compares the two.",
+                report.summary, req.to
+            );
+        }
+        Ok(report)
+    })
+}
+
 /// Every planned update or remove step runs `npx`: plugin and npm packs are
 /// already skipped. Fails once, before the plan is shown, when Node is missing.
 fn require_node_for(rt: &Runtime, steps: &[PackStep]) -> Result<(), CoreError> {
@@ -397,23 +551,6 @@ fn upstream_skills(
         .into_iter()
         .map(|skill| skill.name)
         .collect())
-}
-
-/// The URL `git` takes for a `npx skills add` source, or `None` for a local path.
-fn git_url(source: &str) -> Option<String> {
-    let source = source.trim();
-    if source.contains("://") || source.starts_with("git@") {
-        return Some(source.to_string());
-    }
-    let (owner, repo) = source.split_once('/')?;
-    let plain = |part: &str| {
-        !part.is_empty()
-            && part
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
-    };
-    (plain(owner) && plain(repo) && !owner.starts_with('.'))
-        .then(|| format!("https://github.com/{owner}/{repo}.git"))
 }
 
 fn removable(inventory: &Inventory, skill: &PackSkill) -> Option<DeploymentId> {
@@ -548,6 +685,7 @@ fn action_report(dry_run: bool, action: PackStepAction, steps: Vec<PackStep>) ->
         PackStepAction::Install => ("install", "Installed"),
         PackStepAction::Update => ("update", "Updated"),
         PackStepAction::Remove => ("remove", "Removed"),
+        PackStepAction::SwitchSource => ("switch", "Switched"),
     };
     let summary = if dry_run {
         format!(
@@ -569,7 +707,7 @@ fn action_report(dry_run: bool, action: PackStepAction, steps: Vec<PackStep>) ->
 
 #[cfg(test)]
 mod tests {
-    use super::git_url;
+    use crate::pack::git_url;
 
     #[test]
     fn git_url_expands_github_shorthand_and_keeps_urls_or_refuses_local_paths() {
