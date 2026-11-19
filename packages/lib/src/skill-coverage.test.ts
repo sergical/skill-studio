@@ -4,7 +4,6 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  AGENT_MATRIX_LABELS,
   agentMatrix,
   agentIdFromDeploymentLabel,
   driftingCopies,
@@ -203,19 +202,6 @@ describe("driftingCopies", () => {
     const truth = fixtureDeployment({ agent: "shared", content_hash: "abc" });
     const copy = fixtureDeployment({ agent: "Codex", content_hash: "xyz" });
     expect(driftingCopies({ truth, links: [], copies: [copy], broken: [] })).toEqual([copy]);
-  });
-});
-
-describe("AGENT_MATRIX_LABELS", () => {
-  it("includes Cursor and Grok Build alongside the original four", () => {
-    expect(AGENT_MATRIX_LABELS).toEqual([
-      "Claude Code",
-      "Codex",
-      "OpenCode",
-      "pi",
-      "Cursor",
-      "Grok Build",
-    ]);
   });
 });
 

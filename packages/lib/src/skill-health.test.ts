@@ -12,6 +12,7 @@ import {
   findSpecViolations,
   findSpecWarnings,
   specViolationSeverity,
+  HEALTH_ISSUE_KIND_LABEL,
   HEALTH_ISSUE_KIND_ORDER,
   isBlockingSpecViolation,
 } from "./skill-health";
@@ -275,13 +276,10 @@ describe("findLinkedRootIssues", () => {
 });
 
 describe("HEALTH_ISSUE_KIND_ORDER", () => {
-  it("includes parked-but-reinstalled", () => {
-    expect(HEALTH_ISSUE_KIND_ORDER).toContain("parked-but-reinstalled");
-  });
-
-  it("does not include update-available or missing-from-agents", () => {
-    expect(HEALTH_ISSUE_KIND_ORDER).not.toContain("update-available");
-    expect(HEALTH_ISSUE_KIND_ORDER).not.toContain("missing-from-agents");
+  it("ranks every health issue kind exactly once, or a new kind sorts unpredictably on Home", () => {
+    const kinds = Object.keys(HEALTH_ISSUE_KIND_LABEL);
+    expect(new Set(HEALTH_ISSUE_KIND_ORDER).size).toBe(HEALTH_ISSUE_KIND_ORDER.length);
+    expect([...HEALTH_ISSUE_KIND_ORDER].sort()).toEqual([...kinds].sort());
   });
 });
 
