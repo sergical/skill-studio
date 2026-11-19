@@ -104,7 +104,7 @@ Skipped, with the reason:
 Doctor link warnings, retained-entry ages, and pending history checks are covered by `crates/skill-studio-core/tests/doctor.rs`, `apps/cli/tests/doctor_scope.rs`, and the MCP stdio doctor test. Complete-tree regressions in `doctor_readonly.rs`, CLI, and MCP include lease files. Retention checks continue when history is unavailable, inspect linked metadata without reading its target, and stream directory entries and journal plans. See `docs/perf/doctor-invariants.md` for the read-only policy.
 
 Returning launches and new agents are covered by `useFirstRun.test.ts` and `DetectedAgentsCard.test.tsx`.
-Scan progress and worker error reporting are covered by `apps/desktop/src/components/SkillList/ScanProgress.test.tsx` and described in `docs/perf/desktop-scan-status.md`.
+Background refresh errors on the sidebar's Sync button are covered by `apps/desktop/e2e/background-refresh.e2e.ts` and described in `docs/perf/desktop-scan-status.md`.
 
 ## Operation guarantees
 

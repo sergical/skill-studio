@@ -1,9 +1,11 @@
 // ============================================================================
 // sidebar-nav - Non-component helpers for the Sidebar: which nav row a view
-// anchors to, and the "last scanned" relative-time label. Split out of
+// anchors to, the "last scanned" relative-time label, and the background
+// refresh error the Sync button reports. Split out of
 // Sidebar.tsx so that file only exports the component (Fast Refresh).
 // ============================================================================
 
+import type { BackgroundStatus } from "@skill-studio/lib";
 import type { ActiveView } from "../store/appStore";
 
 /**
@@ -40,4 +42,14 @@ export function hasNewerSkillSnapshotEmission(
     emittedSnapshotRevision !== undefined &&
     (requestedSnapshotRevision === undefined || emittedSnapshotRevision > requestedSnapshotRevision)
   );
+}
+
+/**
+ * The error from the last skill scan or usage refresh that failed, or null. A running refresh is
+ * not reported: the lists keep the last results and update when it lands. The update check is
+ * left out because Home reports its result.
+ */
+export function backgroundRefreshError(status: BackgroundStatus | undefined): string | null {
+  const failed = status?.tasks.find((task) => task.worker !== "update_check" && task.last_error);
+  return failed?.last_error ?? null;
 }
