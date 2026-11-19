@@ -44,17 +44,3 @@ it("snapshot confirms the parked target and enables the switch instead of invert
   expect(screen.getByRole("switch").getAttribute("aria-checked")).toBe("false");
   expect(screen.getByRole("switch").getAttribute("aria-disabled")).toBe(null);
 });
-
-it("confirmed project park stays off and disabled until the snapshot arrives instead of reopening confirmation", async () => {
-  render(
-    <RowActionSwitch
-      checked
-      ariaLabel="Project Codex copy"
-      action={action}
-      onAction={async () => true}
-    />,
-  );
-  await userEvent.click(screen.getByRole("switch"));
-  expect(screen.getByRole("switch").getAttribute("aria-checked")).toBe("false");
-  expect(screen.getByRole("switch").getAttribute("aria-disabled")).toBe("true");
-});

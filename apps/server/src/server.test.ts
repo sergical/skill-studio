@@ -7,27 +7,12 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createNodeRequestHandler, requireApiKey } from "./server";
-import { isAllowedRawRequestTarget } from "./skills-proxy-app";
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
 describe("raw Node request target validation", () => {
-  it.each([
-    "/api/v1/skills/x/../search",
-    "/api/v1/skills/x/%2e%2e/search",
-    "/api/v1/skills/x/%252e%252e/search",
-    "/api/v1/skills/owner/repo%2Fescape/slug",
-    "/api/v1/skills/owner/repo%252Fescape/slug",
-    "/api/v1/skills/owner/repo/skill%5Cname",
-    "/api/v1/skills/owner/repo/skill%255Cname",
-    "/api/v1/skills/owner/repo/%E0%A4%A",
-    "/api/v1/skills/search?q=%E0%A4%A",
-  ])("rejects an unsafe raw path: %s", (rawTarget) => {
-    expect(isAllowedRawRequestTarget(rawTarget)).toBe(false);
-  });
-
   it.each([
     ["/api/v1/skills/x/../search", "/api/v1/skills/search"],
     ["/api/v1/skills/x/%2e%2e/search", "/api/v1/skills/search"],

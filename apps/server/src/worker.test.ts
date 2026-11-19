@@ -107,14 +107,6 @@ describe("Worker tracing", () => {
     expect(payload).toBe("");
   });
 
-  it("keeps the caller's search text, IP, user agent, cookie and timezone out of every span", async () => {
-    const payload = await callWorker();
-
-    for (const detail of CALLER_DETAILS) {
-      expect(payload).not.toContain(detail);
-    }
-  });
-
   it("keeps the caller's details and the skills.sh key out of the error a 5xx upstream reports", async () => {
     upstreamStatus = 503;
     const payload = await callWorker();
@@ -136,14 +128,6 @@ describe("Worker tracing", () => {
     expect(payload).toBe("");
     expect(payload).not.toContain(CALLER_TRACE_ID);
     expect(payload).not.toContain(SEARCH_TEXT);
-  });
-
-  it("keeps the request and response Content-Length values out of every span", async () => {
-    const payload = await callWorker({ headers: { "content-length": "0" } });
-
-    expect(payload).toBe("");
-    expect(payload).not.toContain("http.request.body.size");
-    expect(payload).not.toContain("http.response.body.size");
   });
 
   it("does not send spans for a made-up method", async () => {

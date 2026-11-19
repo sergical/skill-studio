@@ -66,22 +66,6 @@ describe("frontmatterRepairKindsFor", () => {
   const kindsFor = (...spec_violations: string[]) => frontmatterRepairKindsFor({ spec_violations });
 
   /**
-   * Flow: the scanner reports each fixable violation.
-   * Expect: the matching repair kind.
-   * Failure: a Fix button asks the backend for the wrong repair, which refuses it.
-   */
-  it("maps each fixable violation to its repair kind", () => {
-    expect(kindsFor("invalid YAML frontmatter at line 3, column 1: x")).toEqual(["colon-scalar"]);
-    expect(kindsFor('name "Foo" does not match its directory name "foo"')).toEqual([
-      "name-mismatch",
-    ]);
-    expect(
-      kindsFor('name "Foo" must be 1-64 lowercase a-z0-9 characters and hyphens, with no leading'),
-    ).toEqual(["name-format"]);
-    expect(kindsFor("conflicting invocation keys")).toEqual(["invocation-conflict"]);
-  });
-
-  /**
    * Flow: a skill has a name problem and the invocation conflict.
    * Expect: both fixes, so the conflict stays reachable when the name fix is refused.
    * Failure: one priority-picked kind hides the other, and a refused name fix

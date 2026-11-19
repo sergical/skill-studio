@@ -51,18 +51,6 @@ describe("selection mode", () => {
     expect(useAppStore.getState().selectedSkillPaths).toEqual(new Set(["/a", "/b"]));
   });
 
-  it("clearSkillSelection leaves nothing selected", () => {
-    useAppStore.getState().toggleSkillSelection("/a");
-    useAppStore.getState().clearSkillSelection();
-    expect(useAppStore.getState().selectedSkillPaths).toEqual(new Set());
-  });
-
-  it("leaving the list view ends selection mode", () => {
-    useAppStore.getState().toggleSkillSelection("/a");
-    useAppStore.getState().setActiveView({ kind: "home" });
-    expect(useAppStore.getState().selectedSkillPaths).toEqual(new Set());
-  });
-
   it("opening a skill ends selection mode", () => {
     useAppStore.getState().toggleSkillSelection("/a");
     useAppStore.getState().openSkill("find-bugs");

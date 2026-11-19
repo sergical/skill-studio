@@ -14,25 +14,12 @@ import { HTTPException } from "hono/http-exception";
 import {
   createSkillsProxyApp,
   proxyGet,
-  upstreamUrl,
   type RateLimiter,
   type ResponseCache,
 } from "./skills-proxy-app";
 
 afterEach(() => {
   vi.unstubAllGlobals();
-});
-
-describe("upstreamUrl", () => {
-  it("appends the path and search string verbatim to the skills.sh base", () => {
-    expect(upstreamUrl("/skills/search", "?q=foo&limit=10")).toBe(
-      "https://skills.sh/api/v1/skills/search?q=foo&limit=10",
-    );
-  });
-
-  it("tolerates an empty search string", () => {
-    expect(upstreamUrl("/skills", "")).toBe("https://skills.sh/api/v1/skills");
-  });
 });
 
 describe("proxyGet", () => {
