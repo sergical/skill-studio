@@ -7,11 +7,13 @@ Run by hand, like `perf:baseline`; nothing in CI reads the result:
     cargo build --workspace --all-features --bins
     python3 tools/perf-writes.py --cli target/debug/skill-studio --label "$(git rev-parse --short HEAD)"
 
-Each run uses a new temporary home. One shared npm cache is warmed before the
-first timed run, so `npx` does not download the skills package inside a
-sample. A wrapper on PATH counts the `npx` calls of each job: the count is the
-deterministic part (see crates/skill-studio-core/tests/write_spawn_count.rs);
-the times include process start, git over loopback and the skills CLI.
+Each run uses a new temporary home whose npm cache is warmed before its first
+timed job, so `npx` does not download the skills package inside a sample.
+Upstream changes before each `pack update`, and the script checks that the new
+content arrived, so the update really fetches and writes. A wrapper on PATH
+counts the `npx` calls of each job: the count is the deterministic part (see
+crates/skill-studio-core/tests/write_spawn_count.rs); the times include
+process start, git over loopback and the skills CLI.
 """
 import argparse
 import http.server
@@ -30,27 +32,82 @@ import time
 SKILLS_CLI = "skills@1.8.1"
 
 
+def clean_env(home):
+    """The caller's environment without anything that points git or npm at
+    the user's own repositories, config or cache, with HOME set to `home`."""
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith(("GIT_", "SKILL_STUDIO_", "XDG_", "CODEX_", "CLAUDE_"))
+           and not key.lower().startswith("npm_config_")}
+    env.update(HOME=str(home), GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+               GIT_TERMINAL_PROMPT="0")
+    return env
+
+
+def cli_npm_env(home, env):
+    """`env` with the npm and git settings the CLI gives `npx` for `--home`
+    (skill-studio-host `RealProcessSpawner::isolate_environment`), so a
+    warm-up fills the cache the timed jobs read."""
+    env = dict(env)
+    for name, path in [("cache", home / ".npm"), ("userconfig", home / ".npmrc"),
+                       ("globalconfig", home / ".npm-global/etc/npmrc"),
+                       ("prefix", home / ".npm-global")]:
+        env[f"npm_config_{name}"] = str(path)
+        env[f"NPM_CONFIG_{name.upper()}"] = str(path)
+    env.update(HOME=str(home), GIT_CONFIG_GLOBAL=str(home / ".gitconfig"),
+               GIT_CONFIG_NOSYSTEM="1")
+    return env
+
+
+def git(env, *args):
+    return subprocess.run(["git", "-c", "user.name=bench", "-c", "user.email=bench@example.invalid",
+                           "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", *args],
+                          env=env, check=True, capture_output=True, text=True).stdout.strip()
+
+
 def make_pack(root, count):
-    """A bare git repo with `count` skills under skills/<name>/SKILL.md."""
+    """A bare git repo with `count` skills under skills/<name>/SKILL.md, made
+    with git isolated from the user's config, hooks and repositories."""
+    env = clean_env(root / "setup-home")
+    (root / "setup-home").mkdir(parents=True, exist_ok=True)
     work = root / "work"
     names = [f"bench-skill-{i:02d}" for i in range(count)]
     for name in names:
         folder = work / "skills" / name
         folder.mkdir(parents=True)
         (folder / "SKILL.md").write_text(
-            f"---\nname: {name}\ndescription: Write-job benchmark skill {name}.\n---\nBody.\n")
-    git = ["git", "-c", "user.name=bench", "-c", "user.email=bench@example.invalid"]
-    subprocess.run([*git, "init", "-q", "-b", "main", str(work)], check=True)
-    subprocess.run([*git, "-C", str(work), "add", "-A"], check=True)
-    subprocess.run([*git, "-C", str(work), "commit", "-q", "-m", "pack"], check=True)
+            f"---\nname: {name}\ndescription: Write-job benchmark skill {name}.\n---\nRevision 0.\n")
+    git(env, "init", "-q", "-b", "main", str(work))
+    git(env, "-C", str(work), "add", "-A")
+    git(env, "-C", str(work), "commit", "-q", "-m", "revision 0")
     bare = root / "srv" / "pack.git"
-    subprocess.run(["git", "clone", "-q", "--bare", str(work), str(bare)], check=True)
-    subprocess.run(["git", "-C", str(bare), "config", "http.receivepack", "false"], check=True)
+    git(env, "clone", "-q", "--bare", str(work), str(bare))
+    git(env, "-C", str(bare), "config", "http.receivepack", "false")
     return names
 
 
+def bump_pack(root, names, revision):
+    """Commits `Revision <revision>.` into every skill and pushes it to the
+    served repo, so the next update has new content to fetch."""
+    env = clean_env(root / "setup-home")
+    work = root / "work"
+    for name in names:
+        (work / "skills" / name / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: Write-job benchmark skill {name}.\n---\n"
+            f"Revision {revision}.\n")
+    git(env, "-C", str(work), "commit", "-q", "-am", f"revision {revision}")
+    git(env, "-C", str(work), "push", "-q", str(root / "srv" / "pack.git"), "main")
+
+
+def tree_hashes(root, names):
+    """Each skill folder's git tree hash at the served HEAD: what the skills CLI
+    records as `skillFolderHash` and compares on update."""
+    env = clean_env(root / "setup-home")
+    bare = root / "srv" / "pack.git"
+    return {name: git(env, "-C", str(bare), "rev-parse", f"HEAD:skills/{name}") for name in names}
+
+
 def serve_git(projects_root):
-    """Starts `git http-backend` behind a loopback HTTP server; returns its base URL."""
+    """Starts `git http-backend` behind a loopback HTTP server; returns it and its base URL."""
     exec_path = subprocess.check_output(["git", "--exec-path"], text=True).strip()
     backend = f"{exec_path}/git-http-backend"
 
@@ -64,11 +121,13 @@ def serve_git(projects_root):
             body = self.rfile.read(length) if length else b""
             env = {
                 "GIT_PROJECT_ROOT": str(projects_root), "GIT_HTTP_EXPORT_ALL": "1",
+                "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
                 "PATH_INFO": path, "QUERY_STRING": query,
                 "REQUEST_METHOD": self.command,
                 "CONTENT_TYPE": self.headers.get("Content-Type", ""),
                 "CONTENT_LENGTH": str(len(body)), "REMOTE_ADDR": "127.0.0.1",
                 "GIT_PROTOCOL": self.headers.get("Git-Protocol", ""),
+                "HTTP_CONTENT_ENCODING": self.headers.get("Content-Encoding", ""),
                 "PATH": os.environ["PATH"],
             }
             out = subprocess.run([backend], input=body, env=env, capture_output=True,
@@ -108,19 +167,29 @@ def npx_wrapper(bin_dir, log):
     wrapper.chmod(0o755)
 
 
-def write_lock_rows(home, names, source):
-    """`npx skills` writes no lock row for a loopback git URL (checked with
-    skills@1.8.1 for both 127.0.0.1 and localhost), so nothing would track the
-    pack. Writes the rows it writes for a remote git source, so `pack update`
-    finds the pack and `npx skills update` fetches it from the local server."""
+def warm_cache(home, template, env):
+    """Fills `home/.npm` with the skills package: once into `template` with the
+    CLI's npm settings, then a copy for each later home."""
+    if not (template / ".npm").exists():
+        template.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["npx", "-y", SKILLS_CLI, "--version"], env=cli_npm_env(template, env),
+                       check=True, capture_output=True)
+    shutil.copytree(template / ".npm", home / ".npm", symlinks=True)
+
+
+def write_lock_rows(home, names, source, hashes):
+    """`npx skills@1.8.1` writes no lock row for a loopback git URL (checked for
+    both 127.0.0.1 and localhost), so nothing would track the pack. Writes the
+    rows it writes for a remote git source, with each folder's real tree hash:
+    skills skips a row whose hash is empty instead of checking it."""
     lock = home / ".agents" / ".skill-lock.json"
     doc = json.loads(lock.read_text()) if lock.exists() else {"version": 3, "skills": {}}
     for name in names:
-        doc["skills"].setdefault(name, {
+        doc["skills"][name] = {
             "source": source, "sourceType": "git", "sourceUrl": source,
-            "skillPath": f"skills/{name}/SKILL.md", "skillFolderHash": "",
+            "skillPath": f"skills/{name}/SKILL.md", "skillFolderHash": hashes[name],
             "installedAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z",
-        })
+        }
     lock.write_text(json.dumps(doc, indent=2))
 
 
@@ -138,7 +207,10 @@ def run_job(cli, args, home, env, log):
     steps = (envelope.get("data") or {}).get("steps")
     if steps is not None and not steps:
         sys.exit(f"{' '.join(args[:2])} planned no step: {envelope.get('data')}")
-    return elapsed, calls, envelope.get("status")
+    if envelope.get("status") != "ok":
+        sys.exit(f"{' '.join(args[:2])} ended with status {envelope.get('status')}: "
+                 f"{envelope.get('errors')}")
+    return elapsed, calls
 
 
 def main():
@@ -159,12 +231,8 @@ def main():
         source = f"{base}/pack.git"
         log = root / "npx.log"
         npx_wrapper(root / "bin", log)
-        env = {key: value for key, value in os.environ.items()
-               if not key.startswith(("SKILL_STUDIO_", "XDG_", "CODEX_", "CLAUDE_"))}
-        env.update(PATH=f"{root / 'bin'}{os.pathsep}{env['PATH']}",
-                   npm_config_cache=str(root / "npm-cache"), SKILL_STUDIO_TELEMETRY="0")
-        subprocess.run(["npx", "-y", SKILLS_CLI, "--version"], env=env, check=True,
-                       capture_output=True)
+        env = clean_env(root / "unused-home")
+        env.update(PATH=f"{root / 'bin'}{os.pathsep}{env['PATH']}", SKILL_STUDIO_TELEMETRY="0")
 
         skill_flags = [flag for name in names for flag in ("--skill", name)]
         jobs = {
@@ -177,13 +245,18 @@ def main():
         for run in range(args.runs):
             home = root / f"home-{run}"
             home.mkdir()
+            warm_cache(home, root / "warm-template", env)
             for job, job_args in jobs.items():
-                elapsed, calls, status = run_job(cli, job_args, home, env, log)
-                if status != "ok":
-                    sys.exit(f"run {run}: {job} ended with status {status}")
+                if job == "pack_update":
+                    bump_pack(root, names, run + 1)
+                elapsed, calls = run_job(cli, job_args, home, env, log)
                 samples[job].append({"ms": round(elapsed, 1), "npx_calls": calls})
                 if job == "pack_add":
-                    write_lock_rows(home, names, source)
+                    write_lock_rows(home, names, source, tree_hashes(root, names))
+                if job == "pack_update":
+                    body = (home / ".agents/skills" / names[0] / "SKILL.md").read_text()
+                    if f"Revision {run + 1}." not in body:
+                        sys.exit(f"run {run}: pack update did not fetch the new revision:\n{body}")
         server.shutdown()
 
     result = {
