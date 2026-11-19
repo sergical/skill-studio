@@ -8470,43 +8470,48 @@ mod tests {
         /// silently falling out of coverage.
         #[test]
         fn every_operation_serializes_to_its_documented_snake_case_name() {
-            let all = [
-                Operation::Scan,
-                Operation::Diagnose,
-                Operation::Capabilities,
-                Operation::Harnesses,
-                Operation::PreviewFrontmatterRepair,
-                Operation::ApplyFrontmatterRepair,
-                Operation::ListEvents,
-                Operation::RestoreEvent,
-                Operation::Park,
-                Operation::Unpark,
-                Operation::FixSkill,
-                Operation::DiagnoseConflict,
-                Operation::Remove,
-                Operation::Update,
-                Operation::UpdateAll,
-                Operation::Install,
-                Operation::InstallPreferences,
-                Operation::Doctor,
-                Operation::Outdated,
-                Operation::SweepQuarantine,
-                Operation::Split,
-                Operation::TurnOffForAgent,
-                Operation::SkillUsage,
-                Operation::Library,
-                Operation::Extras,
-                Operation::Review,
-                Operation::ReviewDue,
-                Operation::PackList,
-                Operation::PackShow,
-                Operation::PackAdd,
-                Operation::PackUpdate,
-                Operation::PackRemove,
-                Operation::PackSwitchSource,
-                Operation::RecoveryList,
-                Operation::RecoveryDrop,
-            ];
+            // Every variant, read from the schema derived from the enum
+            // itself, so a variant missing from a hand-written list (as
+            // `Invocation` once was) cannot skip this check.
+            fn names(schema: &serde_json::Value, out: &mut Vec<String>) {
+                match schema {
+                    serde_json::Value::Object(map) => {
+                        for (key, value) in map {
+                            match (key.as_str(), value) {
+                                ("const", serde_json::Value::String(name)) => {
+                                    out.push(name.clone());
+                                }
+                                ("enum", serde_json::Value::Array(items)) => out.extend(
+                                    items.iter().filter_map(|i| i.as_str().map(str::to_string)),
+                                ),
+                                _ => names(value, out),
+                            }
+                        }
+                    }
+                    serde_json::Value::Array(items) => {
+                        for item in items {
+                            names(item, out);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let mut wire_names = Vec::new();
+            names(
+                &serde_json::to_value(schemars::schema_for!(Operation)).unwrap(),
+                &mut wire_names,
+            );
+            let all: Vec<Operation> = wire_names
+                .iter()
+                .map(|name| {
+                    serde_json::from_value(serde_json::Value::String(name.clone()))
+                        .unwrap_or_else(|e| panic!("schema name {name:?} does not parse: {e}"))
+                })
+                .collect();
+            assert!(
+                all.contains(&Operation::Invocation) && all.contains(&Operation::RecoveryDrop),
+                "the schema must list every variant: {wire_names:?}"
+            );
             for operation in all {
                 let expected = match operation {
                     Operation::Scan => "scan",
