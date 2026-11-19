@@ -27,5 +27,5 @@ Preconditions: baseline; `url` is the run's `pack-url`.
 ## Gotchas
 
 - `npx skills@1.8.1` writes no lock row for a loopback git URL (127.0.0.1 or localhost). After an add, `pack list` shows no pack until you run `control-skill-studio track`. A GitHub source does get lock rows.
-- The first `npx` call in a new home takes about 5 s even against the local pack. Compare times only across runs of the same shape.
+- Times depend on machine load (a `cargo` build or test run nearby doubles them). Compare times only across runs of the same shape on an idle machine; `tools/perf-writes.py` does that over several runs.
 - `pack add` without `--skill` lists the source with git; that path needs the pack server too.
