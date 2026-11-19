@@ -69,6 +69,7 @@ mod ops_update;
 mod ownership;
 pub mod pack;
 pub mod pack_action;
+pub mod pack_export;
 pub mod pack_original;
 mod park_layout;
 mod park_move;
