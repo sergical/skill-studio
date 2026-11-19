@@ -816,6 +816,25 @@ impl SkillStudioServer {
     }
 
     #[tool(
+        description = "Copy installed skills into a new or empty folder laid out as a pack: skills/<name>/ for each and a README.md with the npx skills add install lines (source names where the pack will live, as owner/repo or a git URL). dir must be absolute. It writes nothing outside dir, never overwrites a file, and records no event: undo by deleting dir. Push dir to git to share the pack. Set dry_run to get the file list only.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
+    async fn pack_export(
+        &self,
+        Parameters(req): Parameters<skill_studio_core::pack_export::PackExportRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op_in_project(
+            Operation::PackExport,
+            true,
+            req.project_path.as_deref(),
+            &context,
+            |rt, ctx| ops::pack_export(rt, ctx, &req),
+        )
+        .await
+    }
+
+    #[tool(
         description = "Remove the skills of one pack (source as pack_list reports it) through the tool that installed them. Skips plugin and npm packs, and skills with local edits. Set dry_run to get the plan only. Undo one skill with restore_event and its event_id.",
         annotations(read_only_hint = false, destructive_hint = true)
     )]

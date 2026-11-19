@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PackExportRequest",
+  "description": "Input for `pack_export`.",
+  "type": "object",
+  "properties": {
+    "dir": {
+      "description": "Absolute folder to create the pack in. It must not exist yet, or be\nan empty folder.",
+      "type": "string"
+    },
+    "skills": {
+      "description": "Installed skills to put in the pack.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "source": {
+      "description": "Where the pack will live, as `owner/repo` or a git URL, for the\nREADME's install lines. Absent: the lines say `<owner>/<repo>`.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "project_path": {
+      "description": "Take each skill's copy from this tracked project. Absent: the home.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "dry_run": {
+      "description": "Return the plan and write nothing.",
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "required": [
+    "dir",
+    "skills"
+  ]
+}

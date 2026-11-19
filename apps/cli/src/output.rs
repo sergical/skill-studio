@@ -830,6 +830,12 @@ pub fn write_schemas(out: Option<PathBuf>) -> ExitCode {
         ("pack_action_report", || {
             schemars::schema_for!(skill_studio_core::pack_action::PackActionReport)
         }),
+        ("pack_export_request", || {
+            schemars::schema_for!(skill_studio_core::pack_export::PackExportRequest)
+        }),
+        ("pack_export_report", || {
+            schemars::schema_for!(skill_studio_core::pack_export::PackExportReport)
+        }),
         ("recovery_report", || {
             schemars::schema_for!(skill_studio_core::ops_recovery::RecoveryReport)
         }),
@@ -1045,6 +1051,25 @@ pub fn print_pack_action(
         println!("{}  {}  {scope}  {state}", step.source, step.skill);
     }
     println!("{}", report.summary);
+}
+
+pub fn print_pack_export(
+    envelope: &ResultEnvelope<skill_studio_core::pack_export::PackExportReport>,
+) {
+    print_errors(envelope);
+    let Some(report) = &envelope.data else {
+        return;
+    };
+    for skill in &report.skills {
+        println!(
+            "{}  {} files  from {}",
+            skill.skill,
+            skill.files,
+            skill.from.display()
+        );
+    }
+    println!("{}", report.summary);
+    println!("Install it, once pushed: {}", report.install_command);
 }
 
 pub fn print_packs(envelope: &ResultEnvelope<skill_studio_core::pack::PackReport>) {

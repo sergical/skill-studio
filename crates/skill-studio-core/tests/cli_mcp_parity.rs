@@ -116,6 +116,10 @@ const CLI_SUBCOMMANDS: &[SurfaceName] = &[
         surface: "pack",
     },
     SurfaceName {
+        op: "pack_export",
+        surface: "pack",
+    },
+    SurfaceName {
         op: "recovery_list",
         surface: "recovery",
     },

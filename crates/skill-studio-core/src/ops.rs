@@ -169,6 +169,8 @@ pub enum Operation {
     PackRemove,
     /// Move the skills of one pack to another source.
     PackSwitchSource,
+    /// Copy installed skills into a new folder laid out as a pack.
+    PackExport,
     /// List the recovery plans that did not finish or were dropped.
     RecoveryList,
     /// Give up one interrupted recovery plan.
@@ -5867,6 +5869,7 @@ pub use crate::ops_update::{update, update_all, update_all_unbounded, update_spl
 /// Pack read operations shared by CLI and MCP.
 pub use crate::pack::{pack_list, pack_show};
 pub use crate::pack_action::{pack_add, pack_remove, pack_switch_source, pack_update};
+pub use crate::pack_export::pack_export;
 
 /// Moves one real copy's directory into the parked root, in the slot for
 /// where it came from ([`crate::park_layout`]).
@@ -8685,6 +8688,7 @@ mod tests {
                 Operation::PackUpdate,
                 Operation::PackRemove,
                 Operation::PackSwitchSource,
+                Operation::PackExport,
                 Operation::RecoveryList,
                 Operation::RecoveryDrop,
             ];
@@ -8724,6 +8728,7 @@ mod tests {
                     Operation::PackUpdate => "pack_update",
                     Operation::PackRemove => "pack_remove",
                     Operation::PackSwitchSource => "pack_switch_source",
+                    Operation::PackExport => "pack_export",
                     Operation::RecoveryList => "recovery_list",
                     Operation::RecoveryDrop => "recovery_drop",
                 };
