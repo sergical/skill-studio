@@ -841,35 +841,6 @@ mod tests {
     }
 
     #[test]
-    fn normalize_default_server_url_falls_back_to_localhost_when_unset() {
-        assert_eq!(normalize_default_server_url(None), "http://127.0.0.1:8787");
-    }
-
-    #[test]
-    fn normalize_default_server_url_falls_back_to_localhost_when_blank() {
-        assert_eq!(
-            normalize_default_server_url(Some("   ")),
-            "http://127.0.0.1:8787"
-        );
-    }
-
-    #[test]
-    fn normalize_default_server_url_trims_a_trailing_slash() {
-        assert_eq!(
-            normalize_default_server_url(Some("https://skill-studio-server.example.workers.dev/")),
-            "https://skill-studio-server.example.workers.dev"
-        );
-    }
-
-    #[test]
-    fn normalize_default_server_url_keeps_a_url_with_no_trailing_slash() {
-        assert_eq!(
-            normalize_default_server_url(Some("https://skill-studio-server.example.workers.dev")),
-            "https://skill-studio-server.example.workers.dev"
-        );
-    }
-
-    #[test]
     fn server_unreachable_message_names_the_local_dev_server_for_loopback_hosts() {
         assert_eq!(
             server_unreachable_message("http://127.0.0.1:8787"),
@@ -889,3 +860,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "api_url_properties.rs"]
+mod url_properties;
