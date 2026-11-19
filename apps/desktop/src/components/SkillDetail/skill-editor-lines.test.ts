@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
   contentForSave,
@@ -6,33 +7,31 @@ import {
   normalizeLineEndings,
 } from "./skill-editor-lines";
 
+/** Text whose lines hold no line-end characters, plus any of LF, CRLF or a lone CR between them. */
+const lineText = fc.string({ unit: fc.constantFrom("a", "b", " ", "-", ":", "é") });
+const lineEnd = fc.constantFrom("\n", "\r\n", "\r");
+const rawText = fc
+  .array(fc.tuple(lineText, lineEnd), { maxLength: 6 })
+  .chain((pairs) => lineText.map((last) => pairs.map(([text, end]) => text + end).join("") + last));
+
 describe("lineRange", () => {
-  const content = "---\nname: a\n---\n";
-
-  it("line_range_selects_the_requested_line_without_its_newline_or_jumps_to_the_wrong_row", () => {
-    expect(lineRange(content, 1)).toEqual({ start: 0, end: 3 });
-    expect(lineRange(content, 2)).toEqual({ start: 4, end: 11 });
-    expect(content.slice(4, 11)).toBe("name: a");
+  it("line_range_selects_exactly_the_requested_line_in_the_lf_text_for_any_line_ending_or_jumps_to_the_wrong_row", () => {
+    fc.assert(
+      fc.property(rawText, fc.integer({ min: -2, max: 10 }), (raw, line) => {
+        const lines = normalizeLineEndings(raw).split("\n");
+        const range = lineRange(raw, line);
+        if (line < 1 || line > lines.length) {
+          expect(range).toBeNull();
+          return;
+        }
+        const start = lines.slice(0, line - 1).reduce((sum, text) => sum + text.length + 1, 0);
+        expect(range).toEqual({ start, end: start + lines[line - 1].length });
+      }),
+    );
   });
 
-  it("line_range_covers_the_last_line_when_the_text_has_no_trailing_newline_or_drops_it", () => {
-    expect(lineRange("a\nbc", 2)).toEqual({ start: 2, end: 4 });
-  });
-
-  it("line_range_returns_null_for_a_line_the_text_does_not_have_or_selects_garbage", () => {
-    expect(lineRange("a\nb", 3)).toBeNull();
-    expect(lineRange("a", 0)).toBeNull();
+  it("line_range_returns_null_for_a_fractional_line_or_selects_garbage", () => {
     expect(lineRange("a", 1.5)).toBeNull();
-  });
-
-  it("line_range_gives_an_empty_range_for_a_trailing_blank_line_or_overshoots", () => {
-    expect(lineRange("a\n", 2)).toEqual({ start: 2, end: 2 });
-  });
-
-  it("line_range_selects_the_right_text_in_a_crlf_file_or_drifts_one_char_per_line", () => {
-    const crlf = "---\r\nname: a\r\n---\r\n";
-    expect(lineRange(crlf, 2)).toEqual({ start: 4, end: 11 });
-    expect(lineRange(crlf, 4)).toEqual({ start: 16, end: 16 });
   });
 });
 
@@ -56,15 +55,21 @@ describe("normalizeLineEndings", () => {
 });
 
 describe("contentForSave", () => {
-  it("save_content_restores_crlf_for_a_crlf_file_or_rewrites_it_as_lf", () => {
-    expect(contentForSave("a\nb\n", "x\r\ny\r\n")).toBe("a\r\nb\r\n");
+  it("save_content_gives_back_a_crlf_or_lf_file_byte_for_byte_after_open_and_save_or_rewrites_its_line_ends", () => {
+    fc.assert(
+      fc.property(fc.array(lineText, { maxLength: 6 }), fc.boolean(), (lines, crlf) => {
+        const raw = lines.join(crlf ? "\r\n" : "\n");
+        expect(contentForSave(normalizeLineEndings(raw), raw)).toBe(raw);
+      }),
+    );
   });
 
-  it("save_content_never_writes_a_doubled_carriage_return_or_corrupts_crlf_text", () => {
-    expect(contentForSave("a\r\nb\n", "x\r\ny\r\n")).toBe("a\r\nb\r\n");
-  });
-
-  it("save_content_leaves_an_lf_file_untouched_or_adds_carriage_returns", () => {
-    expect(contentForSave("a\nb\n", "x\ny\n")).toBe("a\nb\n");
+  it("save_content_writes_only_crlf_for_a_crlf_file_whatever_the_editor_holds_or_doubles_a_carriage_return", () => {
+    fc.assert(
+      fc.property(rawText, (content) => {
+        const saved = contentForSave(content.replace(/\r(?!\n)/g, "\n"), "x\r\ny");
+        expect(saved).not.toMatch(/\r\r|\r(?!\n)|(?<!\r)\n/);
+      }),
+    );
   });
 });

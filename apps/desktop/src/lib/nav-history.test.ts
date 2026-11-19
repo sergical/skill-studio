@@ -3,10 +3,12 @@
 // Back/forward stacks behind the mouse buttons and ⌘[ / ⌘].
 // ============================================================================
 
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { ActiveView } from "../store/appStore";
 import {
   EMPTY_NAV_HISTORY,
+  type NavStep,
   NAV_HISTORY_LIMIT,
   recordNavigation,
   stepBack,
@@ -63,15 +65,40 @@ describe("recordNavigation", () => {
 });
 
 describe("stepBack and stepForward", () => {
-  it("Back lands on the previous place and Forward returns to where Back left", () => {
-    const history = recordNavigation(EMPTY_NAV_HISTORY, home, skills);
-    const back = stepBack(history, skills, always)!;
-    expect(back.view).toEqual(home);
-
-    const forward = stepForward(back.history, home, always)!;
-    expect(forward.view).toEqual(skills);
-    expect(forward.history.back).toEqual([home]);
-    expect(forward.history.forward).toEqual([]);
+  it("Back then Forward returns to the same place and stacks after any mix of moves, and neither stack passes the cap", () => {
+    const view = fc.constantFrom<ActiveView>(
+      home,
+      skills,
+      settings,
+      skillPage("a"),
+      skillPage("b"),
+    );
+    const op = fc.oneof(
+      { arbitrary: view.map((to) => ({ kind: "go" as const, to })), weight: 8 },
+      fc.constant({ kind: "back" as const }),
+      fc.constant({ kind: "forward" as const }),
+    );
+    fc.assert(
+      fc.property(fc.array(op, { maxLength: 200, size: "max" }), (ops) => {
+        let history = EMPTY_NAV_HISTORY;
+        let current: ActiveView = home;
+        for (const next of ops) {
+          const moved: NavStep | null =
+            next.kind === "go"
+              ? { history: recordNavigation(history, current, next.to), view: next.to }
+              : (next.kind === "back" ? stepBack : stepForward)(history, current, always);
+          if (moved) ({ history, view: current } = moved);
+          expect(history.back.length).toBeLessThanOrEqual(NAV_HISTORY_LIMIT);
+          expect(history.forward.length).toBeLessThanOrEqual(NAV_HISTORY_LIMIT);
+        }
+        const back = stepBack(history, current, always);
+        if (!back) return;
+        const forward = stepForward(back.history, back.view, always);
+        expect(forward?.view).toEqual(current);
+        // At the cap, Back drops the oldest Forward entry, so only the shorter stacks come back whole.
+        if (history.forward.length < NAV_HISTORY_LIMIT) expect(forward?.history).toEqual(history);
+      }),
+    );
   });
 
   it("returns null with nothing to go to, so the caller leaves the view alone", () => {
