@@ -246,6 +246,7 @@ class GateTests(unittest.TestCase):
             'ALTER TABLE "old" ADD COLUMN "note" text;',
             'ALTER TABLE "old" ADD COLUMN "count" integer DEFAULT 0 NOT NULL;',
             "ALTER TABLE \"old\" ADD COLUMN \"tags\" jsonb DEFAULT '[]'::jsonb NOT NULL;",
+            "CREATE TABLE \"grids\" (\"sep\" text DEFAULT ';', \"dash\" text DEFAULT '--');",
         ]:
             with self.subTest(sql=sql):
                 self.migrate(sql)
@@ -267,6 +268,15 @@ class GateTests(unittest.TestCase):
             'ALTER TABLE "old" ADD CONSTRAINT "old_grid_fk" FOREIGN KEY ("id") REFERENCES "public"."grids"("id");',
             'CREATE TABLE "grids" ("id" uuid);--> statement-breakpoint\nUPDATE "old" SET "id" = null;',
             '-- nothing',
+            # PostgreSQL reads these differently from a pattern match.
+            "CREATE TABLE \"grids\" (\"a\" text DEFAULT ')--'); DROP TABLE \"old\";",
+            'CREATE TABLE "grids" ("a" int /* ); DROP TABLE "old"; */);',
+            'CREATE TABLE "grids" ("a" text DEFAULT $$x$$);',
+            'ALTER TABLE "old" ADD COLUMN "n" integer NOT NULL -- DEFAULT 0',
+            'ALTER TABLE "old" ADD COLUMN "n" serial;',
+            'ALTER TABLE "other"."old" ADD COLUMN "note" text;',
+            'CREATE TABLE IF NOT EXISTS "old" ("id" uuid);--> statement-breakpoint\nCREATE UNIQUE INDEX "u" ON "old" ("id");',
+            'CREATE TABLE "grids" ("id" uuid) INHERITS ("old");',
         ]:
             with self.subTest(sql=sql):
                 self.migrate(sql)

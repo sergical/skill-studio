@@ -95,35 +95,76 @@ def classify(cfg, base, head='HEAD', raise_to=None, reason=None, author=''):
     return {'tier': tier, 'reasons': hits, 'needs_you': needs_you(cfg, hits), 'base': base, 'head': git('rev-parse', head)}
 
 
-TABLE = r'(?:"public"\.)?"(?P<t>[^"]+)"'
-CONSTANT = r"-?\d+(?:\.\d+)?|'(?:[^']|'')*'(?:::[a-z ]+(?:\[\])?)?|true|false|null"
+TABLE = r'(?:"public"\.)?"(?P<t>\w+)"'
+CONSTANT = r"-?\d+(?:\.\d+)?|'\?'(?:::[a-z ]+(?:\[\])?)?|true|false|null"
+COLUMN_TYPE = (r'(?:text|uuid|boolean|integer|bigint|smallint|real|double precision|jsonb|json|date|bytea|interval'
+               r'|timestamptz|timestamp(?: \(\d\))?(?: with(?:out)? time zone)?'
+               r'|(?:varchar|character varying|char|numeric)(?: ?\(\d+(?:, ?\d+)?\))?)(?:\[\])?')
+
+
+def statements(sql):
+    """Split SQL the way PostgreSQL reads it: drop `--` comments, keep quoted text
+    whole, and write each string literal as '?'. None when the text holds what
+    this reader does not model: block comments, dollar quotes, backslashes, or a
+    quoted name that is not letters, digits and underscores."""
+    if re.search(r'/\*|\$|\\', sql):
+        return None
+    out, current, i = [], '', 0
+    while i < len(sql):
+        c = sql[i]
+        if c in '\'"':
+            j = i + 1
+            while True:
+                j = sql.find(c, j)
+                if j < 0:
+                    return None
+                if sql[j + 1:j + 2] != c:
+                    break
+                j += 2
+            if c == '"' and not re.fullmatch(r'\w+', sql[i + 1:j]):
+                return None
+            current += sql[i:j + 1] if c == '"' else "'?'"
+            i = j + 1
+        elif sql.startswith('--', i):
+            i = len(sql) if sql.find('\n', i) < 0 else sql.find('\n', i)
+        elif c == ';':
+            out.append(current)
+            current, i = '', i + 1
+        else:
+            current, i = current + c, i + 1
+    return [' '.join(x.split()) for x in out + [current] if x.strip()]
+
+
+def balanced(text):
+    depth = 0
+    for c in text:
+        depth += {'(': 1, ')': -1}.get(c, 0)
+        if depth < 0:
+            return False
+    return depth == 0
 
 
 def adds_only(sql):
     """True when each statement adds a table, an index or foreign key on a table the
     same file creates, or a column that is nullable or has a constant default."""
-    text = re.sub(r'--[^\n]*', '', sql.replace('--> statement-breakpoint', ';'))
-    statements = [' '.join(s.split()) for s in text.split(';')]
-    statements = [s for s in statements if s]
-    created = {m['t'] for s in statements if (m := re.fullmatch(rf'CREATE TABLE (?:IF NOT EXISTS )?{TABLE} \(.*\)', s, re.I))}
-    for s in statements:
-        if re.fullmatch(rf'CREATE TABLE (?:IF NOT EXISTS )?{TABLE} \(.*\)', s, re.I):
+    parts = statements(sql)
+    if not parts:
+        return False
+    tables = [re.fullmatch(rf'CREATE TABLE {TABLE} \((?P<body>.*)\)', s, re.I) for s in parts]
+    created = {m['t'] for m in tables if m and balanced(m['body'])}
+    for s, table in zip(parts, tables):
+        if table and table['t'] in created:
             continue
-        on_new = (re.fullmatch(rf'CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?"[^"]+" ON {TABLE}(?: USING \w+)? \(.*\)(?: WHERE .*)?', s, re.I)
-                  or re.fullmatch(rf'ALTER TABLE {TABLE} ADD CONSTRAINT "[^"]+" FOREIGN KEY \(.*\) REFERENCES .*', s, re.I))
-        if on_new:
-            if on_new['t'] in created:
-                continue
-            return False
-        column = re.fullmatch(rf'ALTER TABLE {TABLE} ADD COLUMN (?:IF NOT EXISTS )?"[^"]+" (?P<rest>.+)', s, re.I)
-        if not column or re.search(r',|\b(?:PRIMARY|UNIQUE|REFERENCES|CHECK|GENERATED|ADD|DROP|ALTER|RENAME)\b', column['rest'], re.I):
-            return False
-        default = re.search(r'\bDEFAULT (?P<v>.+?)(?: NOT NULL)?$', column['rest'], re.I)
-        if default and not re.fullmatch(CONSTANT, default['v'], re.I):
-            return False
-        if not default and re.search(r'\bNOT NULL\b', column['rest'], re.I):
-            return False
-    return bool(statements)
+        on_new = (re.fullmatch(rf'CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?"\w+" ON {TABLE}(?: USING \w+)? \(.*\)(?: WHERE .*)?', s, re.I)
+                  or re.fullmatch(rf'ALTER TABLE {TABLE} ADD CONSTRAINT "\w+" FOREIGN KEY \([^()]*\) REFERENCES (?:"public"\.)?"\w+" ?\([^()]*\)'
+                                  r'(?: ON (?:DELETE|UPDATE) (?:no action|cascade|set null|set default|restrict))*', s, re.I))
+        if on_new and on_new['t'] in created:
+            continue
+        column = re.fullmatch(rf'ALTER TABLE {TABLE} ADD COLUMN (?:IF NOT EXISTS )?"\w+" {COLUMN_TYPE}(?: DEFAULT (?P<v>{CONSTANT}))?(?P<required> NOT NULL)?', s, re.I)
+        if column and (column['v'] or not column['required']):
+            continue
+        return False
+    return True
 
 
 def additive_migration(spec, base, head, files):
