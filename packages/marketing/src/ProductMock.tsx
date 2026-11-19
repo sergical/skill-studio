@@ -17,6 +17,7 @@ import * as stylex from "@stylexjs/stylex";
 import {
   Activity,
   BookOpen,
+  Boxes,
   Check,
   ChevronDown,
   ChevronRight,
@@ -402,6 +403,7 @@ const navItems: ReadonlyArray<{
   { id: "home", label: "Home", Icon: LayoutDashboard },
   { id: "skills", label: "Skills", Icon: Layers, count: SKILL_TOTAL },
   { id: "plugins", label: "Plugins", Icon: Puzzle, count: 109 },
+  { id: "packs", label: "Packs", Icon: Boxes },
   { id: "activity", label: "Activity", Icon: Activity },
 ];
 
@@ -1136,6 +1138,441 @@ function PluginsScreen({ onOpenSkill }: { onOpenSkill: (skill: SkillRow) => void
           ))}
         </section>
       </div>
+    </>
+  );
+}
+
+// Packs: the labels, summaries and skip reasons copy the app's Packs page and the core's plan text.
+interface PackSkill {
+  name: string;
+  scope: string;
+  edited?: boolean;
+  behind?: boolean;
+}
+
+interface MockPack {
+  source: string;
+  kind: "skills.sh" | "dotagents" | "Plugin";
+  skills: readonly PackSkill[];
+  newUpstream: readonly string[];
+  /** Set for plugin packs: the agent, not Skill Studio, updates and removes them. */
+  updateCommand?: string;
+}
+
+type PackIntent =
+  | { kind: "update"; source: string | null }
+  | { kind: "remove"; source: string }
+  | { kind: "add"; source: string; skills: readonly string[] };
+
+interface PackStep {
+  skill: string;
+  scope: string;
+  skip: string | null;
+}
+
+const EDITED_REASON = "has local edits, which the owner tool would overwrite or delete";
+// A source the demo has no pack for ships these skills.
+const ADD_PACK_SKILLS = ["sql-review", "pr-review"];
+
+// The core reads the source's skills upstream; the demo's upstream is each pack's
+// installed skills plus its new upstream ones.
+function upstreamSkills(packs: readonly MockPack[], source: string): readonly string[] {
+  const pack = packs.find((each) => each.source === source && each.kind === "skills.sh");
+  if (!pack) return ADD_PACK_SKILLS;
+  return [...new Set([...pack.skills.map((skill) => skill.name), ...pack.newUpstream])].sort();
+}
+
+const initialPacks: readonly MockPack[] = [
+  {
+    source: "sergical/skills",
+    kind: "skills.sh",
+    skills: [
+      { name: "add-customer-story", scope: "Global" },
+      { name: "commit", scope: "Global", edited: true, behind: true },
+      { name: "new-branch", scope: "agent-studio" },
+      { name: "prepare-videos", scope: "Global", behind: true },
+    ],
+    newUpstream: [],
+  },
+  {
+    source: "getsentry/skills",
+    kind: "skills.sh",
+    skills: [
+      { name: "backport-pr", scope: "Global" },
+      { name: "code-review", scope: "Global" },
+    ],
+    newUpstream: ["sentry-workflow"],
+  },
+  {
+    source: "figma@claude-plugins-official",
+    kind: "Plugin",
+    skills: pluginGroups[1].skills.map(([name]) => ({ name, scope: "Global" })),
+    newUpstream: [],
+    updateCommand: "claude plugin update figma@claude-plugins-official",
+  },
+];
+
+const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "" : "s"}`;
+const countSkills = (packs: readonly MockPack[], want: (skill: PackSkill) => boolean | undefined) =>
+  packs.reduce((sum, pack) => sum + pack.skills.filter(want).length, 0);
+
+function packSummary(pack: MockPack, checked: boolean) {
+  const edited = countSkills([pack], (skill) => skill.edited);
+  const behind = countSkills([pack], (skill) => skill.behind);
+  const parts = [plural(pack.skills.length, "skill")];
+  if (edited > 0) parts.push(`${edited} edited locally`);
+  if (!checked) parts.push("upstream not checked");
+  else if (pack.updateCommand) parts.push("no git source to check");
+  else if (behind === 0 && pack.newUpstream.length === 0) parts.push("up to date");
+  else parts.push(`${behind} behind upstream`);
+  if (checked && pack.newUpstream.length > 0) {
+    parts.push(`new upstream: ${pack.newUpstream.join(", ")}`);
+  }
+  return parts.join(", ");
+}
+
+function reportSummary(packs: readonly MockPack[], checked: boolean) {
+  const edited = countSkills(packs, (skill) => skill.edited);
+  const parts = [
+    plural(packs.length, "pack"),
+    plural(
+      countSkills(packs, () => true),
+      "skill",
+    ),
+  ];
+  if (edited > 0) parts.push(`${edited} edited locally`);
+  if (!checked) return [...parts, "upstream not checked (pass remote to check)"].join(", ");
+  const behind = countSkills(packs, (skill) => skill.behind);
+  const fresh = packs.reduce((sum, pack) => sum + pack.newUpstream.length, 0);
+  return [...parts, `${behind} behind upstream`, `${fresh} new upstream`].join(", ");
+}
+
+function ownerReason(pack: MockPack, action: "update" | "remove") {
+  if (!pack.updateCommand) return null;
+  return action === "update"
+    ? `A plugin. The agent updates it with ${pack.updateCommand}.`
+    : "A plugin. Remove it in the agent.";
+}
+
+/** Each step's skip reason, as the core plans it; `null` when the step will run. */
+function planSteps(packs: readonly MockPack[], intent: PackIntent): PackStep[] {
+  if (intent.kind === "add") {
+    const installed = (name: string) =>
+      packs.some((pack) => pack.skills.some((s) => s.name === name && s.scope === "Global"));
+    return intent.skills.map((skill) => ({
+      skill,
+      scope: "Global",
+      skip: installed(skill) ? "already installed here" : null,
+    }));
+  }
+  return packs
+    .filter((pack) => intent.source === null || pack.source === intent.source)
+    .flatMap((pack) =>
+      pack.skills.map((skill) => ({
+        skill: skill.name,
+        scope: skill.scope,
+        skip: pack.updateCommand
+          ? intent.kind === "update"
+            ? `a plugin; the agent updates it with ${pack.updateCommand}`
+            : "a plugin; remove it in the agent"
+          : skill.edited
+            ? EDITED_REASON
+            : null,
+      })),
+    );
+}
+
+/** Applies the steps that ran. Pack additions install through skills.sh, as in the core. */
+function applyPackPlan(
+  packs: readonly MockPack[],
+  intent: PackIntent,
+  steps: readonly PackStep[],
+): MockPack[] {
+  const run = steps.filter((step) => step.skip === null);
+  const ran = new Set(run.map((step) => `${step.skill}:${step.scope}`));
+  const didRun = (skill: PackSkill) => ran.has(`${skill.name}:${skill.scope}`);
+  if (intent.kind === "add") {
+    const added = run.map((step) => ({ name: step.skill, scope: step.scope }));
+    const owner = (pack: MockPack) => pack.source === intent.source && pack.kind === "skills.sh";
+    const withNew = packs.some(owner)
+      ? packs.map((pack) => (owner(pack) ? { ...pack, skills: [...pack.skills, ...added] } : pack))
+      : [
+          ...packs,
+          { source: intent.source, kind: "skills.sh" as const, skills: added, newUpstream: [] },
+        ];
+    return withNew.map((pack) =>
+      pack.source === intent.source
+        ? {
+            ...pack,
+            newUpstream: pack.newUpstream.filter((name) => !added.some((s) => s.name === name)),
+          }
+        : pack,
+    );
+  }
+  const touched = (pack: MockPack) => intent.source === null || pack.source === intent.source;
+  return packs.flatMap((pack) => {
+    if (!touched(pack)) return [pack];
+    if (intent.kind === "update") {
+      const skills = pack.skills.map((s) => (didRun(s) ? { ...s, behind: false } : s));
+      return [{ ...pack, skills }];
+    }
+    // Upstream still ships the removed skills, so the next check lists them as new.
+    const kept = pack.skills.filter((skill) => !didRun(skill));
+    const removed = pack.skills.filter(didRun).map((skill) => skill.name);
+    const newUpstream = [...new Set([...pack.newUpstream, ...removed])].sort();
+    return kept.length > 0 ? [{ ...pack, skills: kept, newUpstream }] : [];
+  });
+}
+
+const PACK_VERB = { update: "Update", remove: "Remove", add: "Add" } as const;
+const PACK_PLANNED = { update: "Will update", remove: "Will remove", add: "Will install" } as const;
+const PACK_DONE = { update: "Updated", remove: "Removed", add: "Installed" } as const;
+const PACK_SUMMARY_VERB = { update: "update", remove: "remove", add: "install" } as const;
+
+function PackPlanDialog({
+  intent,
+  steps,
+  onConfirm,
+  onClose,
+}: {
+  intent: PackIntent;
+  steps: readonly PackStep[];
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const [done, setDone] = useState(false);
+  const {
+    dialog,
+    initialFocus: cancelButton,
+    onKeyDown,
+  } = useModalFocus<HTMLButtonElement>(onClose);
+  // Confirm unmounts after it runs; move focus to Close so it stays in the dialog.
+  useEffect(() => {
+    if (done) cancelButton.current?.focus();
+  }, [done, cancelButton]);
+  const toRun = steps.filter((step) => step.skip === null).length;
+  const skipped = steps.length - toRun;
+  const title = done
+    ? "Done"
+    : intent.kind === "update" && intent.source === null
+      ? "Update every pack?"
+      : intent.kind === "add"
+        ? `Add skills from ${intent.source}?`
+        : `${PACK_VERB[intent.kind]} ${intent.source}?`;
+  const summary = done
+    ? `${PACK_DONE[intent.kind]} ${plural(toRun, "skill")}; ${skipped} skipped; 0 failed.`
+    : `Would ${PACK_SUMMARY_VERB[intent.kind]} ${plural(toRun, "skill")}; ${skipped} skipped.`;
+  return (
+    <div {...stylex.props(styles.compareBackdrop)}>
+      <section
+        ref={dialog}
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={title}
+        onKeyDown={onKeyDown}
+        {...stylex.props(styles.compareDialog, styles.planDialog)}
+      >
+        <header {...stylex.props(styles.compareHeader)}>
+          <h2 {...stylex.props(styles.sheetTitle)}>{title}</h2>
+        </header>
+        <p role="status" {...stylex.props(styles.planDescription)}>
+          {summary}
+        </p>
+        <ul aria-label="Steps" {...stylex.props(styles.planSteps)}>
+          {steps.map((step) => (
+            <li key={`${step.skill}:${step.scope}`} {...stylex.props(styles.planStep)}>
+              <span {...stylex.props(styles.planStepTop)}>
+                <span {...stylex.props(styles.truncate)}>{step.skill}</span>
+                <small {...stylex.props(styles.faint)}>{step.scope}</small>
+                <span {...stylex.props(styles.planStepState)}>
+                  {step.skip
+                    ? "Skipped"
+                    : done
+                      ? PACK_DONE[intent.kind]
+                      : PACK_PLANNED[intent.kind]}
+                </span>
+              </span>
+              {step.skip && <small {...stylex.props(styles.muted)}>{step.skip}</small>}
+            </li>
+          ))}
+        </ul>
+        <footer {...stylex.props(styles.sheetFooter)}>
+          {done ? (
+            <button
+              ref={cancelButton}
+              type="button"
+              onClick={onClose}
+              {...stylex.props(styles.outlineButton)}
+            >
+              Close
+            </button>
+          ) : (
+            <>
+              <button
+                ref={cancelButton}
+                type="button"
+                onClick={onClose}
+                {...stylex.props(styles.outlineButton)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={toRun === 0}
+                onClick={() => {
+                  onConfirm();
+                  setDone(true);
+                }}
+                {...stylex.props(styles.solidButton)}
+              >
+                {PACK_VERB[intent.kind]}
+                {toRun > 0 && ` ${plural(toRun, "skill")}`}
+              </button>
+            </>
+          )}
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function PackButton({
+  disabledReason,
+  onClick,
+  children,
+}: {
+  disabledReason: string | null;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  const button = (
+    <button
+      type="button"
+      disabled={disabledReason !== null}
+      onClick={onClick}
+      {...stylex.props(styles.outlineButton, styles.packButton)}
+    >
+      {children}
+    </button>
+  );
+  return disabledReason === null ? button : <span title={disabledReason}>{button}</span>;
+}
+
+function PacksScreen() {
+  const [packs, setPacks] = useState<readonly MockPack[]>(initialPacks);
+  const [checked, setChecked] = useState(false);
+  const [addSource, setAddSource] = useState("");
+  const [plan, setPlan] = useState<{ intent: PackIntent; steps: PackStep[] } | null>(null);
+  const open = (intent: PackIntent) => setPlan({ intent, steps: planSteps(packs, intent) });
+  const canUpdateAll = packs.some((pack) => ownerReason(pack, "update") === null);
+  return (
+    <>
+      <PageHeader
+        title="Packs"
+        subtitle="Sources that ship your skills. Each change shows its plan before it runs."
+        actions={
+          <>
+            <button
+              type="button"
+              onClick={() => setChecked(true)}
+              {...stylex.props(styles.outlineButton)}
+            >
+              <RefreshCw aria-hidden="true" size={12} />
+              Check upstream
+            </button>
+            <button
+              type="button"
+              disabled={!canUpdateAll}
+              onClick={() => open({ kind: "update", source: null })}
+              {...stylex.props(styles.outlineButton)}
+            >
+              Update all
+            </button>
+          </>
+        }
+      />
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          const source = addSource.trim();
+          if (source) open({ kind: "add", source, skills: upstreamSkills(packs, source) });
+        }}
+        {...stylex.props(styles.toolbar)}
+      >
+        <span {...stylex.props(styles.packAdd)}>
+          <label {...stylex.props(styles.filterInput)}>
+            <input
+              value={addSource}
+              onChange={(event) => setAddSource(event.target.value)}
+              aria-label="Pack source"
+              placeholder="owner/repo or git URL"
+              {...stylex.props(styles.input)}
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={addSource.trim() === ""}
+            {...stylex.props(styles.outlineButton)}
+          >
+            Add pack
+          </button>
+        </span>
+      </form>
+      <div {...stylex.props(styles.view)}>
+        <section {...stylex.props(styles.page)}>
+          <p {...stylex.props(styles.packSummary)}>{reportSummary(packs, checked)}</p>
+          <ul aria-label="Packs" {...stylex.props(styles.pluginCard, styles.packList)}>
+            {packs.map((pack) => (
+              <li
+                key={`${pack.kind}:${pack.source}`}
+                aria-label={pack.source}
+                {...stylex.props(styles.packRow)}
+              >
+                <span {...stylex.props(styles.pluginSkill, styles.truncate)}>{pack.source}</span>
+                <small {...stylex.props(styles.faint, styles.hideBelowNarrow)}>{pack.kind}</small>
+                <span {...stylex.props(styles.pluginDescription, styles.hideBelowNarrow)}>
+                  {packSummary(pack, checked)}
+                </span>
+                <span {...stylex.props(styles.packActions)}>
+                  {checked && pack.newUpstream.length > 0 && (
+                    <PackButton
+                      disabledReason={null}
+                      onClick={() =>
+                        open({ kind: "add", source: pack.source, skills: pack.newUpstream })
+                      }
+                    >
+                      Add {pack.newUpstream.length} new
+                    </PackButton>
+                  )}
+                  <PackButton
+                    disabledReason={ownerReason(pack, "update")}
+                    onClick={() => open({ kind: "update", source: pack.source })}
+                  >
+                    Update
+                  </PackButton>
+                  <PackButton
+                    disabledReason={ownerReason(pack, "remove")}
+                    onClick={() => open({ kind: "remove", source: pack.source })}
+                  >
+                    Remove
+                  </PackButton>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      </div>
+      {plan && (
+        <PackPlanDialog
+          intent={plan.intent}
+          steps={plan.steps}
+          onConfirm={() => setPacks((current) => applyPackPlan(current, plan.intent, plan.steps))}
+          onClose={() => {
+            setPlan(null);
+            setAddSource("");
+          }}
+        />
+      )}
     </>
   );
 }
@@ -2042,6 +2479,8 @@ export function ProductMock({ theme, onToggleTheme }: ProductMockProps) {
             <SkillsScreen rows={rows} onOpenSkill={openSkill} onFix={fixSkill} />
           ) : activeView === "plugins" ? (
             <PluginsScreen onOpenSkill={openSkill} />
+          ) : activeView === "packs" ? (
+            <PacksScreen />
           ) : activeView === "activity" ? (
             <ActivityScreen onOpenSkill={openSkill} />
           ) : (
@@ -2364,18 +2803,19 @@ const styles = stylex.create({
   segmentOn: { backgroundColor: tokens.active, color: tokens.text, fontWeight: 500 },
   outlineButton: {
     alignItems: "center",
-    backgroundColor: { default: "transparent", ":hover": tokens.hover },
+    backgroundColor: { default: "transparent", ":hover:not(:disabled)": tokens.hover },
     borderColor: tokens.border,
     borderRadius: 4,
     borderStyle: "solid",
     borderWidth: 1,
     color: tokens.text,
-    cursor: "pointer",
+    cursor: { default: "pointer", ":disabled": "default" },
     display: "inline-flex",
     flexShrink: 0,
     fontSize: 12,
     gap: 6,
     height: 28,
+    opacity: { default: 1, ":disabled": 0.45 },
     paddingInline: 10,
     whiteSpace: "nowrap",
   },
@@ -2698,6 +3138,48 @@ const styles = stylex.create({
     transition: "background-color 150ms ease-out, color 150ms ease-out",
     ":active": { transform: "scale(.96)" },
   },
+
+  // Packs
+  packAdd: { display: "flex", flex: "1 1 auto", gap: 8, minWidth: 0 },
+  packList: { listStyle: "none", margin: 0, padding: 0 },
+  packSummary: { color: tokens.muted, fontSize: 12, margin: 0, paddingInline: 12 },
+  packRow: {
+    alignItems: "center",
+    borderBottomColor: tokens.subtleBorder,
+    borderBottomStyle: "solid",
+    borderBottomWidth: { default: 1, ":last-child": 0 },
+    columnGap: 12,
+    display: "grid",
+    fontSize: 13,
+    gridTemplateColumns: {
+      default: "minmax(0,1fr) 72px minmax(0,1.4fr) 200px",
+      [PANEL_BELOW_NARROW]: "minmax(0,1fr) auto",
+    },
+    height: 40,
+    paddingInline: 12,
+  },
+  packActions: { display: "flex", gap: 6, justifyContent: "flex-end" },
+  packButton: { height: 24, paddingInline: 8 },
+  planSteps: {
+    listStyle: "none",
+    margin: 0,
+    maxHeight: 260,
+    overflow: "auto",
+    padding: "4px 20px",
+  },
+  planStep: {
+    borderBottomColor: tokens.subtleBorder,
+    borderBottomStyle: "solid",
+    borderBottomWidth: { default: 1, ":last-child": 0 },
+    display: "flex",
+    flexDirection: "column",
+    gap: 2,
+    paddingBlock: 6,
+  },
+  planStepTop: { alignItems: "baseline", display: "flex", fontSize: 13, gap: 8 },
+  planStepState: { color: tokens.muted, fontSize: 11, marginLeft: "auto", whiteSpace: "nowrap" },
+  planDescription: { color: tokens.muted, fontSize: 12, margin: 0, padding: "12px 20px 0" },
+  planDialog: { width: "min(480px, 92%)" },
 
   // Plugins
   pluginGroup: { display: "flex", flexDirection: "column", gap: 6 },

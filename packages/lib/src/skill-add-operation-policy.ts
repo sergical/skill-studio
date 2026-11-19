@@ -58,11 +58,8 @@ export function shouldConsumeAddSkillOperation(
   return isAddSkillOperationTerminal(status.phase);
 }
 
-/** Progress line: phase title plus batch "2 of 5" when present. */
+/** Progress line: the backend's message (such as "Installing 5 skills"), else the phase title. */
 export function addSkillOperationProgressCopy(status: AddSkillOperationEvent): string {
-  if (status.item) {
-    return `${addSkillOperationStatusTitle(status.phase)} · ${status.item.current} of ${status.item.total}`;
-  }
   return status.message || addSkillOperationStatusTitle(status.phase);
 }
 

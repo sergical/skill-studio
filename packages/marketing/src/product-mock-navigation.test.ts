@@ -13,6 +13,7 @@ describe("productMockDetailBackLabel", () => {
   it("keeps the existing labels for other root views", () => {
     expect(productMockDetailBackLabel("home")).toBe("Home");
     expect(productMockDetailBackLabel("skills")).toBe("Skills");
+    expect(productMockDetailBackLabel("packs")).toBe("Packs");
     expect(productMockDetailBackLabel("activity")).toBe("Activity");
     expect(productMockDetailBackLabel("parked")).toBe("Parked");
   });

@@ -78,3 +78,24 @@ export function otherScopeNote(
   if (presence.projectPaths.length === 0) return null;
   return `${already} in ${joinNames(presence.projectPaths.map(projectName))}. A global copy will apply to every project.`;
 }
+
+/**
+ * True when a live copy of `skillName` already sits in `scope` - for a
+ * project install, the project at `projectPath`. Installing it there again
+ * fails: the core does not overwrite a copy. Parked and plugin copies do not
+ * count.
+ */
+export function isInstalledIn(
+  skills: readonly InstalledSkill[],
+  skillName: string,
+  scope: InstallScope,
+  projectPath?: string,
+): boolean {
+  const skill = skills.find((s) => s.name === skillName);
+  if (!skill) return false;
+  const presence = scopePresence(skill.deployments);
+  if (scope === "project") {
+    return projectPath !== undefined && presence.projectPaths.includes(projectPath);
+  }
+  return presence.global;
+}

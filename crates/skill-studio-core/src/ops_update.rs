@@ -62,7 +62,7 @@ use crate::dto::{InstallMethod, UpdateAllItem, UpdateAllOutcome, UpdateOutcome, 
 use crate::error::{CoreError, ErrorCode};
 use crate::events::{fingerprint_path, EventDraft, EventKind, EventStatus};
 use crate::fsops::{self, Root};
-use crate::identity::{PlanId, RootScope, SkillName, UNIVERSAL_ROOT_RELATIVE};
+use crate::identity::{EventId, PlanId, RootScope, SkillName, UNIVERSAL_ROOT_RELATIVE};
 use crate::journal::{FsJournal, PlanWriter};
 use crate::ops::Operation;
 use crate::ops_install;
@@ -83,7 +83,7 @@ use crate::ports::{
 /// the same name alone.
 fn update_cli_args_and_cwd(
     method: InstallMethod,
-    skill: &SkillName,
+    skills: &[SkillName],
     scope: &RootScope,
 ) -> (Vec<String>, Option<PathBuf>) {
     let cwd = match scope {
@@ -95,8 +95,8 @@ fn update_cli_args_and_cwd(
             let mut args = vec![
                 crate::skills_cli_agents::SKILLS_CLI_PACKAGE.to_string(),
                 "update".to_string(),
-                skill.0.clone(),
             ];
+            args.extend(skills.iter().map(|skill| skill.0.clone()));
             args.push(
                 match scope {
                     RootScope::Global => "--global",
@@ -350,6 +350,7 @@ fn update_via_cli(
     rt: &Runtime,
     ctx: &OpContext,
     req: &UpdateRequest,
+    from_source: Option<&str>,
     destination: &Path,
 ) -> Result<(), CoreError> {
     let spawner = rt.ports.spawner.as_ref().ok_or_else(|| {
@@ -358,7 +359,19 @@ fn update_via_cli(
             "this host build has no process spawner; dotagents/skills.sh updates are not available",
         )
     })?;
-    let (args, cwd) = update_cli_args_and_cwd(req.method, &req.skill, &req.scope);
+    let (args, cwd) = match from_source {
+        Some(source) if req.method == InstallMethod::SkillsSh => {
+            crate::ops_install_cli::cli_args_and_cwd(
+                req.method,
+                source,
+                std::slice::from_ref(&req.skill),
+                &req.scope,
+                &[],
+                crate::dto::InstallLinkMode::Link,
+            )
+        }
+        _ => update_cli_args_and_cwd(req.method, std::slice::from_ref(&req.skill), &req.scope),
+    };
     let cwd = cwd
         .or_else(|| (req.method == InstallMethod::SkillsSh).then(|| rt.scope.home.lexical.clone()));
     let spec = crate::ports::ProcessSpec {
@@ -370,10 +383,10 @@ fn update_via_cli(
     };
     let output = spawner.run(&spec, ctx.cancel.as_ref())?;
     if output.status != Some(0) {
-        let command = if req.method == InstallMethod::Dotagents {
-            "dotagents install"
-        } else {
-            "skills update"
+        let command = match (req.method, from_source) {
+            (InstallMethod::Dotagents, _) => "dotagents install",
+            (_, Some(_)) => "skills add",
+            _ => "skills update",
         };
         return Err(cli_failure(command, &output));
     }
@@ -620,6 +633,7 @@ fn update_write(
     ctx: &OpContext,
     session: &mut MutationSession,
     req: &UpdateRequest,
+    from_source: Option<&str>,
     universal_root: &Path,
     destination: &Path,
     copy_registry: Option<CopyRegistryRead>,
@@ -657,7 +671,7 @@ fn update_write(
                 }
             }
             let held_before = harness_dirs_holding(rt, &req.scope, &req.skill);
-            let refreshed = update_via_cli(rt, ctx, req, destination).and_then(|()| {
+            let refreshed = update_via_cli(rt, ctx, req, from_source, destination).and_then(|()| {
                 if req.method == InstallMethod::SkillsSh {
                     remove_links_the_cli_added(
                         rt,
@@ -697,7 +711,21 @@ pub fn update(
     ctx: &OpContext,
     req: &UpdateRequest,
 ) -> Result<UpdateOutcome, CoreError> {
-    update_then_release(rt, ctx, req, &mut |_| {})
+    update_then_release(rt, ctx, req, None, &mut |_| {})
+}
+
+/// [`update`] for a `SkillsSh` skill, installing it from `from_source`
+/// instead of its recorded source: `npx skills add <from_source> --skill
+/// <name>` over the existing copy, which moves its lock row to that source.
+/// The journal row backs up the folder and the lock row, so `restore_event`
+/// puts the old source back. `pack_switch_source` calls this.
+pub(crate) fn update_from_source(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &UpdateRequest,
+    from_source: &str,
+) -> Result<UpdateOutcome, CoreError> {
+    update_then_release(rt, ctx, req, Some(from_source), &mut |_| {})
 }
 
 /// A point inside [`update_body`] where the lease is held, for
@@ -714,11 +742,12 @@ fn update_then_release(
     rt: &Runtime,
     ctx: &OpContext,
     req: &UpdateRequest,
+    from_source: Option<&str>,
     on_stage: &mut dyn FnMut(UpdateStage<'_>),
 ) -> Result<UpdateOutcome, CoreError> {
     rt.run(Operation::Update, ctx, || {
         refuse_parked(rt, req)?;
-        update_body(rt, ctx, req, on_stage)
+        update_body(rt, ctx, req, from_source, on_stage)
     })
 }
 
@@ -765,6 +794,7 @@ fn update_body(
     rt: &Runtime,
     ctx: &OpContext,
     req: &UpdateRequest,
+    from_source: Option<&str>,
     on_stage: &mut dyn FnMut(UpdateStage<'_>),
 ) -> Result<UpdateOutcome, CoreError> {
     ctx.checkpoint()?;
@@ -776,6 +806,56 @@ fn update_body(
     let mut session = session?;
     let begin_step = crate::timing::step(clock, "begin_session", step_start);
 
+    let step_start = clock.monotonic();
+    let mut prepared = prepare_update(rt, &mut session, req, from_source, on_stage)?;
+    let written = update_write(
+        rt,
+        ctx,
+        &mut session,
+        req,
+        from_source,
+        &prepared.universal_root,
+        &prepared.destination,
+        prepared.copy_registry.take(),
+        prepared.dotagents.as_ref(),
+    );
+    let outcome = finish_update(rt, &mut session, req, prepared, written)?;
+    on_stage(UpdateStage::Written);
+    session.finish(rt, ctx);
+    let write_step = crate::timing::step(clock, "write", step_start);
+    ctx.record_timing(crate::timing::op_timing(
+        clock,
+        "update",
+        op_start,
+        vec![begin_step, write_step],
+    ));
+    Ok(outcome)
+}
+
+/// What [`prepare_update`] read and recorded for one skill before its
+/// first write.
+struct PreparedUpdate {
+    id: EventId,
+    universal_root: PathBuf,
+    destination: PathBuf,
+    tree_hash_before: String,
+    lock_undo: Option<crate::lock_file::LockRowUndo>,
+    backup_targets: Vec<PathBuf>,
+    folders_before: Vec<String>,
+    copy_registry: Option<CopyRegistryRead>,
+    dotagents: Option<DotagentsPlan>,
+}
+
+/// Checks `req` under the held lease and records its journal row - the
+/// backup of the existing destination (and, for `Dotagents`, the files
+/// `install` rewrites) and the inverse - before the first write.
+fn prepare_update(
+    rt: &Runtime,
+    session: &mut MutationSession,
+    req: &UpdateRequest,
+    from_source: Option<&str>,
+    on_stage: &mut dyn FnMut(UpdateStage<'_>),
+) -> Result<PreparedUpdate, CoreError> {
     let fs = rt.ports.fs.as_ref();
     let root = ops_install::scope_root(rt, &req.scope);
     let universal_root = root.join(UNIVERSAL_ROOT_RELATIVE);
@@ -813,7 +893,6 @@ fn update_body(
         on_stage(UpdateStage::DotagentsPlanned(plan));
     }
 
-    let step_start = clock.monotonic();
     let id = rt.ports.ids.next_event_id();
     // The row goes down before the first write, same as install's own F7 -
     // this time the backup captures the real tree already on disk (never
@@ -822,7 +901,7 @@ fn update_body(
     // destination stays first: its entry is the row's primary path, and
     // `restore_event` puts every other entry - `Dotagents`' `agents.toml`
     // and `agents.lock` - back beside it.
-    let mut lock_undo = if req.method == InstallMethod::SkillsSh {
+    let lock_undo = if req.method == InstallMethod::SkillsSh {
         let path = match &req.scope {
             RootScope::Global => crate::lock_file::lock_file_path(&rt.scope.home.lexical),
             RootScope::Project(project) => crate::lock_file::project_lock_file_path(&project.0),
@@ -889,7 +968,7 @@ fn update_body(
         payload: serde_json::json!({
             "method": ops_install::method_wire_name(req.method),
             "destination": destination,
-            "source": req.source,
+            "source": from_source.or(req.source.as_deref()),
             "tree_hash_before": tree_hash_before,
         }),
         inverse: Some(inverse),
@@ -897,16 +976,42 @@ fn update_body(
     };
     session.store.record(&session.guard, &id, &draft)?;
 
-    let registry_undo = match update_write(
-        rt,
-        ctx,
-        &mut session,
-        req,
-        &universal_root,
-        &destination,
+    Ok(PreparedUpdate {
+        id,
+        universal_root,
+        destination,
+        tree_hash_before,
+        lock_undo,
+        backup_targets,
+        folders_before,
         copy_registry,
-        dotagents.as_ref(),
-    ) {
+        dotagents,
+    })
+}
+
+/// Marks `prepared`'s row `Failed` when `written` failed; otherwise records
+/// what only a finished update knows (lock row, fingerprints, tree hash)
+/// and marks the row `Done`.
+fn finish_update(
+    rt: &Runtime,
+    session: &mut MutationSession,
+    req: &UpdateRequest,
+    prepared: PreparedUpdate,
+    written: Result<Option<serde_json::Value>, CoreError>,
+) -> Result<UpdateOutcome, CoreError> {
+    let fs = rt.ports.fs.as_ref();
+    let PreparedUpdate {
+        id,
+        universal_root,
+        destination,
+        tree_hash_before,
+        mut lock_undo,
+        backup_targets,
+        folders_before,
+        dotagents,
+        ..
+    } = prepared;
+    let registry_undo = match written {
         Ok(undo) => undo,
         Err(e) => {
             let _ = session
@@ -929,7 +1034,7 @@ fn update_body(
         // Best-effort like the registry patch above: the install already
         // wrote, so the row must still finish for undo to find it.
         let _ = record_dotagents_side_effects(
-            &mut session,
+            session,
             fs,
             &id,
             &universal_root,
@@ -984,15 +1089,6 @@ fn update_body(
     session
         .store
         .finish(&session.guard, &id, EventStatus::Done, post_fingerprint)?;
-    on_stage(UpdateStage::Written);
-    session.finish(rt, ctx);
-    let write_step = crate::timing::step(clock, "write", step_start);
-    ctx.record_timing(crate::timing::op_timing(
-        clock,
-        "update",
-        op_start,
-        vec![begin_step, write_step],
-    ));
     Ok(UpdateOutcome {
         event_id: id,
         skill: req.skill.clone(),
@@ -1509,6 +1605,159 @@ fn covered_by_install(req: &UpdateRequest, batch: &DotagentsBatch, rt: &Runtime)
     }
 }
 
+/// How many requests from `start` share one `npx skills update` (#687):
+/// consecutive `SkillsSh` requests with no ref pin, in `start`'s scope, with
+/// distinct names. Only consecutive ones, so batching never reorders
+/// requests that may write the same paths.
+fn skills_sh_run(requests: &[UpdateRequest], start: usize) -> usize {
+    let batchable =
+        |req: &UpdateRequest| req.method == InstallMethod::SkillsSh && req.ref_pin.is_none();
+    let first = &requests[start];
+    if !batchable(first) {
+        return 0;
+    }
+    let mut names = std::collections::HashSet::from([&first.skill]);
+    let mut len = 1;
+    while let Some(next) = requests.get(start + len) {
+        if !batchable(next) || next.scope != first.scope || !names.insert(&next.skill) {
+            break;
+        }
+        len += 1;
+    }
+    len
+}
+
+/// [`update_skills_sh_group`] for one run from [`skills_sh_run`], one result
+/// per request. A failure before any row, such as a busy lease, is each
+/// request's result.
+fn update_skills_sh_run(
+    rt: &Runtime,
+    ctx: &OpContext,
+    run: &[UpdateRequest],
+) -> Vec<Result<UpdateOutcome, CoreError>> {
+    let batch: Vec<&UpdateRequest> = run.iter().collect();
+    // Each skill files its own `Operation::Update` record in a single
+    // update; the run files one for the call it shares.
+    match rt.run(Operation::Update, ctx, || {
+        update_skills_sh_group(rt, ctx, &batch)
+    }) {
+        Ok(outcomes) => outcomes,
+        Err(e) => run.iter().map(|_| Err(e.for_each_item())).collect(),
+    }
+}
+
+/// One scope's `SkillsSh` updates under one lease: each skill is checked
+/// and recorded (backup and lock row) first, then one CLI call updates them
+/// all, then each skill is checked and finished on its own, so each keeps
+/// its own undo. A failed call fails every row, as a failed single update
+/// does.
+fn update_skills_sh_group(
+    rt: &Runtime,
+    ctx: &OpContext,
+    batch: &[&UpdateRequest],
+) -> Result<Vec<Result<UpdateOutcome, CoreError>>, CoreError> {
+    ctx.checkpoint()?;
+    let clock = rt.ports.clock.as_ref();
+    let op_start = clock.monotonic();
+    let step_start = clock.monotonic();
+    let names: Vec<SkillName> = batch.iter().map(|req| req.skill.clone()).collect();
+    let session = MutationSession::begin_for(rt, ctx, &names);
+    ctx.take_timing();
+    let mut session = session?;
+    let begin_step = crate::timing::step(clock, "begin_session", step_start);
+
+    let step_start = clock.monotonic();
+    let mut results: Vec<Option<Result<UpdateOutcome, CoreError>>> =
+        batch.iter().map(|_| None).collect();
+    let mut prepared: Vec<(usize, PreparedUpdate, Vec<PathBuf>)> = Vec::new();
+    for (index, req) in batch.iter().enumerate() {
+        let ready = refuse_parked(rt, req)
+            .and_then(|()| prepare_update(rt, &mut session, req, None, &mut |_| {}));
+        match ready {
+            Ok(ready) => {
+                let held_before = harness_dirs_holding(rt, &req.scope, &req.skill);
+                prepared.push((index, ready, held_before));
+            }
+            Err(e) => results[index] = Some(Err(e)),
+        }
+    }
+    if !prepared.is_empty() {
+        let skills: Vec<SkillName> = prepared
+            .iter()
+            .map(|(index, _, _)| batch[*index].skill.clone())
+            .collect();
+        let called = run_skills_update(rt, ctx, &skills, &batch[0].scope);
+        for (index, ready, held_before) in prepared {
+            let req = batch[index];
+            let written = match &called {
+                Err(e) => Err(e.for_each_item()),
+                Ok(()) if rt.ports.fs.symlink_metadata(&ready.destination).is_err() => Err(
+                    CoreError::new(ErrorCode::Io, "the CLI removed the expected destination")
+                        .at(&ready.destination),
+                ),
+                Ok(()) => remove_links_the_cli_added(
+                    rt,
+                    &session.guard,
+                    &req.scope,
+                    &req.skill,
+                    &held_before,
+                )
+                .map(|()| None),
+            };
+            results[index] = Some(finish_update(rt, &mut session, req, ready, written));
+        }
+    }
+    session.finish(rt, ctx);
+    let write_step = crate::timing::step(clock, "write", step_start);
+    ctx.record_timing(crate::timing::op_timing(
+        clock,
+        "update",
+        op_start,
+        vec![begin_step, write_step],
+    ));
+    Ok(results
+        .into_iter()
+        .map(|result| {
+            result.unwrap_or_else(|| {
+                Err(CoreError::new(
+                    ErrorCode::Incomplete,
+                    "the batched update left a skill without a result",
+                ))
+            })
+        })
+        .collect())
+}
+
+/// `npx skills update <skills>... --global|--project` once, with the
+/// project as cwd for a project scope and the home otherwise, as
+/// [`update_via_cli`] runs it for one skill.
+fn run_skills_update(
+    rt: &Runtime,
+    ctx: &OpContext,
+    skills: &[SkillName],
+    scope: &RootScope,
+) -> Result<(), CoreError> {
+    let spawner = rt.ports.spawner.as_ref().ok_or_else(|| {
+        CoreError::new(
+            ErrorCode::Unsupported,
+            "this host build has no process spawner; dotagents/skills.sh updates are not available",
+        )
+    })?;
+    let (args, cwd) = update_cli_args_and_cwd(InstallMethod::SkillsSh, skills, scope);
+    let spec = crate::ports::ProcessSpec {
+        program: "npx".to_string(),
+        args,
+        cwd: cwd.or_else(|| Some(rt.scope.home.lexical.clone())),
+        env: crate::skills_cli_agents::cli_environment(&rt.scope),
+        timeout_ms: 120_000,
+    };
+    let output = spawner.run(&spec, ctx.cancel.as_ref())?;
+    if output.status != Some(0) {
+        return Err(cli_failure("skills update", &output));
+    }
+    Ok(())
+}
+
 fn update_all_body(
     rt: &Runtime,
     ctx: &OpContext,
@@ -1524,9 +1773,33 @@ fn update_all_body(
     // requests the install covered reuse its row instead of installing again.
     let mut installed: Vec<DotagentsBatch> = Vec::new();
     let mut not_run = Vec::new();
+    let mut batched: Vec<Option<Result<UpdateOutcome, CoreError>>> =
+        requests.iter().map(|_| None).collect();
     for (index, req) in requests.iter().enumerate() {
+        // A run of skills.sh requests starts here: one `npx skills update`
+        // for the whole run, in request order. Its outcomes are reported as
+        // the loop reaches them, before the next run or request starts.
+        let run = if batched[index].is_none() && !ctx.cancel.is_cancelled() {
+            skills_sh_run(requests, index)
+        } else {
+            0
+        };
+        if run > 1 {
+            let members = &requests[index..index + run];
+            for (slot, outcome) in batched[index..index + run]
+                .iter_mut()
+                .zip(update_skills_sh_run(rt, ctx, members))
+            {
+                *slot = Some(outcome);
+            }
+        }
         let is_dotagents = req.method == InstallMethod::Dotagents;
-        let result = if let Some(covered) = cover_under_lease(&installed, rt, req) {
+        let result = if let Some(done) = batched[index].take() {
+            // The batch wrote this scope, so a cached dotagents install no
+            // longer describes it.
+            installed.retain(|batch| batch.scope != req.scope);
+            done
+        } else if let Some(covered) = cover_under_lease(&installed, rt, req) {
             // Already refreshed by a finished install, so cancel must still report it.
             covered
         } else {
@@ -1538,7 +1811,7 @@ fn update_all_body(
             }
             let mut hashes_before = BTreeMap::new();
             let mut snapshot = None;
-            let result = update_then_release(rt, ctx, req, &mut |stage| match stage {
+            let result = update_then_release(rt, ctx, req, None, &mut |stage| match stage {
                 UpdateStage::DotagentsPlanned(plan) => {
                     hashes_before = hash_later_dotagents(
                         rt,
@@ -1612,7 +1885,11 @@ mod tests {
         let skill = SkillName("alpha".to_string());
         let project = RootScope::Project(ProjectRef(PathBuf::from("/proj")));
 
-        let (args, _) = update_cli_args_and_cwd(InstallMethod::SkillsSh, &skill, &project);
+        let (args, _) = update_cli_args_and_cwd(
+            InstallMethod::SkillsSh,
+            std::slice::from_ref(&skill),
+            &project,
+        );
 
         assert!(args.contains(&"--project".to_string()), "argv: {args:?}");
         assert!(!args.contains(&"--global".to_string()), "argv: {args:?}");
@@ -1677,7 +1954,7 @@ mod tests {
         ];
 
         for (label, method, scope, expected_args, expected_cwd) in cases {
-            let (args, cwd) = update_cli_args_and_cwd(method, &skill, scope);
+            let (args, cwd) = update_cli_args_and_cwd(method, std::slice::from_ref(&skill), scope);
             let expected_args: Vec<String> = expected_args.into_iter().map(String::from).collect();
             assert_eq!(args, expected_args, "{label}: argv");
             assert_eq!(cwd, expected_cwd, "{label}: cwd");

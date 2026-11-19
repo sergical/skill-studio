@@ -35,10 +35,10 @@ fn cli_package(method: InstallMethod) -> Option<&'static str> {
 /// from `skill_add.rs`'s `add_via_dotagents` (`npx -y @sentry/dotagents
 /// [--project] add <source> [--name <n>]`, also with the process cwd set to
 /// the project path for a project scope).
-fn cli_args_and_cwd(
+pub(crate) fn cli_args_and_cwd(
     method: InstallMethod,
     source: &str,
-    skill: &SkillName,
+    skills: &[SkillName],
     scope: &RootScope,
     harnesses: &[AgentId],
     link_mode: InstallLinkMode,
@@ -58,8 +58,10 @@ fn cli_args_and_cwd(
                 }
                 RootScope::Project(project) => Some(project.0.clone()),
             };
-            args.push("--skill".to_string());
-            args.push(skill.0.clone());
+            for skill in skills {
+                args.push("--skill".to_string());
+                args.push(skill.0.clone());
+            }
             for harness in install_targets::requested_harnesses(harnesses) {
                 args.push("--agent".to_string());
                 args.push(install_targets::cli_agent_id(&harness).to_string());
@@ -80,8 +82,10 @@ fn cli_args_and_cwd(
             };
             args.push("add".to_string());
             args.push(source.to_string());
-            args.push("--name".to_string());
-            args.push(skill.0.clone());
+            for skill in skills {
+                args.push("--name".to_string());
+                args.push(skill.0.clone());
+            }
             (args, cwd)
         }
         InstallMethod::Copy => (Vec::new(), None),
@@ -126,6 +130,13 @@ pub(crate) fn validate_cli_project_path(
     Ok(())
 }
 
+/// One skill a CLI install writes: its name, and the folder the CLI must
+/// create for it.
+pub(crate) struct CliTarget<'a> {
+    pub(crate) skill: &'a SkillName,
+    pub(crate) destination: &'a Path,
+}
+
 /// `Dotagents`/`SkillsSh`: runs `req.method`'s argv (see
 /// [`cli_args_and_cwd`]) through the process-spawner port and checks the
 /// destination now exists. The CLI writes its own files directly - see
@@ -139,6 +150,25 @@ pub(crate) fn install_via_cli(
     harnesses: &[AgentId],
     destination: &Path,
 ) -> Result<(), CoreError> {
+    let target = CliTarget {
+        skill: &req.skill,
+        destination,
+    };
+    install_via_cli_batch(rt, ctx, req, std::slice::from_ref(&target), harnesses)?.remove(0)
+}
+
+/// [`install_via_cli`] for several skills of one `req.source` in one CLI
+/// call (`--skill a --skill b`), so the source is fetched once (#687). The
+/// outer error is a failed call, which fails every target; each inner
+/// result is one target's own destination check, in `targets` order. Only
+/// `SkillsSh` takes more than one target: dotagents `add` names one skill.
+pub(crate) fn install_via_cli_batch(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &InstallRequest,
+    targets: &[CliTarget<'_>],
+    harnesses: &[AgentId],
+) -> Result<Vec<Result<(), CoreError>>, CoreError> {
     let Some(source) = req.source.as_deref() else {
         return Err(CoreError::new(
             ErrorCode::InvalidRequest,
@@ -151,38 +181,48 @@ pub(crate) fn install_via_cli(
             "install_via_cli is never called for Copy",
         ));
     }
+    if targets.len() != 1 && req.method != InstallMethod::SkillsSh {
+        return Err(CoreError::new(
+            ErrorCode::InvalidRequest,
+            "only a skills.sh install takes several skills in one call",
+        ));
+    }
     let spawner = rt.ports.spawner.as_ref().ok_or_else(|| {
         CoreError::new(
             ErrorCode::Unsupported,
             "this host build has no process spawner; dotagents/skills.sh installs are not available",
         )
     })?;
+    let skills: Vec<SkillName> = targets.iter().map(|t| t.skill.clone()).collect();
     let (args, cwd) = cli_args_and_cwd(
         req.method,
         source,
-        &req.skill,
+        &skills,
         &req.scope,
         harnesses,
         req.link_mode,
     );
-    // For a project-scope install, `home_fallback` is where a `--cwd`-less
-    // `npx skills add` (this op's own former bug, or a spawner that quietly
-    // drops `cwd`) would land the skill instead of the project - recorded
-    // before the spawn so the destination-missing check below can tell
-    // "landed at the fallback" from "just failed".
-    let home_fallback = match &req.scope {
-        RootScope::Project(_) => Some(
-            rt.scope
-                .home
-                .lexical
-                .join(UNIVERSAL_ROOT_RELATIVE)
-                .join(&req.skill.0),
-        ),
-        RootScope::Global => None,
-    };
-    let home_fallback_existed_before = home_fallback
-        .as_deref()
-        .is_some_and(|path| rt.ports.fs.symlink_metadata(path).is_ok());
+    // For a project-scope install, a skill's home fallback is where a
+    // `--cwd`-less `npx skills add` (this op's own former bug, or a spawner
+    // that quietly drops `cwd`) would land it instead of the project -
+    // recorded before the spawn so the destination-missing check below can
+    // tell "landed at the fallback" from "just failed".
+    let fallbacks: Vec<Option<(PathBuf, bool)>> = targets
+        .iter()
+        .map(|target| match &req.scope {
+            RootScope::Project(_) => {
+                let path = rt
+                    .scope
+                    .home
+                    .lexical
+                    .join(UNIVERSAL_ROOT_RELATIVE)
+                    .join(&target.skill.0);
+                let existed = rt.ports.fs.symlink_metadata(&path).is_ok();
+                Some((path, existed))
+            }
+            RootScope::Global => None,
+        })
+        .collect();
     let spec = ProcessSpec {
         program: "npx".to_string(),
         args,
@@ -208,27 +248,40 @@ pub(crate) fn install_via_cli(
         )
         .with_detail(output.stderr));
     }
-    if rt.ports.fs.symlink_metadata(destination).is_err() {
-        if let Some(fallback) = &home_fallback {
-            let fallback_now_exists = rt.ports.fs.symlink_metadata(fallback).is_ok();
-            if fallback_now_exists && !home_fallback_existed_before {
-                return Err(CoreError::new(
-                    ErrorCode::Io,
-                    format!(
-                        "the CLI installed to {} instead of the project",
-                        fallback.display()
-                    ),
-                )
-                .at(destination));
-            }
-        }
-        return Err(CoreError::new(
-            ErrorCode::Io,
-            "the CLI did not create the expected destination",
-        )
-        .at(destination));
+    Ok(targets
+        .iter()
+        .zip(&fallbacks)
+        .map(|(target, fallback)| check_destination(rt, target.destination, fallback.as_ref()))
+        .collect())
+}
+
+/// After a successful CLI call: the destination exists, or an error that
+/// says whether the CLI put the skill in the home instead of the project.
+fn check_destination(
+    rt: &Runtime,
+    destination: &Path,
+    fallback: Option<&(PathBuf, bool)>,
+) -> Result<(), CoreError> {
+    if rt.ports.fs.symlink_metadata(destination).is_ok() {
+        return Ok(());
     }
-    Ok(())
+    if let Some((fallback, existed_before)) = fallback {
+        if !existed_before && rt.ports.fs.symlink_metadata(fallback).is_ok() {
+            return Err(CoreError::new(
+                ErrorCode::Io,
+                format!(
+                    "the CLI installed to {} instead of the project",
+                    fallback.display()
+                ),
+            )
+            .at(destination));
+        }
+    }
+    Err(CoreError::new(
+        ErrorCode::Io,
+        "the CLI did not create the expected destination",
+    )
+    .at(destination))
 }
 
 #[cfg(test)]
@@ -471,7 +524,14 @@ mod tests {
         ];
 
         for (label, method, scope, harnesses, link_mode, expected_args, expected_cwd) in cases {
-            let (args, cwd) = cli_args_and_cwd(method, "src", &skill, scope, harnesses, link_mode);
+            let (args, cwd) = cli_args_and_cwd(
+                method,
+                "src",
+                std::slice::from_ref(&skill),
+                scope,
+                harnesses,
+                link_mode,
+            );
             let expected_args: Vec<String> = expected_args.into_iter().map(String::from).collect();
             assert_eq!(args, expected_args, "{label}: argv");
             assert_eq!(cwd, expected_cwd, "{label}: cwd");

@@ -36,10 +36,13 @@ block a PR. Existing required job names are unchanged.
 
 ## Verification plan
 
-| Issue                 | User flow                                           | Expectation                                            | Proof                                         | Red before fix?                                          | Measured numbers                        |
-| --------------------- | --------------------------------------------------- | ------------------------------------------------------ | --------------------------------------------- | -------------------------------------------------------- | --------------------------------------- |
-| Baseline prerequisite | Read skills through core, CLI, MCP, and desktop IPC | Repeatable release samples for all three fixture sizes | `pnpm run perf:baseline`                      | Baseline command and artifacts absent before this change | See baseline JSON and Markdown          |
-| #224                  | Scan the owner's home                               | Record actual home scan against 100 ms                 | Owner must run the command against their home | Not run: task safety rule forbids real-home access       | Fixture numbers do not close this issue |
+| Issue                 | User flow                                           | Expectation                                            | Proof                                                 | Red before fix?                                          | Measured numbers                        |
+| --------------------- | --------------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------- | -------------------------------------------------------- | --------------------------------------- |
+| Baseline prerequisite | Read skills through core, CLI, MCP, and desktop IPC | Repeatable release samples for all three fixture sizes | `pnpm run perf:baseline`                              | Baseline command and artifacts absent before this change | See baseline JSON and Markdown          |
+| #224                  | Scan the owner's home                               | Record actual home scan against 100 ms                 | Owner must run the command against their home         | Not run: task safety rule forbids real-home access       | Fixture numbers do not close this issue |
+| #687                  | Add 5 skills from one pack                          | One `npx skills add` call for the whole set            | `write_spawn_count.rs` (#690); `tools/perf-writes.py` | Yes: 5 calls on `main` before #690                       | 8.9 s → 5.5 s median, 5 → 1 calls       |
+| #687                  | Update 5 skills of one pack                         | One `npx skills update` call per scope                 | `write_spawn_count.rs` (#690); `tools/perf-writes.py` | Yes: 5 calls on `main` before #690                       | 8.4 s → 2.7 s median, 5 → 1 calls       |
+| Write baseline        | Park and unpark 5 skills                            | No `npx` call                                          | `tools/perf-writes.py`                                | Not applicable                                           | 0.45 s and 0.12 s median, 0 calls       |
 
 Lifecycle transitions are in `docs/state-machines.md`; user flows are in
 `docs/flows.md`.
@@ -65,3 +68,35 @@ fields and pass `--runs` to the desktop example. Run
 `python3 tools/perf-baseline.py --check` to check the runner without a baseline.
 
 The profile metadata records the copied executable hash, source commit, load average, Cargo process counts before and after, and `DEVELOPER_DIR`. The commands in `profile.md` generate the folded stacks and SVG from the same trace as the summary table. These derived files are not committed.
+
+## Write jobs
+
+`perf:baseline` times reads only. `tools/perf-writes.py` times write jobs:
+`pack add`, `pack update --all`, `park` and `unpark` of 5 skills from one
+pack, through a built CLI and the real `npx skills`. Run it by hand:
+
+```bash
+cargo build --workspace --all-features --bins
+python3 tools/perf-writes.py --cli target/debug/skill-studio --label "$(git rev-parse --short HEAD)"
+```
+
+The pack is a local bare git repo served by `git http-backend` on loopback, so
+no number depends on GitHub or the network. Setup git runs with `GIT_*`
+cleared and no global config. Each run uses a new temporary home whose npm
+cache (`<home>/.npm`, the one the CLI points `npx` at) is warmed before the
+first timed job. Upstream gets a new revision before each `pack update`, and
+the script stops unless the update brought it in. A wrapper on `PATH` counts
+the `npx` calls of each job. The count is the deterministic part, and
+`crates/skill-studio-core/tests/write_spawn_count.rs` (#690) checks it on
+every commit. The times are for one machine and are not compared in CI; a
+`cargo` build running at the same time doubles them.
+
+`npx skills@1.8.1` writes no lock row for a loopback git URL, so the script
+writes the rows it writes for a remote git source after `pack add`, with each
+folder's hash as `npx skills` computes it (its own `computeSkillFolderHash`). Without them `pack update` finds no pack, and with an
+empty hash `npx skills update` skips the skill without fetching.
+
+Measured on 2026-11-19, Apple M3 Max, debug builds, idle machine, 5 runs,
+medians: with `main` before #690, `pack add` 8.9 s (5 `npx` calls) and
+`pack update` 8.4 s (5 calls); with #690, 5.5 s (1 call) and 2.7 s (1 call).
+`park` and `unpark` take 0.45 s and 0.12 s and run no `npx`.

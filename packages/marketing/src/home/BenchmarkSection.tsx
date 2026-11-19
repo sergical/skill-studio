@@ -1,11 +1,10 @@
 // ============================================================================
 // Skill Studio - Agent benchmark section
-// Renders the results file from tools/agent-bench as a race: each agent and
-// model answers the same questions by hand and with Skill Studio, one tick per
-// tool call, on a sped-up clock. Every run stays in the table below.
+// Renders the results file from tools/agent-bench as three measures: time, tool
+// calls and wrong answers, by hand against Skill Studio, one bar per side.
+// Every run stays in the table below.
 // ============================================================================
 import { useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { Check, RotateCcw, X } from "lucide-react";
 import * as stylex from "@stylexjs/stylex";
 
 import rawData from "../data/agent-benchmark.json";
@@ -15,20 +14,17 @@ import { chartTokens } from "./BenchmarkChart.stylex";
 import {
   HARNESS_NAMES,
   harnessName,
+  benchSummary,
   cellsForTask,
-  featuredPairs,
   formatMetric,
   formatRatio,
-  raceHeadline,
-  racePairs,
   rowKey,
   type BenchCell,
   type BenchData,
   type BenchMethod,
   type BenchMetric,
+  type BenchSummary,
   type BenchTask,
-  type RaceHeadline,
-  type RacePair,
 } from "./benchmark-summary";
 import { homeSectionStyles } from "./HomeSection.stylex";
 
@@ -66,193 +62,230 @@ const METHOD_LABELS = {
   mcp: "Skill Studio MCP",
 } satisfies Record<BenchMethod, string>;
 
-const PLAY_SECONDS = 5;
+// Time a full-width bar takes to grow. Every bar grows at that speed, so a shorter bar stops
+// sooner: the Skill Studio bar lands first, as its answer did.
+const GROW_MS = 1400;
+const ROW_DELAY_MS = 120;
+// Share of a measure on screen before its bars grow, so the short ones do not finish unseen.
+const MEASURE_IN_VIEW = 0.5;
 const WIN_RATIO = 1.25;
+const MIN_BAR_PX = 3;
+// Room for the value at the end of a full-width bar.
+const VALUE_ROOM = 120;
+const VALUE_ROOM_MOBILE = 96;
 const HARNESS_ORDER = [...HARNESS_NAMES.keys()];
 const METHODOLOGY_URL = `${GITHUB_REPOSITORY_URL}/blob/main/tools/agent-bench/METHODOLOGY.md`;
 const HARNESS_URL = `${GITHUB_REPOSITORY_URL}/tree/main/tools/agent-bench`;
 const RESULTS_URL = `${GITHUB_REPOSITORY_URL}/blob/main/packages/marketing/src/data/agent-benchmark.json`;
 
-const RACES = TASKS.map((task) => {
-  const pairs = racePairs(data, task.id);
-  return { ...task, lanes: featuredPairs(pairs), headline: raceHeadline(pairs) };
-}).filter((race) => race.lanes.length > 0);
-
-function prefersReducedMotion() {
-  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+interface BarValue {
+  value: number;
+  /** Share of the track a finished bar fills. */
+  share: number;
+  /** The label for a value on the way up, and for the final value. */
+  text: (value: number) => string;
 }
 
-// Seconds on the race clock. Starts finished, so the server render and a reader with reduced
-// motion see the result; rewinds on mount and plays once the race scrolls into view.
-function useRaceClock(target: RefObject<HTMLElement | null>, length: number) {
+interface Measure {
+  id: string;
+  big: string;
+  word: string;
+  byHand: BarValue;
+  studio: BarValue;
+}
+
+// The ratio of the two numbers the reader sees, so the page agrees with itself.
+function lead(byHand: number, studio: number, win: string, lose: string, tie: string) {
+  const times = byHand / studio;
+  if (times >= WIN_RATIO) return { big: formatRatio(times), word: win };
+  if (times <= 1 / WIN_RATIO) return { big: formatRatio(1 / times), word: lose };
+  return { big: "Same", word: `${tie}, within 25%` };
+}
+
+const secondsText = (value: number) => `${Math.round(value)} s`;
+
+// A median over an even count of pairs can end in .5, and shows as it is. Any other fraction is
+// a value on the way up, and shows whole.
+const callsText = (value: number) => {
+  const shown = Number.isInteger(value * 2) ? value : Math.round(value);
+  return `${shown} ${shown === 1 ? "call" : "calls"}`;
+};
+
+function measuresFor({ byHand, studio }: BenchSummary): Measure[] {
+  const seconds = { byHand: Math.round(byHand.seconds), studio: Math.round(studio.seconds) };
+  const slowest = Math.max(seconds.byHand, seconds.studio);
+  const mostCalls = Math.max(byHand.toolCalls, studio.toolCalls);
+  const noneWrong = byHand.wrong === 0 && studio.wrong === 0;
+  return [
+    {
+      id: "time",
+      ...lead(seconds.byHand, seconds.studio, "faster", "slower", "time"),
+      byHand: { value: seconds.byHand, share: seconds.byHand / slowest, text: secondsText },
+      studio: { value: seconds.studio, share: seconds.studio / slowest, text: secondsText },
+    },
+    {
+      id: "calls",
+      ...lead(
+        byHand.toolCalls,
+        studio.toolCalls,
+        "fewer tool calls",
+        "more tool calls",
+        "tool calls",
+      ),
+      byHand: { value: byHand.toolCalls, share: byHand.toolCalls / mostCalls, text: callsText },
+      studio: { value: studio.toolCalls, share: studio.toolCalls / mostCalls, text: callsText },
+    },
+    {
+      id: "wrong",
+      big: noneWrong ? "0" : `${byHand.wrong} → ${studio.wrong}`,
+      word: noneWrong ? "wrong answers, both ways" : "wrong answers",
+      // A share of all answers, so 1 wrong answer of 24 does not fill the bar.
+      byHand: {
+        value: byHand.wrong,
+        share: byHand.wrong / byHand.answers,
+        text: (v) => `${Math.round(v)} of ${byHand.answers}`,
+      },
+      studio: {
+        value: studio.wrong,
+        share: studio.wrong / studio.answers,
+        text: (v) => `${Math.round(v)} of ${studio.answers}`,
+      },
+    },
+  ];
+}
+
+const SUMMARIES = TASKS.flatMap((task) => {
+  const summary = benchSummary(data, task.id);
+  return summary ? [{ ...task, pairs: summary.pairs, measures: measuresFor(summary) }] : [];
+});
+
+const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+
+// Milliseconds since the bars of one measure began to grow. Starts finished, so the server render
+// and a reader with reduced motion see the result; rewinds on mount and plays once the measure
+// scrolls into view. Each measure has its own clock: on a phone they are a screen apart. Reduced
+// motion turned on at any point ends the animation at once.
+function useGrowClock(target: RefObject<HTMLElement | null>, total: number) {
   const [elapsed, setElapsed] = useState(Infinity);
 
   useLayoutEffect(() => {
     const node = target.current;
-    if (!node || prefersReducedMotion() || !("IntersectionObserver" in window)) return;
+    const reduced = window.matchMedia(REDUCED_MOTION_QUERY);
+    if (!node || reduced.matches || !("IntersectionObserver" in window)) return;
     setElapsed(0);
     let frame = 0;
-    const play = () => {
-      const speed = length / PLAY_SECONDS;
-      const start = performance.now();
-      const tick = (now: number) => {
-        const seconds = ((now - start) / 1000) * speed;
-        setElapsed(seconds);
-        if (seconds < length) frame = requestAnimationFrame(tick);
-      };
-      frame = requestAnimationFrame(tick);
+    const tick = (start: number) => (now: number) => {
+      const ms = now - start;
+      setElapsed(ms < total ? ms : Infinity);
+      if (ms < total) frame = requestAnimationFrame(tick(start));
     };
     const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (!entry.isIntersecting) return;
+      (entries) => {
+        // The newest entry is the current state. `isIntersecting` is also true below the
+        // threshold, when only an edge shows, so the ratio decides.
+        if (entries[entries.length - 1].intersectionRatio < MEASURE_IN_VIEW) return;
         observer.disconnect();
-        play();
+        frame = requestAnimationFrame(tick(performance.now()));
       },
-      { threshold: 0.4 },
+      { threshold: MEASURE_IN_VIEW },
     );
+    const finish = () => {
+      if (!reduced.matches) return;
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+      setElapsed(Infinity);
+    };
     observer.observe(node);
+    reduced.addEventListener("change", finish);
     return () => {
       observer.disconnect();
       cancelAnimationFrame(frame);
+      reduced.removeEventListener("change", finish);
     };
-  }, [target, length]);
+  }, [target, total]);
 
   return elapsed;
 }
 
-function correctCount(cell: BenchCell) {
-  return Math.round((cell.correct_share?.median ?? 0) * cell.questions);
+interface BarLineProps {
+  name: string;
+  tone: "byHand" | "studio";
+  bar: BarValue;
+  /** Share of the track a full-width bar has reached. */
+  grown: number;
 }
 
-interface LaneProps {
-  cell: BenchCell;
-  elapsed: number;
-  length: number;
-}
-
-function Lane({ cell, elapsed, length }: LaneProps) {
-  const seconds = cell.duration_s!.median;
-  const calls = Math.max(1, Math.round(cell.tool_calls!.median));
-  const shown = Math.min(elapsed, seconds);
-  const done = elapsed >= seconds;
-  const right = correctCount(cell);
-  const allRight = right === cell.questions;
-  const tone =
-    cell.method === "raw" ? laneTone.raw : cell.method === "cli" ? laneTone.cli : laneTone.mcp;
-  const pct = (value: number) => (value / length) * 100;
-  const label = `${METHOD_LABELS[cell.method]}: ${formatMetric("duration_s", seconds)}, ${calls} tool ${calls === 1 ? "call" : "calls"}, ${right} of ${cell.questions} answers right`;
-
+function BarLine({ name, tone, bar, grown }: BarLineProps) {
+  const shown = Math.min(grown, bar.share);
+  const done = grown >= bar.share;
+  const end = shown > 0 ? `max(${shown * 100}%, ${MIN_BAR_PX}px)` : "0px";
   return (
-    <div {...stylex.props(styles.lane)} role="img" aria-label={label}>
-      <span {...stylex.props(styles.laneName)}>{METHOD_LABELS[cell.method]}</span>
-      <div {...stylex.props(styles.track)}>
-        <span aria-hidden="true" {...stylex.props(styles.rail)} />
-        <span
-          aria-hidden="true"
-          {...stylex.props(styles.progress, tone, dynamic.width(`${pct(shown)}%`))}
-        />
-        {Array.from({ length: calls }, (_, i) => {
-          const at = ((i + 0.5) / calls) * seconds;
-          return (
+    <div {...stylex.props(styles.barLine)}>
+      <span {...stylex.props(styles.barName)}>{name}</span>
+      <span {...stylex.props(styles.track)}>
+        <span {...stylex.props(styles.clip)}>
+          <span
+            {...stylex.props(
+              styles.fill,
+              barTone[tone],
+              dynamic.transform(`translateX(calc(${end} - 100%))`),
+            )}
+          />
+        </span>
+        <span {...stylex.props(styles.valueWindow)}>
+          <span {...stylex.props(styles.valueSlot, dynamic.transform(`translateX(${end})`))}>
             <span
-              key={i}
-              aria-hidden="true"
               {...stylex.props(
-                styles.tick,
-                tone,
-                dynamic.left(`${pct(at)}%`),
-                elapsed >= at ? styles.tickOn : null,
+                styles.value,
+                bar.share === 0 && styles.valueFlush,
+                done && tone === "studio" && styles.valueOn,
               )}
-            />
-          );
-        })}
+            >
+              {bar.text(done ? bar.value : (bar.value * shown) / bar.share)}
+            </span>
+          </span>
+        </span>
+      </span>
+    </div>
+  );
+}
+
+interface MeasureRowProps {
+  measure: Measure;
+  row: number;
+  /** The reader picked this task, so the big number changes in front of them. */
+  swapped: boolean;
+}
+
+function MeasureRow({ measure, row, swapped }: MeasureRowProps) {
+  const rowRef = useRef<HTMLLIElement>(null);
+  const delay = row * ROW_DELAY_MS;
+  const elapsed = useGrowClock(rowRef, delay + GROW_MS);
+  const grown = Math.min(Math.max((elapsed - delay) / GROW_MS, 0), 1);
+  const { byHand, studio } = measure;
+  return (
+    <li ref={rowRef} {...stylex.props(styles.measure)}>
+      <p {...stylex.props(styles.lead)}>
         <span
-          aria-hidden="true"
           {...stylex.props(
-            styles.result,
-            dynamic.left(`${pct(shown)}%`),
-            done && styles.resultDone,
+            styles.big,
+            swapped && styles.bigSwap,
+            swapped && dynamic.delay(`${row * 60}ms`),
           )}
         >
-          <span {...stylex.props(styles.time)}>{Math.round(shown)} s</span>
-          {done &&
-            (allRight ? (
-              <span {...stylex.props(styles.verdict, styles.verdictRight)}>
-                <Check size={13} strokeWidth={3} />
-              </span>
-            ) : (
-              <span {...stylex.props(styles.verdict, styles.verdictWrong)}>
-                <X size={13} strokeWidth={3} />
-                {right}/{cell.questions}
-              </span>
-            ))}
+          {measure.big}
         </span>
-      </div>
-    </div>
-  );
-}
-
-function RaceRow({ pair, elapsed, length }: { pair: RacePair; elapsed: number; length: number }) {
-  const won = elapsed >= pair.studio.duration_s!.median;
-  return (
-    <li {...stylex.props(styles.raceRow)}>
-      <div {...stylex.props(styles.agent)}>
-        <span {...stylex.props(styles.agentName)}>{harnessName(pair.harness)}</span>
-        <span {...stylex.props(styles.agentModel)}>{pair.label}</span>
-        <span {...stylex.props(styles.win, won && styles.winOn)}>
-          {formatRatio(pair.speedup)} faster
-        </span>
-      </div>
-      <div {...stylex.props(styles.lanes)}>
-        <Lane cell={pair.byHand} elapsed={elapsed} length={length} />
-        <Lane cell={pair.studio} elapsed={elapsed} length={length} />
+        <span {...stylex.props(styles.word)}>{measure.word}</span>
+      </p>
+      <div
+        role="img"
+        aria-label={`By hand: ${byHand.text(byHand.value)}. Skill Studio: ${studio.text(studio.value)}.`}
+        {...stylex.props(styles.bars)}
+      >
+        <BarLine name="By hand" tone="byHand" bar={byHand} grown={grown} />
+        <BarLine name="Skill Studio" tone="studio" bar={studio} grown={grown} />
       </div>
     </li>
-  );
-}
-
-function Stat({ value, label, note }: { value: string; label: string; note: string }) {
-  return (
-    <div {...stylex.props(styles.stat)}>
-      <dt {...stylex.props(styles.statLabel)}>{label}</dt>
-      <dd {...stylex.props(styles.statValue)}>{value}</dd>
-      <dd {...stylex.props(styles.statNote)}>{note}</dd>
-    </div>
-  );
-}
-
-const pairName = (pair: RacePair) => `Best: ${harnessName(pair.harness)}, ${pair.label}`;
-
-function Headline({ headline }: { headline: RaceHeadline }) {
-  const percent = (value: number) => `${Math.round(value * 100)}%`;
-  const { speedup, callRatio, costRatio } = headline;
-  return (
-    <dl {...stylex.props(styles.stats)}>
-      {speedup.speedup >= WIN_RATIO && (
-        <Stat value={formatRatio(speedup.speedup)} label="faster" note={pairName(speedup)} />
-      )}
-      {callRatio.callRatio >= WIN_RATIO && (
-        <Stat
-          value={formatRatio(callRatio.callRatio)}
-          label="fewer tool calls"
-          note={pairName(callRatio)}
-        />
-      )}
-      {headline.correctWithStudio > headline.correctByHand && (
-        <Stat
-          value={percent(headline.correctWithStudio)}
-          label="answers right"
-          note={`${percent(headline.correctByHand)} by hand`}
-        />
-      )}
-      {costRatio.costRatio >= WIN_RATIO && (
-        <Stat
-          value={formatRatio(costRatio.costRatio)}
-          label="lower cost"
-          note={pairName(costRatio)}
-        />
-      )}
-    </dl>
   );
 }
 
@@ -333,26 +366,10 @@ function ResultsTable({ task }: { task: BenchTask }) {
   );
 }
 
-const raceLength = (lanes: readonly RacePair[]) =>
-  Math.max(...lanes.map((p) => Math.max(p.byHand.duration_s!.median, p.studio.duration_s!.median)));
-
-function Race({ lanes }: { lanes: readonly RacePair[] }) {
-  const raceRef = useRef<HTMLOListElement>(null);
-  const length = raceLength(lanes);
-  const elapsed = useRaceClock(raceRef, length);
-  return (
-    <ol ref={raceRef} {...stylex.props(styles.race)}>
-      {lanes.map((pair) => (
-        <RaceRow key={pair.key} pair={pair} elapsed={elapsed} length={length} />
-      ))}
-    </ol>
-  );
-}
-
 export function BenchmarkSection() {
-  const [task, setTask] = useState<BenchTask>(RACES[0]?.id ?? "usage");
-  const [runId, setRunId] = useState(0);
-  const race = RACES.find((r) => r.id === task) ?? RACES[0];
+  const [task, setTask] = useState<BenchTask>(SUMMARIES[0]?.id ?? "usage");
+  const [picks, setPicks] = useState(0);
+  const summary = SUMMARIES.find((s) => s.id === task) ?? SUMMARIES[0];
   const harnesses = new Set(data.cells.map((c) => c.harness)).size;
   const models = new Set(data.cells.map((c) => c.model)).size;
   const runDate = new Date(data.generated).toLocaleDateString("en-GB", {
@@ -364,10 +381,10 @@ export function BenchmarkSection() {
 
   const pick = (next: BenchTask) => {
     setTask(next);
-    setRunId((r) => r + 1);
+    setPicks((count) => count + 1);
   };
 
-  if (!race) return null;
+  if (!summary) return null;
 
   return (
     <>
@@ -375,42 +392,29 @@ export function BenchmarkSection() {
         Same agent. Same question. Skill Studio answers first.
       </h2>
 
-      {RACES.length > 1 && <Segmented label="Task" options={RACES} value={task} onChange={pick} />}
-      <p {...stylex.props(styles.question)}>“{race.question}”</p>
+      {SUMMARIES.length > 1 && (
+        <Segmented label="Task" options={SUMMARIES} value={task} onChange={pick} />
+      )}
+      <p {...stylex.props(styles.question)}>“{summary.question}”</p>
 
-      {race.headline && <Headline headline={race.headline} />}
-
-      <div {...stylex.props(styles.raceHead)}>
-        <ul {...stylex.props(styles.key)} aria-label="Legend">
-          <li {...stylex.props(styles.keyItem)}>
-            <span aria-hidden="true" {...stylex.props(styles.keyTick)} />
-            One tool call
-          </li>
-          <li {...stylex.props(styles.keyItem)}>
-            <Check size={13} strokeWidth={3} aria-hidden="true" />
-            All answers right
-          </li>
-        </ul>
-        <button
-          type="button"
-          onClick={() => setRunId((r) => r + 1)}
-          {...stylex.props(styles.replay)}
-        >
-          <RotateCcw size={13} aria-hidden="true" />
-          Replay
-        </button>
-      </div>
-
-      <Race key={`${task}:${runId}`} lanes={race.lanes} />
+      {/* A new task mounts the measures again, so their bars grow from zero. */}
+      <ul key={`${task}:${picks}`} {...stylex.props(styles.measures)}>
+        {summary.measures.map((measure, row) => (
+          <MeasureRow key={measure.id} measure={measure} row={row} swapped={picks > 0} />
+        ))}
+      </ul>
+      <p {...stylex.props(styles.note)}>
+        Medians over {summary.pairs} agent and model pairs, three runs each. Skill Studio here is
+        its MCP server; the CLI is in “Every run”.
+      </p>
 
       <details {...stylex.props(styles.details)}>
         <summary {...stylex.props(styles.summary)}>Every run</summary>
         <ResultsTable task={task} />
         <p {...stylex.props(styles.methodText)}>
           {data.total_runs} runs on {runDate}: {harnesses} agents, {models} models, three runs each.
-          Every run got a fresh copy of a made-up home folder with known answers. The race shows
-          medians on a clock sped up {Math.round(raceLength(race.lanes) / PLAY_SECONDS)}×. Your
-          numbers will differ.
+          Every run got a fresh copy of a made-up home folder with known answers. Your numbers will
+          differ.
         </p>
       </details>
 
@@ -430,16 +434,22 @@ export function BenchmarkSection() {
 }
 
 const MOBILE = "@media (max-width: 600px)";
+const TABLET = "@media (max-width: 900px)";
+const REDUCED_MOTION = "@media (prefers-reduced-motion: reduce)";
 
-const dynamic = stylex.create({
-  left: (left: string) => ({ left }),
-  width: (width: string) => ({ width }),
+const swapIn = stylex.keyframes({
+  from: { filter: "blur(4px)", opacity: 0, transform: "translateY(8px)" },
+  to: { filter: "blur(0)", opacity: 1, transform: "none" },
 });
 
-const laneTone = stylex.create({
-  raw: { backgroundColor: chartTokens.byHand },
-  cli: { backgroundColor: chartTokens.cli },
-  mcp: { backgroundColor: chartTokens.mcp },
+const dynamic = stylex.create({
+  delay: (animationDelay: string) => ({ animationDelay }),
+  transform: (transform: string) => ({ transform }),
+});
+
+const barTone = stylex.create({
+  byHand: { backgroundColor: chartTokens.byHand },
+  studio: { backgroundColor: chartTokens.mcp },
 });
 
 const styles = stylex.create({
@@ -453,183 +463,98 @@ const styles = stylex.create({
     textWrap: "pretty",
     [MOBILE]: { fontSize: 16 },
   },
-  stats: {
-    display: "grid",
-    gap: 24,
-    gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-    margin: "36px 0 0",
-  },
-  stat: {
-    borderTopColor: siteTokens.text,
-    borderTopStyle: "solid",
-    borderTopWidth: 2,
-    display: "grid",
-    gridTemplateAreas: '"value" "label" "note"',
-    paddingTop: 14,
-  },
-  statLabel: { color: siteTokens.text, fontSize: 15, fontWeight: 620, gridArea: "label" },
-  statValue: {
-    color: siteTokens.text,
-    fontSize: "clamp(48px, 6vw, 72px)",
-    fontVariantNumeric: "tabular-nums",
-    fontWeight: 720,
-    gridArea: "value",
-    letterSpacing: "-.045em",
-    lineHeight: 1.05,
-    margin: 0,
-  },
-  statNote: { color: siteTokens.muted, fontSize: 12, gridArea: "note", margin: "4px 0 0" },
-  raceHead: {
+  measures: { display: "grid", listStyle: "none", margin: "36px 0 0", padding: 0 },
+  measure: {
     alignItems: "center",
-    display: "flex",
-    gap: 16,
-    justifyContent: "space-between",
-    marginTop: 48,
-  },
-  key: {
-    color: siteTokens.muted,
-    display: "flex",
-    flexWrap: "wrap",
-    fontSize: 13,
-    gap: "6px 18px",
-    listStyle: "none",
-    margin: 0,
-    padding: 0,
-  },
-  keyItem: { alignItems: "center", display: "flex", gap: 7 },
-  keyTick: { backgroundColor: siteTokens.muted, borderRadius: 1, height: 12, width: 2 },
-  replay: {
-    alignItems: "center",
-    backgroundColor: "transparent",
-    borderColor: siteTokens.border,
-    borderRadius: 999,
-    borderStyle: "solid",
-    borderWidth: 1,
-    color: siteTokens.text,
-    cursor: "pointer",
-    display: "inline-flex",
-    flexShrink: 0,
-    fontFamily: "inherit",
-    fontSize: 13,
-    fontWeight: 600,
-    gap: 6,
-    minHeight: 36,
-    paddingInline: 14,
-    transition: "border-color 150ms ease-out",
-    ":hover": { borderColor: siteTokens.muted },
-    ":focus-visible": { outline: `2px solid ${siteTokens.text}`, outlineOffset: 2 },
-  },
-  race: {
-    display: "flex",
-    flexDirection: "column",
-    listStyle: "none",
-    margin: "16px 0 0",
-    padding: 0,
-  },
-  raceRow: {
     borderTopColor: siteTokens.border,
     borderTopStyle: "solid",
     borderTopWidth: 1,
     display: "grid",
-    gap: 24,
-    gridTemplateColumns: "180px minmax(0, 1fr)",
-    paddingBlock: 18,
-    [MOBILE]: { gap: 10, gridTemplateColumns: "1fr", paddingBlock: 16 },
+    gap: 48,
+    gridTemplateColumns: "300px minmax(0, 1fr)",
+    paddingBlock: 30,
+    [TABLET]: { gap: 32, gridTemplateColumns: "210px minmax(0, 1fr)" },
+    [MOBILE]: { gap: 16, gridTemplateColumns: "minmax(0, 1fr)", paddingBlock: 24 },
   },
-  agent: {
-    alignContent: "start",
-    display: "grid",
-    gap: 2,
-    [MOBILE]: { alignItems: "baseline", display: "flex", flexWrap: "wrap", gap: "2px 8px" },
-  },
-  agentName: { color: siteTokens.text, fontSize: 15, fontWeight: 640 },
-  agentModel: { color: siteTokens.muted, fontSize: 13 },
-  win: {
+  lead: { display: "grid", gap: 4, margin: 0 },
+  big: {
     color: siteTokens.text,
-    fontSize: 13,
+    fontSize: "clamp(52px, 6vw, 76px)",
     fontVariantNumeric: "tabular-nums",
-    fontWeight: 680,
-    marginTop: 6,
-    opacity: 0,
-    transform: "translateY(4px)",
-    transition: "opacity 240ms ease-out, transform 240ms ease-out",
-    [MOBILE]: { marginTop: 0, marginLeft: "auto" },
+    fontWeight: 720,
+    letterSpacing: "-.05em",
+    lineHeight: 1,
   },
-  winOn: { opacity: 1, transform: "none" },
-  lanes: { display: "grid", gap: 10 },
-  lane: {
+  // Only after the reader picks a task. The first numbers are at rest when the page loads.
+  bigSwap: {
+    animationDuration: "280ms",
+    animationFillMode: "backwards",
+    animationName: { default: swapIn, [REDUCED_MOTION]: "none" },
+    animationTimingFunction: "cubic-bezier(0.32, 0.72, 0, 1)",
+  },
+  word: { color: siteTokens.muted, fontSize: 17, fontWeight: 560, [MOBILE]: { fontSize: 16 } },
+  bars: { display: "grid", gap: 12, [MOBILE]: { gap: 10 } },
+  barLine: {
     alignItems: "center",
     display: "grid",
-    gap: 14,
-    gridTemplateColumns: "120px minmax(0, 1fr)",
-    [MOBILE]: { gap: 8, gridTemplateColumns: "76px minmax(0, 1fr)" },
+    gap: 16,
+    gridTemplateColumns: "96px minmax(0, 1fr)",
+    [MOBILE]: { gap: 10, gridTemplateColumns: "86px minmax(0, 1fr)" },
   },
-  laneName: { color: siteTokens.muted, fontSize: 12, fontWeight: 560, lineHeight: 1.2 },
-  // The right padding keeps the time and verdict inside the row at the end of the slowest lane.
-  track: { height: 22, marginRight: 132, position: "relative", [MOBILE]: { marginRight: 104 } },
-  rail: {
-    backgroundColor: chartTokens.grid,
-    height: 2,
+  barName: { color: siteTokens.muted, fontSize: 14, fontWeight: 560, whiteSpace: "nowrap" },
+  track: {
+    display: "block",
+    height: 26,
+    marginRight: VALUE_ROOM,
+    position: "relative",
+    [MOBILE]: { height: 22, marginRight: VALUE_ROOM_MOBILE },
+  },
+  clip: { borderRadius: 5, inset: 0, overflow: "hidden", position: "absolute" },
+  // A full-width bar that slides in from the left, so growing it never changes the layout.
+  fill: { borderRadius: 5, inset: 0, position: "absolute", willChange: "transform" },
+  // The track plus the value room. It clips the slot, which is as wide as the track and would
+  // reach past the edge of the page at the end of a long bar.
+  valueWindow: {
+    bottom: 0,
     left: 0,
-    marginTop: -1,
+    overflow: "hidden",
     position: "absolute",
-    right: 0,
-    top: "50%",
+    right: -VALUE_ROOM,
+    top: 0,
+    [MOBILE]: { right: -VALUE_ROOM_MOBILE },
   },
-  progress: {
-    borderRadius: 2,
-    height: 2,
-    left: 0,
-    marginTop: -1,
-    position: "absolute",
-    top: "50%",
-  },
-  tick: {
-    borderRadius: 1,
-    height: 14,
-    marginLeft: -1,
-    marginTop: -7,
-    opacity: 0,
-    position: "absolute",
-    top: "50%",
-    transform: "scaleY(.3)",
-    transition: "opacity 120ms ease-out, transform 160ms ease-out",
-    width: 2,
-  },
-  tickOn: { opacity: 1, transform: "none" },
-  result: {
+  valueSlot: {
     alignItems: "center",
-    color: siteTokens.muted,
+    bottom: 0,
     display: "flex",
-    gap: 6,
-    marginLeft: 10,
+    left: 0,
     position: "absolute",
-    top: "50%",
-    transform: "translateY(-50%)",
-    whiteSpace: "nowrap",
+    right: VALUE_ROOM,
+    top: 0,
+    willChange: "transform",
+    [MOBILE]: { right: VALUE_ROOM_MOBILE },
   },
-  resultDone: { color: siteTokens.text },
-  time: { fontSize: 13, fontVariantNumeric: "tabular-nums", fontWeight: 640 },
-  verdict: {
-    alignItems: "center",
-    borderRadius: 999,
-    display: "inline-flex",
-    fontSize: 11,
-    fontVariantNumeric: "tabular-nums",
-    fontWeight: 700,
-    gap: 2,
-    height: 18,
-    justifyContent: "center",
-    minWidth: 18,
-    paddingInline: 3,
-  },
-  verdictRight: { backgroundColor: siteTokens.text, color: siteTokens.background },
-  verdictWrong: {
-    borderColor: siteTokens.muted,
-    borderStyle: "solid",
-    borderWidth: 1,
+  value: {
     color: siteTokens.muted,
-    paddingInline: "3px 6px",
+    fontSize: 20,
+    fontVariantNumeric: "tabular-nums",
+    fontWeight: 640,
+    letterSpacing: "-.02em",
+    paddingLeft: 12,
+    transition: "color 200ms ease-out",
+    whiteSpace: "nowrap",
+    [MOBILE]: { fontSize: 17, paddingLeft: 10 },
+    [REDUCED_MOTION]: { transition: "none" },
+  },
+  valueFlush: { paddingLeft: 0, [MOBILE]: { paddingLeft: 0 } },
+  valueOn: { color: siteTokens.text },
+  note: {
+    color: siteTokens.muted,
+    fontSize: 13,
+    lineHeight: 1.6,
+    margin: "4px 0 0",
+    maxWidth: "64ch",
+    textWrap: "pretty",
   },
   segmented: {
     backgroundColor: siteTokens.surface,
@@ -667,7 +592,7 @@ const styles = stylex.create({
     borderTopColor: siteTokens.border,
     borderTopStyle: "solid",
     borderTopWidth: 1,
-    marginTop: 8,
+    marginTop: 20,
     paddingTop: 16,
   },
   summary: {

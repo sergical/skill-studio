@@ -4,8 +4,8 @@
 // knocks its neighbours and lands on the heap. Throw it at the mascot and the
 // mascot sorts it. A click pops a copy into the parked drawer. A click on the
 // mascot tidies everything, and so does the mascot itself when the visitor
-// leaves the pile alone. One rAF loop runs damped springs and sleeps when
-// nothing moves.
+// leaves the pile alone. The pour and the first tidy play once per session.
+// One rAF loop runs damped springs and sleeps when nothing moves.
 // ============================================================================
 import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
 
@@ -116,6 +116,25 @@ interface Hold {
   pivotV: Point;
   moved: boolean;
   samples: Array<{ t: number; x: number; y: number }>;
+}
+
+const INTRO_SEEN_KEY = "skill-studio:hero-intro";
+
+// The intro plays once per session. Storage can be blocked, and then it plays on each visit.
+function introSeen() {
+  try {
+    return sessionStorage.getItem(INTRO_SEEN_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
+function rememberIntro() {
+  try {
+    sessionStorage.setItem(INTRO_SEEN_KEY, "1");
+  } catch {
+    return;
+  }
 }
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -251,14 +270,15 @@ export function SkillThrow() {
       { ...lerpPose(from, to, 0.5), y: Math.min(from.y, to.y) - (keep ? 40 : 70), r: 0 },
       { offset: pop ? 0.55 : 0.45 },
     );
-    const frames = via
-      ? [frame({ ...via, r: 0, s: 0.5 }, { offset: 0.35 }), frame(to)]
+    const path = via
+      ? [frame({ ...via, r: 0, s: 0.5 }, { offset: 0.35 })]
       : pop
-        ? [frame({ ...from, y: from.y - 12, s: body.s * 1.22 }, { offset: 0.18 }), arc, frame(to)]
-        : [arc, frame(to)];
+        ? [frame({ ...from, y: from.y - 12, s: body.s * 1.22 }, { offset: 0.18 }), arc]
+        : [arc];
     fly(
       element,
-      frames,
+      path,
+      to,
       { duration: via ? 560 : pop ? 620 : keep ? 640 : 540, delay },
       keep ? undefined : countParked,
     );
@@ -700,8 +720,8 @@ export function SkillThrow() {
             easing: "cubic-bezier(0.2, 0.8, 0.3, 1)",
           },
           { transform: poseTransform({ ...to, y: to.y - 6 }), offset: 0.8, easing: "ease-in-out" },
-          frame(to),
         ],
+        to,
         {
           duration: DROP_MS,
           delay: POUR_MS * Math.sqrt(index / PILE.length),
@@ -715,8 +735,8 @@ export function SkillThrow() {
       [
         frame({ ...g.mascot, y: g.mascot.y - 12, s: 1.14 }, { offset: 0.5 }),
         frame({ ...g.mascot, s: 0.95 }, { offset: 0.78 }),
-        frame(g.mascot),
       ],
+      g.mascot,
       { duration: 560, delay: MASCOT_ENTER_MS },
     );
   };
@@ -744,7 +764,8 @@ export function SkillThrow() {
       setStyle(element, { zIndex: "" });
       fly(
         element,
-        [frame(heap.current[index])],
+        [],
+        heap.current[index],
         { duration: 420, delay: (PILE.length - index) * 3 },
         () => {
           const body = bodies.current[index];
@@ -754,11 +775,39 @@ export function SkillThrow() {
     });
   };
 
+  // Moves every chip to its end position at once: for reduced motion, and for a visit that
+  // skips the intro.
+  const toggleNow = () => {
+    const g = geo.current;
+    if (!g) return;
+    if (tidy) {
+      collected.current.clear();
+      setCopiesRemaining(PILE_COUNTS.copies);
+      parked.current = 0;
+      setCollectedCount(0);
+    } else {
+      PILE.forEach((_, index) => collected.current.add(index));
+      parked.current = PILE_COUNTS.parked;
+      setCopiesRemaining(0);
+      setCollectedCount(PILE.length);
+    }
+    // Sorted chips leave the physics, so the pointer cannot push them back into the pile.
+    resetBodies();
+    showMessy(g);
+  };
+
   const start = useEffectEvent(() => {
     const g = geo.current;
     if (started.current || !g || !(reduced || seen.current)) return;
     started.current = true;
     setReady(true);
+    if (introSeen()) {
+      // A later visit in the same session opens on the result. The mascot replays it.
+      autoTidy.current.done = true;
+      toggleNow();
+      return;
+    }
+    rememberIntro();
     if (reduced) {
       showMessy(g);
       autoTidy.current.due = clock() + AUTO_TIDY_MS;
@@ -924,25 +973,6 @@ export function SkillThrow() {
     body.vx = vx;
     body.vy = vy;
     tick();
-  };
-
-  // Reduced motion: the toggle moves every chip to its end position at once.
-  const toggleNow = () => {
-    const g = geo.current;
-    if (!g) return;
-    if (tidy) {
-      collected.current.clear();
-      setCopiesRemaining(PILE_COUNTS.copies);
-      parked.current = 0;
-      setCollectedCount(0);
-      resetBodies();
-    } else {
-      PILE.forEach((_, index) => collected.current.add(index));
-      parked.current = PILE_COUNTS.parked;
-      setCopiesRemaining(0);
-      setCollectedCount(PILE.length);
-    }
-    showMessy(g);
   };
 
   const onMascotClick = () => {

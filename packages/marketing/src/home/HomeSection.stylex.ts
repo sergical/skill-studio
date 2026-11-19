@@ -17,7 +17,7 @@ export const homeSectionStyles = stylex.create({
       gap: 32,
       gridTemplateColumns: "260px minmax(0, 1fr)",
     },
-    "@media (max-width: 760px)": { gap: 0, gridTemplateColumns: "1fr" },
+    "@media (max-width: 760px)": { gap: 0, gridTemplateColumns: "minmax(0, 1fr)" },
   },
   title: {
     fontSize: 34,

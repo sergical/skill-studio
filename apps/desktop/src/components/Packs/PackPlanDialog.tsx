@@ -45,12 +45,14 @@ const PLANNED_LABEL = {
   install: "Will install",
   update: "Will update",
   remove: "Will remove",
+  switch_source: "Will switch",
 } satisfies Record<PackStep["action"], string>;
 
 const DONE_LABEL = {
   install: "Installed",
   update: "Updated",
   remove: "Removed",
+  switch_source: "Switched",
 } satisfies Record<PackStep["action"], string>;
 
 function scopeLabel(step: PackStep): string {

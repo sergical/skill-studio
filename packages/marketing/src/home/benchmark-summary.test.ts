@@ -1,30 +1,27 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  featuredPairs,
-  raceHeadline,
-  racePairs,
-  type BenchCell,
-  type BenchData,
-} from "./benchmark-summary";
+import { benchSummary, type BenchCell, type BenchData } from "./benchmark-summary";
 
 const stat = (median: number) => ({ median, min: median, max: median });
 
-function cell(harness: string, method: BenchCell["method"], seconds: number, cost: number) {
+function cell(model: string, method: BenchCell["method"], seconds: number, toolCalls: number) {
   return {
     task: "usage",
-    harness,
-    model: `${harness}-model`,
-    label: harness,
+    harness: "codex",
+    model,
+    label: model,
     method,
     runs: 3,
     errors: 0,
-    questions: 4,
+    fixture_changed: 0,
+    scored: 3,
+    questions: 2,
+    per_question: { q1: 1, q2: 1 },
     cost_source: "harness",
-    correct_share: stat(0.75),
+    correct_share: stat(1),
     duration_s: stat(seconds),
-    cost_usd: stat(cost),
-    tool_calls: stat(5),
+    cost_usd: stat(0.1),
+    tool_calls: stat(toolCalls),
   } satisfies BenchCell;
 }
 
@@ -36,98 +33,88 @@ const data = (cells: BenchCell[]): BenchData => ({
   cells,
 });
 
-describe("agent benchmark race", () => {
-  const right = (c: BenchCell, correct: number) => ({ ...c, correct_share: stat(correct) });
-
-  it("races each harness and model against itself by hand", () => {
-    const pairs = racePairs(
+describe("agent benchmark summary", () => {
+  it("takes the median of each side over the pairs", () => {
+    const summary = benchSummary(
       data([
-        cell("codex", "raw", 90, 0.3),
-        cell("codex", "mcp", 30, 0.1),
-        cell("claude", "raw", 20, 0.1),
-        cell("claude", "mcp", 10, 0.05),
+        cell("a", "raw", 90, 20),
+        cell("a", "mcp", 10, 2),
+        cell("b", "raw", 60, 10),
+        cell("b", "mcp", 20, 3),
+        cell("c", "raw", 30, 12),
+        cell("c", "mcp", 40, 8),
       ]),
       "usage",
     );
-    expect(pairs.map((p) => [p.harness, p.speedup])).toEqual([
-      ["codex", 3],
-      ["claude", 2],
-    ]);
+    expect(summary).toMatchObject({
+      pairs: 3,
+      byHand: { seconds: 60, toolCalls: 12 },
+      studio: { seconds: 20, toolCalls: 3 },
+    });
   });
 
-  it("picks the more correct Skill Studio method, then the faster one", () => {
-    const [pair] = racePairs(
+  it("takes the middle of the two middle pairs when the count is even", () => {
+    const summary = benchSummary(
       data([
-        cell("a", "raw", 90, 0.3),
-        right(cell("a", "mcp", 20, 0.1), 0.5),
-        right(cell("a", "cli", 40, 0.1), 0.75),
+        cell("a", "raw", 90, 7),
+        cell("a", "mcp", 10, 2),
+        cell("b", "raw", 60, 8),
+        cell("b", "mcp", 20, 5),
       ]),
       "usage",
     );
-    expect(pair.studio.method).toBe("cli");
+    expect(summary?.byHand).toMatchObject({ seconds: 75, toolCalls: 7.5 });
   });
 
-  it("keeps a pair where Skill Studio gets fewer answers right out of the race and the ratios, but in the correct shares", () => {
-    const pairs = racePairs(
+  it("counts one answer per question and scored run, and the wrong ones", () => {
+    const summary = benchSummary(
       data([
-        right(cell("a", "raw", 90, 0.3), 1),
-        right(cell("a", "mcp", 5, 0.01), 0.5),
-        right(cell("b", "raw", 20, 0.1), 1),
-        right(cell("b", "mcp", 10, 0.1), 1),
+        { ...cell("a", "raw", 90, 20), per_question: { q1: 1, q2: 1 / 3 } },
+        cell("a", "mcp", 10, 2),
       ]),
       "usage",
     );
-    expect(featuredPairs(pairs).map((p) => p.key)).toEqual(["b/b-model"]);
-    expect(raceHeadline(pairs)?.speedup.key).toBe("b/b-model");
-    expect(raceHeadline(pairs)).toMatchObject({ correctByHand: 1, correctWithStudio: 0.75 });
+    expect(summary?.byHand).toMatchObject({ answers: 6, wrong: 2 });
+    expect(summary?.studio).toMatchObject({ answers: 6, wrong: 0 });
   });
 
-  it("features the fastest pair of each harness, in harness order", () => {
-    const pairs = racePairs(
+  it("leaves out a pair when one side has fewer than three scored runs", () => {
+    const summary = benchSummary(
       data([
-        cell("codex", "raw", 90, 0.3),
-        cell("codex", "mcp", 30, 0.1),
-        { ...cell("claude", "raw", 40, 0.1), model: "m1" },
-        { ...cell("claude", "mcp", 20, 0.1), model: "m1" },
-        { ...cell("claude", "raw", 80, 0.1), model: "m2" },
-        { ...cell("claude", "mcp", 10, 0.1), model: "m2" },
+        { ...cell("a", "raw", 900, 99), errors: 2, scored: 1 },
+        cell("a", "mcp", 10, 2),
+        cell("b", "raw", 60, 10),
+        cell("b", "mcp", 20, 3),
       ]),
       "usage",
     );
-    expect(featuredPairs(pairs).map((p) => p.key)).toEqual(["claude/m2", "codex/codex-model"]);
+    expect(summary).toMatchObject({ pairs: 1, byHand: { seconds: 60 }, studio: { seconds: 20 } });
   });
 
-  it("features a pair with every answer right over a faster pair with a miss", () => {
-    const pairs = racePairs(
+  it("counts the runs that bench.py scored, also when one run both failed and changed the fixture", () => {
+    const summary = benchSummary(
       data([
-        { ...right(cell("a", "raw", 90, 0.1), 0.5), model: "fast" },
-        { ...right(cell("a", "mcp", 10, 0.1), 0.75), model: "fast" },
-        { ...right(cell("a", "raw", 40, 0.1), 1), model: "sure" },
-        { ...right(cell("a", "mcp", 20, 0.1), 1), model: "sure" },
+        { ...cell("a", "raw", 900, 99), errors: 1, fixture_changed: 1, scored: 2 },
+        cell("a", "mcp", 10, 2),
+        { ...cell("b", "raw", 60, 10), runs: 4, errors: 1, fixture_changed: 1 },
+        cell("b", "mcp", 20, 3),
       ]),
       "usage",
     );
-    expect(featuredPairs(pairs).map((p) => p.key)).toEqual(["a/sure"]);
+    expect(summary).toMatchObject({ pairs: 1, byHand: { seconds: 60, answers: 6 } });
   });
 
-  it("features no pair that Skill Studio does not clearly win", () => {
-    const pairs = racePairs(data([cell("a", "raw", 22, 0.1), cell("a", "mcp", 20, 0.1)]), "usage");
-    expect(featuredPairs(pairs)).toEqual([]);
-  });
-
-  it("leads with the best pair and averages correct answers over every pair", () => {
-    const headline = raceHeadline(
-      racePairs(
-        data([
-          right(cell("a", "raw", 90, 0.3), 0.5),
-          right(cell("a", "mcp", 10, 0.1), 1),
-          right(cell("b", "raw", 20, 0.1), 1),
-          right(cell("b", "mcp", 10, 0.1), 1),
-        ]),
-        "usage",
-      ),
+  it("compares by hand with the MCP server, not the CLI", () => {
+    const summary = benchSummary(
+      data([cell("a", "raw", 60, 10), cell("a", "cli", 5, 1), cell("a", "mcp", 20, 3)]),
+      "usage",
     );
-    expect(headline?.speedup.speedup).toBe(9);
-    expect(headline).toMatchObject({ correctByHand: 0.75, correctWithStudio: 1 });
+    expect(summary?.studio).toMatchObject({ seconds: 20, toolCalls: 3 });
+  });
+
+  it("has no summary when no pair has both sides", () => {
+    expect(
+      benchSummary(data([cell("a", "raw", 60, 10), cell("a", "cli", 5, 1)]), "usage"),
+    ).toBeNull();
   });
 });

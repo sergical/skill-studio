@@ -79,14 +79,6 @@ pub(crate) fn check_batch_size(len: usize) -> Result<(), CoreError> {
 const MAX_FOLDER_FILES: usize = 2_000;
 /// Largest total bytes `content_fingerprint` will read per deployment.
 const MAX_FOLDER_BYTES: u64 = 64 * 1024 * 1024;
-/// Manifest filenames a plugin cache walk looks for, in priority order,
-/// per the agent-plugins.org manifest convention.
-const PLUGIN_MANIFEST_CANDIDATES: &[&str] = &[
-    ".claude-plugin/plugin.json",
-    ".codex-plugin/plugin.json",
-    ".cursor-plugin/plugin.json",
-    "plugin.json",
-];
 /// Depth `find_plugin_roots` walks below a plugin cache root before giving
 /// up on finding a manifest.
 const PLUGIN_CACHE_MAX_DEPTH: u8 = 3;
@@ -167,6 +159,8 @@ pub enum Operation {
     PackUpdate,
     /// Remove the skills of one pack.
     PackRemove,
+    /// Move the skills of one pack to another source.
+    PackSwitchSource,
     /// List the recovery plans that did not finish or were dropped.
     RecoveryList,
     /// Give up one interrupted recovery plan.
@@ -2074,21 +2068,23 @@ struct PluginSkillDir {
     source: PluginSourceDto,
 }
 
-/// Reports whether `plugin_dir` holds one of [`PLUGIN_MANIFEST_CANDIDATES`],
+/// Reports whether `plugin_dir` holds one of [`crate::harness::PLUGIN_MANIFEST_CANDIDATES`],
 /// leniently: a manifest that exists but fails to parse as JSON, or parses
 /// without a `name`, still counts as "a plugin is here" rather than failing
 /// the walk. Only presence matters to the caller; the manifest's own fields
 /// (`name`, `version`) come from the path components in
 /// [`enumerate_plugin_skills`] instead.
 fn plugin_manifest_present(fs: &dyn ScopeFs, plugin_dir: &Path) -> bool {
-    PLUGIN_MANIFEST_CANDIDATES.iter().any(|candidate| {
-        fs.read_capped(&plugin_dir.join(candidate), SKILL_MD_MAX_BYTES)
-            .is_ok()
-    })
+    crate::harness::PLUGIN_MANIFEST_CANDIDATES
+        .iter()
+        .any(|candidate| {
+            fs.read_capped(&plugin_dir.join(candidate), SKILL_MD_MAX_BYTES)
+                .is_ok()
+        })
 }
 
 /// Walks a plugin cache tree up to [`PLUGIN_CACHE_MAX_DEPTH`] levels for
-/// plugin roots (a directory holding one of [`PLUGIN_MANIFEST_CANDIDATES`]
+/// plugin roots (a directory holding one of [`crate::harness::PLUGIN_MANIFEST_CANDIDATES`]
 /// directly), then lists each plugin's `skills/<name>` directories.
 /// `marketplace`/`plugin`/`version` come from the plugin root's path
 /// relative to `target.path`, per the agent-plugins.org
@@ -2235,7 +2231,9 @@ fn walk_for_plugin_roots(
         return;
     };
     for entry in entries {
-        if !matches!(entry.kind, FileKind::Dir) {
+        if !matches!(entry.kind, FileKind::Dir)
+            || crate::harness::is_plugin_cache_bookkeeping(&entry.name)
+        {
             continue;
         }
         let path = dir.join(&entry.name);
@@ -5074,21 +5072,8 @@ fn restore_event_body(
             }
         }
         crate::ops_install::check_registry_drift(fs, inverse)?;
-        if let Some(edit) = inverse.get("lock_row_undo").filter(|v| !v.is_null()) {
-            let lock = crate::lock_file::lock_file_path(&rt.scope.home.lexical);
-            let live = crate::lock_file::read_lock_entry_value(
-                fs,
-                &lock,
-                edit["skill"].as_str().unwrap_or_default(),
-            )?;
-            if live.as_ref().unwrap_or(&serde_json::Value::Null) != &edit["expected"] {
-                return Err(CoreError::new(
-                    ErrorCode::DriftConflict,
-                    "the updated lock row changed; pass force to restore anyway",
-                )
-                .at(lock));
-            }
-        }
+        // `LockRowUndo::check` above already compared the lock row at the
+        // path the event recorded, global or project.
     }
     let mut write_back_plans: Vec<(PathBuf, RestorePlan)> = Vec::new();
     if !write_back.is_empty() {
@@ -5869,7 +5854,7 @@ fn find_independent_links<'a>(
 pub use crate::extras::extras;
 pub use crate::ops_discard::discard;
 pub use crate::ops_doctor::doctor;
-pub use crate::ops_install::{install, install_preferences};
+pub use crate::ops_install::{install, install_batch, install_preferences};
 /// Stuck recovery plans, shared by CLI and MCP.
 pub use crate::ops_recovery::{recovery_drop, recovery_list};
 pub use crate::ops_remove::{remove, sweep_quarantine};
@@ -5877,7 +5862,7 @@ pub use crate::ops_split::split;
 pub use crate::ops_update::{update, update_all, update_all_unbounded, update_split_copies};
 /// Pack read operations shared by CLI and MCP.
 pub use crate::pack::{pack_list, pack_show};
-pub use crate::pack_action::{pack_add, pack_remove, pack_update};
+pub use crate::pack_action::{pack_add, pack_remove, pack_switch_source, pack_update};
 
 /// Moves one real copy's directory into the parked root, in the slot for
 /// where it came from ([`crate::park_layout`]).
@@ -8199,6 +8184,38 @@ mod tests {
             builder
         }
 
+        /// A plugin cache's bookkeeping folders hold no plugin: a dot-named folder, or the
+        /// `temp_git_*` folder Claude Code clones a marketplace into before it moves the
+        /// plugin into place. A manifest inside one is not a plugin yet, so the walk lists no
+        /// skill from it.
+        #[test]
+        fn plugin_walk_skips_bookkeeping_cache_folders_or_lists_a_staged_plugin() {
+            let fs = claude_plugin_fixture(None)
+                .dir("/h/.claude/plugins/cache/temp_git_1_ab/skills/cloned-skill")
+                .file(
+                    "/h/.claude/plugins/cache/temp_git_1_ab/.claude-plugin/plugin.json",
+                    b"{\"name\": \"cloned\"}",
+                )
+                .file(
+                    "/h/.claude/plugins/cache/temp_git_1_ab/skills/cloned-skill/SKILL.md",
+                    b"---\nname: cloned-skill\ndescription: Cloned.\n---\n",
+                )
+                .dir("/h/.claude/plugins/cache/mp/.tmpStaged/v1/skills/staged-skill")
+                .file(
+                    "/h/.claude/plugins/cache/mp/.tmpStaged/v1/.claude-plugin/plugin.json",
+                    b"{\"name\": \"staged\"}",
+                )
+                .file(
+                    "/h/.claude/plugins/cache/mp/.tmpStaged/v1/skills/staged-skill/SKILL.md",
+                    b"---\nname: staged-skill\ndescription: Staged.\n---\n",
+                )
+                .build_fs();
+            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
+            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
+            let names: Vec<String> = inv.skills.iter().map(|s| s.name.to_string()).collect();
+            assert_eq!(names, ["plugin-skill"]);
+        }
+
         fn plugin_enabled_in(inv: &Inventory) -> Option<bool> {
             inv.skills[0].deployments[0]
                 .plugin
@@ -8695,6 +8712,7 @@ mod tests {
                 Operation::PackAdd,
                 Operation::PackUpdate,
                 Operation::PackRemove,
+                Operation::PackSwitchSource,
                 Operation::RecoveryList,
                 Operation::RecoveryDrop,
             ];
@@ -8733,6 +8751,7 @@ mod tests {
                     Operation::PackAdd => "pack_add",
                     Operation::PackUpdate => "pack_update",
                     Operation::PackRemove => "pack_remove",
+                    Operation::PackSwitchSource => "pack_switch_source",
                     Operation::RecoveryList => "recovery_list",
                     Operation::RecoveryDrop => "recovery_drop",
                 };

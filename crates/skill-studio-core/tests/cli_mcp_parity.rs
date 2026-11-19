@@ -30,6 +30,12 @@ const EXCLUSIONS: &[Exclusion] = &[
                   fetches a skill's files yet",
     },
     Exclusion {
+        name: "install_batch",
+        reason: "several installs in one call for callers that hold a list (the desktop's \
+                  multi-skill add, `pack add`); the CLI and MCP add a set of skills from one \
+                  source with `pack add`, which calls it",
+    },
+    Exclusion {
         name: "update_all_unbounded",
         reason: "`update_all` without the batch limit, for a set that comes from saved state \
                   (the desktop's \"Update all\", `pack update`); a request that lists its own \
@@ -109,6 +115,10 @@ const CLI_SUBCOMMANDS: &[SurfaceName] = &[
     },
     SurfaceName {
         op: "pack_remove",
+        surface: "pack",
+    },
+    SurfaceName {
+        op: "pack_switch_source",
         surface: "pack",
     },
     SurfaceName {

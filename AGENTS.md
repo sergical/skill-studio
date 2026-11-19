@@ -414,6 +414,10 @@ Enabled in `apps/desktop/tsconfig.json`:
   there, and the spec must fail without the change. Component tests that set
   the store directly do not prove these flows: a window key handler in
   another component broke ⌘K while they all passed.
+- Real CLI runs: the e2e harness and the Rust tests mock `npx skills`. To
+  prove a change against the real `npx skills` and real files, use the
+  `verify-skill-studio` skill (`.agents/skills/verify-skill-studio/`): a
+  disposable home, a local git pack, and saved evidence for each command.
 
 ## Before you implement an issue
 
