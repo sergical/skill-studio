@@ -350,6 +350,7 @@ fn update_via_cli(
     rt: &Runtime,
     ctx: &OpContext,
     req: &UpdateRequest,
+    from_source: Option<&str>,
     destination: &Path,
 ) -> Result<(), CoreError> {
     let spawner = rt.ports.spawner.as_ref().ok_or_else(|| {
@@ -358,7 +359,19 @@ fn update_via_cli(
             "this host build has no process spawner; dotagents/skills.sh updates are not available",
         )
     })?;
-    let (args, cwd) = update_cli_args_and_cwd(req.method, &req.skill, &req.scope);
+    let (args, cwd) = match from_source {
+        Some(source) if req.method == InstallMethod::SkillsSh => {
+            crate::ops_install_cli::cli_args_and_cwd(
+                req.method,
+                source,
+                &req.skill,
+                &req.scope,
+                &[],
+                crate::dto::InstallLinkMode::Link,
+            )
+        }
+        _ => update_cli_args_and_cwd(req.method, &req.skill, &req.scope),
+    };
     let cwd = cwd
         .or_else(|| (req.method == InstallMethod::SkillsSh).then(|| rt.scope.home.lexical.clone()));
     let spec = crate::ports::ProcessSpec {
@@ -370,10 +383,10 @@ fn update_via_cli(
     };
     let output = spawner.run(&spec, ctx.cancel.as_ref())?;
     if output.status != Some(0) {
-        let command = if req.method == InstallMethod::Dotagents {
-            "dotagents install"
-        } else {
-            "skills update"
+        let command = match (req.method, from_source) {
+            (InstallMethod::Dotagents, _) => "dotagents install",
+            (_, Some(_)) => "skills add",
+            _ => "skills update",
         };
         return Err(cli_failure(command, &output));
     }
@@ -620,6 +633,7 @@ fn update_write(
     ctx: &OpContext,
     session: &mut MutationSession,
     req: &UpdateRequest,
+    from_source: Option<&str>,
     universal_root: &Path,
     destination: &Path,
     copy_registry: Option<CopyRegistryRead>,
@@ -657,7 +671,7 @@ fn update_write(
                 }
             }
             let held_before = harness_dirs_holding(rt, &req.scope, &req.skill);
-            let refreshed = update_via_cli(rt, ctx, req, destination).and_then(|()| {
+            let refreshed = update_via_cli(rt, ctx, req, from_source, destination).and_then(|()| {
                 if req.method == InstallMethod::SkillsSh {
                     remove_links_the_cli_added(
                         rt,
@@ -697,7 +711,21 @@ pub fn update(
     ctx: &OpContext,
     req: &UpdateRequest,
 ) -> Result<UpdateOutcome, CoreError> {
-    update_then_release(rt, ctx, req, &mut |_| {})
+    update_then_release(rt, ctx, req, None, &mut |_| {})
+}
+
+/// [`update`] for a `SkillsSh` skill, installing it from `from_source`
+/// instead of its recorded source: `npx skills add <from_source> --skill
+/// <name>` over the existing copy, which moves its lock row to that source.
+/// The journal row backs up the folder and the lock row, so `restore_event`
+/// puts the old source back. `pack_switch_source` calls this.
+pub(crate) fn update_from_source(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &UpdateRequest,
+    from_source: &str,
+) -> Result<UpdateOutcome, CoreError> {
+    update_then_release(rt, ctx, req, Some(from_source), &mut |_| {})
 }
 
 /// A point inside [`update_body`] where the lease is held, for
@@ -714,11 +742,12 @@ fn update_then_release(
     rt: &Runtime,
     ctx: &OpContext,
     req: &UpdateRequest,
+    from_source: Option<&str>,
     on_stage: &mut dyn FnMut(UpdateStage<'_>),
 ) -> Result<UpdateOutcome, CoreError> {
     rt.run(Operation::Update, ctx, || {
         refuse_parked(rt, req)?;
-        update_body(rt, ctx, req, on_stage)
+        update_body(rt, ctx, req, from_source, on_stage)
     })
 }
 
@@ -765,6 +794,7 @@ fn update_body(
     rt: &Runtime,
     ctx: &OpContext,
     req: &UpdateRequest,
+    from_source: Option<&str>,
     on_stage: &mut dyn FnMut(UpdateStage<'_>),
 ) -> Result<UpdateOutcome, CoreError> {
     ctx.checkpoint()?;
@@ -889,7 +919,7 @@ fn update_body(
         payload: serde_json::json!({
             "method": ops_install::method_wire_name(req.method),
             "destination": destination,
-            "source": req.source,
+            "source": from_source.or(req.source.as_deref()),
             "tree_hash_before": tree_hash_before,
         }),
         inverse: Some(inverse),
@@ -902,6 +932,7 @@ fn update_body(
         ctx,
         &mut session,
         req,
+        from_source,
         &universal_root,
         &destination,
         copy_registry,
@@ -1538,7 +1569,7 @@ fn update_all_body(
             }
             let mut hashes_before = BTreeMap::new();
             let mut snapshot = None;
-            let result = update_then_release(rt, ctx, req, &mut |stage| match stage {
+            let result = update_then_release(rt, ctx, req, None, &mut |stage| match stage {
                 UpdateStage::DotagentsPlanned(plan) => {
                     hashes_before = hash_later_dotagents(
                         rt,

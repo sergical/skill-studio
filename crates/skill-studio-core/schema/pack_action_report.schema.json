@@ -118,6 +118,11 @@
           "description": "Remove the skill.",
           "type": "string",
           "const": "remove"
+        },
+        {
+          "description": "Install the skill from another source over its current copy.",
+          "type": "string",
+          "const": "switch_source"
         }
       ]
     },

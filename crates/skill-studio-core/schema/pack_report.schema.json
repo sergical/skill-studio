@@ -95,6 +95,17 @@
           "description": "Remote check result.",
           "$ref": "#/$defs/RemoteState"
         },
+        "original": {
+          "description": "The source this pack's skills moved away from with\n`pack_switch_source`, such as the repo the pack's source is a fork\nof, and how the pack compares with it. Absent for a pack that never\nmoved.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PackOriginal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "summary": {
           "description": "One line for a person or agent.",
           "type": "string",
@@ -307,6 +318,43 @@
             "reason"
           ]
         }
+      ]
+    },
+    "PackOriginal": {
+      "description": "The source a pack moved away from, and how the pack compares with it.",
+      "type": "object",
+      "properties": {
+        "source": {
+          "description": "The source the pack's skills came from before they moved to the\npack's own source.",
+          "type": "string",
+          "x-untrusted": true
+        },
+        "remote": {
+          "description": "Remote check result for the original.",
+          "$ref": "#/$defs/RemoteState"
+        },
+        "differs": {
+          "description": "Installed skills whose folder in the original differs from the\nfolder in the pack's own source: one of the two changed it. Empty\nunless the remote check read both sources.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-untrusted": true
+        },
+        "not_in_source": {
+          "description": "Skills of the original that the pack's own source does not have.\nEmpty unless the remote check read both sources.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-untrusted": true
+        }
+      },
+      "required": [
+        "source",
+        "remote",
+        "differs",
+        "not_in_source"
       ]
     }
   }

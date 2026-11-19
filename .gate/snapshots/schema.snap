@@ -4723,6 +4723,11 @@
             "const": "remove",
             "description": "Remove the skill.",
             "type": "string"
+          },
+          {
+            "const": "switch_source",
+            "description": "Install the skill from another source over its current copy.",
+            "type": "string"
           }
         ]
       },
@@ -5016,6 +5021,17 @@
             "type": "array",
             "x-untrusted": true
           },
+          "original": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PackOriginal"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The source this pack's skills moved away from with\n`pack_switch_source`, such as the repo the pack's source is a fork\nof, and how the pack compares with it. Absent for a pack that never\nmoved."
+          },
           "ref_pin": {
             "description": "Branch, tag, commit, or plugin version the install is pinned to.",
             "type": [
@@ -5098,6 +5114,43 @@
             "type": "string"
           }
         ]
+      },
+      "PackOriginal": {
+        "description": "The source a pack moved away from, and how the pack compares with it.",
+        "properties": {
+          "differs": {
+            "description": "Installed skills whose folder in the original differs from the\nfolder in the pack's own source: one of the two changed it. Empty\nunless the remote check read both sources.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "x-untrusted": true
+          },
+          "not_in_source": {
+            "description": "Skills of the original that the pack's own source does not have.\nEmpty unless the remote check read both sources.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "x-untrusted": true
+          },
+          "remote": {
+            "$ref": "#/$defs/RemoteState",
+            "description": "Remote check result for the original."
+          },
+          "source": {
+            "description": "The source the pack's skills came from before they moved to the\npack's own source.",
+            "type": "string",
+            "x-untrusted": true
+          }
+        },
+        "required": [
+          "source",
+          "remote",
+          "differs",
+          "not_in_source"
+        ],
+        "type": "object"
       },
       "PackSkill": {
         "description": "One installed skill of a pack, at one scope.",

@@ -133,6 +133,11 @@ pub struct Pack {
     pub behind_count: usize,
     /// Remote check result.
     pub remote: RemoteState,
+    /// The source this pack's skills moved away from with
+    /// `pack_switch_source`, such as the repo the pack's source is a fork
+    /// of, and how the pack compares with it. Absent for a pack that never
+    /// moved.
+    pub original: Option<crate::pack_original::PackOriginal>,
     /// One line for a person or agent.
     #[schemars(extend("x-untrusted" = true))]
     pub summary: String,
@@ -363,10 +368,19 @@ pub(crate) fn build(
             members.push(entry);
         }
     }
+    let links = crate::pack_original::read_links(&fs, &rt.scope.home.lexical);
     let mut packs = Vec::new();
     for (key, entries) in grouped.into_values() {
         ctx.checkpoint()?;
-        packs.push(pack(&fs, key, entries, remote, ctx.cancel.as_ref()));
+        let original = crate::pack_original::original_of(&links, key.kind, &key.source);
+        packs.push(pack(
+            &fs,
+            key,
+            entries,
+            original,
+            remote,
+            ctx.cancel.as_ref(),
+        ));
     }
     let summary = report_summary(&packs, want_remote);
     Ok((PackReport { packs, summary }, inventory))
@@ -384,7 +398,7 @@ pub(crate) fn scan(rt: &Runtime, ctx: &OpContext) -> Result<Inventory, CoreError
 /// `owner/repo`, `https://github.com/Owner/repo.git`, and
 /// `git@github.com:owner/repo.git` match; case is ignored only on GitHub.
 /// A port stays. Local paths and other kinds match as written.
-fn source_identity(kind: PackKind, source: &str) -> String {
+pub(crate) fn source_identity(kind: PackKind, source: &str) -> String {
     let source = source.trim();
     let local = source.starts_with(['/', '.', '~', '\\'])
         || source.as_bytes().get(1) == Some(&b':') && source.as_bytes()[0].is_ascii_alphabetic();
@@ -419,6 +433,23 @@ fn source_identity(kind: PackKind, source: &str) -> String {
         s.make_ascii_lowercase();
     }
     s
+}
+
+/// The URL `git` takes for a `npx skills add` source, or `None` for a local path.
+pub(crate) fn git_url(source: &str) -> Option<String> {
+    let source = source.trim();
+    if source.contains("://") || source.starts_with("git@") {
+        return Some(source.to_string());
+    }
+    let (owner, repo) = source.split_once('/')?;
+    let plain = |part: &str| {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+    };
+    (plain(owner) && plain(repo) && !owner.starts_with('.'))
+        .then(|| format!("https://github.com/{owner}/{repo}.git"))
 }
 
 pub(crate) fn selected_scopes(
@@ -776,6 +807,7 @@ fn pack(
     fs: &dyn ScopeFs,
     key: PackKey,
     entries: Vec<Entry>,
+    original_source: Option<String>,
     remote: Option<&dyn PackRemote>,
     cancel: &dyn CancelToken,
 ) -> Pack {
@@ -836,6 +868,24 @@ fn pack(
         });
     }
     skills.sort_by(|a, b| (&a.scope, &a.name).cmp(&(&b.scope, &b.name)));
+    let original = original_source.map(|source| {
+        let fetched = match (remote, crate::pack::git_url(&source)) {
+            (None, _) => Err(RemoteState::NotChecked),
+            (Some(_), None) => Err(RemoteState::NoGitSource),
+            (Some(remote), Some(url)) => {
+                remote
+                    .fetch(&url, None, cancel)
+                    .map_err(|err| RemoteState::Failed {
+                        reason: match err {
+                            RemoteError::Failed(reason) => reason,
+                            known => known.text(&source),
+                        },
+                    })
+            }
+        };
+        let installed: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
+        crate::pack_original::compare(source, upstream.as_ref().ok(), fetched, &installed)
+    });
     let (new_upstream, remote) = match upstream {
         Ok(up) => {
             let mut names: Vec<String> = up
@@ -859,6 +909,7 @@ fn pack(
         behind_count,
         &new_upstream,
         &remote,
+        original.as_ref(),
     );
     Pack {
         source: key.source,
@@ -872,6 +923,7 @@ fn pack(
         edited_count,
         behind_count,
         remote,
+        original,
         summary,
     }
 }
@@ -890,6 +942,7 @@ fn pack_summary(
     behind: usize,
     new_upstream: &[String],
     remote: &RemoteState,
+    original: Option<&crate::pack_original::PackOriginal>,
 ) -> String {
     let mut parts = vec![plural(skills, "skill")];
     if edited > 0 {
@@ -907,6 +960,23 @@ fn pack_summary(
     });
     if !new_upstream.is_empty() {
         parts.push(format!("new upstream: {}", new_upstream.join(", ")));
+    }
+    if let Some(original) = original {
+        parts.push(match &original.remote {
+            RemoteState::Checked { .. } => format!(
+                "moved from {}: {} differ, {} only there",
+                original.source,
+                original.differs.len(),
+                original.not_in_source.len()
+            ),
+            RemoteState::Failed { reason } => {
+                format!(
+                    "moved from {}, which could not be checked: {reason}",
+                    original.source
+                )
+            }
+            _ => format!("moved from {}", original.source),
+        });
     }
     parts.join(", ")
 }

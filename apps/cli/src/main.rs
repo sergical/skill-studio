@@ -234,7 +234,8 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// List, add, update or remove packs: one source that ships skills.
+    /// List, add, update, remove or switch the source of packs: one source
+    /// that ships skills.
     Pack {
         #[command(subcommand)]
         action: PackCommand,
@@ -741,6 +742,23 @@ enum PackCommand {
     Remove {
         /// Pack source, as pack list prints it.
         source: String,
+        #[command(flatten)]
+        args: PackWriteArgs,
+    },
+    /// Install the skills of one skills.sh pack from another git source,
+    /// such as your fork, and keep the old source as the pack's original.
+    /// pack show <to> --remote then compares the two. Skips skills with
+    /// local edits.
+    SwitchSource {
+        /// Pack source, as pack list prints it.
+        source: String,
+        /// owner/repo or a git URL to install from instead; add #ref to pin
+        /// a branch or tag.
+        to: String,
+        /// Skill to move. Repeat for more than one. Default: every skill of
+        /// the pack.
+        #[arg(long = "skill", value_name = "SKILL")]
+        skills: Vec<String>,
         #[command(flatten)]
         args: PackWriteArgs,
     },
@@ -2977,12 +2995,14 @@ fn run_pack(action: PackCommand, time: bool) -> ExitCode {
 
 fn run_pack_action(action: PackCommand, time: bool) -> ExitCode {
     use skill_studio_core::pack_action::{
-        PackActionReport, PackAddRequest, PackRemoveRequest, PackUpdateRequest,
+        PackActionReport, PackAddRequest, PackRemoveRequest, PackSwitchSourceRequest,
+        PackUpdateRequest,
     };
     let (operation, args) = match &action {
         PackCommand::Add { args, .. } => (Operation::PackAdd, args),
         PackCommand::Update { args, .. } => (Operation::PackUpdate, args),
         PackCommand::Remove { args, .. } => (Operation::PackRemove, args),
+        PackCommand::SwitchSource { args, .. } => (Operation::PackSwitchSource, args),
         PackCommand::List { .. } | PackCommand::Show { .. } => unreachable!("read commands"),
     };
     let rt = match build_runtime_write_with_project::<PackActionReport>(
@@ -3044,6 +3064,19 @@ fn run_pack_action(action: PackCommand, time: bool) -> ExitCode {
             &ctx,
             &PackRemoveRequest {
                 source,
+                project_path,
+                dry_run,
+            },
+        ),
+        PackCommand::SwitchSource {
+            source, to, skills, ..
+        } => ops::pack_switch_source(
+            &rt,
+            &ctx,
+            &PackSwitchSourceRequest {
+                source,
+                to,
+                skills,
                 project_path,
                 dry_run,
             },

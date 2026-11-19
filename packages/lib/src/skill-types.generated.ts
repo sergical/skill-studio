@@ -1345,6 +1345,13 @@ export interface Pack {
         reason: string;
       };
   /**
+   * The source this pack's skills moved away from with
+   * `pack_switch_source`, such as the repo the pack's source is a fork
+   * of, and how the pack compares with it. Absent for a pack that never
+   * moved.
+   */
+  original: PackOriginal | null;
+  /**
    * One line for a person or agent.
    */
   summary: string;
@@ -1384,6 +1391,54 @@ export interface PackSkill {
    * Upstream has a different version. Absent: no remote check, or upstream lacks the skill.
    */
   behind: boolean | null;
+}
+/**
+ * The source a pack moved away from, and how the pack compares with it.
+ */
+export interface PackOriginal {
+  /**
+   * The source the pack's skills came from before they moved to the
+   * pack's own source.
+   */
+  source: string;
+  /**
+   * Remote check result for the original.
+   */
+  remote:
+    | {
+        state: "not_checked";
+      }
+    | {
+        state: "no_git_source";
+      }
+    | {
+        state: "pinned_to_commit";
+      }
+    | {
+        state: "checked";
+        /**
+         * Upstream commit the check compared against.
+         */
+        commit: string;
+      }
+    | {
+        state: "failed";
+        /**
+         * Git's own message.
+         */
+        reason: string;
+      };
+  /**
+   * Installed skills whose folder in the original differs from the
+   * folder in the pack's own source: one of the two changed it. Empty
+   * unless the remote check read both sources.
+   */
+  differs: string[];
+  /**
+   * Skills of the original that the pack's own source does not have.
+   * Empty unless the remote check read both sources.
+   */
+  not_in_source: string[];
 }
 /**
  * Input for `pack_add`.
@@ -1498,7 +1553,7 @@ export interface PackStep {
   /**
    * What the step does.
    */
-  action: "install" | "update" | "remove";
+  action: "install" | "update" | "remove" | "switch_source";
   /**
    * Where the step is.
    */

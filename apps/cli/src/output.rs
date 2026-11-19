@@ -824,6 +824,9 @@ pub fn write_schemas(out: Option<PathBuf>) -> ExitCode {
         ("pack_remove_request", || {
             schemars::schema_for!(skill_studio_core::pack_action::PackRemoveRequest)
         }),
+        ("pack_switch_source_request", || {
+            schemars::schema_for!(skill_studio_core::pack_action::PackSwitchSourceRequest)
+        }),
         ("pack_action_report", || {
             schemars::schema_for!(skill_studio_core::pack_action::PackActionReport)
         }),
@@ -1080,6 +1083,16 @@ pub fn print_packs(envelope: &ResultEnvelope<skill_studio_core::pack::PackReport
         }
         for command in &pack.update_commands {
             println!("  update with: {command}");
+        }
+        if let Some(original) = &pack.original {
+            for (label, names) in [
+                ("differ from", &original.differs),
+                ("only in", &original.not_in_source),
+            ] {
+                if !names.is_empty() {
+                    println!("  {label} {}: {}", original.source, names.join(", "));
+                }
+            }
         }
     }
     println!("{}", report.summary);
