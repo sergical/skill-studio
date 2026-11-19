@@ -17,30 +17,34 @@ const FRAME_MS = 1000 / 30;
 // A frame is due a little early, so vsync jitter on a 60 Hz or 120 Hz display does not
 // skip it.
 const FRAME_SLACK_MS = 3;
-// After a long pause (another tab, a debugger), the animation goes on where it stopped.
+// A longer gap is a pause (a hidden tab, a debugger), not time the animation should skip.
 const MAX_STEP_MS = 100;
 
 /**
- * Calls `onFrame` with the animation time, 30 times a second on the display's own frames,
- * while `target` is on screen. The time pauses off screen and in a hidden tab. Returns a
- * function that stops it.
+ * Calls `onStep` with the milliseconds since the last step, 30 times a second on the
+ * display's own frames, while `target` is on screen. A pause off screen or in a hidden tab
+ * counts as one frame. Returns a function that stops it.
  */
-export function paceWhileVisible(target: Element, onFrame: (frame: number) => void) {
+export function paceWhileVisible(target: Element, onStep: (ms: number) => void) {
   let frameId = 0;
   let last = 0;
-  let frame = 0;
+  let due = 0;
   const tick = (now: number) => {
     frameId = requestAnimationFrame(tick);
-    if (now - last < FRAME_MS - FRAME_SLACK_MS) return;
-    frame += Math.min(now - last, MAX_STEP_MS) * DITHER_SPEED;
+    if (now < due - FRAME_SLACK_MS) return;
+    // A deadline, not the last draw, keeps a 144 Hz display at 30 fps on average.
+    due += FRAME_MS;
+    if (due <= now) due = now + FRAME_MS;
+    const step = now - last;
     last = now;
-    onFrame(frame);
+    onStep(step > MAX_STEP_MS ? FRAME_MS : step);
   };
   const observer = new IntersectionObserver((entries) => {
     cancelAnimationFrame(frameId);
     // A fast scroll can queue an exit and an entry together; the newest one is current.
     if (!entries[entries.length - 1].isIntersecting) return;
     last = performance.now();
+    due = last + FRAME_MS;
     frameId = requestAnimationFrame(tick);
   });
   observer.observe(target);
@@ -64,6 +68,8 @@ export function WarpDither({ colorBack, colorFront }: WarpDitherProps) {
   const boxRef = useRef<HTMLDivElement>(null);
   const shaderRef = useRef<ComponentRef<typeof Dithering>>(null);
   const [cssPixels, setCssPixels] = useState(0);
+  // Animation time survives a reduced-motion toggle, so the dither goes on where it stopped.
+  const frame = useRef(0);
   const reducedMotion = useReducedMotion();
 
   useLayoutEffect(() => {
@@ -80,7 +86,10 @@ export function WarpDither({ colorBack, colorFront }: WarpDitherProps) {
   useEffect(() => {
     const box = boxRef.current;
     if (!box || reducedMotion) return;
-    return paceWhileVisible(box, (frame) => shaderRef.current?.paperShaderMount?.setFrame(frame));
+    return paceWhileVisible(box, (ms) => {
+      frame.current += ms * DITHER_SPEED;
+      shaderRef.current?.paperShaderMount?.setFrame(frame.current);
+    });
   }, [reducedMotion]);
 
   return (

@@ -75,55 +75,72 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** Starts the pacer and returns its step count and the animation time it reported. */
+function startPacer() {
+  const steps: number[] = [];
+  const stop = paceWhileVisible(document.body, (ms) => steps.push(ms));
+  const total = () => steps.reduce((sum, ms) => sum + ms, 0);
+  return { steps, stop, total };
+}
+
 describe("paceWhileVisible", () => {
-  it.each([60, 120])("draws 30 frames a second on a %i Hz display", (hz) => {
-    const onFrame = vi.fn<(frame: number) => void>();
-    const stop = paceWhileVisible(document.body, onFrame);
+  it.each([60, 120, 144])("draws 30 frames a second on a %i Hz display", (hz) => {
+    const pacer = startPacer();
     deliver([true]);
 
-    runDisplay(hz, 1000);
-    stop();
+    runDisplay(hz, 10_000);
+    pacer.stop();
 
-    expect(onFrame).toHaveBeenCalledTimes(30);
-    // Animation time runs at the shader speed, 0.35 ms per millisecond.
-    expect(onFrame.mock.lastCall?.[0]).toBeCloseTo(350, 0);
+    expect(pacer.steps).toHaveLength(300);
+    expect(pacer.total()).toBeGreaterThan(9_990);
+    expect(pacer.total()).toBeLessThan(10_000.001);
   });
 
   it("draws nothing while off screen, and reads the newest of queued entries", () => {
-    const onFrame = vi.fn<(frame: number) => void>();
-    const stop = paceWhileVisible(document.body, onFrame);
+    const pacer = startPacer();
 
     deliver([true, false]);
     runDisplay(60, 500);
-    expect(onFrame).not.toHaveBeenCalled();
+    expect(pacer.steps).toHaveLength(0);
 
     deliver([false, true]);
     runDisplay(60, 500);
-    stop();
-    expect(onFrame).toHaveBeenCalledTimes(15);
+    pacer.stop();
+    expect(pacer.steps).toHaveLength(15);
   });
 
-  it("goes on where it stopped when the target comes back on screen", () => {
-    const onFrame = vi.fn<(frame: number) => void>();
-    const stop = paceWhileVisible(document.body, onFrame);
+  it("counts time off screen as one frame", () => {
+    const pacer = startPacer();
     deliver([true]);
     runDisplay(60, 1000);
     deliver([false]);
     runDisplay(60, 5000);
     deliver([true]);
     runDisplay(60, 1000);
-    stop();
+    pacer.stop();
 
-    expect(onFrame.mock.lastCall?.[0]).toBeCloseTo(700, 0);
+    expect(pacer.total()).toBeCloseTo(2000, 0);
+  });
+
+  it("counts a hidden tab as one frame, and draws the next frame on time", () => {
+    const pacer = startPacer();
+    deliver([true]);
+    runDisplay(60, 1000);
+    // A hidden tab gets no display frames.
+    now += 5000;
+    runDisplay(60, 1000);
+    pacer.stop();
+
+    expect(pacer.steps.slice(30, 32)).toEqual([1000 / 30, expect.closeTo(1000 / 30, 5)]);
+    expect(pacer.total()).toBeCloseTo(2000, 0);
   });
 
   it("stops drawing when stopped", () => {
-    const onFrame = vi.fn<(frame: number) => void>();
-    const stop = paceWhileVisible(document.body, onFrame);
+    const pacer = startPacer();
     deliver([true]);
-    stop();
+    pacer.stop();
     runDisplay(60, 1000);
 
-    expect(onFrame).not.toHaveBeenCalled();
+    expect(pacer.steps).toHaveLength(0);
   });
 });
