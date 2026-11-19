@@ -1,6 +1,8 @@
 # Flows
 
-A new user-facing flow must add a row to this table and a flow-level test.
+A new user-facing flow must add a row to this table and one flow-level test at
+the lowest seam that proves its file effects. CLI and MCP parity comes from
+the flow_parity.rs table, not from new tests per adapter.
 The CLI and MCP columns name shared core calls. Gap rows are known missing
 adapters or desktop integrations, not claims of feature parity. The flow_parity
 integration test requires named CLI and MCP tests for each supported

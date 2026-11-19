@@ -11,8 +11,10 @@ a status field, a phase enum, or a busy flag.
 2. **Name every legal move.** Write the moves as a `match` (Rust) or a
    discriminated union (TypeScript). An illegal move returns an error, not a
    silent overwrite.
-3. **Test the whole table.** A machine test walks every `(from, to)` pair, or
-   every input row, and names the illegal move in its failure message.
+3. **Test the whole table once.** One test per machine walks every
+   `(from, to)` pair, or every input row, from the transition function itself,
+   and names the illegal move in its failure message. Do not add one test per
+   pair, and do not test moves that the type system already forbids.
 4. **Derive, do not mirror.** If a state follows from other state, compute it.
    Do not store a second flag that can drift from the first.
 5. **Keep the wire stable.** Serialized names (`kebab-case` phases, SQL status
