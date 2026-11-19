@@ -176,6 +176,8 @@ fn pack_export_refuses_bad_requests_before_it_writes_anything() {
     let foxtrot = home.join(".agents/skills/foxtrot");
     write(&foxtrot.join("SKILL.md"), &skill_md("foxtrot"));
     std::os::unix::fs::symlink("../../../outside.md", foxtrot.join("notes.md")).unwrap();
+    std::fs::create_dir_all(home.join(".claude/skills")).unwrap();
+    std::os::unix::fs::symlink(home.join("gone/hotel"), home.join(".claude/skills/hotel")).unwrap();
     let rt = runtime(&home);
     let out = home.join("pack");
 
@@ -200,6 +202,7 @@ fn pack_export_refuses_bad_requests_before_it_writes_anything() {
             "leaves its folder",
         ),
         (export(&out, &["foxtrot"], false), "leaves its folder"),
+        (export(&out, &["hotel"], false), "broken link"),
     ];
     for (req, expected) in cases {
         let err = ops::pack_export(&rt, &ctx(), &req).unwrap_err();
