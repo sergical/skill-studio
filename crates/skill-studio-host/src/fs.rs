@@ -10,8 +10,7 @@ use cap_std::ambient_authority;
 use cap_std::fs::{Dir, OpenOptionsExt as _, PermissionsExt as _};
 use chrono::{DateTime, Utc};
 use skill_studio_core::ports::{
-    DirEntryFacts, DirHandle, ExclusiveGuard, FileFacts, FileKind, OpenedEntry, OpenedFile,
-    ScopeFs, ScopedPath,
+    DirEntryFacts, DirHandle, ExclusiveGuard, FileFacts, FileKind, OpenedFile, ScopeFs, ScopedPath,
 };
 
 /// A counter mixed into temp file names so concurrent writers on the same
@@ -319,10 +318,10 @@ impl ScopeFs for RealFs {
     }
 }
 
-/// [`DirHandle`] over one open folder. Opens by one name use `openat` with
-/// `O_NOFOLLOW`, so the kind a caller listed is the kind it gets; the one
-/// call that follows links, [`DirHandle::open_within`], goes through
-/// cap-std, which refuses a link out of the folder.
+/// [`DirHandle`] over one open folder. Every call takes one name and
+/// resolves it in the folder without following a link (`openat` with
+/// `O_NOFOLLOW`, `fstatat`, `readlinkat`), so the kind a caller read is the
+/// kind it gets.
 struct HeldDir(Dir);
 
 fn one_name(name: &(impl AsRef<std::ffi::OsStr> + ?Sized)) -> io::Result<&std::ffi::OsStr> {
@@ -432,29 +431,31 @@ impl DirHandle for HeldDir {
         Ok((bytes, meta.mode() & 0o7777))
     }
 
-    fn open_within(&self, relative: &Path, max_file_bytes: u64) -> io::Result<OpenedEntry> {
-        let mut options = cap_std::fs::OpenOptions::new();
-        options
-            .read(true)
-            .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed());
-        let file = self.0.open_with(relative, &options)?.into_std();
-        let meta = file.metadata()?;
-        if meta.is_dir() {
-            return Ok(OpenedEntry::Dir(Box::new(HeldDir(Dir::from_std_file(
-                file,
-            )))));
-        }
-        if !meta.is_file() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("{} is a device, not a file", relative.display()),
-            ));
-        }
-        let bytes = read_capped_from(&file, relative, max_file_bytes)?;
-        Ok(OpenedEntry::File {
-            bytes,
-            mode: meta.mode() & 0o7777,
+    fn kind(&self, name: &str) -> io::Result<FileKind> {
+        let file_type = self.0.symlink_metadata(one_name(name)?)?.file_type();
+        Ok(if file_type.is_symlink() {
+            FileKind::Symlink
+        } else if file_type.is_dir() {
+            FileKind::Dir
+        } else if file_type.is_file() {
+            FileKind::File
+        } else {
+            FileKind::Other
         })
+    }
+
+    fn read_link(&self, name: &str) -> io::Result<PathBuf> {
+        use std::os::unix::ffi::OsStringExt as _;
+        match rustix::fs::readlinkat(&self.0, one_name(name)?, Vec::new()) {
+            Ok(target) => Ok(PathBuf::from(std::ffi::OsString::from_vec(
+                target.into_bytes(),
+            ))),
+            Err(e) if e == rustix::io::Errno::INVAL => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{name} is not a link"),
+            )),
+            Err(e) => Err(e.into()),
+        }
     }
 
     fn create_dir(&self, name: &str) -> io::Result<Box<dyn DirHandle>> {
@@ -468,16 +469,18 @@ impl DirHandle for HeldDir {
         // CREATE | EXCL fails on any entry, a link included.
         let flags =
             OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-        let fd = openat(
-            &self.0,
-            one_name(name)?,
-            flags,
-            Mode::from_bits_truncate(mode as _),
-        )?;
+        let name = one_name(name)?;
+        let fd = openat(&self.0, name, flags, Mode::from_bits_truncate(mode as _))?;
         let mut file = fs::File::from(fd);
-        file.write_all(bytes)?;
         // The umask already masked the create mode above.
-        file.set_permissions(fs::Permissions::from_mode(mode))
+        let written = file
+            .write_all(bytes)
+            .and_then(|()| file.set_permissions(fs::Permissions::from_mode(mode)));
+        if written.is_err() {
+            // This call created the file, so a partial one is not the user's.
+            let _ = rustix::fs::unlinkat(&self.0, name, rustix::fs::AtFlags::empty());
+        }
+        written
     }
 }
 

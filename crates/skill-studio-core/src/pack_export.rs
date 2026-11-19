@@ -11,7 +11,8 @@
 //! empty, and every file is created with create-new, so nothing is ever
 //! overwritten.
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+use std::rc::Rc;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -20,7 +21,7 @@ use crate::dto::{DeploymentDto, Inventory};
 use crate::error::{CoreError, ErrorCode, ErrorEntry};
 use crate::identity::{RootKind, RootScope};
 use crate::ops::{OpStatus, Operation, Outcome};
-use crate::ports::{DirHandle, FileKind, OpContext, OpenedEntry, Runtime, ScopeFs};
+use crate::ports::{DirHandle, FileKind, OpContext, Runtime, ScopeFs};
 
 /// Largest single file the export copies.
 const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
@@ -113,7 +114,7 @@ pub fn pack_export(
 ) -> Result<PackExportReport, CoreError> {
     rt.run(Operation::PackExport, ctx, || {
         let fs = rt.ports.fs.as_ref();
-        check_request(fs, req)?;
+        let target = check_request(fs, req)?;
         let scope = match &req.project_path {
             Some(path) => crate::pack::selected_scopes(rt, Some(path))?.remove(0).0,
             None => RootScope::Global,
@@ -145,7 +146,7 @@ pub fn pack_export(
             mode: 0o644,
         });
         if !req.dry_run {
-            write_pack(fs, &req.dir, &planned)?;
+            target.write(&planned)?;
         }
         let count = skills.len();
         let summary = format!(
@@ -167,9 +168,9 @@ pub fn pack_export(
 
 /// Refuses a request that could write outside its folder or over a file:
 /// no skills, a repeated or path-like name, a relative folder, or a folder
-/// that holds anything. [`write_pack`] checks the folder again through the
-/// handle it writes with.
-fn check_request(fs: &dyn ScopeFs, req: &PackExportRequest) -> Result<(), CoreError> {
+/// that holds anything. Returns the pack folder's held parent, which
+/// [`PackTarget::write`] checks again and writes through.
+fn check_request(fs: &dyn ScopeFs, req: &PackExportRequest) -> Result<PackTarget, CoreError> {
     let invalid = |message: String| CoreError::new(ErrorCode::InvalidRequest, message);
     if req.skills.is_empty() {
         return Err(invalid("name at least one skill to put in the pack".into()));
@@ -198,7 +199,7 @@ fn check_request(fs: &dyn ScopeFs, req: &PackExportRequest) -> Result<(), CoreEr
             invalid("give the pack folder as an absolute path without `..`".into()).at(&req.dir),
         );
     }
-    open_pack_dir(fs, &req.dir, false).map(|_| ())
+    PackTarget::open(fs, &req.dir)
 }
 
 /// The copy of `name` to export from `scope`: the shared `.agents/skills`
@@ -270,14 +271,24 @@ fn refuse(path: &Path, message: &str) -> CoreError {
     CoreError::new(ErrorCode::InvalidRequest, message.to_string()).at(path)
 }
 
+/// A folder held open, shared by the walk and the link resolver.
+type Held = Rc<dyn DirHandle>;
+
+/// Most links one entry may pass through, so a chain of links that loops
+/// fails instead of running forever.
+const MAX_LINK_HOPS: usize = 40;
+
+const NOT_A_FILE: &str = "the skill holds something that is not a file or a folder";
+const LEAVES: &str = "a link in the skill leaves its folder; the pack would not hold what it names";
+
 /// Adds every file under `folder` to `planned`, at `into/<relative path>`.
 /// The folder itself may be a link (a linked install): its resolved folder
 /// is the boundary. The walk holds each folder open and reads every entry
-/// through its folder's handle, so what it checks is what it reads: a link
-/// swapped in after the listing fails the open instead of redirecting it,
-/// and a link inside the skill is followed only while it stays inside the
-/// skill. A link that leaves the skill, or loops back into a folder being
-/// walked, is refused. `.git` is left out.
+/// through the folder that holds it, never by path, so what it checks is
+/// what it reads: an entry that turns into a link after the listing fails
+/// the open instead of redirecting it. A link inside the skill is followed
+/// through the folders already held ([`follow`]) and is refused when it
+/// leaves the skill or loops. `.git` is left out.
 fn collect(
     fs: &dyn ScopeFs,
     folder: &Path,
@@ -294,10 +305,85 @@ fn collect(
         }
         Err(e) => return Err(CoreError::io(folder, e)),
     };
-    let root = open_dir(fs, &resolved)?;
+    let root: Held = Rc::from(open_dir(fs, &resolved)?);
     let identity = root.identity().map_err(|e| CoreError::io(&resolved, e))?;
     walk.open = vec![identity];
-    walk.dir(root.as_ref(), root.as_ref(), &resolved, Path::new(""), into)
+    walk.dir(&[root], &resolved, into)
+}
+
+/// What an entry of the skill holds once opened.
+enum Reached {
+    /// A folder, and the held folders from the skill folder down to it.
+    Dir(Vec<Held>),
+    /// A regular file's bytes and permission bits.
+    File(Vec<u8>, u32),
+}
+
+/// Follows the link target `target`, written in the last folder of `chain`
+/// (the held folders from the skill folder down), one name at a time
+/// through held folders: `..` steps back to the held parent, a name opens
+/// without following a link, and a link on the way is followed the same
+/// way. Nothing is resolved by path, so a folder swapped for a link after
+/// it was opened cannot redirect the result. `link` names the entry, for
+/// messages.
+fn follow(
+    chain: &[Held],
+    target: &Path,
+    link: &Path,
+    hops: &mut usize,
+) -> Result<Reached, CoreError> {
+    *hops += 1;
+    if *hops > MAX_LINK_HOPS {
+        return Err(refuse(
+            link,
+            "a link in the skill loops back into its own folder",
+        ));
+    }
+    let io = |e: std::io::Error| match e.kind() {
+        std::io::ErrorKind::NotADirectory | std::io::ErrorKind::InvalidInput => changed(link),
+        std::io::ErrorKind::NotFound => refuse(link, "a link in the skill names nothing"),
+        _ => CoreError::io(link, e),
+    };
+    let mut chain = chain.to_vec();
+    let names: Vec<Component<'_>> = target.components().collect();
+    for (index, component) in names.iter().enumerate() {
+        let last = index + 1 == names.len();
+        match component {
+            Component::RootDir | Component::Prefix(_) => return Err(refuse(link, LEAVES)),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if chain.len() == 1 {
+                    return Err(refuse(link, LEAVES));
+                }
+                chain.pop();
+            }
+            Component::Normal(name) => {
+                let name = name.to_str().ok_or_else(|| refuse(link, NOT_A_FILE))?;
+                // The chain never empties: `..` stops at the skill folder.
+                let Some(here) = chain.last().cloned() else {
+                    return Err(refuse(link, LEAVES));
+                };
+                match here.kind(name).map_err(io)? {
+                    FileKind::Dir => chain.push(Rc::from(here.open_dir(name).map_err(io)?)),
+                    FileKind::File if last => {
+                        let (bytes, mode) = here.read_file(name, MAX_FILE_BYTES).map_err(io)?;
+                        return Ok(Reached::File(bytes, mode));
+                    }
+                    FileKind::Symlink => {
+                        let next = here.read_link(name).map_err(io)?;
+                        match follow(&chain, &next, link, hops)? {
+                            Reached::Dir(reached) => chain = reached,
+                            file @ Reached::File(..) if last => return Ok(file),
+                            Reached::File(..) => return Err(changed(link)),
+                        }
+                    }
+                    FileKind::File => return Err(changed(link)),
+                    FileKind::Other => return Err(refuse(link, NOT_A_FILE)),
+                }
+            }
+        }
+    }
+    Ok(Reached::Dir(chain))
 }
 
 /// Walk state shared across the skills of one export.
@@ -311,16 +397,12 @@ struct Walk<'a> {
 }
 
 impl Walk<'_> {
-    /// Walks `dir`, which is `relative` below the skill folder `root`;
-    /// `shown` is its path, for messages only.
-    fn dir(
-        &mut self,
-        root: &dyn DirHandle,
-        dir: &dyn DirHandle,
-        shown: &Path,
-        relative: &Path,
-        into: &Path,
-    ) -> Result<(), CoreError> {
+    /// Walks the last folder of `chain`, the held folders from the skill
+    /// folder down; `shown` is its path, for messages only.
+    fn dir(&mut self, chain: &[Held], shown: &Path, into: &Path) -> Result<(), CoreError> {
+        let Some(dir) = chain.last() else {
+            return Ok(());
+        };
         let mut entries = dir.entries().map_err(|e| CoreError::io(shown, e))?;
         entries.sort_by(|a, b| a.name.cmp(&b.name));
         for entry in entries {
@@ -328,39 +410,39 @@ impl Walk<'_> {
                 continue;
             }
             let path = shown.join(&entry.name);
-            let opened = match entry.kind {
-                FileKind::Dir => dir.open_dir(&entry.name).map(OpenedEntry::Dir),
-                FileKind::File => dir
-                    .read_file(&entry.name, MAX_FILE_BYTES)
-                    .map(|(bytes, mode)| OpenedEntry::File { bytes, mode }),
-                FileKind::Symlink => {
-                    match root.open_within(&relative.join(&entry.name), MAX_FILE_BYTES) {
-                        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                            return Err(refuse(
-                                &path,
-                                "a link in the skill leaves its folder; the pack would not hold what it names",
-                            ))
-                        }
-                        Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => {
-                            return Err(refuse(&path, NOT_A_FILE))
-                        }
-                        other => other,
-                    }
-                }
-                FileKind::Other => return Err(refuse(&path, NOT_A_FILE)),
-            };
-            // The kind the listing gave no longer holds: a folder or file
-            // became a link, or the other way round.
-            let opened = opened.map_err(|e| match e.kind() {
+            // An error here means the entry is no longer the kind the
+            // listing gave: a folder or file became a link, or the reverse.
+            let stale = |e: std::io::Error| match e.kind() {
                 std::io::ErrorKind::NotADirectory | std::io::ErrorKind::InvalidInput => {
                     changed(&path)
                 }
                 _ => CoreError::io(&path, e),
-            })?;
+            };
+            let reached = match entry.kind {
+                FileKind::Dir => {
+                    let child: Held = Rc::from(dir.open_dir(&entry.name).map_err(stale)?);
+                    let mut deeper = chain.to_vec();
+                    deeper.push(child);
+                    Reached::Dir(deeper)
+                }
+                FileKind::File => {
+                    let (bytes, mode) =
+                        dir.read_file(&entry.name, MAX_FILE_BYTES).map_err(stale)?;
+                    Reached::File(bytes, mode)
+                }
+                FileKind::Symlink => {
+                    let target = dir.read_link(&entry.name).map_err(stale)?;
+                    follow(chain, &target, &path, &mut 0)?
+                }
+                FileKind::Other => return Err(refuse(&path, NOT_A_FILE)),
+            };
             let target = into.join(&entry.name);
-            match opened {
-                OpenedEntry::Dir(child) => {
-                    let identity = child.identity().map_err(|e| CoreError::io(&path, e))?;
+            match reached {
+                Reached::Dir(deeper) => {
+                    let Some(held) = deeper.last() else {
+                        return Err(refuse(&path, LEAVES));
+                    };
+                    let identity = held.identity().map_err(|e| CoreError::io(&path, e))?;
                     if self.open.contains(&identity) {
                         return Err(refuse(
                             &path,
@@ -368,16 +450,10 @@ impl Walk<'_> {
                         ));
                     }
                     self.open.push(identity);
-                    self.dir(
-                        root,
-                        child.as_ref(),
-                        &path,
-                        &relative.join(&entry.name),
-                        &target,
-                    )?;
+                    self.dir(&deeper, &path, &target)?;
                     self.open.pop();
                 }
-                OpenedEntry::File { bytes, mode } => self.file(&path, target, bytes, mode)?,
+                Reached::File(bytes, mode) => self.file(&path, target, bytes, mode)?,
             }
         }
         Ok(())
@@ -406,120 +482,141 @@ impl Walk<'_> {
     }
 }
 
-const NOT_A_FILE: &str = "the skill holds something that is not a file or a folder";
+/// Where the pack goes: the pack folder's parent, held open from the first
+/// check to the last write, and the folder's name in it. The user's path is
+/// resolved once, so a parent swapped for a link later cannot move the
+/// write.
+struct PackTarget {
+    parent: Box<dyn DirHandle>,
+    name: String,
+    /// The path the request named, for messages.
+    dir: PathBuf,
+}
 
 /// The pack folder, held open.
-struct PackDir {
-    handle: Box<dyn DirHandle>,
-    /// This export created the folder.
+struct PackFolder {
+    folder: Box<dyn DirHandle>,
+    /// This export created it.
     created: bool,
 }
 
-/// Opens the pack folder: its parent by its link-free path, then the folder
-/// by name, never through a link. `None` when the folder does not exist and
-/// `create` is false. Refuses a folder that holds anything.
-fn open_pack_dir(fs: &dyn ScopeFs, dir: &Path, create: bool) -> Result<Option<PackDir>, CoreError> {
-    let invalid = |message: &str| refuse(dir, message);
-    let (Some(parent), Some(name)) = (dir.parent(), dir.file_name().and_then(|n| n.to_str()))
-    else {
-        return Err(invalid(
-            "give the pack folder a name inside a parent folder",
-        ));
-    };
-    let parent = match fs.canonicalize(parent) {
-        Ok(parent) => parent,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+impl PackTarget {
+    /// Opens the parent of `dir` by its link-free path and checks the
+    /// folder: absent, or an empty folder.
+    fn open(fs: &dyn ScopeFs, dir: &Path) -> Result<PackTarget, CoreError> {
+        let (Some(parent), Some(name)) = (dir.parent(), dir.file_name().and_then(|n| n.to_str()))
+        else {
             return Err(refuse(
-                parent,
-                "the pack folder's parent folder does not exist",
-            ))
-        }
-        Err(e) => return Err(CoreError::io(parent, e)),
-    };
-    let parent = open_dir(fs, &parent)?;
-    let (handle, created) = match parent.open_dir(name) {
-        Ok(folder) => (folder, false),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !create => return Ok(None),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (
-            parent.create_dir(name).map_err(|e| CoreError::io(dir, e))?,
-            true,
-        ),
-        Err(e) if e.kind() == std::io::ErrorKind::NotADirectory => {
-            return Err(invalid(
-                "the pack folder path is a file or a link, not a folder",
-            ))
-        }
-        Err(e) => return Err(CoreError::io(dir, e)),
-    };
-    let entries = handle.entries().map_err(|e| CoreError::io(dir, e))?;
-    if !entries.is_empty() {
-        return Err(invalid(
-            "the pack folder is not empty; choose a new or empty folder",
-        ));
-    }
-    Ok(Some(PackDir { handle, created }))
-}
-
-/// Writes the pack through the handle [`open_pack_dir`] returns, so no write
-/// can leave the folder, even through a folder swapped for a link after the
-/// checks; every folder and file is created with create-new. On a failure
-/// the error lists what was written and what to remove: the folder when
-/// this export created it, else only the listed files.
-fn write_pack(fs: &dyn ScopeFs, dir: &Path, planned: &[PlannedFile]) -> Result<(), CoreError> {
-    let Some(PackDir {
-        handle: root,
-        created,
-    }) = open_pack_dir(fs, dir, true)?
-    else {
-        return Err(changed(dir));
-    };
-    let mut written: Vec<PathBuf> = Vec::new();
-    let stopped = |path: &Path, e: std::io::Error, written: &[PathBuf]| {
-        let undo = if created {
-            format!("remove {}", dir.display())
-        } else if written.is_empty() {
-            "nothing was written".to_string()
-        } else {
-            format!(
-                "remove what it wrote in {}: {}",
-                dir.display(),
-                written
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
+                dir,
+                "give the pack folder a name inside a parent folder",
+            ));
         };
-        CoreError::io(dir.join(path), e).with_detail(format!("the export stopped here; {undo}"))
-    };
-    // Folders this export created, by path relative to `dir`, held open.
-    let mut made: BTreeMap<PathBuf, Box<dyn DirHandle>> = BTreeMap::new();
-    for file in planned {
-        let mut at = PathBuf::new();
-        let parts: Vec<&std::ffi::OsStr> = file.relative.iter().collect();
-        let Some((leaf, folders)) = parts.split_last() else {
-            continue;
-        };
-        for folder in folders {
-            let parent = at.clone();
-            at.push(folder);
-            if made.contains_key(&at) {
-                continue;
+        let parent = match fs.canonicalize(parent) {
+            Ok(parent) => parent,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(refuse(
+                    parent,
+                    "the pack folder's parent folder does not exist",
+                ))
             }
-            let holder = made.get(&parent).map_or(root.as_ref(), AsRef::as_ref);
-            let opened = holder
-                .create_dir(&folder.to_string_lossy())
-                .map_err(|e| stopped(&at, e, &written))?;
-            written.push(at.clone());
-            made.insert(at.clone(), opened);
-        }
-        made.get(&at)
-            .map_or(root.as_ref(), AsRef::as_ref)
-            .write_new_file(&leaf.to_string_lossy(), &file.bytes, file.mode)
-            .map_err(|e| stopped(&file.relative, e, &written))?;
-        written.push(file.relative.clone());
+            Err(e) => return Err(CoreError::io(parent, e)),
+        };
+        let target = PackTarget {
+            parent: open_dir(fs, &parent)?,
+            name: name.to_string(),
+            dir: dir.to_path_buf(),
+        };
+        target.folder(false)?;
+        Ok(target)
     }
-    Ok(())
+
+    /// The pack folder, held open and empty, created when `create` and it
+    /// does not exist; `None` when it does not exist and not `create`.
+    fn folder(&self, create: bool) -> Result<Option<PackFolder>, CoreError> {
+        let invalid = |message: &str| refuse(&self.dir, message);
+        let io = |e| CoreError::io(&self.dir, e);
+        let (folder, created) = match self.parent.open_dir(&self.name) {
+            Ok(folder) => (folder, false),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !create => return Ok(None),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                (self.parent.create_dir(&self.name).map_err(io)?, true)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotADirectory => {
+                return Err(invalid(
+                    "the pack folder path is a file or a link, not a folder",
+                ))
+            }
+            Err(e) => return Err(io(e)),
+        };
+        if !folder.entries().map_err(io)?.is_empty() {
+            return Err(invalid(
+                "the pack folder is not empty; choose a new or empty folder",
+            ));
+        }
+        Ok(Some(PackFolder { folder, created }))
+    }
+
+    /// Writes the pack into the folder [`Self::folder`] holds, so no write
+    /// can leave it; every folder and file is created with create-new. On a
+    /// failure the error lists what was written and what to remove: the
+    /// folder when this export created it, else only the listed files.
+    fn write(&self, planned: &[PlannedFile]) -> Result<(), CoreError> {
+        let dir = &self.dir;
+        let Some(PackFolder {
+            folder: root,
+            created,
+        }) = self.folder(true)?
+        else {
+            return Err(changed(dir));
+        };
+        let mut written: Vec<PathBuf> = Vec::new();
+        let stopped = |path: &Path, e: std::io::Error, written: &[PathBuf]| {
+            let undo = if created {
+                format!("remove {}", dir.display())
+            } else if written.is_empty() {
+                "nothing was written".to_string()
+            } else {
+                format!(
+                    "remove what it wrote in {}: {}",
+                    dir.display(),
+                    written
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            CoreError::io(dir.join(path), e).with_detail(format!("the export stopped here; {undo}"))
+        };
+        // Folders this export created, by path relative to `dir`, held open.
+        let mut made: BTreeMap<PathBuf, Box<dyn DirHandle>> = BTreeMap::new();
+        for file in planned {
+            let mut at = PathBuf::new();
+            let parts: Vec<&std::ffi::OsStr> = file.relative.iter().collect();
+            let Some((leaf, folders)) = parts.split_last() else {
+                continue;
+            };
+            for folder in folders {
+                let parent = at.clone();
+                at.push(folder);
+                if made.contains_key(&at) {
+                    continue;
+                }
+                let holder = made.get(&parent).map_or(root.as_ref(), AsRef::as_ref);
+                let opened = holder
+                    .create_dir(&folder.to_string_lossy())
+                    .map_err(|e| stopped(&at, e, &written))?;
+                written.push(at.clone());
+                made.insert(at.clone(), opened);
+            }
+            made.get(&at)
+                .map_or(root.as_ref(), AsRef::as_ref)
+                .write_new_file(&leaf.to_string_lossy(), &file.bytes, file.mode)
+                .map_err(|e| stopped(&file.relative, e, &written))?;
+            written.push(file.relative.clone());
+        }
+        Ok(())
+    }
 }
 
 /// `word` as one shell word: as is when it holds only safe characters, else
