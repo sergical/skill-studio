@@ -1045,6 +1045,91 @@
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
+        "claude_budget_fraction": {
+          "description": "Predict Claude Code at this `skillListingBudgetFraction` (0 to 1).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "claude_context_window_tokens": {
+          "description": "Predict Claude Code with this context window in tokens.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "claude_transcript": {
+          "description": "Compare Claude Code with this session transcript instead of the newest one.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true
+        },
+        "codex_max_context_tokens": {
+          "description": "Predict Codex at this `skills.max_context_tokens` (capped at 10000).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "count_by": {
+          "default": null,
+          "description": "Count the rows of the whole main list by this field. A list field\ncounts each item.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cursor": {
+          "default": null,
+          "description": "A `next_cursor` from `page` or `page.also` of an earlier call with the\nsame filters. It continues that one list; the other lists return only\ntotals.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fields": {
+          "default": [],
+          "description": "Row fields to keep. Empty keeps every field.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "limit": {
+          "default": null,
+          "description": "Rows to return from the main list. `0` returns only `page` (totals\nand `counts`). Without it, rows until the answer is 32 KB.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "project_path": {
+          "description": "Also report this project. It must be in the runtime scope.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true
+        }
+      },
+      "type": "object"
+    },
+    "name": "listing"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
         "copy_status": {
           "anyOf": [
             {

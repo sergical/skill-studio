@@ -32,6 +32,7 @@ outdated    List skills that have an update
 update      Update installed skills
 mcp         Start the MCP server
 extras      List hook events, MCP server names, and instruction file paths
+listing     Show which skills each agent lists with a description
 doctor      Check skill state and model listing budgets
 ```
 
@@ -166,6 +167,18 @@ List hook events and counts, MCP server names, and instruction file paths:
 ```sh
 skill-studio extras --project /path/to/repo --json
 ```
+
+Show which skills each agent lists for the model with a description, with a
+name only, or not at all, and what changes at a 2% Claude Code budget:
+
+```sh
+skill-studio listing --claude-fraction 0.02
+```
+
+`--codex-max-tokens N` does the same for Codex. `--claude-session <file.jsonl>`
+compares with one recorded Claude Code session instead of the newest. The
+command writes no agent settings; it prints the setting text and the file to
+put it in.
 
 This reads declarations only. It does not show config values or instruction
 contents. Unreadable files have an `unreadable` row. Agent trust and enable

@@ -143,6 +143,8 @@ pub enum Operation {
     Library,
     /// Names and paths of non-skill agent configuration.
     Extras,
+    /// Per-skill model listing state for each harness.
+    Listing,
     /// Check or set skill invocation across harnesses.
     Invocation,
     /// Set or clear a review date.
@@ -245,6 +247,9 @@ impl Outcome for Diagnosis {
 
 impl Outcome for crate::extras::ExtrasReport {
     const LISTS: &'static [&'static str] = &["/entries"];
+}
+impl Outcome for crate::listing_visibility::ListingReport {
+    const LISTS: &'static [&'static str] = &["/listings"];
 }
 impl Outcome for Capabilities {}
 impl Outcome for HarnessReport {}
@@ -8708,6 +8713,7 @@ mod tests {
                 Operation::SkillUsage,
                 Operation::Library,
                 Operation::Extras,
+                Operation::Listing,
                 Operation::Review,
                 Operation::ReviewDue,
                 Operation::PackList,
@@ -8747,6 +8753,7 @@ mod tests {
                     Operation::SkillUsage => "skill_usage",
                     Operation::Library => "library",
                     Operation::Extras => "extras",
+                    Operation::Listing => "listing",
                     Operation::Invocation => "invocation",
                     Operation::Review => "review",
                     Operation::ReviewDue => "review_due",

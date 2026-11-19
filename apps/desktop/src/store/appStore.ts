@@ -15,6 +15,8 @@ import { ALL_ACTIVITY, USAGE_WINDOWS } from "@skill-studio/lib";
 import type { ActivityFilter, UsageWindow } from "@skill-studio/lib";
 import type { Toast, TrackedProjects, SkillSnapshot } from "@skill-studio/lib";
 import type {
+  ListingReport,
+  ListingRequest,
   PackActionReport,
   PackExportReport,
   PackExportRequest,
@@ -28,6 +30,7 @@ import {
   packAdd,
   packExport,
   packList,
+  skillListing,
   packRemove,
   packUpdate,
 } from "../lib/skill-api";
@@ -70,6 +73,7 @@ export type ActiveView =
   | { kind: "skills" }
   | { kind: "plugins" }
   | { kind: "packs" }
+  | { kind: "listing" }
   | { kind: "activity" }
   | { kind: "learn"; section?: LearnSection }
   | { kind: "settings" }
@@ -252,6 +256,10 @@ interface AppState {
   runPackAction: (intent: PackIntent, dryRun: boolean) => Promise<PackActionReport>;
   /** Plans (`dryRun`) or writes a new pack folder from installed skills. Rejects with the command's message. */
   exportPack: (request: PackExportRequest) => Promise<PackExportReport>;
+
+  // === Model listing ===
+  /** Per-skill listing state for each agent, from the core's `listing`. Reads only. */
+  readListing: (request: ListingRequest) => Promise<ListingReport>;
 
   // === Add-skill Sheet ===
   addSkillSheet: { open: boolean; prefill?: string };
@@ -534,6 +542,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   checkSkillUpdates: checkSkillUpdatesNow,
 
   listPacks: (remote) => withCommandMessage(packList(remote)),
+  readListing: (request) => withCommandMessage(skillListing(request)),
   runPackAction: (intent, dryRun) =>
     withCommandMessage(packActionCall(intent, dryRun, get().harnessDetection.choice?.kept ?? [])),
   exportPack: (request) => withCommandMessage(packExport(request)),
