@@ -120,7 +120,13 @@ test("Try again from the keyboard leaves focus on the Sync button", async ({ pag
   await page.keyboard.press("Enter");
 
   await expect(popover).toBeHidden();
-  await expect(page.getByRole("button", { name: "Syncing installed skills" })).toBeFocused();
+  // The retry can end before this check on a slow runner, and the button's name changes with
+  // its state. Match the button in every state: the claim is about focus, not the spinner.
+  await expect(
+    page.getByRole("button", {
+      name: /^(Syncing installed skills|Sync installed skills|Sync failed, show error)$/,
+    }),
+  ).toBeFocused();
 });
 
 test("a long error scrolls with the keyboard", async ({ page }) => {
