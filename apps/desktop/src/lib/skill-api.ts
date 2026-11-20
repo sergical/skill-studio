@@ -3,6 +3,7 @@
 // Tauri IPC communication for skills.sh integration
 // ============================================================================
 
+import { z } from "zod";
 import { invoke } from "@tauri-apps/api/core";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -110,15 +111,17 @@ function callCommand<T>(command: string, args?: InvokeArgs): Promise<T> {
   );
 }
 
+const PRIMITIVE_REJECTION = z.union([z.string(), z.number(), z.boolean(), z.bigint()]);
+
 /** Kept for call sites that already branch on `cause` themselves; `callCommand` now normalizes
  * every rejection to an `Error` before it reaches a catch block, so this is equivalent to reading
  * `cause.message` directly there. */
 export function invokeErrorMessage(cause: unknown): string {
   if (cause instanceof Error) return cause.message;
-  if (cause == null) return "Unknown error";
-  // `callCommand` turns every rejection into an `Error`, so only a primitive gets here.
-  // oxlint-disable-next-line typescript/no-base-to-string, typescript/restrict-template-expressions -- formats a primitive rejection value
-  return `${cause}`;
+  // Other callers (a clipboard rejection, say) can pass anything: a primitive reads as itself,
+  // and any other value as "Unknown error", not "[object Object]".
+  const primitive = PRIMITIVE_REJECTION.safeParse(cause);
+  return primitive.success ? String(primitive.data) : "Unknown error";
 }
 
 export async function previewSkillFrontmatterRepair(

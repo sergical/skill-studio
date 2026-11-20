@@ -88,12 +88,16 @@ export function AppVersionCard() {
       .catch((err) => {
         if (!cancelled) setUpdateStatus({ status: "error", message: invokeErrorMessage(err) });
       });
+    // A listener that fails to register shows as an error status, and leaves nothing to unlisten.
     const unlisten = onUpdateStatus((status) => {
       if (!cancelled) setUpdateStatus(status);
+    }).catch((err) => {
+      if (!cancelled) setUpdateStatus({ status: "error", message: invokeErrorMessage(err) });
+      return null;
     });
     return () => {
       cancelled = true;
-      void unlisten.then((fn) => fn());
+      void unlisten.then((fn) => fn?.());
     };
   }, []);
 
