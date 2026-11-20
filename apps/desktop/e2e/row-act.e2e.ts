@@ -1,15 +1,15 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { openApp, setLatency } from "./app-harness";
 
 /** A skill row, not a group header: only skill rows carry `aria-selected`. */
 const SKILL_ROW = '[role="row"][aria-selected]';
 
-// Every harness answer waits 400 ms, so a running act is on screen long enough to measure; the
-// waits add up, so each test gets the slow timeout.
+// After the app starts, every harness answer waits 400 ms, so a running act is on screen long
+// enough to measure; the waits add up, so each test gets the slow timeout.
 test.beforeEach(async ({ page }) => {
   test.slow();
-  await page.goto("/?latency=400");
-  await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
+  await openApp(page);
+  await setLatency(page, 400);
 });
 
 async function openSkillsPage(page: Page) {
@@ -34,6 +34,48 @@ async function top(row: Locator): Promise<number> {
   return Math.round((await row.boundingBox())!.y);
 }
 
+interface BusyBox {
+  width: number;
+  top: number;
+}
+
+/** Records the button's width and its row's top in the page, in the same task that sets
+ * `aria-busy="true"` on the button. Two separate reads after the act starts can miss it: on a
+ * loaded runner the act can end between them. Call it before the click; await the result after. */
+async function measureWhenBusy(button: Locator, row: Locator): Promise<() => Promise<BusyBox>> {
+  const rowElement = await row.elementHandle();
+  const pending = await button.evaluateHandle(
+    // Wrapped in an object: evaluateHandle would wait for a returned promise, before the click.
+    (element, rowEl) => ({
+      box: new Promise<BusyBox>((resolve) => {
+        const observer = new MutationObserver(() => {
+          if (element.getAttribute("aria-busy") !== "true") return;
+          observer.disconnect();
+          resolve({
+            width: element.getBoundingClientRect().width,
+            top: Math.round(rowEl!.getBoundingClientRect().y),
+          });
+        });
+        observer.observe(element, { attributes: true, attributeFilter: ["aria-busy"] });
+      }),
+    }),
+    rowElement,
+  );
+  // Called right after the click: the button must turn busy within expect's default 5 s, as the
+  // `toHaveAttribute("aria-busy", "true")` check that this replaces required.
+  return () =>
+    pending.evaluate(
+      (handle, ms) =>
+        Promise.race([
+          handle.box,
+          new Promise<BusyBox>((_, reject) => {
+            setTimeout(() => reject(new Error(`the button did not turn busy within ${ms} ms`)), ms);
+          }),
+        ]),
+      5000,
+    );
+}
+
 test("Update on a Skills row spins in place, then the row stays in its slot and says Updated", async ({
   page,
 }) => {
@@ -47,12 +89,11 @@ test("Update on a Skills row spins in place, then the row stays in its slot and 
   const running = target.getByRole("button", { name: "Update", exact: true });
   const before = await top(target);
   const width = (await running.boundingBox())!.width;
+  const busy = await measureWhenBusy(running, target);
 
   await running.click();
 
-  await expect(running).toHaveAttribute("aria-busy", "true");
-  expect((await running.boundingBox())!.width).toBe(width);
-  expect(await top(target)).toBe(before);
+  expect(await busy()).toEqual({ width, top: before });
 
   await expect(target.getByText("Updated", { exact: true })).toBeVisible();
   expect(await top(target)).toBe(before);
@@ -135,8 +176,7 @@ test("a selection-bar Park leaves a row that is still updating to its Update, an
   page,
 }) => {
   // The Update must still run when Park is clicked; a slow answer keeps that true on a loaded machine.
-  await page.goto("/?latency=2000");
-  await page.getByRole("button", { name: "Continue" }).click();
+  await setLatency(page, 2000);
   await openSkillsPage(page);
   const grid = page.getByRole("grid", { name: "Skills" });
   const updating = rowNamed(

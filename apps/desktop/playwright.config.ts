@@ -9,6 +9,10 @@ export default defineConfig({
   testMatch: "**/*.e2e.ts",
   globalSetup: "./e2e/warm-up.ts",
   forbidOnly: !!process.env.CI,
+  // Each test opens its own page on its own harness state, so tests in one file can run at the
+  // same time, and CI shards split by test, not by file. CI uses one worker per core.
+  fullyParallel: true,
+  workers: process.env.CI ? "100%" : undefined,
   reporter: process.env.CI ? "github" : "list",
   use: {
     baseURL: `http://localhost:${PORT}`,
