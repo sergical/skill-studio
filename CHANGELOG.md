@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+## v0.4.0
+
 ### Added
 
 - Codex listing: Skill Studio now models Codex 0.170.0 exactly enough to match real sessions. It charges `rN/` short paths and the skill roots table, names plugin skills `plugin:name`, lists system skills and nested skills from the newest session, reads frontmatter the way Codex repairs it, and hides plugins Codex did not load, with the reason for each hidden skill. It reports the tier (all described, descriptions shortened, names only), the full and names-only costs, how far the budget is from the next tier, and the 10,000-token cap; it flags skills Claude Code keeps manual-only that Codex still lists. Replaying the 15 newest real sessions, it listed every recorded skill in order and gave the exact description length for 99.8%; overflow runs at 1000 to 4000 tokens matched exactly. The budget comes from the newest session's model. `skill-studio listing --codex-session <rollout>` compares with one session in this home.
@@ -22,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Model listing: the Codex tier has its own box with grouped numbers, the comparison column stays empty until you try a budget, and a page subtitle no longer draws over the title in a narrow window. Sessions links each agent's skills docs.
 - The doctor listing budget for Claude Code now uses the model's context window from Claude Code's model catalog cache and the model's characters per token (3 for current models). Before, it used 200,000 tokens at 4 characters, so the limit for Opus 5.5 was 2,000 tokens instead of 7,500. Codex uses `context_window` from `models_cache.json` for the configured model.
 - Frontmatter that is not valid YAML, such as a description with `: ` in it, still shows its top-level fields, the way Claude Code reads it.
 - Undo of a skills.sh update in a project no longer fails with `drift_conflict`. It compared the home lock file, not the project's `skills-lock.json`.
