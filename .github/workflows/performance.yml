@@ -2,10 +2,19 @@ name: Performance baseline
 
 on:
   pull_request:
+  # Main runs save the Rust cache that pull requests restore.
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  # A new commit on a pull request cancels that branch's older run. Main runs
+  # and scheduled or manual runs each get their own group, so none is cancelled.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   baseline:
@@ -22,6 +31,8 @@ jobs:
         with:
           toolchain: 1.95.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: mkdir -p apps/desktop/dist
       - run: python3 tools/perf-baseline.py --output perf-artifacts/baseline.json
       - name: Publish measurements
