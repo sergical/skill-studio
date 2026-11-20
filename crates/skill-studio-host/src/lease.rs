@@ -87,6 +87,11 @@ fn no_exclusive_holder(path: &Path) -> bool {
 ///
 /// Best effort: a write failure here only means a later reader sees no
 /// holder info, never a wrong one, so the caller ignores its result.
+///
+/// Not flushed to disk. Other processes read it through the OS cache, and
+/// the lock is the OS lock, not these bytes. A flush cost 1 to 5 ms per
+/// lock file on macOS, once for the home and once per tracked project, on
+/// every write.
 fn write_holder(file: &File) -> io::Result<()> {
     let pid = std::process::id();
     let now_ms = SystemTime::now()
@@ -96,8 +101,7 @@ fn write_holder(file: &File) -> io::Result<()> {
     let mut file = file;
     file.set_len(0)?;
     file.seek(SeekFrom::Start(0))?;
-    write!(file, "{pid}|{now_ms}")?;
-    file.sync_all()
+    write!(file, "{pid}|{now_ms}")
 }
 
 /// Reads the holder an earlier `write_holder` recorded, if any and if
@@ -293,6 +297,36 @@ mod tests {
             .acquire(&keys, LeaseMode::Exclusive, Duration::from_millis(500))
             .unwrap();
         assert_eq!(exclusive.mode(), LeaseMode::Exclusive);
+    }
+
+    /// Given an exclusive lease held by this process, when a second
+    /// exclusive acquire gives up, then its busy error names this process
+    /// from the unflushed holder record; on failure the panic shows the
+    /// error it got instead.
+    #[test]
+    fn a_busy_error_names_the_holder_pid_from_the_unflushed_record_or_shows_the_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let keys = vec![key("named-holder")];
+        let held = FileLease::new(dir.path().to_path_buf())
+            .acquire(&keys, LeaseMode::Exclusive, Duration::ZERO)
+            .unwrap();
+
+        let result = FileLease::new(dir.path().to_path_buf()).acquire(
+            &keys,
+            LeaseMode::Exclusive,
+            Duration::from_millis(50),
+        );
+
+        let err = result
+            .err()
+            .expect("a second exclusive lease must not succeed while the first is held");
+        assert_eq!(err.code, ErrorCode::ScopeBusy, "{err:?}");
+        assert_eq!(
+            err.busy.as_ref().map(|busy| busy.pid),
+            Some(std::process::id()),
+            "{err:?}"
+        );
+        drop(held);
     }
 
     /// Given the current process's own pid, when [`pid_alive`] checks it,
