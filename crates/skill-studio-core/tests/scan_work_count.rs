@@ -451,6 +451,7 @@ fn memo_runtime(home: &Path, project_dirs: &[PathBuf], fs: Arc<CountingFs>) -> R
         project_dirs,
         fs,
         Arc::new(FakeClock::at(an_hour_ahead)),
+        Arc::new(ScanMemo::new()),
     )
 }
 
@@ -459,10 +460,11 @@ fn memo_runtime_at(
     project_dirs: &[PathBuf],
     fs: Arc<CountingFs>,
     clock: Arc<FakeClock>,
+    memo: Arc<ScanMemo>,
 ) -> Runtime {
     let ports = Ports {
         clock,
-        scan_memo: Some(Arc::new(ScanMemo::new())),
+        scan_memo: Some(memo),
         ..materialized_ports(fs, Arc::new(FileLease::new(home.join(".leases"))))
     };
     Runtime::new(&scope_for(home, project_dirs), ports).expect("runtime")
@@ -564,40 +566,78 @@ fn a_scan_memo_does_not_keep_a_folder_with_an_unreadable_link_target() {
     std::fs::remove_dir_all(&home).ok();
 }
 
+/// The newest mtime or ctime of any entry under `dir`, in whole
+/// milliseconds rounded up.
+fn newest_change_ms(dir: &Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(dir).expect("metadata");
+    let ns = |secs: i64, nsec: i64| secs as u64 * 1_000_000_000 + nsec as u64;
+    let mut newest = ns(meta.mtime(), meta.mtime_nsec())
+        .max(ns(meta.ctime(), meta.ctime_nsec()))
+        .div_ceil(1_000_000);
+    if meta.is_dir() {
+        for entry in std::fs::read_dir(dir).expect("list").flatten() {
+            newest = newest.max(newest_change_ms(&entry.path()));
+        }
+    }
+    newest
+}
+
 /// Given a home whose files were written just now, when the app scans with
-/// a [`ScanMemo`] and the real clock, it keeps nothing until the files are
-/// 2 s old, then reuses the kept result, and after 10 minutes reads the
-/// folder in full again. (The `linked` skill holds a link to a missing file
-/// and is read on every scan.) Fails if a fresh write can be kept, or if a
-/// kept result is used without end.
+/// a [`ScanMemo`], it keeps nothing until 2 s after the newest change in a
+/// folder, then reuses the kept result for less than 10 minutes, and reads
+/// the folder again at 10 minutes or when the clock is set back. (The
+/// `linked` skill holds a link to a missing file and is read on every
+/// scan.) Fails if either limit moves, or if a kept result outlives them.
 #[test]
 fn a_scan_memo_waits_two_seconds_before_it_keeps_and_reads_again_after_ten_minutes() {
     let home = two_skill_home("scan-memo-time");
     let counting_fs = Arc::new(CountingFs::wrap(Arc::new(RealFs::new())));
-    let clock = Arc::new(FakeClock::at(chrono::Utc::now().timestamp_millis() as u64));
-    let rt = memo_runtime_at(&home, &[], counting_fs.clone(), clock.clone());
+    let changed = newest_change_ms(&home.join(".claude/skills/notes"));
+    let clock = Arc::new(FakeClock::at(changed + 1_999));
+    let memo = Arc::new(ScanMemo::new());
+    let rt = memo_runtime_at(&home, &[], counting_fs.clone(), clock.clone(), memo.clone());
     let reads = |rt: &Runtime| {
         let before = CountingFs::get(&counting_fs.skill_md_reads);
         scan(rt, &ctx(), &ScanRequest::default()).expect("scan");
         CountingFs::get(&counting_fs.skill_md_reads) - before
     };
+    let ms = std::time::Duration::from_millis;
 
     assert_eq!(reads(&rt), 2);
     assert_eq!(
         reads(&rt),
         2,
-        "a folder written less than 2 s ago must not be kept"
+        "a folder changed 1.999 s ago must not be kept"
     );
-    clock.advance(std::time::Duration::from_secs(3));
-    assert_eq!(reads(&rt), 2);
-    assert_eq!(reads(&rt), 1, "a folder older than 2 s must be kept");
-    clock.advance(std::time::Duration::from_mins(11));
+    clock.advance(ms(2));
     assert_eq!(
         reads(&rt),
         2,
-        "a result kept 11 minutes ago must be read again"
+        "this scan keeps the folder changed 2.001 s ago"
+    );
+    assert_eq!(reads(&rt), 1, "a kept folder must not be read again");
+    clock.advance(ms(10 * 60 * 1_000 - 1));
+    assert_eq!(
+        reads(&rt),
+        1,
+        "a result kept 9:59.999 ago must still be used"
+    );
+    clock.advance(ms(1));
+    assert_eq!(
+        reads(&rt),
+        2,
+        "a result kept 10 minutes ago must be read again"
     );
     assert_eq!(reads(&rt), 1);
+
+    let set_back = Arc::new(FakeClock::at(changed + 3_000));
+    let rt_set_back = memo_runtime_at(&home, &[], counting_fs.clone(), set_back, memo);
+    assert_eq!(
+        reads(&rt_set_back),
+        2,
+        "a result kept at a later time than the clock must be read again"
+    );
 
     std::fs::remove_dir_all(&home).ok();
 }

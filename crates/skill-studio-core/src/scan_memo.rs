@@ -19,7 +19,9 @@
 //! while its facts were read (A, then B, then A again) leaves the stamp the
 //! same, and some network filesystems report times that do not change. So a
 //! kept result is used for at most [`MAX_AGE`]; after that the folder is
-//! read in full again. This bounds any wrong result the stamp misses.
+//! read in full again. A wall clock set back also ends the use of every
+//! result kept at a later time. This bounds any wrong result the stamp
+//! misses.
 //!
 //! Only a long-lived host gains from this (the desktop app). The host puts
 //! one memo in [`crate::ports::Ports::scan_memo`]; `None` scans as before.
@@ -73,7 +75,8 @@ impl ScanMemo {
     }
 
     /// The kept result for `dir` read as skill `name`, when its stamp is
-    /// `stamp` and it was kept less than [`MAX_AGE`] before `now`.
+    /// `stamp` and it was kept less than [`MAX_AGE`] before `now`, and not
+    /// after `now` (a clock set back).
     pub(crate) fn get(
         &self,
         dir: &Path,
@@ -83,7 +86,11 @@ impl ScanMemo {
     ) -> Option<CachedSkillRead> {
         let folders = self.folders.lock().ok()?;
         let kept = folders.get(dir)?;
-        (kept.name == name && kept.stamp == stamp && now - kept.kept_at < MAX_AGE)
+        let age = now - kept.kept_at;
+        (kept.name == name
+            && kept.stamp == stamp
+            && age >= chrono::Duration::zero()
+            && age < MAX_AGE)
             .then(|| kept.read.clone())
     }
 
