@@ -971,10 +971,6 @@ export interface SkillInvocationStats {
    */
   skill: string;
   /**
-   * Total counted uses across every cached transcript.
-   */
-  total: number;
-  /**
    * Counted uses in the last 24 hours.
    */
   last_24_hours: number;
@@ -987,11 +983,11 @@ export interface SkillInvocationStats {
    */
   last_14_days: number;
   /**
-   * Counted uses in the last 30 days.
+   * Counted uses in the last 30 days: every use in the history.
    */
   last_30_days: number;
   /**
-   * The most recent use's timestamp, RFC 3339.
+   * The most recent use's timestamp in the last 30 days, RFC 3339.
    */
   last_used: string | null;
   /**
@@ -1001,7 +997,7 @@ export interface SkillInvocationStats {
     [k: string]: number;
   };
   /**
-   * Per-day use counts, "YYYY-MM-DD" (UTC), over the last 365 days.
+   * Per-day use counts, "YYYY-MM-DD" (UTC), over the last 30 days.
    */
   by_day: {
     [k: string]: number;
@@ -1015,7 +1011,7 @@ export interface SkillInvocationStats {
   by_trigger_30_days: SkillTriggerCounts;
   /**
    * Hourly use buckets, grouped by (hour, harness, trigger, project),
-   * over the last 365 days.
+   * over the last 30 days.
    */
   by_hour: SkillUseHour[];
 }
@@ -1063,7 +1059,8 @@ export interface SkillUseHour {
   count: number;
 }
 /**
- * Per-day use counts for the heatmap (date "YYYY-MM-DD" -> count).
+ * Per-day use counts for the heatmap (date "YYYY-MM-DD" -> count), over
+ * the last 30 days.
  */
 export interface InvocationHeatmap {
   /**

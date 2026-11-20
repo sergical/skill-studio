@@ -57,13 +57,25 @@ fn claude_skill_line(skill: &str, at: &str) -> String {
     )
 }
 
+/// A UTC day `days` before today, as `YYYY-MM-DD`.
+fn day_ago(days: i64) -> String {
+    (chrono::Utc::now() - chrono::Duration::days(days))
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+/// Noon UTC on the day `days` before today, as RFC 3339.
+fn noon_ago(days: i64) -> String {
+    format!("{}T12:00:00Z", day_ago(days))
+}
+
 /// Flow: `usage --since --until --top` and the MCP `skill_usage` tool with
-/// the same `since`, `until` and `top`, on a home with uses in September
-/// and October.
-/// Expectation: both count only the September uses, keep the one most used
+/// the same `since`, `until` and `top`, on a home with uses 25 to 15 days
+/// ago and 5 to 3 days ago.
+/// Expectation: both count only the older uses, keep the one most used
 /// skill, and echo the window.
-/// Failure means "my top skill last month" needs a date filter by hand, or
-/// the two surfaces disagree on the window.
+/// Failure means "my top skill two weeks ago" needs a date filter by hand,
+/// or the two surfaces disagree on the window.
 #[test]
 fn usage_window_and_top_match_on_the_cli_and_mcp() {
     let home = tempfile::tempdir().unwrap();
@@ -73,13 +85,14 @@ fn usage_window_and_top_match_on_the_cli_and_mcp() {
     let transcripts = home.path().join(".claude/projects/-work");
     std::fs::create_dir_all(&transcripts).unwrap();
     let lines = [
-        claude_skill_line("often", "2026-09-03T10:00:00Z"),
-        claude_skill_line("often", "2026-09-20T10:00:00Z"),
-        claude_skill_line("once", "2026-09-10T10:00:00Z"),
-        claude_skill_line("later", "2026-10-02T10:00:00Z"),
-        claude_skill_line("later", "2026-10-03T10:00:00Z"),
-        claude_skill_line("later", "2026-10-04T10:00:00Z"),
+        claude_skill_line("often", &noon_ago(25)),
+        claude_skill_line("often", &noon_ago(15)),
+        claude_skill_line("once", &noon_ago(20)),
+        claude_skill_line("later", &noon_ago(5)),
+        claude_skill_line("later", &noon_ago(4)),
+        claude_skill_line("later", &noon_ago(3)),
     ];
+    let (since, until) = (day_ago(28), day_ago(10));
     std::fs::write(
         transcripts.join("session.jsonl"),
         format!("{}\n", lines.join("\n")),
@@ -88,20 +101,12 @@ fn usage_window_and_top_match_on_the_cli_and_mcp() {
 
     let cli = headless::cli(
         home.path(),
-        &[
-            "usage",
-            "--since",
-            "2026-09-01",
-            "--until",
-            "2026-10-01",
-            "--top",
-            "1",
-        ],
+        &["usage", "--since", &since, "--until", &until, "--top", "1"],
     );
     let mcp = headless::mcp(
         home.path(),
         "skill_usage",
-        &json!({"since": "2026-09-01", "until": "2026-10-01", "top": 1}),
+        &json!({"since": since, "until": until, "top": 1}),
     );
 
     assert_eq!(
@@ -109,8 +114,8 @@ fn usage_window_and_top_match_on_the_cli_and_mcp() {
         "cli: {cli}\nmcp: {mcp}"
     );
     let data = &cli["data"];
-    assert_eq!(data["since"], "2026-09-01T00:00:00+00:00", "{cli}");
-    assert_eq!(data["until"], "2026-10-01T00:00:00+00:00", "{cli}");
+    assert_eq!(data["since"], format!("{since}T00:00:00+00:00"), "{cli}");
+    assert_eq!(data["until"], format!("{until}T00:00:00+00:00"), "{cli}");
     let rows = data["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 1, "{cli}");
     assert_eq!(rows[0]["skill"], "often");
@@ -118,21 +123,29 @@ fn usage_window_and_top_match_on_the_cli_and_mcp() {
 }
 
 /// Flow: `usage` and the MCP `skill_usage` tool with `since` after `until`,
-/// and with `since` in the future.
+/// with `since` in the future, with `since` 60 days ago, and with 31 days.
 /// Expectation: both refuse with `invalid_request` and no rows.
-/// Failure means an empty window reports every skill as unused.
+/// Failure means an empty window reports every skill as unused, or a window
+/// older than the 30-day history reports uses that are not counted.
 #[test]
-fn an_empty_usage_window_is_refused_on_the_cli_and_mcp() {
+fn an_empty_or_too_old_usage_window_is_refused_on_the_cli_and_mcp() {
     let home = tempfile::tempdir().unwrap();
     write_skill(&home.path().join(".claude/skills"), "often", "Body.");
+    let (recent, older, old) = (day_ago(5), day_ago(10), day_ago(60));
 
-    for (since, until) in [("2026-11-01", Some("2026-10-01")), ("2999-01-01", None)] {
-        let mut args = vec!["usage", "--since", since];
-        let mut params = json!({"since": since});
-        if let Some(until) = until {
-            args.extend(["--until", until]);
-            params["until"] = json!(until);
-        }
+    let cases = [
+        (
+            vec!["usage", "--since", &recent, "--until", &older],
+            json!({"since": recent, "until": older}),
+        ),
+        (
+            vec!["usage", "--since", "2999-01-01"],
+            json!({"since": "2999-01-01"}),
+        ),
+        (vec!["usage", "--since", &old], json!({"since": old})),
+        (vec!["usage", "--days", "31"], json!({"days": 31})),
+    ];
+    for (args, params) in cases {
         let cli = headless::cli(home.path(), &args);
         let mcp = headless::mcp(home.path(), "skill_usage", &params);
         let mcp = &mcp["result"]["structuredContent"];
@@ -140,7 +153,7 @@ fn an_empty_usage_window_is_refused_on_the_cli_and_mcp() {
         for (surface, envelope) in [("cli", &cli), ("mcp", mcp)] {
             assert_eq!(
                 envelope["errors"][0]["code"], "invalid_request",
-                "{surface} {since}..{until:?}: {envelope}"
+                "{surface} {params}: {envelope}"
             );
             assert!(envelope["data"].is_null(), "{surface}: {envelope}");
         }

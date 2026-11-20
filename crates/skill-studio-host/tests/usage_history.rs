@@ -81,7 +81,7 @@ fn usage_compressed_codex_history_includes_live_and_archived_sessions() {
             .any(|v| v["reason"].as_str().is_some_and(|s| s.contains("decode"))),
         "{data}"
     );
-    assert_eq!(data["rows"][0]["total_uses"], 1, "{data}");
+    assert_eq!(data["rows"][0]["recent_uses"], 1, "{data}");
     assert!(data["rows"][0].get("sessions").is_none(), "{data}");
 }
 /// Flow: report Claude user, Skill tool and direct reads in separate sessions.
@@ -150,7 +150,7 @@ fn usage_without_history_is_complete() {
     let dir = fixture();
     let data = report(dir.path());
     assert_eq!(data["partial"], false, "{data}");
-    assert_eq!(data["rows"][0]["total_uses"], 0);
+    assert_eq!(data["rows"][0]["recent_uses"], 0);
 }
 
 #[test]
@@ -182,7 +182,7 @@ fn usage_reads_large_history_in_one_report_without_a_cache() {
         .unwrap();
     }
     let data = report(dir.path());
-    assert_eq!(data["rows"][0]["total_uses"], 64, "{data}");
+    assert_eq!(data["rows"][0]["recent_uses"], 64, "{data}");
     assert_eq!(data["partial"], false, "{data}");
 }
 
@@ -198,15 +198,17 @@ fn usage_cache_round_trip_preserves_complete_history() {
     .unwrap();
     let mut usage = SkillUsage::default();
     let inventory = scan(dir.path());
-    let now = chrono::Utc::now();
-    let first = usage.report(dir.path(), &inventory, 45, now);
+    let now = chrono::DateTime::parse_from_rfc3339("2026-09-30T12:00:00Z")
+        .unwrap()
+        .to_utc();
+    let first = usage.report(dir.path(), &inventory, 30, now);
     let cache = dir.path().join("data/cli-skill-uses.json");
     usage.save_cache(&cache).unwrap();
     let bytes = fs::read(&cache).unwrap();
-    let second = SkillUsage::load_read_only(Some(&cache)).report(dir.path(), &inventory, 45, now);
+    let second = SkillUsage::load_read_only(Some(&cache)).report(dir.path(), &inventory, 30, now);
     assert_eq!(first, second);
     assert!(!second.partial);
-    assert_eq!(second.rows[0].total_uses, 1);
+    assert_eq!(second.rows[0].recent_uses, 1);
     assert_eq!(fs::read(&cache).unwrap(), bytes);
     assert_eq!(fs::read_dir(cache.parent().unwrap()).unwrap().count(), 1);
 }
@@ -254,11 +256,12 @@ fn usage_compressed_large_records_and_active_tail_are_complete_instead_of_false_
     fs::write(root.join("large.jsonl"), format!("{record}\n")).unwrap();
     let data = report(dir.path());
     assert_eq!(data["partial"], false, "{data}");
-    assert_eq!(data["rows"][0]["total_uses"], 2, "{data}");
+    assert_eq!(data["rows"][0]["recent_uses"], 2, "{data}");
 }
-/// Flow: `usage --days 30` with one use in the window and one 60 days old.
+/// Flow: `usage --days 30` with one use in the window and one 60 days old,
+/// before the history.
 /// Expect uses and triggers to count only the window.
-/// Failure: they count all history despite the window.
+/// Failure: they count the older use despite the window.
 #[test]
 fn usage_uses_and_triggers_count_only_the_days_window() {
     let dir = fixture();
@@ -276,7 +279,6 @@ fn usage_uses_and_triggers_count_only_the_days_window() {
     }
     fs::write(path.join("s.jsonl"), text).unwrap();
     let row = &report(dir.path())["rows"][0];
-    assert_eq!(row["total_uses"], 2, "{row}");
     assert_eq!(row["recent_uses"], 1, "{row}");
     assert!(row.get("sessions").is_none(), "{row}");
     assert_eq!(

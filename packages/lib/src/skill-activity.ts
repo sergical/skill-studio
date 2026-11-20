@@ -1,7 +1,7 @@
 // ============================================================================
 // Skill Studio - skill-activity
 // Pure aggregation over SkillInvocationStats.by_hour for the Activity page's
-// "Docked" layout: the year heatmap, a day's details, the window overview,
+// "Docked" layout: the 30-day heatmap, a day's details, the window overview,
 // per-skill and per-project rows, and the harness/trigger filter menus'
 // counts. Every count on this page comes from the same flattened hourly
 // buckets, so a day's splits always add up to its total and the totals
@@ -83,6 +83,37 @@ function flattenUses(stats: SkillInvocationStats[]): FlatUse[] {
   return flat;
 }
 
+const inRangeCache = new WeakMap<
+  SkillInvocationStats[],
+  { key: string; stats: SkillInvocationStats[] }
+>();
+
+/**
+ * `stats` with only the hourly buckets on the Activity calendar's local days, `range.start` to
+ * `range.end`. The 30-day history starts 720 hours before the scan, inside the day before the
+ * first cell, and a transcript can carry a time after the scan; the page drops both here, once,
+ * so the calendar, its totals, the filter menus and every day it can open cover the same days.
+ * Cached per array, so the result keeps the same identity (and `flattenUses` keeps its cache)
+ * while the snapshot and the days stay the same.
+ */
+export function statsInRange(
+  stats: SkillInvocationStats[],
+  range: { start: string; end: string },
+): SkillInvocationStats[] {
+  const key = `${range.start}|${range.end}`;
+  const cached = inRangeCache.get(stats);
+  if (cached?.key === key) return cached.stats;
+  const clipped = stats.map((stat) => ({
+    ...stat,
+    by_hour: stat.by_hour.filter((bucket) => {
+      const day = localDateKey(new Date(bucket.hour * 3_600_000));
+      return day >= range.start && day <= range.end;
+    }),
+  }));
+  inRangeCache.set(stats, { key, stats: clipped });
+  return clipped;
+}
+
 function matchesFilter(u: FlatUse, filter: ActivityFilter): boolean {
   return (
     (filter.harness === "all" || u.harness === filter.harness) &&
@@ -118,7 +149,7 @@ function bump<K extends string>(counts: Counts<K>, key: K, n: number): void {
   counts[key] = (counts[key] ?? 0) + n;
 }
 
-/** Per-local-day use totals over the whole (365-day) window, for the heatmap. */
+/** Per-local-day use totals over the whole 30-day history, for the heatmap. */
 export function dayTotals(stats: SkillInvocationStats[], filter: ActivityFilter) {
   const out: Record<string, number> = {};
   for (const u of flattenUses(stats)) {
@@ -284,8 +315,8 @@ export function projectRows(
   return ranked(counts).map(([project, count]) => ({ project, count }));
 }
 
-/** Year totals per harness under a trigger filter - the harness menu's counts. */
-export function yearByHarness(stats: SkillInvocationStats[], trigger: TriggerFilter) {
+/** History totals per harness under a trigger filter - the harness menu's counts. */
+export function historyByHarness(stats: SkillInvocationStats[], trigger: TriggerFilter) {
   const out: Counts<string> = {};
   for (const u of flattenUses(stats)) {
     if (trigger !== "all" && u.trigger !== trigger) continue;
@@ -294,8 +325,8 @@ export function yearByHarness(stats: SkillInvocationStats[], trigger: TriggerFil
   return out;
 }
 
-/** Year totals per trigger under a harness filter - the trigger menu's counts. */
-export function yearByTrigger(stats: SkillInvocationStats[], harness: HarnessFilter) {
+/** History totals per trigger under a harness filter - the trigger menu's counts. */
+export function historyByTrigger(stats: SkillInvocationStats[], harness: HarnessFilter) {
   const out: Counts<SkillTrigger> = {};
   for (const u of flattenUses(stats)) {
     if (harness !== "all" && u.harness !== harness) continue;

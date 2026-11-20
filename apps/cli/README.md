@@ -41,8 +41,9 @@ Run `skill-studio <command> --help` for each command's flags.
 - `park`, `unpark` and `remove` take a skill name. When the name matches
   more than one copy, the command lists each copy's path and id and exits 2;
   run it again with `--id`. `scan` prints the id of each copy.
-- `usage` lists skills not used in the last `--days` (default 30) first,
-  then the used ones, then a summary line.
+- `usage` lists skills not used in the last `--days` (default and maximum
+  30, the history Skill Studio counts) first, then the used ones, then a
+  summary line.
 - `mcp` serves the Skill Studio MCP server over stdio.
 
 `--fixture`, `--timings` and the commands below other than `scan` and

@@ -61,7 +61,7 @@ import type { ResolvedTheme, Theme } from "../lib/theme";
  * (global/project/parked), harness, source, and issue all live in the
  * store's `skillListFilter`, not on this view, so places (the sidebar) stay
  * distinct from filters (the list) and opening a skill and coming back
- * never loses them; `activity` is the full invocation history (year
+ * never loses them; `activity` is the 30-day invocation history (day
  * heatmap, per-skill and per-project breakdowns); `skill` is the full-page
  * view of one installed skill, opened from any other view.
  */

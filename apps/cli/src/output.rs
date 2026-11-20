@@ -412,12 +412,7 @@ pub fn print_usage_table(envelope: &ResultEnvelope<UsageReport>) {
     if !unused.is_empty() {
         println!("Not used ({}):", report.window);
         for row in &unused {
-            println!(
-                "  {:width$}  last used {}  ({} uses all time)",
-                row.skill,
-                last_used(row),
-                row.total_uses
-            );
+            println!("  {:width$}  last used {}", row.skill, last_used(row));
         }
     }
     if !used.is_empty() {
@@ -439,10 +434,7 @@ pub fn print_usage_table(envelope: &ResultEnvelope<UsageReport>) {
                 if row.recent_uses == 1 { "use " } else { "uses" },
                 last_used(row),
             );
-            println!(
-                "    triggers {:?}; {} uses all time",
-                row.triggers, row.total_uses
-            );
+            println!("    triggers {:?}", row.triggers);
         }
     }
     if !report.rows.is_empty() {
@@ -465,11 +457,11 @@ pub fn print_usage_table(envelope: &ResultEnvelope<UsageReport>) {
     }
 }
 
-/// The date part of a row's last use, or "never".
+/// The date part of a row's last use, or "not in 30 days".
 fn last_used(row: &SkillUsageRow) -> &str {
     row.last_used
         .as_deref()
-        .map_or("never", |at| at.get(..10).unwrap_or(at))
+        .map_or("not in 30 days", |at| at.get(..10).unwrap_or(at))
 }
 
 /// Prints `install`'s table: what got installed, or the trust prompt.

@@ -871,7 +871,7 @@
         },
         "days": {
           "default": null,
-          "description": "Rolling window in days; defaults to 30.",
+          "description": "Rolling window in days, 30 at most; defaults to 30.",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -924,7 +924,7 @@
         },
         "since": {
           "default": null,
-          "description": "Inclusive start (YYYY-MM-DD or RFC 3339).",
+          "description": "Inclusive start (YYYY-MM-DD or RFC 3339), 30 days ago at the earliest.",
           "type": [
             "string",
             "null"
@@ -1987,7 +1987,7 @@
         },
         "days": {
           "default": null,
-          "description": "How many days back to count uses. Default 30.",
+          "description": "How many days back to count uses, 30 at most. Default 30.",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -2031,7 +2031,7 @@
         },
         "since": {
           "default": null,
-          "description": "Count uses from this date (YYYY-MM-DD or RFC 3339) instead of `days`.",
+          "description": "Count uses from this date (YYYY-MM-DD or RFC 3339) instead of `days`,\n30 days ago at the earliest.",
           "type": [
             "string",
             "null"

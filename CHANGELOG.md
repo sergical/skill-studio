@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `skill-studio pack export <dir> --skill <name>...` (MCP `pack_export`) makes a new pack from installed skills: a folder with `skills/<name>/` for each and a README with the `npx skills add` install lines. Push it to git and anyone can install it. It writes only into a new or empty folder, never overwrites a file, and runs no git command.
 - `skill-studio pack switch-source <source> <to>` (MCP `pack_switch_source`) moves the skills of a skills.sh pack to another git source, such as your GitHub fork, with `npx skills add`, and keeps the old source as the pack's original. `pack show <to> --remote` then lists the skills that differ from the original and the skills only the original has. Each skill gets its own undo event. Before, you had to remove the pack and add it again from the fork, and the link to the original was lost.
 
+### Changed
+
+- Skill Studio counts only the last 30 days of agent history: Claude Code deletes its transcripts after 30 days by default, so older counts depended on how long each agent kept its logs. `usage` and `library` (MCP `skill_usage` and `library`) refuse a window that starts more than 30 days ago, by `--days`, `--since` or an old `--until`, with `invalid_request`. `usage` rows no longer have `total_uses`, and `last_used` is `null` for a skill not used in the last 30 days. The desktop scan's `invocations` rows no longer have `total`. Desktop: Activity shows the 30 days as a calendar.
+
 ### Fixed
 
 - The doctor listing budget for Claude Code now uses the model's context window from Claude Code's model catalog cache and the model's characters per token (3 for current models). Before, it used 200,000 tokens at 4 characters, so the limit for Opus 5.5 was 2,000 tokens instead of 7,500. Codex uses `context_window` from `models_cache.json` for the configured model.

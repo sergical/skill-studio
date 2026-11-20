@@ -1774,8 +1774,8 @@ impl SkillInvocationIndex {
         report.files_dropped += before - self.databases.len();
     }
 
-    /// Per-skill use totals across every cached transcript, with the rolling
-    /// windows computed relative to `now`, over uses `filter` counts.
+    /// Per-skill use totals over the last 30 days of cached history, with the
+    /// rolling windows computed relative to `now`, over uses `filter` counts.
     pub fn stats_at(
         &self,
         now: DateTime<Utc>,
@@ -1784,15 +1784,10 @@ impl SkillInvocationIndex {
         skill_stats(self.all_uses(), filter, now)
     }
 
-    /// Per-day use counts over the last `days` days, relative to `now`, over
-    /// uses `filter` counts.
-    pub fn heatmap_at(
-        &self,
-        days: u32,
-        now: DateTime<Utc>,
-        filter: &SkillUseFilter,
-    ) -> InvocationHeatmap {
-        skill_heatmap(self.all_uses(), filter, days, now)
+    /// Per-day use counts over the last 30 days, relative to `now`, over uses
+    /// `filter` counts.
+    pub fn heatmap_at(&self, now: DateTime<Utc>, filter: &SkillUseFilter) -> InvocationHeatmap {
+        skill_heatmap(self.all_uses(), filter, now)
     }
 
     /// File uses plus database uses. A database row id (`"<table>:<id>"`)
@@ -2010,12 +2005,19 @@ mod tests {
         }
     }
 
+    /// Stats as of one minute after the newest indexed use, so a fixture with
+    /// fixed timestamps stays inside the 30-day history.
     fn stats(
         index: &SkillInvocationIndex,
         known_skills: &StdBTreeSet<String>,
         sources: &DiscoverySources,
     ) -> Vec<SkillInvocationStats> {
-        index.stats_at(Utc::now(), &filter(known_skills, sources))
+        let now = index
+            .all_uses()
+            .map(|use_| use_.at)
+            .max()
+            .map_or_else(Utc::now, |at| at + chrono::Duration::minutes(1));
+        index.stats_at(now, &filter(known_skills, sources))
     }
 
     fn usage(
@@ -2256,8 +2258,7 @@ mod tests {
         let sources = DiscoverySources::default();
         index.refresh(home, &sources);
         let stats = stats(&index, &known_skills, &sources);
-        assert_eq!(stats.len(), 1);
-        assert_eq!(stats[0].total, 3);
+        assert_eq!(stats.len(), 1, "the 60-day-old use is before the history");
         assert_eq!(stats[0].last_24_hours, 2);
         assert_eq!(stats[0].last_7_days, 2);
         assert_eq!(stats[0].last_14_days, 2);
@@ -2316,7 +2317,7 @@ mod tests {
         let known_skills = known(&["write-tests", "lint-code"]);
         let sources = DiscoverySources::default();
         index.refresh(home, &sources);
-        let heatmap = index.heatmap_at(30, Utc::now(), &filter(&known_skills, &sources));
+        let heatmap = index.heatmap_at(Utc::now(), &filter(&known_skills, &sources));
         assert_eq!(heatmap.days.len(), 1);
         assert_eq!(*heatmap.days.values().next().unwrap(), 2);
     }
@@ -2340,7 +2341,7 @@ mod tests {
         let stats = stats(&index, &known_skills, &sources);
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].skill, "write-tests");
-        assert_eq!(stats[0].total, 1);
+        assert_eq!(stats[0].last_30_days, 1);
     }
 
     #[test]
@@ -2360,7 +2361,7 @@ mod tests {
         let known_skills = known(&["write-tests", "lint-code"]);
         let sources = DiscoverySources::default();
         index.refresh(home, &sources);
-        assert_eq!(stats(&index, &known_skills, &sources)[0].total, 1);
+        assert_eq!(stats(&index, &known_skills, &sources)[0].last_30_days, 1);
 
         fs::write(
             &path,
@@ -2398,7 +2399,7 @@ mod tests {
         let sources = DiscoverySources::default();
         let first = index.refresh(home, &sources);
         assert!(first.incomplete);
-        assert!(stats(&index, &known_skills, &sources)[0].total < 20);
+        assert!(stats(&index, &known_skills, &sources)[0].last_30_days < 20);
 
         let mut passes = 0;
         loop {
@@ -2410,7 +2411,7 @@ mod tests {
             assert!(passes < 50, "backlog never drained");
         }
         assert_eq!(index.all_uses().count(), 20);
-        assert_eq!(stats(&index, &known_skills, &sources)[0].total, 20);
+        assert_eq!(stats(&index, &known_skills, &sources)[0].last_30_days, 20);
     }
 
     #[test]
@@ -2687,7 +2688,7 @@ mod tests {
         assert!(index
             .all_uses()
             .all(|use_| use_.session.as_deref() == Some("s1")));
-        assert_eq!(stats(&index, &skills, &sources)[0].total, 1);
+        assert_eq!(stats(&index, &skills, &sources)[0].last_30_days, 1);
         let report = usage(home, &skills, now);
         assert_eq!(report.rows[0].recent_uses, 2);
         assert_eq!(report.rows[0].sessions, 2);
@@ -2723,7 +2724,7 @@ mod tests {
         let stats = stats(&index, &known_skills, &sources);
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].skill, "deploy");
-        assert_eq!(stats[0].total, 1);
+        assert_eq!(stats[0].last_30_days, 1);
         assert_eq!(stats[0].by_trigger_30_days.user, 1);
         let _ = SkillTrigger::User; // referenced for readability of the assertion above
     }
@@ -3035,7 +3036,7 @@ mod tests {
                 let sources = DiscoverySources::default();
                 index.refresh(home, &sources);
                 assert!(index.all_uses().all(|use_| use_.session.is_none()));
-                assert_eq!(stats(&index, &known_skills, &sources)[0].total, 2);
+                assert_eq!(stats(&index, &known_skills, &sources)[0].last_30_days, 2);
                 let report = usage(
                     home,
                     &known_skills,
@@ -3143,9 +3144,9 @@ mod tests {
             let by_skill: BTreeMap<&str, &SkillInvocationStats> =
                 stats.iter().map(|s| (s.skill.as_str(), s)).collect();
             assert_eq!(by_skill.len(), 2);
-            assert_eq!(by_skill["foo"].total, 1);
+            assert_eq!(by_skill["foo"].last_30_days, 1);
             assert_eq!(by_skill["foo"].by_trigger_30_days.user, 1);
-            assert_eq!(by_skill["bar"].total, 1);
+            assert_eq!(by_skill["bar"].last_30_days, 1);
             assert_eq!(by_skill["bar"].by_trigger_30_days.file_read, 1);
         }
 
@@ -3237,7 +3238,7 @@ mod tests {
             let known_skills = known(&["foo"]);
             let sources = DiscoverySources::default();
             index.refresh(home, &sources);
-            assert_eq!(stats(&index, &known_skills, &sources)[0].total, 1);
+            assert_eq!(stats(&index, &known_skills, &sources)[0].last_30_days, 1);
 
             let archived_dir = home.join(CODEX_ARCHIVED_SESSIONS_DIR);
             fs::create_dir_all(&archived_dir).unwrap();
@@ -3246,7 +3247,7 @@ mod tests {
             index.refresh(home, &sources);
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1);
-            assert_eq!(stats[0].total, 1, "the use must not be doubled");
+            assert_eq!(stats[0].last_30_days, 1, "the use must not be doubled");
         }
 
         #[test]
@@ -3296,7 +3297,7 @@ mod tests {
             let known_skills = known(&["foo"]);
             let sources = DiscoverySources::default();
             let first = index.refresh(home, &sources);
-            assert_eq!(stats(&index, &known_skills, &sources)[0].total, 1);
+            assert_eq!(stats(&index, &known_skills, &sources)[0].last_30_days, 1);
 
             let mut content = fs::read_to_string(&path).unwrap();
             content.push_str(&skill_block_line("2026-09-16T12:05:00Z", "foo"));
@@ -3321,7 +3322,7 @@ mod tests {
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1);
             assert_eq!(
-                stats[0].total, 2,
+                stats[0].last_30_days, 2,
                 "the missed use: the appended skill use was not counted"
             );
         }
@@ -3434,10 +3435,10 @@ mod tests {
             let by_skill: BTreeMap<&str, &SkillInvocationStats> =
                 stats.iter().map(|s| (s.skill.as_str(), s)).collect();
             assert_eq!(by_skill.len(), 2, "baz's read isn't under a skills root");
-            assert_eq!(by_skill["foo"].total, 1);
+            assert_eq!(by_skill["foo"].last_30_days, 1);
             assert_eq!(by_skill["foo"].by_trigger_30_days.user, 1);
             assert_eq!(by_skill["foo"].by_project_30_days.get("/proj-a"), Some(&1));
-            assert_eq!(by_skill["bar"].total, 1);
+            assert_eq!(by_skill["bar"].last_30_days, 1);
             assert_eq!(by_skill["bar"].by_trigger_30_days.file_read, 1);
             assert_eq!(by_skill["bar"].by_project_30_days.get("/proj-a"), Some(&1));
         }
@@ -3578,7 +3579,7 @@ mod tests {
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1, "the read outside a root must not count");
             assert_eq!(stats[0].skill, "foo");
-            assert_eq!(stats[0].total, 1);
+            assert_eq!(stats[0].last_30_days, 1);
             assert_eq!(
                 stats[0]
                     .by_project_30_days
@@ -3618,7 +3619,7 @@ mod tests {
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1);
             assert_eq!(
-                stats[0].total, 1,
+                stats[0].last_30_days, 1,
                 "the same session's file-read dedupe must collapse the subagent copy"
             );
             assert!(index
@@ -3649,7 +3650,7 @@ mod tests {
             index.refresh(home, &sources);
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1);
-            assert_eq!(stats[0].total, 1);
+            assert_eq!(stats[0].last_30_days, 1);
             assert!(stats[0].by_project_30_days.is_empty());
         }
 
@@ -3800,11 +3801,11 @@ mod tests {
             let stats = stats(&index, &known_skills, &sources);
             let by_skill: BTreeMap<&str, &SkillInvocationStats> =
                 stats.iter().map(|s| (s.skill.as_str(), s)).collect();
-            assert_eq!(by_skill["foo"].total, 1);
+            assert_eq!(by_skill["foo"].last_30_days, 1);
             assert_eq!(by_skill["foo"].by_trigger_30_days.file_read, 1);
-            assert_eq!(by_skill["bar"].total, 1);
+            assert_eq!(by_skill["bar"].last_30_days, 1);
             assert_eq!(by_skill["bar"].by_trigger_30_days.agent, 1);
-            assert_eq!(by_skill["baz"].total, 1);
+            assert_eq!(by_skill["baz"].last_30_days, 1);
             assert_eq!(by_skill["baz"].by_trigger_30_days.user, 1);
             assert_eq!(
                 by_skill["foo"]
@@ -3856,11 +3857,11 @@ mod tests {
             let by_skill: BTreeMap<&str, &SkillInvocationStats> =
                 stats.iter().map(|s| (s.skill.as_str(), s)).collect();
             assert_eq!(
-                by_skill["bar"].total, 2,
+                by_skill["bar"].last_30_days, 2,
                 "one from s1, one from s2's new line"
             );
-            assert_eq!(by_skill["foo"].total, 1);
-            assert_eq!(by_skill["baz"].total, 1);
+            assert_eq!(by_skill["foo"].last_30_days, 1);
+            assert_eq!(by_skill["baz"].last_30_days, 1);
         }
 
         #[test]
@@ -3929,7 +3930,7 @@ mod tests {
             let known_skills = known(&["bar"]);
             let sources = DiscoverySources::default();
             index.refresh(home, &sources);
-            assert_eq!(stats(&index, &known_skills, &sources)[0].total, 1);
+            assert_eq!(stats(&index, &known_skills, &sources)[0].last_30_days, 1);
 
             let mut content = fs::read_to_string(&path).unwrap();
             content.push_str(&grok_line(recent_secs(1), &skill_update("tc1", "bar")));
@@ -3937,7 +3938,7 @@ mod tests {
             fs::write(&path, &content).unwrap();
 
             index.refresh(home, &sources);
-            assert_eq!(stats(&index, &known_skills, &sources)[0].total, 1);
+            assert_eq!(stats(&index, &known_skills, &sources)[0].last_30_days, 1);
         }
 
         #[test]
@@ -4188,7 +4189,7 @@ mod tests {
             index.refresh(home, &sources);
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1);
-            assert_eq!(stats[0].total, 1);
+            assert_eq!(stats[0].last_30_days, 1);
             assert_eq!(stats[0].by_trigger_30_days.agent, 1);
         }
 
@@ -4235,7 +4236,7 @@ mod tests {
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1);
             assert_eq!(stats[0].skill, "foo");
-            assert_eq!(stats[0].total, 1);
+            assert_eq!(stats[0].last_30_days, 1);
             assert_eq!(stats[0].by_trigger_30_days.file_read, 1);
         }
 
@@ -4317,7 +4318,7 @@ mod tests {
             let known_skills = known(&["deploy", "lint"]);
             let sources = DiscoverySources::default();
             index.refresh(home, &sources);
-            assert_eq!(stats(&index, &known_skills, &sources)[0].total, 1);
+            assert_eq!(stats(&index, &known_skills, &sources)[0].last_30_days, 1);
 
             {
                 let conn = Connection::open(&db_path).unwrap();
@@ -4335,7 +4336,7 @@ mod tests {
             let report = index.refresh(home, &sources);
             assert_eq!(report.databases_read, 1);
             let stats = stats(&index, &known_skills, &sources);
-            let total: u32 = stats.iter().map(|s| s.total).sum();
+            let total: u32 = stats.iter().map(|s| s.last_30_days).sum();
             assert_eq!(total, 2, "old row must not be doubled");
         }
 
@@ -4361,7 +4362,7 @@ mod tests {
             let known_skills = known(&["deploy"]);
             let sources = DiscoverySources::default();
             index.refresh(home, &sources);
-            assert_eq!(stats(&index, &known_skills, &sources)[0].total, 1);
+            assert_eq!(stats(&index, &known_skills, &sources)[0].last_30_days, 1);
 
             {
                 let conn = Connection::open(&db_path).unwrap();
@@ -4375,7 +4376,7 @@ mod tests {
             index.refresh(home, &sources);
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1);
-            assert_eq!(stats[0].total, 1);
+            assert_eq!(stats[0].last_30_days, 1);
         }
 
         #[test]
@@ -4411,7 +4412,7 @@ mod tests {
             index.refresh(home, &sources);
             let total: u32 = stats(&index, &known_skills, &sources)
                 .iter()
-                .map(|s| s.total)
+                .map(|s| s.last_30_days)
                 .sum();
             assert_eq!(total, 2);
 
@@ -4453,7 +4454,7 @@ mod tests {
             index.refresh(home, &sources);
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1);
-            assert_eq!(stats[0].total, 1);
+            assert_eq!(stats[0].last_30_days, 1);
         }
 
         #[test]

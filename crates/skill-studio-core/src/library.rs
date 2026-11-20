@@ -26,9 +26,10 @@ pub struct LibraryRequest {
     pub copy_status: Option<LibraryCopyStatus>,
     /// Keep rows that each named agent reads in the given mode.
     pub modes: BTreeMap<String, InvocationMode>,
-    /// Rolling window in days; defaults to 30.
+    /// Rolling window in days, 30 at most; defaults to 30.
     pub days: Option<u32>,
-    /// Inclusive start, instead of days before the end.
+    /// Inclusive start, instead of days before the end; 30 days ago at the
+    /// earliest.
     pub since: Option<DateTime<Utc>>,
     /// Exclusive end; defaults to now.
     pub until: Option<DateTime<Utc>>,
@@ -303,7 +304,7 @@ pub fn library(
         count,
         used,
         window: crate::usage_window::UsageWindow::new(
-            request.days.unwrap_or(30),
+            request.days.unwrap_or(crate::skill_uses::HISTORY_DAYS),
             request.since,
             request.until,
         ),
