@@ -309,6 +309,11 @@ export interface HarnessListing {
    */
   observed_session: ObservedSession | null;
   /**
+   * The costs that decide which tier the listing is in, when the
+   * harness has tiers (Codex).
+   */
+  thresholds: ListingThresholds | null;
+  /**
    * Entries in listing order; hidden entries last.
    */
   entries: ListingEntry[];
@@ -365,6 +370,44 @@ export interface ObservedSession {
   described: number;
 }
 /**
+ * The listing costs, in the listing's `budget_unit`.
+ */
+export interface ListingThresholds {
+  /**
+   * The tier the budget puts the listing in.
+   */
+  tier: "all_described" | "descriptions_shortened" | "names_only";
+  /**
+   * Cost with every description whole.
+   */
+  full_cost: number;
+  /**
+   * Cost with names and paths only.
+   */
+  names_only_cost: number;
+  /**
+   * Cost of the skill roots table that short paths need; included in
+   * both costs above.
+   */
+  roots_table_cost: number;
+  /**
+   * Average cost of one more name-and-path line.
+   */
+  average_line_cost: number;
+  /**
+   * Average description characters each listed skill keeps.
+   */
+  average_description_chars: number;
+  /**
+   * The highest budget the setting accepts.
+   */
+  cap: number | null;
+  /**
+   * The tier and the distance to the next one, in plain words.
+   */
+  summary: string;
+}
+/**
  * One skill in one harness listing.
  */
 export interface ListingEntry {
@@ -404,6 +447,17 @@ export interface ListingEntry {
    * False for entries Skill Studio does not scan, such as bundled skills.
    */
   scanned: boolean;
+  /**
+   * Description characters in the last recorded session, when one was
+   * found and the harness records them (Codex).
+   */
+  observed_description_chars: number | null;
+  /**
+   * Set when another agent's invocation setting disagrees with this one,
+   * such as a skill Claude Code keeps manual-only that Codex still lists.
+   * Holds the skill name.
+   */
+  invocation_mismatch: string | null;
 }
 /**
  * Input for `listing`.
@@ -429,6 +483,12 @@ export interface ListingRequest {
    * Compare Claude Code with this session transcript instead of the newest one.
    */
   claude_transcript: string | null;
+  /**
+   * Compare Codex with this session rollout (`.codex/sessions/** /rollout-*.jsonl`)
+   * instead of the newest one. Its listing also decides which plugins
+   * Codex loaded and the alias order.
+   */
+  codex_transcript: string | null;
 }
 /**
  * Every agent's sessions.
