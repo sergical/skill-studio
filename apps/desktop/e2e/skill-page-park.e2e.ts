@@ -29,8 +29,15 @@ test("Park for every agent turns every copy off and Activity lists it with no Re
   await expect(copies).not.toBeChecked();
 
   await openSidebarPage(page, "Activity");
-  await expect(page.getByRole("main").getByText("Parked", { exact: true })).toBeVisible();
+  const parked = page.getByRole("main").getByText("Parked", { exact: true });
+  await expect(parked).toBeVisible();
   await expect(page.getByRole("main").getByRole("button", { name: "Restore" })).toHaveCount(0);
+  // The Parked row has no button, so it takes focus itself and shows why it cannot be restored.
+  const reason = page.getByRole("main").getByText("Unpark the skill to reverse this.");
+  const reasonOpacity = () => reason.evaluate((el) => getComputedStyle(el.parentElement!).opacity);
+  expect(await reasonOpacity()).toBe("0");
+  await parked.locator("xpath=ancestor::div[@tabindex='0'][1]").focus();
+  await expect.poll(reasonOpacity).toBe("1");
 
   await openSkillsPage(page, "Skills", SKILL);
   await expect(skillRow(page, SKILL)).toHaveCount(0);

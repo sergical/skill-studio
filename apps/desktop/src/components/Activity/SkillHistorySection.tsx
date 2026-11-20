@@ -231,7 +231,11 @@ function EventRow({ event, onRestored }: { event: SkillEvent; onRestored: () => 
   const agent = event.skill && harnessLabel && event.kind !== "split" ? ` · ${harnessLabel}` : "";
 
   return (
-    <div className="group/row relative flex h-8 items-center gap-3 border-b border-border-subtle px-2 last:border-b-0">
+    <div
+      // A row with no button takes focus itself, so Tab still shows why it cannot be restored.
+      tabIndex={canRestoreSkillEvent(event) || event.backup_path ? undefined : 0}
+      className="group/row relative flex h-8 items-center gap-3 rounded-sm border-b border-border-subtle px-2 outline-none last:border-b-0 focus-visible:ring-1 focus-visible:ring-text-secondary"
+    >
       <div className="flex min-w-0 flex-1 items-center gap-2">
         {iconForKind(event.kind, iconColor)}
         <span className="min-w-0 shrink truncate text-body text-text-primary" title={subject}>
