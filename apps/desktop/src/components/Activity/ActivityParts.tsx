@@ -1,6 +1,6 @@
 // ============================================================================
 // ActivityParts - Small pieces the Activity page's sections share: the
-// uppercase section header, muted inline text, and the "Show N more" cap on
+// section header, muted inline text, and the "Show N more" cap on
 // a long list.
 // ============================================================================
 
@@ -13,9 +13,7 @@ const LIST_CAP = 10;
 export function SectionHeader({ title, children }: { title: string; children?: ReactNode }) {
   return (
     <div className="flex min-h-7 items-center justify-between gap-3">
-      <h2 className="text-caption font-medium tracking-[0.08em] text-text-tertiary uppercase">
-        {title}
-      </h2>
+      <h2 className="text-small font-medium text-text-secondary">{title}</h2>
       {children}
     </div>
   );

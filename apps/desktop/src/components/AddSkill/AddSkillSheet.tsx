@@ -83,10 +83,9 @@ type InstallDestinationFields = ReturnType<typeof installDestinationFields>;
 const SHEET_TAB_CLASS =
   "text-body font-medium text-text-tertiary after:bg-accent data-active:text-accent hover:text-text-secondary";
 
-/** The uppercase field-group heading used above the Source, Skills, Method,
+/** The field-group heading used above the Source, Skills, Method,
  * and Scope sections. */
-const SECTION_LABEL_CLASS =
-  "text-caption font-medium tracking-[0.08em] text-text-tertiary uppercase";
+const SECTION_LABEL_CLASS = "text-small font-medium text-text-secondary";
 
 const ALL_METHODS = ["skills-sh", "dotagents", "copy"] as const satisfies AddMethod[];
 

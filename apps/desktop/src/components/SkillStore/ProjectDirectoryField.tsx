@@ -25,7 +25,7 @@ export function ProjectDirectoryField({
 }) {
   return (
     <div className="mt-3">
-      <span className="mb-1.5 block text-caption font-medium tracking-[0.04em] text-text-tertiary uppercase">
+      <span className="mb-1.5 block text-small font-medium text-text-secondary">
         Project directory
       </span>
       <div className="flex gap-2">

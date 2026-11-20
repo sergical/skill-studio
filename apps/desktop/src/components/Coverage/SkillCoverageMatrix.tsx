@@ -60,7 +60,7 @@ function CoverageMarker({ cell }: { cell: AgentMatrixCell }) {
  * skill in the detail panel. The header row stays pinned while scrolling.
  */
 const HEADER_CELL_CLASS =
-  "sticky top-0 z-10 h-9 border-b border-border-subtle bg-bg-secondary px-2.5 text-center text-caption font-medium tracking-[0.08em] text-text-tertiary uppercase";
+  "sticky top-0 z-10 h-9 border-b border-border-subtle bg-bg-secondary px-2.5 text-center text-caption font-medium text-text-tertiary";
 const CELL_CLASS = "h-9 border-b border-border-subtle px-2.5 group-hover:bg-bg-hover";
 
 export function SkillCoverageMatrix({

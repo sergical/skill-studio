@@ -263,7 +263,7 @@ export function SkillListFilterBar({
         >
           {harnesses.length > 1 && (
             <>
-              <p className="m-0 px-2.5 pt-1.5 pb-0.5 text-caption font-medium tracking-[0.08em] text-text-tertiary uppercase">
+              <p className="m-0 px-2.5 pt-1.5 pb-0.5 text-caption font-medium text-text-tertiary">
                 Agent
               </p>
               <MenuRadioGroup
@@ -289,7 +289,7 @@ export function SkillListFilterBar({
               <MenuSeparator />
             </>
           )}
-          <p className="m-0 px-2.5 pt-1.5 pb-0.5 text-caption font-medium tracking-[0.08em] text-text-tertiary uppercase">
+          <p className="m-0 px-2.5 pt-1.5 pb-0.5 text-caption font-medium text-text-tertiary">
             Source
           </p>
           <MenuRadioGroup

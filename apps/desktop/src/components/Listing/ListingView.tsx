@@ -10,6 +10,7 @@
 import { useEffect, useState } from "react";
 import { Copy } from "lucide-react";
 import { Button, Input } from "@skill-studio/ui";
+import { deploymentLabelFromAgentId } from "@skill-studio/lib";
 import type {
   HarnessListing,
   ListingEntry,
@@ -18,7 +19,6 @@ import type {
   ListingState,
   SkillSnapshot,
 } from "@skill-studio/lib";
-import { harnessLabel } from "../../lib/harness-labels";
 import { PageShell } from "../Shell/PageShell";
 import { SelectControl } from "../ui/SelectControl";
 import { useAppStore } from "../../store/appStore";
@@ -242,9 +242,9 @@ export function ListingView({ snapshot }: ListingViewProps) {
     load.kind === "ready"
       ? [...new Set(load.now.listings.map((r) => r.harness))].map((id) => ({
           value: id,
-          label: harnessLabel(id),
+          label: deploymentLabelFromAgentId(id),
         }))
-      : [{ value: harness, label: harnessLabel(harness) }];
+      : [{ value: harness, label: deploymentLabelFromAgentId(harness) }];
   const scopes = [
     { value: GLOBAL, label: "Global sessions" },
     ...(snapshot?.projects ?? []).map((p) => ({ value: p, label: p })),
