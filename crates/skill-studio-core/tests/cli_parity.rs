@@ -470,6 +470,8 @@ fn runtime_with(home: &Path, project: Option<&Path>, spawner: Arc<dyn ProcessSpa
         catalog: Arc::new(HarnessCatalog::builtin()),
 
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+
+        scan_memo: None,
     };
     Runtime::new(&scope, ports).unwrap()
 }

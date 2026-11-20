@@ -277,6 +277,8 @@ fn runtime_with_scope(
         catalog: Arc::new(HarnessCatalog::builtin()),
 
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+
+        scan_memo: None,
     };
     Runtime::new(scope, ports).unwrap()
 }
@@ -1713,6 +1715,7 @@ fn project_install(label: &str) -> ProjectInstall {
         tools: None,
         catalog: Arc::new(HarnessCatalog::builtin()),
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+        scan_memo: None,
     };
     let rt = Runtime::new(&scope, ports).unwrap();
     ProjectInstall {

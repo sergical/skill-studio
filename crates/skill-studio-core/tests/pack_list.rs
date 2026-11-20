@@ -103,6 +103,7 @@ fn runtime() -> Runtime {
         tools: None,
         catalog: Arc::new(HarnessCatalog::builtin()),
         telemetry: Arc::new(skill_studio_core::ports::NoopTelemetry),
+        scan_memo: None,
     };
     let mut scope = scope_for("pack-list", Path::new("/home"));
     scope.projects = ProjectSelection::Explicit {

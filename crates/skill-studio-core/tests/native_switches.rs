@@ -37,6 +37,7 @@ fn runtime_with_scope(home: &Path, scope: &RuntimeScope) -> Runtime {
         tools: None,
         catalog: Arc::new(HarnessCatalog::builtin()),
         telemetry: Arc::new(skill_studio_core::ports::NoopTelemetry),
+        scan_memo: None,
     };
     Runtime::new(scope, ports).unwrap()
 }

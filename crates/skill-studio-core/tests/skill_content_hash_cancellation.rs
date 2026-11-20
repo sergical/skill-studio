@@ -41,6 +41,7 @@ fn skill_content_hash_fails_cancelled_instead_of_hashing() {
         catalog: Arc::new(HarnessCatalog::builtin()),
 
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+        scan_memo: None,
     };
     let rt = Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap();
     let ctx = OpContext::with_cancel(CorrelationId("cancelled".into()), Arc::new(AlwaysCancel));

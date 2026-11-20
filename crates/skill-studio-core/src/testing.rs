@@ -562,6 +562,8 @@ impl ScopeFs for FixtureFs {
             len: state.files.get(path).map_or(0, |b| b.len() as u64),
             modified: None,
             mode: None,
+            changed: None,
+            inode: None,
         })
     }
 
@@ -1881,6 +1883,7 @@ pub mod golden {
             tools: None,
             catalog: Arc::new(HarnessCatalog::builtin()),
             telemetry: Arc::new(crate::ports::NoopTelemetry),
+            scan_memo: None,
         }
     }
 
