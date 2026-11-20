@@ -61,7 +61,19 @@ async function measureWhenBusy(button: Locator, row: Locator): Promise<() => Pro
     }),
     rowElement,
   );
-  return () => pending.evaluate((handle) => handle.box);
+  // Called right after the click: the button must turn busy within expect's default 5 s, as the
+  // `toHaveAttribute("aria-busy", "true")` check that this replaces required.
+  return () =>
+    pending.evaluate(
+      (handle, ms) =>
+        Promise.race([
+          handle.box,
+          new Promise<BusyBox>((_, reject) => {
+            setTimeout(() => reject(new Error(`the button did not turn busy within ${ms} ms`)), ms);
+          }),
+        ]),
+      5000,
+    );
 }
 
 test("Update on a Skills row spins in place, then the row stays in its slot and says Updated", async ({
