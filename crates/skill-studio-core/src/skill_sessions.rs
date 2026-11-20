@@ -99,6 +99,16 @@ pub struct SessionSkillUse {
     pub trigger: SkillTrigger,
 }
 
+/// One entry in a session's listing.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SessionListedSkill {
+    /// Name as the session recorded it.
+    #[schemars(extend("x-untrusted" = true))]
+    pub skill: String,
+    /// How the session listed it.
+    pub listed_as: SessionListingState,
+}
+
 /// A skill the session may have needed but did not use. A guess.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MissedSkill {
@@ -145,10 +155,8 @@ pub struct SessionSummary {
     pub described: usize,
     /// Entries with a name only.
     pub name_only: usize,
-    /// The entries listed by name only, by name. Every other entry had a
-    /// description; a skill missing from both was not listed.
-    #[schemars(extend("x-untrusted" = true))]
-    pub name_only_skills: Vec<String>,
+    /// Every listing entry, in listing order, as recorded.
+    pub entries: Vec<SessionListedSkill>,
     /// Skills used, one row per skill.
     pub used: Vec<SessionSkillUse>,
     /// Possible misses. A guess, not a fact.
@@ -1018,35 +1026,26 @@ fn resolve_name<'a>(name: &str, candidates: impl IntoIterator<Item = &'a str>) -
     }
 }
 
-fn listed_as(
-    name: &str,
-    listing: Option<&BTreeMap<String, RecordedEntry>>,
-    corpus: &BTreeMap<&str, &CorpusSkill>,
-) -> SessionListingState {
-    let Some(listing) = listing else {
-        return SessionListingState::Unknown;
+/// The state of one recorded entry. A description shorter than the scanned
+/// one was cut.
+fn entry_state(entry: RecordedEntry, scanned: Option<&CorpusSkill>) -> SessionListingState {
+    let RecordedEntry::Described(chars) = entry else {
+        return SessionListingState::NameOnly;
     };
-    match listing.get(name) {
-        None => SessionListingState::NotListed,
-        Some(RecordedEntry::NameOnly) => SessionListingState::NameOnly,
-        Some(RecordedEntry::Described(chars)) => {
-            let full = corpus
-                .get(name)
-                .map(|s| {
-                    s.description
-                        .split_whitespace()
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                })
-                .map_or(0, |d| d.chars().count() as u64);
-            // Codex trims descriptions evenly; Claude Code lists them whole
-            // up to 1536 characters, so only a large gap counts.
-            if full > *chars + 3 && *chars < 1536 {
-                SessionListingState::Truncated
-            } else {
-                SessionListingState::Described
-            }
-        }
+    let full = scanned.map_or(0, |s| {
+        s.description
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .count() as u64
+    });
+    // Codex trims descriptions evenly; Claude Code lists them whole up to
+    // 1536 characters, so only a large gap counts.
+    if full > chars + 3 && chars < 1536 {
+        SessionListingState::Truncated
+    } else {
+        SessionListingState::Described
     }
 }
 
@@ -1126,11 +1125,28 @@ pub fn build_agent(
     let mut sessions = Vec::new();
     let mut with_listing = 0usize;
     for session in parsed {
-        let listing: Option<BTreeMap<String, RecordedEntry>> = session.listing.as_ref().map(|l| {
-            l.iter()
-                .map(|(n, e)| (resolve_name(n, by_name.keys().copied()), *e))
-                .collect()
-        });
+        // Recorded names stay as recorded: two plugins' `p:foo` and `q:foo`
+        // are different entries even when both map to one scanned `foo`.
+        let recorded: Option<BTreeMap<&str, RecordedEntry>> = session
+            .listing
+            .as_ref()
+            .map(|l| l.iter().map(|(n, e)| (n.as_str(), *e)).collect());
+        let scanned = |name: &str| resolve_name(name, by_name.keys().copied());
+        // How this session listed a skill, by a recorded or a scanned name.
+        let state_of = |name: &str| -> (String, SessionListingState) {
+            let Some(recorded) = &recorded else {
+                return (name.to_string(), SessionListingState::Unknown);
+            };
+            let listed = resolve_name(name, recorded.keys().copied());
+            match recorded.get(listed.as_str()) {
+                Some(entry) => {
+                    let state =
+                        entry_state(*entry, by_name.get(scanned(&listed).as_str()).copied());
+                    (listed, state)
+                }
+                None => (name.to_string(), SessionListingState::NotListed),
+            }
+        };
         let mut summary = SessionSummary {
             harness: harness.clone(),
             id: session.id.clone(),
@@ -1142,52 +1158,58 @@ pub fn build_agent(
                 .prompt
                 .as_ref()
                 .map(|p| p.chars().take(PROMPT_PREVIEW_CHARS).collect()),
-            listing_recorded: listing.is_some(),
+            listing_recorded: recorded.is_some(),
             listed: 0,
             described: 0,
             name_only: 0,
-            name_only_skills: Vec::new(),
+            entries: Vec::new(),
             used: Vec::new(),
             missed: Vec::new(),
         };
-        if let Some(listing) = &listing {
+        if session.listing.is_some() {
             with_listing += 1;
-            // Session totals count the recorded entries; two recorded names
-            // can map to one scanned skill.
-            for (_, entry) in session.listing.iter().flatten() {
-                summary.listed += 1;
-                match entry {
-                    RecordedEntry::NameOnly => summary.name_only += 1,
-                    RecordedEntry::Described(_) => summary.described += 1,
-                }
+        }
+        // One count per scanned skill per session, even when two recorded
+        // names map to it.
+        let mut counted = BTreeSet::new();
+        for (name, _) in session.listing.iter().flatten() {
+            let (_, state) = state_of(name);
+            summary.listed += 1;
+            if state == SessionListingState::NameOnly {
+                summary.name_only += 1;
+            } else {
+                summary.described += 1;
             }
-            for name in listing.keys() {
-                let row = rollup.entry(name.clone()).or_insert_with(|| blank(name));
-                match listed_as(name, Some(listing), &by_name) {
-                    SessionListingState::NameOnly => {
-                        row.name_only += 1;
-                        summary.name_only_skills.push(name.clone());
-                    }
-                    SessionListingState::Truncated => row.truncated += 1,
-                    _ => row.described += 1,
-                }
+            summary.entries.push(SessionListedSkill {
+                skill: name.clone(),
+                listed_as: state,
+            });
+            let key = scanned(name);
+            if !counted.insert(key.clone()) {
+                continue;
+            }
+            let row = rollup.entry(key.clone()).or_insert_with(|| blank(&key));
+            match state {
+                SessionListingState::NameOnly => row.name_only += 1,
+                SessionListingState::Truncated => row.truncated += 1,
+                _ => row.described += 1,
             }
         }
-        let empty = BTreeMap::new();
-        let names = listing.as_ref().unwrap_or(&empty);
+        let mut used_keys = BTreeSet::new();
         for invocation in &session.uses {
-            let name = resolve_name(&invocation.skill, by_name.keys().copied());
-            let name = resolve_name(&name, names.keys().map(String::as_str));
+            let (name, state) = state_of(&invocation.skill);
             if summary.used.iter().any(|u| u.skill == name) {
                 continue;
             }
-            let state = listed_as(&name, listing.as_ref(), &by_name);
-            let row = rollup.entry(name.clone()).or_insert_with(|| blank(&name));
-            row.used += 1;
-            match state {
-                SessionListingState::NameOnly => row.used_name_only += 1,
-                SessionListingState::NotListed => row.used_not_listed += 1,
-                _ => {}
+            let key = scanned(&name);
+            if used_keys.insert(key.clone()) {
+                let row = rollup.entry(key.clone()).or_insert_with(|| blank(&key));
+                row.used += 1;
+                match state {
+                    SessionListingState::NameOnly => row.used_name_only += 1,
+                    SessionListingState::NotListed => row.used_not_listed += 1,
+                    _ => {}
+                }
             }
             summary.used.push(SessionSkillUse {
                 skill: name,
@@ -1200,7 +1222,7 @@ pub fn build_agent(
                 row.missed += 1;
             }
             summary.missed.push(MissedSkill {
-                listed_as: listed_as(&found.skill, listing.as_ref(), &by_name),
+                listed_as: state_of(&found.skill).1,
                 skill: found.skill,
                 score: found.score,
                 words: found.words,
@@ -1372,6 +1394,40 @@ mod tests {
         );
         let gone = built.skills.iter().find(|r| r.name == "gone").unwrap();
         assert_eq!((gone.described, gone.not_listed), (1, 1));
+    }
+
+    #[test]
+    fn a_use_of_one_plugin_is_not_counted_as_listed_through_another_plugin_with_the_same_skill() {
+        let corpus = [CorpusSkill {
+            name: "foo".into(),
+            path: None,
+            description: "Foo".into(),
+            reachable: true,
+        }];
+        let mut session = listed(&["q:foo"]);
+        session.uses.push(SkillInvocation {
+            skill: "p:foo".into(),
+            harness: AgentId::CODEX.into(),
+            trigger: SkillTrigger::Agent,
+            at: DateTime::<Utc>::UNIX_EPOCH,
+            project_path: None,
+            session: None,
+            use_session: None,
+        });
+        let built = build_agent(
+            &AgentId::parse(AgentId::CODEX).unwrap(),
+            "Codex",
+            SessionRecords::ListingAndUses,
+            None,
+            &corpus,
+            &[session],
+        );
+        let s = &built.sessions[0];
+        assert_eq!(s.used[0].skill, "p:foo");
+        assert_eq!(s.used[0].listed_as, SessionListingState::NotListed);
+        assert_eq!(s.entries[0].skill, "q:foo");
+        let foo = built.skills.iter().find(|r| r.name == "foo").unwrap();
+        assert_eq!((foo.described, foo.used, foo.used_not_listed), (1, 1, 1));
     }
 
     fn listed(names: &[&str]) -> ParsedSession {

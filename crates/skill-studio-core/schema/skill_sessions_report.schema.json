@@ -288,13 +288,12 @@
           "format": "uint",
           "minimum": 0
         },
-        "name_only_skills": {
-          "description": "The entries listed by name only, by name. Every other entry had a\ndescription; a skill missing from both was not listed.",
+        "entries": {
+          "description": "Every listing entry, in listing order, as recorded.",
           "type": "array",
           "items": {
-            "type": "string"
-          },
-          "x-untrusted": true
+            "$ref": "#/$defs/SessionListedSkill"
+          }
         },
         "used": {
           "description": "Skills used, one row per skill.",
@@ -318,33 +317,28 @@
         "listed",
         "described",
         "name_only",
-        "name_only_skills",
+        "entries",
         "used",
         "missed"
       ]
     },
-    "SessionSkillUse": {
-      "description": "One skill a session used.",
+    "SessionListedSkill": {
+      "description": "One entry in a session's listing.",
       "type": "object",
       "properties": {
         "skill": {
-          "description": "Skill name, as the listing shows it when the listing has it.",
+          "description": "Name as the session recorded it.",
           "type": "string",
           "x-untrusted": true
         },
         "listed_as": {
-          "description": "How this session listed the skill.",
+          "description": "How the session listed it.",
           "$ref": "#/$defs/SessionListingState"
-        },
-        "trigger": {
-          "description": "How the first use started.",
-          "$ref": "#/$defs/SkillTrigger"
         }
       },
       "required": [
         "skill",
-        "listed_as",
-        "trigger"
+        "listed_as"
       ]
     },
     "SessionListingState": {
@@ -375,6 +369,30 @@
           "type": "string",
           "const": "unknown"
         }
+      ]
+    },
+    "SessionSkillUse": {
+      "description": "One skill a session used.",
+      "type": "object",
+      "properties": {
+        "skill": {
+          "description": "Skill name, as the listing shows it when the listing has it.",
+          "type": "string",
+          "x-untrusted": true
+        },
+        "listed_as": {
+          "description": "How this session listed the skill.",
+          "$ref": "#/$defs/SessionListingState"
+        },
+        "trigger": {
+          "description": "How the first use started.",
+          "$ref": "#/$defs/SkillTrigger"
+        }
+      },
+      "required": [
+        "skill",
+        "listed_as",
+        "trigger"
       ]
     },
     "SkillTrigger": {

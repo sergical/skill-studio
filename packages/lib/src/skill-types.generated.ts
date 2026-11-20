@@ -562,10 +562,9 @@ export interface SessionSummary {
    */
   name_only: number;
   /**
-   * The entries listed by name only, by name. Every other entry had a
-   * description; a skill missing from both was not listed.
+   * Every listing entry, in listing order, as recorded.
    */
-  name_only_skills: string[];
+  entries: SessionListedSkill[];
   /**
    * Skills used, one row per skill.
    */
@@ -574,6 +573,19 @@ export interface SessionSummary {
    * Possible misses. A guess, not a fact.
    */
   missed: MissedSkill[];
+}
+/**
+ * One entry in a session's listing.
+ */
+export interface SessionListedSkill {
+  /**
+   * Name as the session recorded it.
+   */
+  skill: string;
+  /**
+   * How the session listed it.
+   */
+  listed_as: "described" | "truncated" | "name_only" | "not_listed" | "unknown";
 }
 /**
  * One skill a session used.

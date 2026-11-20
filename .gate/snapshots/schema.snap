@@ -7166,6 +7166,25 @@
         ],
         "type": "object"
       },
+      "SessionListedSkill": {
+        "description": "One entry in a session's listing.",
+        "properties": {
+          "listed_as": {
+            "$ref": "#/$defs/SessionListingState",
+            "description": "How the session listed it."
+          },
+          "skill": {
+            "description": "Name as the session recorded it.",
+            "type": "string",
+            "x-untrusted": true
+          }
+        },
+        "required": [
+          "skill",
+          "listed_as"
+        ],
+        "type": "object"
+      },
       "SessionListingState": {
         "description": "How one session showed one skill to the model.",
         "oneOf": [
@@ -7252,6 +7271,13 @@
             "minimum": 0,
             "type": "integer"
           },
+          "entries": {
+            "description": "Every listing entry, in listing order, as recorded.",
+            "items": {
+              "$ref": "#/$defs/SessionListedSkill"
+            },
+            "type": "array"
+          },
           "harness": {
             "$ref": "#/$defs/AgentIdentity",
             "description": "Agent id."
@@ -7295,14 +7321,6 @@
             "minimum": 0,
             "type": "integer"
           },
-          "name_only_skills": {
-            "description": "The entries listed by name only, by name. Every other entry had a\ndescription; a skill missing from both was not listed.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "x-untrusted": true
-          },
           "project_path": {
             "description": "Working folder.",
             "type": [
@@ -7339,7 +7357,7 @@
           "listed",
           "described",
           "name_only",
-          "name_only_skills",
+          "entries",
           "used",
           "missed"
         ],

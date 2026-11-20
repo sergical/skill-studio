@@ -190,6 +190,7 @@ function formatTime(at: string | null): string {
 }
 
 function SessionRow({ session }: { session: SessionSummary }) {
+  const nameOnly = session.entries.flatMap((e) => (e.listed_as === "name_only" ? [e.skill] : []));
   const project = session.project_path?.split("/").filter(Boolean).pop() ?? "unknown folder";
   return (
     <li className="flex flex-col gap-0.5 py-2">
@@ -202,10 +203,8 @@ function SessionRow({ session }: { session: SessionSummary }) {
           ? `. Listed ${session.listed}: ${session.described} described, ${session.name_only} name only.`
           : ". No listing recorded."}
       </span>
-      {session.name_only_skills.length > 0 && (
-        <span className="text-caption text-text-tertiary">
-          Name only: {session.name_only_skills.join(", ")}
-        </span>
+      {nameOnly.length > 0 && (
+        <span className="text-caption text-text-tertiary">Name only: {nameOnly.join(", ")}</span>
       )}
       {session.used.length > 0 && (
         <span className="text-caption text-text-secondary">
