@@ -20,13 +20,17 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
 
 use crate::error::CoreError;
 use crate::ops::CachedSkillRead;
-use crate::ports::{FileFacts, FileKind, OpContext, ScopeFs};
+use crate::ports::{
+    DirEntryFacts, DirHandle, ExclusiveGuard, FileFacts, FileKind, OpContext, OpenedFile, ScopeFs,
+    ScopedPath,
+};
 
 /// How recent a change must be for [`folder_stamp`] to refuse a stamp.
 const RACY_WINDOW: chrono::Duration = chrono::Duration::seconds(2);
@@ -94,8 +98,8 @@ impl ScanMemo {
 /// folder, as the facts walk does. A link adds the facts of its target too,
 /// so a link that now points at other content changes the stamp.
 ///
-/// The caller keeps a result only when every read behind it succeeded
-/// (`ContentFacts::reads_complete`).
+/// The caller keeps a result only when every call behind it succeeded
+/// ([`FailureWatch`]).
 pub(crate) fn folder_stamp(
     fs: &dyn ScopeFs,
     ctx: &OpContext,
@@ -198,4 +202,149 @@ fn stamp_dir(
         }
     }
     Ok(Some(()))
+}
+
+/// A [`ScopeFs`] that notes when any call through it fails. A skill folder
+/// that the stamp could read in full has no missing entry, so a failed call
+/// while its facts are read means the result is not the folder's true
+/// result, and the memo must not keep it.
+pub(crate) struct FailureWatch<'a> {
+    inner: &'a dyn ScopeFs,
+    failed: AtomicBool,
+}
+
+impl<'a> FailureWatch<'a> {
+    pub(crate) fn new(inner: &'a dyn ScopeFs) -> Self {
+        Self {
+            inner,
+            failed: AtomicBool::new(false),
+        }
+    }
+
+    pub(crate) fn failed(&self) -> bool {
+        self.failed.load(Ordering::SeqCst)
+    }
+
+    fn note<T>(&self, result: std::io::Result<T>) -> std::io::Result<T> {
+        if result.is_err() {
+            self.failed.store(true, Ordering::SeqCst);
+        }
+        result
+    }
+}
+
+impl ScopeFs for FailureWatch<'_> {
+    fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
+        self.note(self.inner.canonicalize(path))
+    }
+    fn symlink_metadata(&self, path: &Path) -> std::io::Result<FileFacts> {
+        self.note(self.inner.symlink_metadata(path))
+    }
+    fn read_link(&self, path: &Path) -> std::io::Result<PathBuf> {
+        self.note(self.inner.read_link(path))
+    }
+    fn read_dir(&self, path: &Path) -> std::io::Result<Vec<DirEntryFacts>> {
+        self.note(self.inner.read_dir(path))
+    }
+    fn visit_dir(&self, path: &Path, visit: &mut dyn FnMut(DirEntryFacts)) -> std::io::Result<()> {
+        self.note(self.inner.visit_dir(path, visit))
+    }
+    fn ancestor_holds(&self, start: &Path, name: &str) -> std::io::Result<bool> {
+        self.note(self.inner.ancestor_holds(start, name))
+    }
+    fn read_capped(&self, path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
+        self.note(self.inner.read_capped(path, max_bytes))
+    }
+    fn open_file(&self, path: &Path) -> std::io::Result<OpenedFile> {
+        self.note(self.inner.open_file(path))
+    }
+    fn read_prefix(&self, path: &Path, limit: u64) -> std::io::Result<(Vec<u8>, bool)> {
+        self.note(self.inner.read_prefix(path, limit))
+    }
+    fn write_atomic(
+        &self,
+        guard: &ExclusiveGuard,
+        path: &ScopedPath,
+        bytes: &[u8],
+    ) -> std::io::Result<()> {
+        self.note(self.inner.write_atomic(guard, path, bytes))
+    }
+    fn rename(
+        &self,
+        guard: &ExclusiveGuard,
+        from: &ScopedPath,
+        to: &ScopedPath,
+    ) -> std::io::Result<()> {
+        self.note(self.inner.rename(guard, from, to))
+    }
+    fn remove_file(&self, guard: &ExclusiveGuard, path: &ScopedPath) -> std::io::Result<()> {
+        self.note(self.inner.remove_file(guard, path))
+    }
+    fn create_dir_all(&self, guard: &ExclusiveGuard, path: &ScopedPath) -> std::io::Result<()> {
+        self.note(self.inner.create_dir_all(guard, path))
+    }
+    fn symlink(
+        &self,
+        guard: &ExclusiveGuard,
+        target: &ScopedPath,
+        link: &ScopedPath,
+    ) -> std::io::Result<()> {
+        self.note(self.inner.symlink(guard, target, link))
+    }
+    fn symlink_relative(
+        &self,
+        guard: &ExclusiveGuard,
+        target: &ScopedPath,
+        relative_target: &Path,
+        link: &ScopedPath,
+    ) -> std::io::Result<()> {
+        self.note(
+            self.inner
+                .symlink_relative(guard, target, relative_target, link),
+        )
+    }
+    fn fsops_device_inode(&self, path: &Path) -> std::io::Result<(u64, u64)> {
+        self.note(self.inner.fsops_device_inode(path))
+    }
+    fn fsops_fsync_file(&self, path: &Path) -> std::io::Result<()> {
+        self.note(self.inner.fsops_fsync_file(path))
+    }
+    fn fsops_fsync_dir(&self, path: &Path) -> std::io::Result<()> {
+        self.note(self.inner.fsops_fsync_dir(path))
+    }
+    fn fsops_create_dir(&self, path: &Path) -> std::io::Result<()> {
+        self.note(self.inner.fsops_create_dir(path))
+    }
+    fn fsops_write_new_file(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        self.note(self.inner.fsops_write_new_file(path, bytes))
+    }
+    fn fsops_write_new_file_with_mode(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        mode: u32,
+    ) -> std::io::Result<()> {
+        self.note(self.inner.fsops_write_new_file_with_mode(path, bytes, mode))
+    }
+    fn fsops_rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        self.note(self.inner.fsops_rename(from, to))
+    }
+    fn fsops_symlink(&self, target: &Path, link: &Path) -> std::io::Result<()> {
+        self.note(self.inner.fsops_symlink(target, link))
+    }
+    fn fsops_remove_dir(&self, path: &Path) -> std::io::Result<()> {
+        self.note(self.inner.fsops_remove_dir(path))
+    }
+    fn fsops_remove_file(&self, path: &Path) -> std::io::Result<()> {
+        self.note(self.inner.fsops_remove_file(path))
+    }
+    fn fsops_exchange(&self, a: &Path, b: &Path) -> std::io::Result<()> {
+        self.note(self.inner.fsops_exchange(a, b))
+    }
+    fn fsops_bind_root(&self, root: &Path) -> std::io::Result<Option<Box<dyn ScopeFs + '_>>> {
+        self.note(self.inner.fsops_bind_root(root))
+    }
+    fn fsops_open_dir(&self, path: &Path) -> std::io::Result<Option<Box<dyn DirHandle>>> {
+        self.note(self.inner.fsops_open_dir(path))
+    }
 }

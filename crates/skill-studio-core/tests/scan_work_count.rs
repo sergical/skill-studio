@@ -47,9 +47,16 @@ struct CountingFs {
     write_atomic: AtomicU64,
     rename: AtomicU64,
     skill_md_reads: AtomicU64,
-    /// The next `read_capped` of this path fails once, as a read does when
-    /// the process has too many open files.
-    fail_next_read_of: Mutex<Option<PathBuf>>,
+    /// One call to fail, as a call does when the process has too many open
+    /// files.
+    fail: Mutex<Option<FailCall>>,
+}
+
+/// Fails the call to `method` on `path` after `skip` calls to it succeeded.
+struct FailCall {
+    method: &'static str,
+    path: PathBuf,
+    skip: u32,
 }
 
 impl CountingFs {
@@ -71,15 +78,33 @@ impl CountingFs {
     fn get(counter: &AtomicU64) -> u64 {
         counter.load(Ordering::SeqCst)
     }
+
+    fn fail_call(&self, method: &'static str, path: &Path) -> std::io::Result<()> {
+        let mut fail = self.fail.lock().expect("fail lock");
+        let Some(call) = fail.as_mut() else {
+            return Ok(());
+        };
+        if call.method != method || call.path != path {
+            return Ok(());
+        }
+        if call.skip > 0 {
+            call.skip -= 1;
+            return Ok(());
+        }
+        *fail = None;
+        Err(std::io::Error::other("too many open files"))
+    }
 }
 
 impl ScopeFs for CountingFs {
     fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
         Self::count(&self.canonicalize);
+        self.fail_call("canonicalize", path)?;
         self.inner().canonicalize(path)
     }
     fn symlink_metadata(&self, path: &Path) -> std::io::Result<FileFacts> {
         Self::count(&self.symlink_metadata);
+        self.fail_call("symlink_metadata", path)?;
         self.inner().symlink_metadata(path)
     }
     fn read_link(&self, path: &Path) -> std::io::Result<PathBuf> {
@@ -99,15 +124,7 @@ impl ScopeFs for CountingFs {
     }
     fn read_capped(&self, path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
         Self::count(&self.read_capped);
-        let mut fail = self
-            .fail_next_read_of
-            .lock()
-            .expect("fail_next_read_of lock");
-        if fail.as_deref() == Some(path) {
-            *fail = None;
-            return Err(std::io::Error::other("too many open files"));
-        }
-        drop(fail);
+        self.fail_call("read_capped", path)?;
         if path.ends_with("SKILL.md") {
             Self::count(&self.skill_md_reads);
         }
@@ -441,8 +458,9 @@ fn skills(inventory: &skill_studio_core::dto::Inventory) -> serde_json::Value {
     serde_json::to_value(&inventory.skills).expect("skills to JSON")
 }
 
-/// A small home: one Claude skill with a support file, and one whose folder
-/// holds a link to a file that does not exist.
+/// A small home: one Claude skill with a support file, a `spec.md` and a
+/// link to the support file, and one whose folder holds a link to a file
+/// that does not exist.
 fn two_skill_home(name: &str) -> PathBuf {
     let dir = unique_temp_dir(name);
     let skills = dir.join(".claude/skills");
@@ -455,39 +473,57 @@ fn two_skill_home(name: &str) -> PathBuf {
         .expect("write SKILL.md");
     }
     std::fs::write(skills.join("notes/notes.md"), "Support text.\n").expect("write notes.md");
+    std::fs::write(skills.join("notes/spec.md"), "Spec.\n").expect("write spec.md");
+    std::os::unix::fs::symlink("notes.md", skills.join("notes/alias.md")).expect("link alias.md");
     std::os::unix::fs::symlink(dir.join("gone.md"), skills.join("linked/gone.md"))
         .expect("link to a missing file");
     dir.canonicalize().expect("canonicalize home")
 }
 
-/// Given a skill whose support file fails to read once during a scan with
-/// a [`ScanMemo`], when the app rescans, the rescan reads that folder again
-/// and returns the same skills as a scan in which no read failed. Fails if
-/// the memo keeps the hash of the failed read.
+/// Given a skill folder where one filesystem call fails once during a scan
+/// with a [`ScanMemo`] (a file read, the `spec.md` check, a link lookup),
+/// when the app rescans, the rescan reads that folder again and returns the
+/// same skills as a scan in which no call failed. The stamp itself reads
+/// each path first, so `skip` lets that call through and fails the facts
+/// read. Fails if the memo keeps a result from a failed call.
 #[test]
-fn a_scan_memo_does_not_keep_facts_from_a_failed_read() {
-    let home = two_skill_home("scan-memo-failed-read");
-    let notes = home.join(".claude/skills/notes/notes.md");
-
-    let clean_fs = Arc::new(CountingFs::wrap(Arc::new(RealFs::new())));
-    let clean_rt = memo_runtime(&home, &[], clean_fs);
-    let clean = scan(&clean_rt, &ctx(), &ScanRequest::default()).expect("clean scan");
-
-    let counting_fs = Arc::new(CountingFs::wrap(Arc::new(RealFs::new())));
-    let rt = memo_runtime(&home, &[], counting_fs.clone());
-    *counting_fs
-        .fail_next_read_of
-        .lock()
-        .expect("fail_next_read_of lock") = Some(notes);
-    let failed = scan(&rt, &ctx(), &ScanRequest::default()).expect("scan with a failed read");
-    assert_ne!(
-        skills(&failed),
-        skills(&clean),
-        "the failed read must change the hash"
+fn a_scan_memo_does_not_keep_facts_from_a_failed_call() {
+    let home = two_skill_home("scan-memo-failed-call");
+    let notes = home.join(".claude/skills/notes");
+    let clean_rt = memo_runtime(
+        &home,
+        &[],
+        Arc::new(CountingFs::wrap(Arc::new(RealFs::new()))),
     );
+    let clean = skills(&scan(&clean_rt, &ctx(), &ScanRequest::default()).expect("clean scan"));
 
-    let rescan = scan(&rt, &ctx(), &ScanRequest::default()).expect("rescan");
-    assert_eq!(skills(&rescan), skills(&clean));
+    for (method, path, skip) in [
+        ("read_capped", notes.join("notes.md"), 0),
+        ("symlink_metadata", notes.join("spec.md"), 1),
+        ("canonicalize", notes.join("alias.md"), 1),
+    ] {
+        let counting_fs = Arc::new(CountingFs::wrap(Arc::new(RealFs::new())));
+        let rt = memo_runtime(&home, &[], counting_fs.clone());
+        *counting_fs.fail.lock().expect("fail lock") = Some(FailCall {
+            method,
+            path: path.clone(),
+            skip,
+        });
+        let failed = scan(&rt, &ctx(), &ScanRequest::default()).expect("scan with a failed call");
+        assert!(
+            counting_fs.fail.lock().expect("fail lock").is_none(),
+            "{method} on {} was not called {} times",
+            path.display(),
+            skip + 1
+        );
+        assert_ne!(
+            skills(&failed),
+            clean,
+            "a failed {method} must change the facts"
+        );
+        let rescan = scan(&rt, &ctx(), &ScanRequest::default()).expect("rescan");
+        assert_eq!(skills(&rescan), clean, "after a failed {method}");
+    }
 
     std::fs::remove_dir_all(&home).ok();
 }
