@@ -983,19 +983,12 @@ fn with_limit(limit: CodexLimit, value: u64) -> CodexLimit {
     }
 }
 
-/// The line the extension renderer adds when it leaves skills out.
-fn omission_line(omitted: usize) -> String {
-    format!(
-        "- {omitted} additional {} omitted from this bounded skills list.\n",
-        if omitted == 1 { "skill" } else { "skills" }
-    )
-}
-
 /// Description characters each line keeps, or `None` when it is omitted.
-/// Mirrors `allocate_skill_lines` and `render_catalog` in Codex 0.170.0
-/// `ext/skills/src/render.rs` for host skills, which Codex renders with the
-/// extension-compatible policy (`extension.rs`); that policy adds the
-/// omission line, the core-compatible one does not.
+/// Mirrors `allocate_skill_lines` in Codex 0.170.0
+/// `ext/skills/src/render.rs`. Host skills render with the core-compatible
+/// policy: system, repository, then user skills by name, `description`
+/// rather than `short-description`, and no omission line. Real sessions
+/// show all three, including at budgets that leave skills out.
 pub(crate) fn codex_allocate(lines: &[CodexLine], limit: CodexLimit) -> Vec<Option<usize>> {
     let max = codex_limit_value(limit);
     let full: u64 = lines
@@ -1033,7 +1026,7 @@ pub(crate) fn codex_allocate(lines: &[CodexLine], limit: CodexLimit) -> Vec<Opti
         return alloc.into_iter().map(Some).collect();
     }
     let mut used = 0;
-    let mut alloc: Vec<Option<usize>> = lines
+    lines
         .iter()
         .map(|l| {
             let next = used + l.cost(0, limit);
@@ -1044,22 +1037,7 @@ pub(crate) fn codex_allocate(lines: &[CodexLine], limit: CodexLimit) -> Vec<Opti
                 None
             }
         })
-        .collect();
-    // The extension renderer adds `- N additional skills omitted ...` and
-    // drops listed lines from the end until that line fits too.
-    let mut omitted = alloc.iter().filter(|a| a.is_none()).count();
-    loop {
-        if used + codex_cost(&omission_line(omitted), limit) <= max {
-            break;
-        }
-        let Some(last) = alloc.iter().rposition(Option::is_some) else {
-            break;
-        };
-        used -= lines[last].cost(0, limit);
-        alloc[last] = None;
-        omitted += 1;
-    }
-    alloc
+        .collect()
 }
 
 /// `### Skills` intro when entries carry absolute paths.
@@ -1140,16 +1118,9 @@ impl CodexRender {
             .sum()
     }
 
-    /// Every line Codex emits, the omission line and the roots table
-    /// included.
+    /// Every line Codex emits, the roots table included.
     fn cost(&self, limit: CodexLimit) -> u64 {
-        let omitted = self.lines.len() - self.included();
         self.roots_cost
-            + if omitted > 0 {
-                codex_cost(&omission_line(omitted), limit)
-            } else {
-                0
-            }
             + self
                 .lines
                 .iter()
@@ -1276,6 +1247,8 @@ pub(crate) struct CodexRecorded {
     pub session: ObservedSession,
     /// Working folder of the session.
     pub cwd: Option<String>,
+    /// `model_context_window` the session ran with.
+    pub context_window: Option<u64>,
     /// The skill roots table, in alias order.
     pub roots: Vec<PathBuf>,
     pub entries: Vec<CodexRecordedEntry>,
@@ -1346,11 +1319,13 @@ fn read_codex_recorded(rt: &Runtime, path: &Path) -> Option<CodexRecorded> {
     let mut cwd = None;
     let mut at = None;
     let mut model = None;
+    let mut window = None;
     let mut block = None;
     for line in text.lines() {
         let wanted = (cwd.is_none() && line.contains("\"session_meta\""))
             || (model.is_none() && line.contains("\"turn_context\""))
-            || (block.is_none() && line.contains("<skills_instructions>"));
+            || (block.is_none() && line.contains("<skills_instructions>"))
+            || (window.is_none() && line.contains("\"model_context_window\""));
         if !wanted {
             continue;
         }
@@ -1358,6 +1333,10 @@ fn read_codex_recorded(rt: &Runtime, path: &Path) -> Option<CodexRecorded> {
             continue;
         };
         let payload = &row["payload"];
+        // `task_started` (and some `turn_context` lines) carry the window.
+        if window.is_none() {
+            window = payload["model_context_window"].as_u64();
+        }
         match row["type"].as_str() {
             Some("session_meta") => {
                 cwd = payload["cwd"].as_str().map(str::to_string);
@@ -1376,15 +1355,16 @@ fn read_codex_recorded(rt: &Runtime, path: &Path) -> Option<CodexRecorded> {
             }
             _ => {}
         }
-        if cwd.is_some() && model.is_some() && block.is_some() {
+        if cwd.is_some() && model.is_some() && block.is_some() && window.is_some() {
             break;
         }
     }
     let block = block?;
     let (roots, entries) = parse_codex_block(&block);
-    let complete = !block.contains("omitted from this bounded skills list")
-        && entries.iter().any(|e| !e.description.is_empty());
+    // Only the names-only tier leaves skills out, and it keeps no description.
+    let complete = entries.iter().any(|e| !e.description.is_empty());
     Some(CodexRecorded {
+        context_window: window,
         complete,
         session: ObservedSession {
             transcript: path.to_path_buf(),
@@ -1408,9 +1388,12 @@ fn newest_codex_recorded(rt: &Runtime, scope: &RootScope) -> Option<CodexRecorde
         chrono::DateTime::<chrono::Utc>::MIN_UTC,
         usize::MAX,
     );
+    let home_agents = rt.scope.global_root_path(Path::new(".agents"));
     // Skips sessions in temporary folders and, for a project, other
-    // projects' sessions, before picking the newest.
-    files
+    // projects' sessions. For the global listing, a session whose folder
+    // adds repository skills compares less well, so the newest session
+    // without any is preferred, within the 20 newest that fit.
+    let fitting: Vec<CodexRecorded> = files
         .into_iter()
         .filter_map(|path| read_codex_recorded(rt, &path))
         .filter(|recorded| {
@@ -1422,8 +1405,37 @@ fn newest_codex_recorded(rt: &Runtime, scope: &RootScope) -> Option<CodexRecorde
                 fits && !crate::skill_sessions::temporary_dir(rt, cwd)
             })
         })
-        .take(1)
-        .next()
+        .take(20)
+        .collect();
+    let has_repo_skills = |r: &CodexRecorded| {
+        r.cwd.as_deref().map(PathBuf::from).is_some_and(|cwd| {
+            !home_agents.starts_with(&cwd)
+                && !rt.scope.codex_home.starts_with(&cwd)
+                && r.entries.iter().any(|e| e.skill_md.starts_with(&cwd))
+        })
+    };
+    let pick = match scope {
+        RootScope::Global => fitting
+            .iter()
+            .position(|r| !has_repo_skills(r))
+            .unwrap_or(0),
+        RootScope::Project(_) => 0,
+    };
+    fitting.into_iter().nth(pick)
+}
+
+/// The newest complete listing in any session (eval runs included): which
+/// plugins this Codex install loads does not depend on the folder.
+fn newest_complete_codex_recorded(rt: &Runtime) -> Option<CodexRecorded> {
+    crate::skill_sessions::newest(
+        crate::skill_sessions::codex_rollouts(rt),
+        chrono::DateTime::<chrono::Utc>::MIN_UTC,
+        usize::MAX,
+    )
+    .into_iter()
+    .take(50)
+    .filter_map(|path| read_codex_recorded(rt, &path))
+    .find(|recorded| recorded.complete)
 }
 
 /// The description a `SKILL.md` gives, read the way Codex reads it.
@@ -1452,7 +1464,6 @@ fn codex_listing(
     req: &ListingRequest,
 ) -> Result<HarnessListing, CoreError> {
     let settings = codex_listing_settings(rt, scope)?;
-    let budget = codex_budget(rt, &settings, req.codex_max_context_tokens);
     let recorded = match &req.codex_transcript {
         Some(path) => {
             // Only a rollout inside this home's Codex session folders, after
@@ -1486,7 +1497,48 @@ fn codex_listing(
         }
         None => newest_codex_recorded(rt, scope),
     };
-    let system_root = rt.scope.codex_home.join("skills/.system");
+    let budget = codex_budget(
+        rt,
+        &settings,
+        req.codex_max_context_tokens,
+        // The session's model window from Codex's model cache (500000 for
+        // gpt-6.1-sol gives the 10000 tokens real sessions show); the
+        // smaller `model_context_window` a session logs is the usable part.
+        recorded.as_ref().and_then(|r| {
+            let transcript = r.session.transcript.display();
+            r.session
+                .model
+                .as_deref()
+                .and_then(|m| {
+                    crate::listing_cost::codex_model_window(rt, m).map(|(v, _)| {
+                        (
+                            v,
+                            format!("{m} context window of the newest session ({transcript})"),
+                        )
+                    })
+                })
+                .or_else(|| {
+                    r.context_window
+                        .map(|v| (v, format!("model_context_window logged in {transcript}")))
+                })
+        }),
+    );
+    // Compared after resolving links: a home can link `.codex/skills`.
+    let system_root = rt
+        .ports
+        .fs
+        .canonicalize(&rt.scope.codex_home.join("skills/.system"))
+        .unwrap_or_else(|_| rt.scope.codex_home.join("skills/.system"));
+    // Which plugins Codex loaded: a listing that left nothing out shows
+    // them all. A listing that left skills out is not evidence, so the
+    // newest complete one is used instead.
+    let load_evidence = match &recorded {
+        Some(r) if r.complete => None,
+        _ => newest_complete_codex_recorded(rt),
+    };
+    let load_evidence = load_evidence
+        .as_ref()
+        .or(recorded.as_ref().filter(|r| r.complete));
     let mut hidden = Vec::new();
     let mut skills: Vec<CodexSkill> = Vec::new();
     for skill in listed_skills(rt, inventory, facts, scope, None)?.into_values() {
@@ -1496,7 +1548,13 @@ fn codex_listing(
             None => skill.name.clone(),
         };
         if skill.hidden.is_some() {
-            hidden.push(hidden_entry(&skill, name));
+            let mut entry = hidden_entry(&skill, name);
+            if skill.hidden == Some("manual-only") {
+                entry.hidden_reason = Some(
+                    "manual-only: agents/openai.yaml sets allow_implicit_invocation: false".into(),
+                );
+            }
+            hidden.push(entry);
             continue;
         }
         // Which installed plugins Codex loads depends on its marketplaces
@@ -1507,19 +1565,27 @@ fn codex_listing(
             .as_ref()
             .and_then(|_| plugin_version_base(skill.path.parent()?))
             .and_then(|version| version.parent().map(Path::to_path_buf));
-        if let (Some(dir), Some(recorded)) = (&plugin_dir, &recorded) {
-            if recorded.complete && !recorded.entries.iter().any(|e| e.skill_md.starts_with(dir)) {
+        if let (Some(dir), Some(evidence)) = (&plugin_dir, &load_evidence) {
+            if !evidence.entries.iter().any(|e| e.skill_md.starts_with(dir)) {
                 let mut entry = hidden_entry(&skill, name);
-                entry.hidden_reason = Some("plugin not loaded in the newest Codex session".into());
+                entry.hidden_reason =
+                    Some("plugin not loaded in the newest complete Codex session".into());
                 hidden.push(entry);
                 continue;
             }
         }
         let chars = skill.description.chars().count() as u64;
+        // Codex prints paths with links resolved (a linked `~/.agents`
+        // shows its target).
+        let folder = rt
+            .ports
+            .fs
+            .canonicalize(&skill.path)
+            .unwrap_or_else(|_| skill.path.clone());
         skills.push(CodexSkill {
             rank: if skill.project_root { 2 } else { 3 },
-            root: skill.path.parent().map(Path::to_path_buf).unwrap_or_default(),
-            skill_md: skill.path.join("SKILL.md"),
+            root: folder.parent().map(Path::to_path_buf).unwrap_or_default(),
+            skill_md: folder.join("SKILL.md"),
             entry: ListingEntry {
                 name: name.clone(),
                 path: Some(skill.path.clone()),
@@ -1579,7 +1645,27 @@ fn codex_listing(
             .filter_map(|s| plugin_version_base(s.skill_md.parent()?.parent()?))
             .filter_map(|v| v.parent().map(Path::to_path_buf))
             .collect();
-        for entry in &recorded.entries {
+        // A listing that left skills out does not show them all; the newest
+        // complete listing adds the rest, without its own repository skills.
+        let evidence_repo = load_evidence
+            .and_then(|e| e.cwd.as_deref())
+            .map(PathBuf::from)
+            .filter(|cwd| !home_agents.starts_with(cwd) && !rt.scope.codex_home.starts_with(cwd));
+        let extra = load_evidence
+            .filter(|_| !recorded.complete)
+            .map(|e| e.entries.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .filter(|e| {
+                !evidence_repo
+                    .as_ref()
+                    .is_some_and(|r| e.skill_md.starts_with(r))
+            });
+        let mut seen = BTreeSet::new();
+        for entry in recorded.entries.iter().chain(extra) {
+            if !seen.insert(entry.skill_md.clone()) {
+                continue;
+            }
             if entry
                 .skill_md
                 .parent()
@@ -1604,7 +1690,13 @@ fn codex_listing(
             unscanned += 1;
             skills.push(CodexSkill {
                 name: entry.name.clone(),
-                rank: if entry.skill_md.starts_with(&system_root) {
+                rank: if rt
+                    .ports
+                    .fs
+                    .canonicalize(&entry.skill_md)
+                    .unwrap_or_else(|_| entry.skill_md.clone())
+                    .starts_with(&system_root)
+                {
                     0
                 } else if session_repo
                     .as_ref()
@@ -1654,7 +1746,7 @@ fn codex_listing(
         let full = line.description.len();
         entry.state = match alloc {
             None => ListingState::Omitted,
-            Some(0) if full > 0 => ListingState::NameOnly,
+            Some(0) => ListingState::NameOnly,
             Some(n) if *n < full => ListingState::Truncated,
             Some(_) => ListingState::Described,
         };
@@ -1921,22 +2013,11 @@ mod tests {
     }
 
     #[test]
-    fn codex_omits_entries_from_the_end_and_makes_room_for_the_omission_line() {
-        // Names longer than the omission line, so it costs less than one entry.
-        let lines = [
-            codex(&"a".repeat(70), "x"),
-            codex(&"b".repeat(70), "y"),
-            codex(&"c".repeat(70), "z"),
-        ];
+    fn codex_omits_entries_from_the_end_when_names_alone_do_not_fit() {
+        let lines = [codex("a", "x"), codex("b", "y"), codex("c", "z")];
         let name_cost = lines[0].cost(0, CodexLimit::Chars(0));
-        let marker = "- 1 additional skill omitted from this bounded skills list.\n"
-            .chars()
-            .count() as u64;
-        let alloc = codex_allocate(&lines, CodexLimit::Chars(name_cost * 2 + marker));
+        let alloc = codex_allocate(&lines, CodexLimit::Chars(name_cost * 2));
         assert_eq!(alloc, vec![Some(0), Some(0), None]);
-        // Without room for the omission line, listed lines go until it fits.
-        let alloc = codex_allocate(&lines, CodexLimit::Chars(name_cost * 2 + marker - 1));
-        assert_eq!(alloc, vec![Some(0), None, None]);
     }
 
     #[test]

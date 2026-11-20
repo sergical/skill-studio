@@ -495,33 +495,43 @@ the `### Available skills` block of real sessions:
 - **Tiers.** All lines fit: every description is whole. Otherwise, if every
   name-and-path line fits, every skill stays and the rest of the budget goes
   round robin, one character at a time, so descriptions end up about the same
-  length. Otherwise there are no descriptions, lines are kept in order while
-  they fit, and a `- N additional skills omitted ...` line is added; listed
-  lines are dropped from the end until it fits. A line costs
+  length. Otherwise there are no descriptions and lines are kept in order
+  while they fit. Host skills render with the core-compatible policy, so
+  there is no `- N additional skills omitted` line (none appears in real
+  sessions, also at budgets that leave skills out). A line costs
   `ceil(bytes / 4)` tokens with its newline.
-- **Budget.** The session model's window decides the budget: T3 Code sessions
-  on `gpt-6.1-sol` (500,000 tokens) get 10,000 tokens, while the configured
-  `gpt-6-astra` gets 5,440. Skill Studio predicts for the configured model.
+- **Budget.** The model of the newest session decides the budget, through
+  `context_window` in `$CODEX_HOME/models_cache.json`: T3 Code sessions on
+  `gpt-6.1-sol` (500,000) get 10,000 tokens, while the configured
+  `gpt-6-astra` (272,000) gets 5,440. The `model_context_window` a session
+  logs in `task_started` (475,000 for `gpt-6.1-sol`) is the usable part and is
+  used only when the model is not in the cache; 2% of 475,000 (9,500) does not
+  match the real lists.
 - **What Skill Studio adds from a session.** The newest rollout outside a
-  temporary folder gives the entries Skill Studio does not scan (system
-  skills, skills in nested folders such as `~/.agents/skills/synced/<id>/`),
-  with their descriptions read from their `SKILL.md`. It also gives the alias
-  order, and it tells which plugins Codex loaded: an installed plugin with no
-  skill in that session is hidden as "plugin not loaded" (`codex exec` does not
-  load the `openai-primary-runtime` plugins, while the T3 Code app does).
-  `--codex-session <rollout>` compares with one chosen session instead.
-- **Match rate.** Replaying the 15 newest real sessions with `--codex-session` at
-  their model's budget listed 2,773 of 2,773 recorded entries, in the same
-  order and tier, and gave the exact description length for 2,763 (99.6%); 13
-  sessions matched exactly, and every miss is one to four characters. On 16 `codex exec` eval sessions (default budget and
-  `max_context_tokens = 10000`) an earlier build listed 2,848 of 2,848 and gave
-  2,736 (96.1%) exact; most misses are google-drive skills that changed version
-  after those runs. `--codex-session` now reads only rollouts inside this
-  home's `sessions` or `archived_sessions` folder (after resolving links), so
-  eval homes in a temporary folder cannot be replayed with it.
-- **Plugin load state.** A plugin with no skill in the session counts as not
-  loaded only when that listing left nothing out (no omission line, and some
-  description kept); otherwise the plugin stays in the prediction.
+  temporary folder (for the global listing, the newest without repository
+  skills, among the 20 newest) gives the entries Skill Studio does not scan
+  (system skills, skills in nested folders such as
+  `~/.agents/skills/synced/<id>/`), with their descriptions read from their
+  `SKILL.md` inside the home. It also gives the alias order, the observed
+  state of each skill, and the model. `--codex-session <rollout>` compares
+  with one chosen session instead. Codex prints paths with links resolved.
+- **Plugin load state.** A listing that kept some description left no skill
+  out, so an installed plugin with no skill in it was not loaded ("plugin not
+  loaded"; `codex exec` does not load the `openai-primary-runtime` plugins,
+  the T3 Code app does, and only the curated-remote `visualize` of two copies
+  is loaded). A names-only listing is not evidence: the newest complete
+  listing in any session supplies the load state and the unscanned skills.
+- **Match rate.** Replaying the 15 newest real sessions with `--codex-session`
+  listed 2,774 of 2,774 recorded entries in the same order and tier, and gave
+  the exact description length for 2,769 (99.8%); 14 sessions matched
+  exactly. The ground-truth session `rollout-2026-11-20T13-41-23-...` (185
+  lines, 182 names, every copy counted) matched 185 of 185. The overflow runs
+  of the `codex exec` eval home (`skills.max_context_tokens` 1000, 2000, 2800,
+  3200, 4000), replayed with `--home` on that home, matched exactly: 52
+  listed and 126 omitted at 1000, 111 and 67 at 2000, 163 and 15 at 2800,
+  and 178 of 178 description lengths at 3200 and 4000. `--codex-session`
+  reads only rollouts inside the home's `sessions` or `archived_sessions`
+  folder, after resolving links.
 
 Skill Studio estimates name, capped description, punctuation, and Codex's file
 locator in UTF-16 characters, or UTF-8 bytes for Codex, divided by four,

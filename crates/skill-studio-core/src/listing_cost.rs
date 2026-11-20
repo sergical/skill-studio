@@ -677,7 +677,9 @@ pub(crate) fn listed_skills(
                 }
                 if codex.as_ref().is_some_and(Option::is_none) {
                     entries.entry(key).or_insert(ListedSkill {
-                        hidden: Some("frontmatter Codex cannot read"),
+                        hidden: Some(
+                            "invalid frontmatter, Codex cannot load it (see skill-studio diagnose)",
+                        ),
                         ..entry
                     });
                     continue;
@@ -892,7 +894,7 @@ pub(crate) struct CodexBudget {
 
 /// `context_window`, or `max_context_window`, of `model` in Codex's
 /// `models_cache.json`.
-fn codex_model_window(rt: &Runtime, model: &str) -> Option<(u64, PathBuf)> {
+pub(crate) fn codex_model_window(rt: &Runtime, model: &str) -> Option<(u64, PathBuf)> {
     let path = rt.scope.codex_home.join("models_cache.json");
     let cache = json(rt, &path).ok()?;
     let entry = cache
@@ -912,19 +914,24 @@ fn codex_model_window(rt: &Runtime, model: &str) -> Option<(u64, PathBuf)> {
     Some((window, path))
 }
 
+/// `session_window` is the context window of the model a recorded session
+/// ran with; it wins over the configured model, because an app can start
+/// Codex with another model.
 pub(crate) fn codex_budget(
     rt: &Runtime,
     settings: &CodexListingSettings,
     max_tokens_override: Option<u64>,
+    session_window: Option<(u64, String)>,
 ) -> CodexBudget {
-    let window = settings
-        .context_window
-        .as_ref()
-        .map(|(v, path)| {
-            (
-                *v,
-                format!("{} (2% of model_context_window)", path.display()),
-            )
+    let window = session_window
+        .map(|(v, source)| (v, format!("2% of the {source}")))
+        .or_else(|| {
+            settings.context_window.as_ref().map(|(v, path)| {
+                (
+                    *v,
+                    format!("{} (2% of model_context_window)", path.display()),
+                )
+            })
         })
         .or_else(|| {
             let model = settings.model.as_deref()?;
@@ -997,7 +1004,7 @@ pub(crate) fn listing_cost(
                 limit = Some(budget.chars.div_ceil(4).max(1));
                 claude = Some(settings);
             } else if harness == AgentId::CODEX {
-                let budget = codex_budget(rt, &codex_listing_settings(rt, &scope)?, None);
+                let budget = codex_budget(rt, &codex_listing_settings(rt, &scope)?, None, None);
                 cap = 1024;
                 source = budget.source;
                 context = budget.context_tokens;
