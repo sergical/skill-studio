@@ -15,6 +15,7 @@ import { BenchmarkSection } from "../home/BenchmarkSection";
 import { FaqSection } from "../home/FaqSection";
 import { homeSectionStyles } from "../home/HomeSection.stylex";
 import { JobsSection } from "../home/JobsSection";
+import { ListingTiers } from "../home/ListingTiers";
 import { FirstScanSteps } from "../home/FirstScanSteps";
 import { SkillThrow } from "../home/SkillThrow";
 import { UsageSection } from "../home/UsageSection";
@@ -155,10 +156,10 @@ export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
           <TopDither theme={theme} />
           <section {...stylex.props(siteLayout.container, styles.hero)}>
             <div {...stylex.props(styles.copy)}>
-              <h1 {...stylex.props(styles.title)}>Find every skill your agents load.</h1>
+              <h1 {...stylex.props(styles.title)}>See which skills your agent reads.</h1>
               <p {...stylex.props(styles.lede)}>
-                Skills pile up in your home folder, in every project and inside plugins. See them in
-                one list, fix the broken ones and park the rest, with undo.
+                Your agent lists some skills for its model with a description, some by name only and
+                some not at all. Skill Studio shows which, for each session, and which skills ran.
               </p>
               <div {...stylex.props(styles.actions)}>
                 <DownloadButton theme={theme} />
@@ -180,32 +181,45 @@ export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
         </section>
 
         <section {...stylex.props(styles.agentProof)} aria-label="Supported agents">
-          <span {...stylex.props(styles.agentProofLabel)}>Works with</span>
-          <div {...stylex.props(styles.desktopAgentList)}>
-            {supportedAgents.map((agent) => (
-              <span key={agent.id} {...stylex.props(styles.agentMark)}>
-                <AgentIcon agent={agent.id} size={20} />
-                {agent.name}
-              </span>
-            ))}
-          </div>
-          <div {...stylex.props(styles.marqueeViewport)}>
-            <div {...stylex.props(styles.marqueeTrack)} aria-hidden="true">
-              {[0, 1].map((copy) => (
-                <div key={copy} {...stylex.props(styles.marqueeSet)}>
-                  {supportedAgents.map((agent) => (
-                    <span key={`${copy}-${agent.id}`} {...stylex.props(styles.agentMark)}>
-                      <AgentIcon agent={agent.id} size={20} />
-                      {agent.name}
-                    </span>
-                  ))}
-                </div>
+          <div {...stylex.props(styles.agentProofRow)}>
+            <span {...stylex.props(styles.agentProofLabel)}>Works with</span>
+            <div {...stylex.props(styles.desktopAgentList)}>
+              {supportedAgents.map((agent) => (
+                <span key={agent.id} {...stylex.props(styles.agentMark)}>
+                  <AgentIcon agent={agent.id} size={20} />
+                  {agent.name}
+                </span>
               ))}
             </div>
-            <span {...stylex.props(styles.visuallyHidden)}>
-              Claude Code, Codex, OpenCode, pi, Cursor, and Grok Build
-            </span>
+            <div {...stylex.props(styles.marqueeViewport)}>
+              <div {...stylex.props(styles.marqueeTrack)} aria-hidden="true">
+                {[0, 1].map((copy) => (
+                  <div key={copy} {...stylex.props(styles.marqueeSet)}>
+                    {supportedAgents.map((agent) => (
+                      <span key={`${copy}-${agent.id}`} {...stylex.props(styles.agentMark)}>
+                        <AgentIcon agent={agent.id} size={20} />
+                        {agent.name}
+                      </span>
+                    ))}
+                  </div>
+                ))}
+              </div>
+              <span {...stylex.props(styles.visuallyHidden)}>
+                Claude Code, Codex, OpenCode, pi, Cursor, and Grok Build
+              </span>
+            </div>
           </div>
+          <p {...stylex.props(styles.agentProofNote)}>
+            Claude Code and Codex record the skill list of each session. The other agents record
+            only the skills they used.
+          </p>
+        </section>
+
+        <section
+          id="listing"
+          {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}
+        >
+          <ListingTiers />
         </section>
 
         <section
@@ -262,10 +276,10 @@ export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
             {...stylex.props(styles.closingMascot)}
           />
           <h2 id="download-title" {...stylex.props(styles.closingTitle)}>
-            See what your agents load.
+            See which skills your agent reads.
           </h2>
           <p {...stylex.props(styles.closingCopy)}>
-            Keep the skills your agents use and park the rest. Undo any time.
+            See what each session listed and used. Park the skills that never run. Undo any time.
           </p>
           <DownloadButton theme={theme} inFinale />
           <TrustLine />
@@ -469,13 +483,32 @@ const styles = stylex.create({
     borderTopWidth: 1,
     color: siteTokens.muted,
     display: "flex",
+    flexDirection: "column",
     fontSize: 12,
+    gap: 12,
+    justifyContent: "center",
+    overflow: "hidden",
+    padding: "22px 28px 20px",
+    "@media (max-width: 600px)": { paddingInline: 20 },
+  },
+  agentProofRow: {
+    alignItems: "center",
+    display: "flex",
     gap: 28,
     justifyContent: "center",
-    minHeight: 76,
-    overflow: "hidden",
-    padding: "0 28px",
-    "@media (max-width: 600px)": { gap: 18, minHeight: 68, paddingInline: 20 },
+    maxWidth: "100%",
+    minWidth: 0,
+    // The marquee fills the row, so the row must fill the strip.
+    width: { default: "auto", "@media (max-width: 860px)": "100%" },
+    "@media (max-width: 600px)": { gap: 18 },
+  },
+  agentProofNote: {
+    color: siteTokens.muted,
+    fontSize: 13,
+    lineHeight: 1.5,
+    margin: 0,
+    textAlign: "center",
+    textWrap: "balance",
   },
   agentProofLabel: {
     color: siteTokens.muted,

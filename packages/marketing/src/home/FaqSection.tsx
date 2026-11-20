@@ -17,8 +17,20 @@ const questions: ReadonlyArray<{ question: string; answer: ReactNode }> = [
       <>
         Claude Code, Codex, OpenCode, pi, Cursor and Grok Build, plus the shared{" "}
         <Code>.agents</Code> folder. It finds skills globally and in the projects you work in.
+        Sessions shows what each session listed only for Claude Code and Codex, because only they
+        record it. For the other four agents, it shows the skills they used.
       </>
     ),
+  },
+  {
+    question: "Does it change my agent settings?",
+    answer:
+      "No. Skill Studio reads agent settings and does not write them. When a setting must change, such as the listing budget, it gives you the line and the file to put it in.",
+  },
+  {
+    question: "How accurate is the listing?",
+    answer:
+      "In five Claude Code sessions, 418 of 420 predicted skill states matched the list that the session recorded (99.5%). In 15 Codex sessions, 99.8% of the description lengths matched. Model listing is a prediction. Sessions shows what each session recorded. A possible miss in Sessions is a guess, and the app marks it as one.",
   },
   {
     question: "Does parking delete a skill?",
@@ -34,8 +46,9 @@ const questions: ReadonlyArray<{ question: string; answer: ReactNode }> = [
     answer: (
       <>
         Skill Studio uses <Code>npx skills</Code> and dotagents to install, update and remove
-        skills. It adds what they do not do: one view of every agent's folders, the copies that
-        differ, broken skills, which skills ran, and park with undo.
+        skills. It adds what they do not do: what each model sees of your skills, one view of every
+        agent's folders, the copies that differ, broken skills, which skills ran, and park with
+        undo.
       </>
     ),
   },

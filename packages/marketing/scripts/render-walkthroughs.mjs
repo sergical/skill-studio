@@ -5,7 +5,11 @@ import { fileURLToPath } from "node:url";
 const packageRoot = fileURLToPath(new URL("../", import.meta.url));
 const output = fileURLToPath(new URL("../public/walkthrough/current/", import.meta.url));
 const entry = "src/remotion/index.ts";
-const features = ["Map", "Repair", "Install", "Activity"];
+// WALKTHROUGH_ONLY=sessions,listing renders only those features.
+const only = process.env.WALKTHROUGH_ONLY?.split(",");
+const features = ["Sessions", "Listing", "Map", "Repair", "Install", "Activity"].filter(
+  (feature) => !only || only.includes(feature.toLowerCase()),
+);
 const themes = ["Dark", "Light"];
 const formats = ["Desktop", "Mobile"];
 

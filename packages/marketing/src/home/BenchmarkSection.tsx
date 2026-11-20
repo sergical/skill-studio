@@ -389,7 +389,7 @@ export function BenchmarkSection() {
   return (
     <>
       <h2 {...stylex.props(homeSectionStyles.title, styles.title)}>
-        Same agent. Same question. Skill Studio answers first.
+        Three skill questions, by hand and with Skill Studio.
       </h2>
 
       {SUMMARIES.length > 1 && (
@@ -405,7 +405,8 @@ export function BenchmarkSection() {
       </ul>
       <p {...stylex.props(styles.note)}>
         Medians over {summary.pairs} agent and model pairs, three runs each. Skill Studio here is
-        its MCP server; the CLI is in “Every run”.
+        its MCP server; the CLI is in “Every run”. The benchmark has three tasks: skill usage, a
+        pack update and sharing a setup. It does not measure Model listing or Sessions.
       </p>
 
       <details {...stylex.props(styles.details)}>

@@ -36,6 +36,8 @@ import {
   Link2Off,
   List,
   ListFilter,
+  ListTree,
+  MessagesSquare,
   Moon,
   MoreHorizontal,
   OctagonAlert,
@@ -51,6 +53,7 @@ import {
 } from "lucide-react";
 
 import { AgentIcon, type AgentId } from "./AgentIcon";
+import { useCopyFlash } from "./home/useCopyFlash";
 import { productDemoLightTheme, productDemoTokens as tokens } from "./ProductDemoTokens.stylex";
 import type { SiteTheme } from "./SiteTheme.stylex";
 import { productMockDetailBackLabel, type ProductMockRootView } from "./product-mock-navigation";
@@ -404,6 +407,8 @@ const navItems: ReadonlyArray<{
   { id: "skills", label: "Skills", Icon: Layers, count: SKILL_TOTAL },
   { id: "plugins", label: "Plugins", Icon: Puzzle, count: 109 },
   { id: "packs", label: "Packs", Icon: Boxes },
+  { id: "listing", label: "Model listing", Icon: ListTree },
+  { id: "sessions", label: "Sessions", Icon: MessagesSquare },
   { id: "activity", label: "Activity", Icon: Activity },
 ];
 
@@ -1778,6 +1783,372 @@ function ActivityScreen({ onOpenSkill }: { onOpenSkill: (skill: SkillRow) => voi
   );
 }
 
+type ListingState = "Described" | "Name only";
+
+// Measured on one machine: Claude Code at a 1% listing budget. The rows below are a sample.
+const LISTING_TOTALS = { described: 49, nameOnly: 107, hidden: 129 };
+const LISTED_TOTAL = LISTING_TOTALS.described + LISTING_TOTALS.nameOnly;
+const CURRENT_BUDGET_PERCENT = 1;
+
+// `fitsAt` is the smallest budget, in percent, at which the skill keeps its description.
+const listingRows = [
+  { name: "commit", fitsAt: 0.2, uses: 47 },
+  { name: "agent-browser", fitsAt: 0.4, uses: 35 },
+  { name: "release-notes", fitsAt: 0.6, uses: 20 },
+  { name: "code-review", fitsAt: 0.9, uses: 14 },
+  { name: "sentry-cli", fitsAt: 1.3, uses: 11 },
+  { name: "emil-interaction-details", fitsAt: 1.6, uses: 2 },
+  { name: "motion", fitsAt: 1.9, uses: 2 },
+  { name: "sql-review", fitsAt: 2.5, uses: 0 },
+  { name: "tailwind", fitsAt: 3, uses: 0 },
+  { name: "theme-factory", fitsAt: 4, uses: 0 },
+] satisfies ReadonlyArray<{ name: string; fitsAt: number; uses: number }>;
+
+const hiddenListingRows = [
+  { name: "deploy-preview", reason: "manual-only" },
+  { name: "pptx", reason: "parked" },
+] satisfies ReadonlyArray<{ name: string; reason: string }>;
+
+const listingStateAt = (fitsAt: number, percent: number): ListingState =>
+  percent >= fitsAt ? "Described" : "Name only";
+
+function listingChangeText(percent: number) {
+  const now = listingRows.filter((row) => row.fitsAt <= CURRENT_BUDGET_PERCENT).length;
+  const then = listingRows.filter((row) => row.fitsAt <= percent).length;
+  if (then === now) return `At ${percent}%: no change in these ${listingRows.length} skills.`;
+  return then > now
+    ? `At ${percent}%: ${then - now} of these ${listingRows.length} skills gain a description.`
+    : `At ${percent}%: ${now - then} of these ${listingRows.length} skills lose their description.`;
+}
+
+function ListingStateText({ state }: { state: ListingState }) {
+  return (
+    <span {...stylex.props(state === "Described" ? styles.stateDescribed : styles.stateNameOnly)}>
+      {state}
+    </span>
+  );
+}
+
+function ListingScreen() {
+  const [budgetText, setBudgetText] = useState("");
+  const [tried, setTried] = useState<number | null>(null);
+  const [showHidden, setShowHidden] = useState(false);
+  const { copied, copy } = useCopyFlash();
+  const typed = Number(budgetText);
+  const canTry = budgetText.trim() !== "" && typed > 0 && typed <= 100;
+  const fraction = Number(((tried ?? CURRENT_BUDGET_PERCENT) / 100).toFixed(4));
+  const snippet = `"skillListingBudgetFraction": ${fraction}`;
+  return (
+    <>
+      <PageHeader
+        title="Model listing"
+        subtitle="What each agent shows the model about your skills"
+        actions={<span {...stylex.props(styles.headerNote)}>Claude Code · Global sessions</span>}
+      />
+      <div {...stylex.props(styles.view)}>
+        <section {...stylex.props(styles.page)}>
+          <div {...stylex.props(styles.listingSummary)}>
+            <p {...stylex.props(styles.listingLead)}>
+              {LISTING_TOTALS.described} of {LISTED_TOTAL} listed skills keep a description.{" "}
+              {LISTING_TOTALS.nameOnly} show a name only. {LISTING_TOTALS.hidden} are hidden.
+            </p>
+            <p {...stylex.props(styles.listingNote)}>
+              Budget: {CURRENT_BUDGET_PERCENT}% of the context window.
+            </p>
+          </div>
+          <div {...stylex.props(styles.listingSummary)}>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (canTry) setTried(typed);
+              }}
+              {...stylex.props(styles.listingForm)}
+            >
+              <label htmlFor="mock-listing-budget" {...stylex.props(styles.listingNote)}>
+                Try a budget, in percent of the context window
+              </label>
+              <span {...stylex.props(styles.filterInput, styles.budgetInput)}>
+                <input
+                  id="mock-listing-budget"
+                  inputMode="decimal"
+                  placeholder="2 (percent)"
+                  value={budgetText}
+                  onChange={(event) => setBudgetText(event.target.value)}
+                  {...stylex.props(styles.input)}
+                />
+              </span>
+              <button
+                type="submit"
+                disabled={!canTry}
+                {...stylex.props(styles.outlineButton, styles.hitArea)}
+              >
+                Compare
+              </button>
+            </form>
+            {/* The line is there before the first Compare, so the result does not move the list. */}
+            <p role="status" {...stylex.props(styles.listingNote)}>
+              {tried === null
+                ? "Compare marks each skill that gains or loses a description."
+                : listingChangeText(tried)}
+            </p>
+          </div>
+          <section aria-label="Listing setting" {...stylex.props(styles.settingCard)}>
+            <p {...stylex.props(styles.settingText)}>
+              <code {...stylex.props(styles.code)}>skillListingBudgetFraction</code> is not set.
+              Skill Studio does not write agent settings. To change it, put this in{" "}
+              <code {...stylex.props(styles.code)}>~/.claude/settings.json</code>.
+            </p>
+            <div {...stylex.props(styles.settingRow)}>
+              <pre {...stylex.props(styles.settingSnippet)}>{snippet}</pre>
+              <button
+                type="button"
+                onClick={() => copy(snippet)}
+                {...stylex.props(styles.outlineButton, styles.hitArea)}
+              >
+                <span aria-live="polite">{copied ? "Copied" : "Copy"}</span>
+              </button>
+            </div>
+          </section>
+          <div>
+            <div aria-hidden="true" {...stylex.props(styles.listingGrid, styles.listingHead)}>
+              <span>Skill</span>
+              <span>Now</span>
+              <span>{tried !== null && "At new budget"}</span>
+              <span {...stylex.props(styles.listingUses)}>Uses</span>
+            </div>
+            <ul aria-label="Listing" {...stylex.props(styles.plainList)}>
+              {listingRows.map((row) => {
+                const now = listingStateAt(row.fitsAt, CURRENT_BUDGET_PERCENT);
+                const next = tried === null ? null : listingStateAt(row.fitsAt, tried);
+                return (
+                  <li
+                    key={row.name}
+                    {...stylex.props(
+                      styles.listingGrid,
+                      styles.listingRow,
+                      next !== null && next !== now && styles.listingRowChanged,
+                    )}
+                  >
+                    <span {...stylex.props(styles.truncate)}>{row.name}</span>
+                    <span>
+                      <ListingStateText state={now} />
+                    </span>
+                    <span>{next !== null && <ListingStateText state={next} />}</span>
+                    <span {...stylex.props(styles.number, styles.listingUses)}>
+                      {row.uses > 0 && row.uses}
+                    </span>
+                  </li>
+                );
+              })}
+              {showHidden &&
+                hiddenListingRows.map((row) => (
+                  <li key={row.name} {...stylex.props(styles.listingGrid, styles.listingRow)}>
+                    <span {...stylex.props(styles.truncate)}>
+                      {row.name} <span {...stylex.props(styles.faint)}>({row.reason})</span>
+                    </span>
+                    <span {...stylex.props(styles.stateHidden)}>Hidden</span>
+                    <span />
+                    <span />
+                  </li>
+                ))}
+            </ul>
+            <p {...stylex.props(styles.listingMore)}>
+              {LISTED_TOTAL - listingRows.length} more listed skills
+              {showHidden &&
+                ` and ${LISTING_TOTALS.hidden - hiddenListingRows.length} more hidden skills`}
+              .
+            </p>
+            <button
+              type="button"
+              aria-pressed={showHidden}
+              onClick={() => setShowHidden((shown) => !shown)}
+              {...stylex.props(styles.showMore, styles.hitArea)}
+            >
+              {showHidden ? "Hide hidden skills" : `Show ${LISTING_TOTALS.hidden} hidden skills`}
+            </button>
+          </div>
+        </section>
+      </div>
+    </>
+  );
+}
+
+type SessionsAgent = "claude" | "cursor";
+
+// Titles, advice and notes match apps/desktop SessionsView and the core's agent notes.
+const sessionFindings = [
+  {
+    title: "Possibly missed",
+    count: 1,
+    advice:
+      "A guess: a short first prompt matched the skill's description, and the session used no skill. If the guess is right, reword the description so it names the task, or make sure the skill keeps its description.",
+    rows: [
+      ["emil-interaction-details", "Sessions: name only in 100, used in 2, possibly missed in 1."],
+    ],
+  },
+  {
+    title: "Used while listed by name only",
+    count: 2,
+    advice:
+      "The model found these from the name alone. Raise the listing budget on Model listing, or shorten other descriptions, so they keep a description.",
+    rows: [
+      ["sentry-cli", "Sessions: name only in 100, used in 11."],
+      ["motion", "Sessions: name only in 100, used in 2."],
+    ],
+  },
+  {
+    title: "Listed in nearly every session, never used",
+    // Measured on one machine.
+    count: 119,
+    advice:
+      "Each one takes listing space that other skills need. Park the skill, turn off its plugin, or in Claude Code set skillOverrides to user-invocable-only so you can still type it.",
+    rows: [
+      ["theme-factory", "Sessions: name only in 100."],
+      ["tailwind", "Sessions: name only in 100."],
+      ["sql-review", "Sessions: name only in 100."],
+    ],
+  },
+] satisfies ReadonlyArray<{
+  title: string;
+  count: number;
+  advice: string;
+  rows: ReadonlyArray<readonly [name: string, sessions: string]>;
+}>;
+
+const sessionRows = [
+  {
+    prompt: "tooltips feel slow",
+    meta: `Nov 18, 2026, 2:14 PM in acme-web. Listed ${LISTED_TOTAL}: ${LISTING_TOTALS.described} described, ${LISTING_TOTALS.nameOnly} name only.`,
+    finding:
+      "Possibly missed (guess): emil-interaction-details, name only. Matched tooltips, slow.",
+  },
+  {
+    prompt: "why does checkout throw in production",
+    meta: `Nov 17, 2026, 10:02 AM in acme-api. Listed ${LISTED_TOTAL}: ${LISTING_TOTALS.described} described, ${LISTING_TOTALS.nameOnly} name only.`,
+    finding: "Used: sentry-cli (name only)",
+  },
+] satisfies ReadonlyArray<{ prompt: string; meta: string; finding: string }>;
+
+function SessionsScreen() {
+  const [agent, setAgent] = useState<SessionsAgent>("claude");
+  return (
+    <>
+      <PageHeader
+        title="Sessions"
+        subtitle="Which skills your agents saw, used and may have missed"
+        actions={
+          <div
+            role="group"
+            aria-label="Agent"
+            {...stylex.props(styles.segmented, styles.segmentedOpen)}
+          >
+            {(
+              [
+                ["claude", "Claude Code"],
+                ["cursor", "Cursor"],
+              ] satisfies ReadonlyArray<[SessionsAgent, string]>
+            ).map(([id, name]) => (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={agent === id}
+                onClick={() => setAgent(id)}
+                {...stylex.props(
+                  styles.segment,
+                  styles.segmentSmall,
+                  styles.segmentTall,
+                  agent === id && styles.segmentOn,
+                )}
+              >
+                {/* The button text names the agent, so the icon's own label would repeat it. */}
+                <span aria-hidden="true" {...stylex.props(styles.segmentIcon)}>
+                  <AgentIcon agent={id} size={12} />
+                </span>
+                {name}
+              </button>
+            ))}
+          </div>
+        }
+      />
+      <div {...stylex.props(styles.view)}>
+        <section {...stylex.props(styles.page)}>
+          <section aria-label="What the words mean" {...stylex.props(styles.settingCard)}>
+            <p {...stylex.props(styles.settingText)}>
+              <span {...stylex.props(styles.glossaryTerm)}>Described</span>: the model sees the
+              skill's name and description, so it can pick the skill from what you ask.
+            </p>
+            <p {...stylex.props(styles.settingText)}>
+              <span {...stylex.props(styles.glossaryTerm)}>Name only</span>: the model sees only the
+              name and must guess from it. The skill can still run.
+            </p>
+            <p {...stylex.props(styles.settingText)}>
+              <span {...stylex.props(styles.glossaryTerm)}>Not listed</span>: the model does not see
+              the skill. It can still read the SKILL.md file if it knows the path.
+            </p>
+          </section>
+          {agent === "cursor" ? (
+            <div {...stylex.props(styles.listingSummary)}>
+              <p {...stylex.props(styles.listingLead)}>This agent does not record its listing.</p>
+              <p {...stylex.props(styles.listingNote)}>
+                Cursor records skill uses but not what it listed for the model, so per-session
+                listing states are not available. Uses are on the Activity page; the current listing
+                is predicted.
+              </p>
+            </div>
+          ) : (
+            <>
+              <p {...stylex.props(styles.listingNote)}>
+                Claude Code records each session's skill listing and its skill uses. Skill Studio
+                reads the newest sessions from the last 30 days.
+              </p>
+              {sessionFindings.map((finding) => (
+                <section
+                  key={finding.title}
+                  aria-label={finding.title}
+                  {...stylex.props(styles.finding)}
+                >
+                  <h3 {...stylex.props(styles.findingTitle)}>
+                    {finding.title} <span {...stylex.props(styles.faint)}>({finding.count})</span>
+                  </h3>
+                  <p {...stylex.props(styles.settingText)}>{finding.advice}</p>
+                  <ul {...stylex.props(styles.plainList)}>
+                    {finding.rows.map(([name, sessions]) => (
+                      <li key={name} {...stylex.props(styles.findingRow)}>
+                        <span {...stylex.props(styles.truncate)}>{name}</span>
+                        <span {...stylex.props(styles.findingMeta)}>{sessions}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  {finding.count > finding.rows.length && (
+                    <p {...stylex.props(styles.listingMore)}>
+                      {finding.count - finding.rows.length} more. Run skill-studio sessions to see
+                      every one.
+                    </p>
+                  )}
+                </section>
+              ))}
+              <section aria-label="Sessions" {...stylex.props(styles.finding)}>
+                <h3 {...stylex.props(styles.findingTitle)}>Sessions</h3>
+                <ul {...stylex.props(styles.plainList)}>
+                  {sessionRows.map((session) => (
+                    <li key={session.prompt} {...stylex.props(styles.findingRow)}>
+                      <span {...stylex.props(styles.truncate)}>{session.prompt}</span>
+                      <span {...stylex.props(styles.findingMeta)}>{session.meta}</span>
+                      <span {...stylex.props(styles.findingMeta, styles.muted)}>
+                        {session.finding}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            </>
+          )}
+        </section>
+      </div>
+    </>
+  );
+}
+
 function ParkedScreen({
   parked,
   onOpenSkill,
@@ -2403,7 +2774,8 @@ const park = (skill: SkillRow): SkillRow => ({
 });
 
 export function ProductMock({ theme, onToggleTheme }: ProductMockProps) {
-  const [activeView, setActiveView] = useState<ProductMockRootView>("home");
+  // Opens on Sessions: it answers the headline, which skills each session saw and used.
+  const [activeView, setActiveView] = useState<ProductMockRootView>("sessions");
   const [detail, setDetail] = useState<DetailState | null>(null);
   const [installOpen, setInstallOpen] = useState(false);
   const [compareSkill, setCompareSkill] = useState<string | null>(null);
@@ -2481,6 +2853,10 @@ export function ProductMock({ theme, onToggleTheme }: ProductMockProps) {
             <PluginsScreen onOpenSkill={openSkill} />
           ) : activeView === "packs" ? (
             <PacksScreen />
+          ) : activeView === "listing" ? (
+            <ListingScreen />
+          ) : activeView === "sessions" ? (
+            <SessionsScreen />
           ) : activeView === "activity" ? (
             <ActivityScreen onOpenSkill={openSkill} />
           ) : (
@@ -2629,7 +3005,12 @@ const styles = stylex.create({
   },
   navIcon: { flexShrink: 0 },
   navLabelCollapsible: { display: { default: "inline", [MOBILE]: "none" } },
-  navItemActive: { backgroundColor: tokens.active, color: tokens.text },
+  navItemActive: {
+    backgroundColor: tokens.active,
+    color: tokens.text,
+    // On a phone only the active item shows its label, so it takes the width the label needs.
+    [MOBILE]: { flex: "0 0 auto", paddingInline: 8 },
+  },
   navCount: {
     color: tokens.faint,
     fontSize: 11,
@@ -2772,6 +3153,8 @@ const styles = stylex.create({
     width: "100%",
     "::placeholder": { color: tokens.faint },
     [MOBILE]: { fontSize: 16 },
+    // iOS zooms the page on a focused field under 16px, also on a wide tablet.
+    "@media (pointer: coarse)": { fontSize: 16 },
   },
   segmented: {
     alignSelf: "flex-start",
@@ -2800,6 +3183,24 @@ const styles = stylex.create({
     whiteSpace: "nowrap",
   },
   segmentSmall: { fontSize: 11, height: 22, paddingInline: 8 },
+  segmentIcon: { display: "inline-flex" },
+  // A segment group clips its segments to round the ends. A group that does not clip lets each
+  // segment reach past its 22px box, so the ends round themselves.
+  segmentedOpen: { overflow: "visible" },
+  segmentTall: {
+    borderEndEndRadius: { default: 0, ":last-child": 3 },
+    borderEndStartRadius: { default: 0, ":first-child": 3 },
+    borderStartEndRadius: { default: 0, ":last-child": 3 },
+    borderStartStartRadius: { default: 0, ":first-child": 3 },
+    position: "relative",
+    "::before": { content: '""', inset: "-9px 0", position: "absolute" },
+  },
+  // Makes a 28px control 40px tall to the pointer. Only for controls with no control above or
+  // below them.
+  hitArea: {
+    position: "relative",
+    "::before": { content: '""', inset: "-6px 0", position: "absolute" },
+  },
   segmentOn: { backgroundColor: tokens.active, color: tokens.text, fontWeight: 500 },
   outlineButton: {
     alignItems: "center",
@@ -3339,6 +3740,95 @@ const styles = stylex.create({
   },
   barFill: { backgroundColor: tokens.muted, display: "block", height: "100%" },
   sideHint: { color: tokens.faint, fontSize: 12, margin: 0 },
+
+  // Model listing and Sessions
+  headerNote: {
+    color: tokens.faint,
+    fontSize: 12,
+    whiteSpace: "nowrap",
+    [PANEL_BELOW_MEDIUM]: { display: "none" },
+  },
+  listingSummary: { display: "flex", flexDirection: "column", gap: 4 },
+  listingLead: { fontSize: 13, lineHeight: 1.5, margin: 0, textWrap: "pretty" },
+  listingNote: { color: tokens.muted, fontSize: 12, lineHeight: 1.5, margin: 0 },
+  listingForm: { alignItems: "center", display: "flex", flexWrap: "wrap", gap: 8 },
+  budgetInput: { flex: "0 0 112px" },
+  settingCard: {
+    borderColor: tokens.subtleBorder,
+    borderRadius: 6,
+    borderStyle: "solid",
+    borderWidth: 1,
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+    padding: 12,
+  },
+  settingText: {
+    color: tokens.muted,
+    fontSize: 12,
+    lineHeight: 1.5,
+    margin: 0,
+    textWrap: "pretty",
+  },
+  settingRow: { alignItems: "center", display: "flex", gap: 8 },
+  settingSnippet: {
+    backgroundColor: tokens.surface,
+    borderRadius: 4,
+    flex: 1,
+    fontFamily: monoStack,
+    fontSize: 12,
+    margin: 0,
+    minWidth: 0,
+    overflowX: "auto",
+    padding: "6px 8px",
+    scrollbarWidth: "thin",
+  },
+  code: { color: tokens.text, fontFamily: monoStack, fontSize: 12, overflowWrap: "anywhere" },
+  glossaryTerm: { color: tokens.text },
+  plainList: { listStyle: "none", margin: 0, padding: 0 },
+  listingGrid: {
+    alignItems: "center",
+    columnGap: 12,
+    display: "grid",
+    gridTemplateColumns: {
+      default: "minmax(0,1fr) 84px 104px 40px",
+      [PANEL_BELOW_NARROW]: "minmax(0,1fr) 72px 96px",
+    },
+    height: 32,
+    paddingInline: 8,
+  },
+  listingHead: {
+    borderBottomColor: tokens.subtleBorder,
+    borderBottomStyle: "solid",
+    borderBottomWidth: 1,
+    color: tokens.faint,
+    fontSize: 12,
+  },
+  listingRow: {
+    borderBottomColor: tokens.subtleBorder,
+    borderBottomStyle: "solid",
+    borderBottomWidth: 1,
+    fontSize: 13,
+  },
+  listingRowChanged: { backgroundColor: tokens.active },
+  listingUses: { textAlign: "right", [PANEL_BELOW_NARROW]: { display: "none" } },
+  listingMore: { color: tokens.faint, fontSize: 12, margin: 0, padding: "10px 8px 0" },
+  stateDescribed: { color: tokens.text, fontSize: 12 },
+  stateNameOnly: { color: tokens.muted, fontSize: 12 },
+  stateHidden: { color: tokens.faint, fontSize: 12 },
+  finding: { display: "flex", flexDirection: "column", gap: 6 },
+  findingTitle: { fontSize: 13, fontWeight: 500, margin: 0 },
+  findingRow: {
+    borderBottomColor: tokens.subtleBorder,
+    borderBottomStyle: "solid",
+    borderBottomWidth: { default: 1, ":last-child": 0 },
+    display: "flex",
+    flexDirection: "column",
+    fontSize: 13,
+    gap: 2,
+    paddingBlock: 7,
+  },
+  findingMeta: { color: tokens.faint, fontSize: 12, lineHeight: 1.45 },
 
   // Add skill sheet
   sheetBackdrop: {
