@@ -145,6 +145,8 @@ pub enum Operation {
     Extras,
     /// Per-skill model listing state for each harness.
     Listing,
+    /// Per-session listing state and uses, rolled up per skill.
+    SkillSessions,
     /// Check or set skill invocation across harnesses.
     Invocation,
     /// Set or clear a review date.
@@ -250,6 +252,9 @@ impl Outcome for crate::extras::ExtrasReport {
 }
 impl Outcome for crate::listing_visibility::ListingReport {
     const LISTS: &'static [&'static str] = &["/listings"];
+}
+impl Outcome for crate::skill_sessions::SkillSessionsReport {
+    const LISTS: &'static [&'static str] = &["/skills", "/sessions"];
 }
 impl Outcome for Capabilities {}
 impl Outcome for HarnessReport {}
@@ -8631,6 +8636,7 @@ mod tests {
                     Operation::Library => "library",
                     Operation::Extras => "extras",
                     Operation::Listing => "listing",
+                    Operation::SkillSessions => "skill_sessions",
                     Operation::Invocation => "invocation",
                     Operation::Review => "review",
                     Operation::ReviewDue => "review_due",

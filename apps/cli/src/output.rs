@@ -804,6 +804,12 @@ pub fn write_schemas(out: Option<PathBuf>) -> ExitCode {
         ("listing_report", || {
             schemars::schema_for!(skill_studio_core::listing_visibility::ListingReport)
         }),
+        ("skill_sessions_request", || {
+            schemars::schema_for!(skill_studio_core::skill_sessions::SkillSessionsRequest)
+        }),
+        ("skill_sessions_report", || {
+            schemars::schema_for!(skill_studio_core::skill_sessions::SkillSessionsReport)
+        }),
         ("pack_list_request", || {
             schemars::schema_for!(skill_studio_core::pack::PackListRequest)
         }),
@@ -1037,6 +1043,82 @@ pub fn print_listing_table(
                 state_label(entry.state),
                 entry.name
             );
+        }
+    }
+}
+
+/// Plain-words report: what each term means, then for each agent the skills
+/// worth acting on.
+pub fn print_sessions_table(
+    envelope: &ResultEnvelope<skill_studio_core::skill_sessions::SkillSessionsReport>,
+) {
+    use skill_studio_core::skill_sessions::{SessionRecords, SkillSessionFlag};
+    print_errors(envelope);
+    let Some(report) = &envelope.data else { return };
+    println!("Described: the model sees the name and the description, so it can pick the skill from your words.");
+    println!(
+        "Name only: the model sees only the name and must guess from it. The skill can still run."
+    );
+    println!("Not listed: the model does not see the skill. It can still read SKILL.md by path.");
+    println!("Possibly missed is a guess: a short first prompt matched the skill's description, and the session used no skill.");
+    for agent in &report.agents {
+        println!();
+        println!("{}: {}", agent.harness, agent.note);
+        if let Some(doc) = &agent.doc {
+            println!("  Docs: {doc}");
+        }
+        if agent.records == SessionRecords::ListingAndUses {
+            println!(
+                "  {} sessions read, {} with a listing, {} used a skill, {} possibly missed one.",
+                agent.sessions_read,
+                agent.sessions_with_listing,
+                agent.sessions_with_use,
+                agent.sessions_with_miss
+            );
+        }
+        let groups = [
+            (
+                SkillSessionFlag::ListedNeverUsed,
+                "Listed in nearly every session, never used (costs listing space; park it or set it to user-invocable only):",
+            ),
+            (
+                SkillSessionFlag::UsedWhileNameOnly,
+                "Used while listed by name only (raise the budget or shorten other descriptions so it keeps one):",
+            ),
+            (
+                SkillSessionFlag::PossiblyMissed,
+                "Possibly missed (a guess; reword the description so it names the task):",
+            ),
+            (
+                SkillSessionFlag::NotDescribedNow,
+                "Not described in the current listing:",
+            ),
+            (
+                SkillSessionFlag::NotReachable,
+                "Installed but not reachable by this agent:",
+            ),
+        ];
+        for (flag, title) in groups {
+            let rows: Vec<_> = report
+                .skills
+                .iter()
+                .filter(|s| s.harness == agent.harness && s.flags.contains(&flag))
+                .collect();
+            if rows.is_empty() {
+                continue;
+            }
+            println!("  {title}");
+            for s in rows {
+                let reach = s
+                    .reach
+                    .as_deref()
+                    .map(|r| format!("  {r}"))
+                    .unwrap_or_default();
+                println!(
+                    "    {:<40} described {:>3}  shortened {:>3}  name only {:>3}  not listed {:>3}  used {:>3}  missed {:>3}{reach}",
+                    s.name, s.described, s.truncated, s.name_only, s.not_listed, s.used, s.missed
+                );
+            }
         }
     }
 }

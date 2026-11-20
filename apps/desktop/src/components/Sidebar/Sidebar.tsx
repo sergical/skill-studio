@@ -13,6 +13,7 @@ import {
   Layers,
   LayoutDashboard,
   ListTree,
+  MessagesSquare,
   Moon,
   PackageOpen,
   Plus,
@@ -162,6 +163,15 @@ function SidebarNavItems({
       >
         <ListTree size={14} />
         <span className="min-w-0 truncate">Model listing</span>
+      </Button>
+      <Button
+        variant="ghost"
+        className={itemClass(anchorView.kind === "sessions")}
+        aria-current={anchorView.kind === "sessions" ? "page" : undefined}
+        onClick={() => setActiveView({ kind: "sessions" })}
+      >
+        <MessagesSquare size={14} />
+        <span className="min-w-0 truncate">Sessions</span>
       </Button>
       <Button
         variant="ghost"

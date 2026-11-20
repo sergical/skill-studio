@@ -19,6 +19,15 @@ export type ProjectRef = string;
  */
 export type ListingState = "described" | "truncated" | "name_only" | "omitted" | "hidden";
 /**
+ * A finding about one skill across sessions.
+ */
+export type SkillSessionFlag =
+  | "listed_never_used"
+  | "used_while_name_only"
+  | "possibly_missed"
+  | "not_described_now"
+  | "not_reachable";
+/**
  * Lexical skill name: the directory name that holds `SKILL.md`.
  *
  * Invariant: two deployments with the same `SkillName` are the same skill,
@@ -420,6 +429,235 @@ export interface ListingRequest {
    * Compare Claude Code with this session transcript instead of the newest one.
    */
   claude_transcript: string | null;
+}
+/**
+ * Every agent's sessions.
+ */
+export interface SkillSessionsReport {
+  /**
+   * Skills with findings first, then by agent and name.
+   */
+  skills: SkillSessionRollup[];
+  /**
+   * Sessions, by agent, newest first.
+   */
+  sessions: SessionSummary[];
+  /**
+   * Agents in catalog order.
+   */
+  agents: AgentSessions[];
+  /**
+   * Days of history read.
+   */
+  history_days: number;
+}
+/**
+ * One skill across the sessions read.
+ */
+export interface SkillSessionRollup {
+  /**
+   * Agent id.
+   */
+  harness: string;
+  /**
+   * Name as the agent lists it.
+   */
+  name: string;
+  /**
+   * Installed folder, when Skill Studio scans it.
+   */
+  path: string | null;
+  /**
+   * Sessions that listed it with its full description.
+   */
+  described: number;
+  /**
+   * Sessions that listed it with a shortened description.
+   */
+  truncated: number;
+  /**
+   * Sessions that listed it by name only.
+   */
+  name_only: number;
+  /**
+   * Sessions with a listing that did not list it.
+   */
+  not_listed: number;
+  /**
+   * Sessions that used it.
+   */
+  used: number;
+  /**
+   * Sessions that used it while it was listed by name only.
+   */
+  used_name_only: number;
+  /**
+   * Sessions that used it while it was not listed.
+   */
+  used_not_listed: number;
+  /**
+   * Sessions that may have missed it (a guess).
+   */
+  missed: number;
+  /**
+   * The current listing prediction. Null when the agent does not read it
+   * or Skill Studio does not scan it.
+   */
+  now: ListingState | null;
+  /**
+   * Why it is not described now, in plain words.
+   */
+  reach: string | null;
+  /**
+   * Findings, most important first.
+   */
+  flags: SkillSessionFlag[];
+}
+/**
+ * One recorded session.
+ */
+export interface SessionSummary {
+  /**
+   * Agent id.
+   */
+  harness: string;
+  /**
+   * The agent's session id.
+   */
+  id: string | null;
+  /**
+   * Transcript file.
+   */
+  transcript: string;
+  /**
+   * Working folder.
+   */
+  project_path: string | null;
+  /**
+   * Start time, as recorded.
+   */
+  at: string | null;
+  /**
+   * Model id.
+   */
+  model: string | null;
+  /**
+   * Start of the first user prompt.
+   */
+  prompt: string | null;
+  /**
+   * False when the session recorded no listing.
+   */
+  listing_recorded: boolean;
+  /**
+   * Entries in the listing.
+   */
+  listed: number;
+  /**
+   * Entries with a full or shortened description.
+   */
+  described: number;
+  /**
+   * Entries with a name only.
+   */
+  name_only: number;
+  /**
+   * Skills used, one row per skill.
+   */
+  used: SessionSkillUse[];
+  /**
+   * Possible misses. A guess, not a fact.
+   */
+  missed: MissedSkill[];
+}
+/**
+ * One skill a session used.
+ */
+export interface SessionSkillUse {
+  /**
+   * Skill name, as the listing shows it when the listing has it.
+   */
+  skill: string;
+  /**
+   * How this session listed the skill.
+   */
+  listed_as: "described" | "truncated" | "name_only" | "not_listed" | "unknown";
+  /**
+   * How the first use started.
+   */
+  trigger: "user" | "agent" | "file_read";
+}
+/**
+ * A skill the session may have needed but did not use. A guess.
+ */
+export interface MissedSkill {
+  /**
+   * Skill name.
+   */
+  skill: string;
+  /**
+   * How this session listed the skill.
+   */
+  listed_as: "described" | "truncated" | "name_only" | "not_listed" | "unknown";
+  /**
+   * Match score of the first prompt against the description (BM25).
+   */
+  score: number;
+  /**
+   * Prompt words, stemmed, that matched the description, best first.
+   */
+  words: string[];
+}
+/**
+ * One agent's sessions and per-skill rollup.
+ */
+export interface AgentSessions {
+  /**
+   * Agent id.
+   */
+  harness: string;
+  /**
+   * What this agent records.
+   */
+  records: "listing_and_uses" | "uses_only";
+  /**
+   * What this agent records, in plain words.
+   */
+  note: string;
+  /**
+   * The agent's skills documentation.
+   */
+  doc: string | null;
+  /**
+   * Sessions read.
+   */
+  sessions_read: number;
+  /**
+   * Sessions that recorded a listing.
+   */
+  sessions_with_listing: number;
+  /**
+   * Sessions that used a skill.
+   */
+  sessions_with_use: number;
+  /**
+   * Sessions with a possible miss.
+   */
+  sessions_with_miss: number;
+}
+/**
+ * Input for `skill_sessions`.
+ */
+export interface SkillSessionsRequest {
+  /**
+   * Only sessions recorded in this project, and its skills. It must be in
+   * the runtime scope.
+   */
+  project_path: string | null;
+  /**
+   * Newest sessions to read per agent, at most 500. Default 100.
+   */
+  sessions: number | null;
 }
 /**
  * Empty input. The runtime scope selects the home and projects.

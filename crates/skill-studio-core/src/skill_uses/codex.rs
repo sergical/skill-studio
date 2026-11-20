@@ -15,10 +15,10 @@ use crate::skill_uses::{
 
 /// Fast-path substrings a line must contain before it's worth a full JSON
 /// parse.
-const SESSION_META_MARKER: &str = "\"session_meta\"";
-const SKILL_BLOCK_MARKER: &str = "<skill>";
-const SKILL_MD_MARKER: &str = "SKILL.md";
-const SKILLS_NAMESPACE_MARKER: &str = "\"namespace\":\"skills\"";
+pub(crate) const SESSION_META_MARKER: &str = "\"session_meta\"";
+pub(crate) const SKILL_BLOCK_MARKER: &str = "<skill>";
+pub(crate) const SKILL_MD_MARKER: &str = "SKILL.md";
+pub(crate) const SKILLS_NAMESPACE_MARKER: &str = "\"namespace\":\"skills\"";
 
 /// The name in a user `<skill>\n<name>X</name>\n<path>P</path>...` block, or
 /// `None` when `text` doesn't open with that exact shape (many other lines

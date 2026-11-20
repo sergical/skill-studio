@@ -14,9 +14,9 @@ use crate::skill_uses::{
 /// Fast-path substrings a line must contain before it's worth a full JSON
 /// parse: a `Skill` `tool_use`, a typed command block, or a `SKILL.md` path
 /// (a `Read` or `Bash` file read).
-const SKILL_TOOL_MARKER: &str = "\"name\":\"Skill\"";
-const COMMAND_MARKER: &str = "<command-name>";
-const SKILL_MD_MARKER: &str = "SKILL.md";
+pub(crate) const SKILL_TOOL_MARKER: &str = "\"name\":\"Skill\"";
+pub(crate) const COMMAND_MARKER: &str = "<command-name>";
+pub(crate) const SKILL_MD_MARKER: &str = "SKILL.md";
 
 /// Parses one Claude Code transcript's text (newline-delimited JSON) into
 /// skill uses: an `Agent` use per `Skill` `tool_use` block, a `User` use per

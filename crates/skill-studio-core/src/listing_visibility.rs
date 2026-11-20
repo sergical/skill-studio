@@ -162,44 +162,65 @@ pub fn listing(
     req: &ListingRequest,
 ) -> Result<ListingReport, CoreError> {
     rt.run(Operation::Listing, ctx, || {
-        if req
-            .claude_budget_fraction
-            .is_some_and(|f| !(f > 0.0 && f <= 1.0))
-        {
-            return Err(CoreError::new(
-                ErrorCode::InvalidRequest,
-                "claude_budget_fraction must be above 0 and at most 1",
-            ));
-        }
-        let mut scopes = vec![RootScope::Global];
-        if let Some(path) = &req.project_path {
-            let project = rt
-                .scope
-                .projects
-                .iter()
-                .find(|p| p.lexical == *path || p.canonical == *path)
-                .ok_or_else(|| {
-                    CoreError::new(ErrorCode::InvalidRequest, "Project is not in the scope")
-                        .at(path)
-                })?;
-            scopes.push(RootScope::Project(ProjectRef(project.lexical.clone())));
-        }
+        let scopes = listing_scopes(rt, req)?;
         let _folder_guard = rt.ports.history.guard_read_data_folder()?;
         let _guard = crate::ports::acquire_shared(rt.ports.leases.as_ref(), &rt.scope)?;
         let inventory = crate::ops::scan_inner(rt, ctx, &ScanRequest::default())?;
-        let mut listings = Vec::new();
-        for scope in &scopes {
-            for facts in &rt.ports.catalog.facts {
-                ctx.checkpoint()?;
-                listings.push(match facts.id.as_str() {
-                    AgentId::CLAUDE_CODE => claude_listing(rt, &inventory, facts, scope, req)?,
-                    AgentId::CODEX => codex_listing(rt, &inventory, facts, scope, req)?,
-                    _ => unlimited_listing(rt, &inventory, facts, scope)?,
-                });
-            }
-        }
-        Ok(ListingReport { listings })
+        listing_rows(rt, ctx, &inventory, &scopes, req)
     })
+}
+
+/// The global scope, plus the requested project when it is in the runtime
+/// scope.
+pub(crate) fn listing_scopes(
+    rt: &Runtime,
+    req: &ListingRequest,
+) -> Result<Vec<RootScope>, CoreError> {
+    if req
+        .claude_budget_fraction
+        .is_some_and(|f| !(f > 0.0 && f <= 1.0))
+    {
+        return Err(CoreError::new(
+            ErrorCode::InvalidRequest,
+            "claude_budget_fraction must be above 0 and at most 1",
+        ));
+    }
+    let mut scopes = vec![RootScope::Global];
+    if let Some(path) = &req.project_path {
+        let project = rt
+            .scope
+            .projects
+            .iter()
+            .find(|p| p.lexical == *path || p.canonical == *path)
+            .ok_or_else(|| {
+                CoreError::new(ErrorCode::InvalidRequest, "Project is not in the scope").at(path)
+            })?;
+        scopes.push(RootScope::Project(ProjectRef(project.lexical.clone())));
+    }
+    Ok(scopes)
+}
+
+/// Every harness listing for `scopes`, from an inventory the caller already
+/// scanned under the shared lease.
+pub(crate) fn listing_rows(
+    rt: &Runtime,
+    ctx: &OpContext,
+    inventory: &crate::dto::Inventory,
+    scopes: &[RootScope],
+    req: &ListingRequest,
+) -> Result<ListingReport, CoreError> {
+    let mut listings = Vec::new();
+    for scope in scopes {
+        for facts in &rt.ports.catalog.facts {
+            ctx.checkpoint()?;
+            listings.push(match facts.id.as_str() {
+                AgentId::CLAUDE_CODE => claude_listing(rt, inventory, facts, scope, req)?,
+                AgentId::CODEX => codex_listing(rt, inventory, facts, scope, req)?,
+                _ => unlimited_listing(rt, inventory, facts, scope)?,
+            });
+        }
+    }
+    Ok(ListingReport { listings })
 }
 
 fn hidden_entry(skill: &ListedSkill, name: String) -> ListingEntry {
@@ -319,7 +340,7 @@ pub(crate) fn claude_allocate(lines: &[ClaudeLine], budget: u64) -> Vec<bool> {
 
 /// Display width the way Claude Code counts it for ASCII text: UTF-16
 /// units, without newlines. Wide and combining characters can differ.
-fn claude_width(text: &str) -> u64 {
+pub(crate) fn claude_width(text: &str) -> u64 {
     text.encode_utf16()
         .filter(|u| *u != u16::from(b'\n'))
         .count() as u64
@@ -389,7 +410,7 @@ struct Unscanned {
 
 /// Claude Code's project folder name: every character that is not ASCII
 /// alphanumeric becomes `-`.
-fn claude_project_slug(path: &Path) -> String {
+pub(crate) fn claude_project_slug(path: &Path) -> String {
     path.to_string_lossy()
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
@@ -519,7 +540,7 @@ fn entry_head<'a>(line: &'a str, known: &BTreeSet<&str>) -> Option<(&'a str, boo
 
 /// Splits a listing into entries. Each entry starts with `- <name>` at the
 /// start of a line; descriptions can span lines.
-fn parse_listing(content: &str, names: &[String]) -> Vec<(String, bool, u64)> {
+pub(crate) fn parse_listing(content: &str, names: &[String]) -> Vec<(String, bool, u64)> {
     let known: BTreeSet<&str> = names.iter().map(String::as_str).collect();
     let mut out: Vec<(String, bool, u64)> = Vec::new();
     let mut text_lines = content.split('\n').peekable();

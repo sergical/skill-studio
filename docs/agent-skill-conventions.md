@@ -506,6 +506,62 @@ Manual-only checks are per harness. Claude, pi, and Cursor read
 `metadata["opencode/autoinvoke"]: false`. A restriction for one harness does not
 hide a skill from another harness that does not support that field.
 
+## Skill sessions
+
+Checked on 2026-11-20 against the session files on one machine (500 Claude
+Code transcripts, 301 Codex rollouts). `skill-studio sessions`, the MCP
+`skill_sessions` tool and the desktop **Sessions** page join each session's
+recorded listing with its skill uses.
+
+- **Claude Code** writes the listing into the transcript as `attachment`
+  rows of type `skill_listing` (`names`, `content`). The first has
+  `isInitial: true`; later ones add skills that appear during the session.
+  An entry `- name: description` is described; `- name` is name only. Claude
+  Code does not record a cut description, so Skill Studio reports none.
+  Subagent transcripts (`<session>/subagents/*.jsonl`) carry no listing and
+  are not read.
+- **Codex** writes the listing into the developer message inside
+  `<skills_instructions>`, under `### Available skills`, as
+  `- name: description (file: rN/...)`. Plugin skills are `plugin:name`. A
+  skill that is not in the block was omitted. A description shorter than the
+  scanned one (whitespace collapsed) is reported as shortened.
+- **Cursor, OpenCode, pi, Grok Build** record uses but not the listing. The
+  report says so and shows only the current prediction.
+
+Uses come from the same parsers as Activity ("Skill uses"): a skill tool
+call, a typed command, or a `SKILL.md` read. A use names a listing entry by
+name, or by the part after `plugin:`. Skill Studio reads the newest 100
+sessions per agent from the last 30 days (`--sessions` up to 500), streams
+each file line by line, and skips lines above 8 MB.
+
+Flags per skill: **listed, never used** (listed in at least 3 sessions and in
+at least 80% of the sessions with a listing, no use); **used while name
+only**; **possibly missed**; **not described now** (the `listing` prediction
+is name only, shortened, omitted or hidden, with the reason); and **not
+reachable** (installed in scope, but in no folder the agent reads). Each agent
+row links its skills doc: [Claude Code](https://code.claude.com/docs/en/skills),
+[Codex](https://developers.openai.com/codex/skills),
+[Cursor](https://cursor.com/docs/skills),
+[OpenCode](https://opencode.ai/docs/skills),
+[pi](https://docs.pi.dev/latest/skills).
+
+**Possibly missed is a guess.** No agent has a skill search, and there is no
+record of what the model should have used. Skill Studio scores the session's
+first prompt (400 characters or less) against every skill description with
+BM25. When the best score is 10 or more and the session used no skill, that
+skill is a possible miss. On 282 eval sessions with known expected skills
+(`~/.agents/evals/ui-skills`), this flagged 62 sessions with precision 0.58,
+and found 36 of the 75 sessions that really missed. Phrase lists taken from
+"Triggers on:" lines reached about 0.15 precision in a prototype. To know for
+sure, run an eval like `compare.py` for the chosen skills.
+
+Parse checks on the same machine: every recorded name appeared in 500 of 500
+Claude Code listings, and 301 of 301 Codex listings matched their block.
+Model-started uses agreed with `compare.py`'s parser (Skill calls and `Read` of
+`SKILL.md`) in 442 of 500 sessions. Every difference was a use that Skill
+Studio also counts and `compare.py` does not, such as `cat SKILL.md` through
+the shell.
+
 ## Non-skill configuration inventory
 
 `skill-studio extras [--project <path>] [--json]` and the MCP `extras` tool

@@ -512,6 +512,23 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Show, per recent session, which skills were listed with a description,
+    /// by name only, or not at all, which were used, and which were possibly
+    /// missed. This writes nothing.
+    Sessions {
+        #[command(flatten)]
+        scope: ScopeArgs,
+        #[command(flatten)]
+        view: ViewArgs,
+        /// Only this project's sessions. It must be in the scope.
+        #[arg(long = "for-project")]
+        for_project: Option<PathBuf>,
+        /// Newest sessions to read per agent (default 100, at most 500).
+        #[arg(long)]
+        sessions: Option<usize>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Check skill state and model listing budgets. This writes nothing.
     Doctor {
         #[command(flatten)]
@@ -1076,6 +1093,19 @@ fn main() -> ExitCode {
             run_diagnose_conflict(&scope, &view.into(), json, time)
         }
         Command::Extras { scope, view, json } => run_extras(&scope, &view.into(), json, time),
+        Command::Sessions {
+            scope,
+            view,
+            for_project,
+            sessions,
+            json,
+        } => {
+            let request = skill_studio_core::skill_sessions::SkillSessionsRequest {
+                project_path: for_project.map(|p| std::fs::canonicalize(&p).unwrap_or(p)),
+                sessions,
+            };
+            run_skill_sessions(&scope, &request, &view.into(), json, time)
+        }
         Command::Listing {
             scope,
             view,
@@ -2930,6 +2960,27 @@ fn run_extras(scope: &ScopeArgs, view: &ViewRequest, json: bool, time: bool) -> 
     );
     let envelope = ResultEnvelope::from_result(Operation::Extras, &rt.scope, &ctx, result);
     finish_view(&envelope, view, json, time, output::print_extras_table)
+}
+
+fn run_skill_sessions(
+    scope: &ScopeArgs,
+    request: &skill_studio_core::skill_sessions::SkillSessionsRequest,
+    view: &ViewRequest,
+    json: bool,
+    time: bool,
+) -> ExitCode {
+    let rt = match build_runtime::<skill_studio_core::skill_sessions::SkillSessionsReport>(
+        scope,
+        Operation::SkillSessions,
+        json,
+    ) {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let result = skill_studio_core::skill_sessions::skill_sessions(&rt, &ctx, request);
+    let envelope = ResultEnvelope::from_result(Operation::SkillSessions, &rt.scope, &ctx, result);
+    finish_view(&envelope, view, json, time, output::print_sessions_table)
 }
 
 fn run_listing(

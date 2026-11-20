@@ -94,6 +94,7 @@ use skill_studio_core::identity::CorrelationId;
 use skill_studio_core::listing_visibility::ListingRequest;
 use skill_studio_core::ops::{self, Operation, Outcome, ResultEnvelope};
 use skill_studio_core::ports::{OpContext, Runtime};
+use skill_studio_core::skill_sessions::SkillSessionsRequest;
 use skill_studio_core::view::ViewRequest;
 use skill_studio_core::CoreError;
 use skill_studio_host::SkillUsage;
@@ -1115,6 +1116,26 @@ impl SkillStudioServer {
             &view,
             &context,
             |rt, ctx| skill_studio_core::listing_visibility::listing(rt, ctx, &req),
+        )
+        .await
+    }
+
+    #[tool(
+        description = "For each agent's recent sessions, show which skills the model saw with a description, with a name only, or not at all, which skills each session used, and which it possibly missed (a guess from the first prompt). Per skill, flags skills listed in nearly every session but never used, skills used while listed by name only, and skills the agent cannot reach, with the reason. Claude Code and Codex record listings; other agents record uses only. This writes nothing.",
+        annotations(read_only_hint = true)
+    )]
+    async fn skill_sessions(
+        &self,
+        Parameters(Viewed { request: req, view }): Parameters<Viewed<SkillSessionsRequest>>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op_viewed(
+            Operation::SkillSessions,
+            false,
+            None,
+            &view,
+            &context,
+            |rt, ctx| skill_studio_core::skill_sessions::skill_sessions(rt, ctx, &req),
         )
         .await
     }
