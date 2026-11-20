@@ -11,8 +11,8 @@ permissions:
 
 concurrency:
   # A new commit on a pull request cancels that branch's older run. Main runs
-  # are never cancelled, so every main commit gets a full result.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  # and scheduled or manual runs each get their own group, so none is cancelled.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
