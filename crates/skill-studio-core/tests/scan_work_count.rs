@@ -403,13 +403,17 @@ fn a_rescan_with_a_scan_memo_reads_only_the_skill_md_that_changed() {
     );
     assert_eq!(skills(&second), skills(&first));
 
-    let skill_md = std::fs::read_dir(home.join(".claude/skills"))
+    let mut skill_mds: Vec<PathBuf> = std::fs::read_dir(home.join(".claude/skills"))
         .expect("list Claude skills")
         .flatten()
         .map(|entry| entry.path().join("SKILL.md"))
-        .find(|path| path.symlink_metadata().is_ok_and(|m| m.is_file()))
+        .filter(|path| path.symlink_metadata().is_ok_and(|m| m.is_file()))
+        .collect();
+    skill_mds.sort();
+    let skill_md = skill_mds
+        .first()
         .expect("a Claude skill with its own SKILL.md");
-    let before = std::fs::read_to_string(&skill_md).expect("read SKILL.md");
+    let before = std::fs::read_to_string(skill_md).expect("read SKILL.md");
     let mtime = filetime::FileTime::from_last_modification_time(
         &skill_md.metadata().expect("SKILL.md metadata"),
     );
@@ -421,8 +425,8 @@ fn a_rescan_with_a_scan_memo_reads_only_the_skill_md_that_changed() {
     };
     let after = format!("{}{new}{}", &before[..at], &before[at + old.len()..]);
     assert_eq!(after.len(), before.len());
-    std::fs::write(&skill_md, &after).expect("rewrite SKILL.md");
-    filetime::set_file_mtime(&skill_md, mtime).expect("restore SKILL.md mtime");
+    std::fs::write(skill_md, &after).expect("rewrite SKILL.md");
+    filetime::set_file_mtime(skill_md, mtime).expect("restore SKILL.md mtime");
 
     let third = scan(&rt, &ctx(), &ScanRequest::default()).expect("third scan");
     assert_eq!(
@@ -430,13 +434,28 @@ fn a_rescan_with_a_scan_memo_reads_only_the_skill_md_that_changed() {
         after_first + 1,
         "a rescan must read again only the SKILL.md that changed"
     );
-    let new_description = after[at..].lines().next().expect("description").to_owned();
-    assert!(
-        third
-            .skills
-            .iter()
-            .any(|skill| skill.description.as_deref() == Some(new_description.as_str())),
-        "the rescan must show the new description {new_description:?}"
+    // The truth for the changed estate: a scan without a memo.
+    let fresh_ports = Ports {
+        clock: Arc::new(FakeClock::at(
+            chrono::Utc::now().timestamp_millis() as u64 + 3_600_000,
+        )),
+        ..materialized_ports(
+            Arc::new(RealFs::new()),
+            Arc::new(FileLease::new(home.join(".leases"))),
+        )
+    };
+    let fresh_rt =
+        Runtime::new(&scope_for(&home, &generated.project_dirs), fresh_ports).expect("runtime");
+    let fresh = scan(&fresh_rt, &ctx(), &ScanRequest::default()).expect("scan without a memo");
+    assert_ne!(
+        skills(&fresh),
+        skills(&first),
+        "the rewrite must change the skills"
+    );
+    assert_eq!(
+        skills(&third),
+        skills(&fresh),
+        "the rescan must return what a scan without a memo returns"
     );
 
     std::fs::remove_dir_all(&dir).ok();
