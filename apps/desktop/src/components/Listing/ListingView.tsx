@@ -102,6 +102,13 @@ function Summary({ row }: { row: HarnessListing }) {
           {row.uses_default_context_window && " The model was not found, so this is a default."}
         </p>
       )}
+      {row.thresholds && (
+        <p className="m-0">
+          Full listing {row.thresholds.full_cost.toLocaleString()} {row.budget_unit}; names and
+          paths only {row.thresholds.names_only_cost.toLocaleString()} (skill roots table{" "}
+          {row.thresholds.roots_table_cost.toLocaleString()}). {row.thresholds.summary}
+        </p>
+      )}
       {row.observed_session && (
         <p className="m-0">
           Last session: {row.observed_session.described} of {row.observed_session.listed} with a
@@ -176,6 +183,12 @@ function EntryRow({ entry, tried }: { entry: ListingEntry; tried: ListingEntry |
         {entry.hidden_reason && (
           <span className="text-caption text-text-tertiary"> ({entry.hidden_reason})</span>
         )}
+        {entry.invocation_mismatch && (
+          <span className="text-caption text-destructive-text" title={entry.invocation_mismatch}>
+            {" "}
+            (manual-only in Claude Code)
+          </span>
+        )}
       </span>
       <StateText state={entry.state} />
       <StateText state={tried?.state} />
@@ -209,6 +222,7 @@ export function ListingView({ snapshot }: ListingViewProps) {
       claude_context_window_tokens: null,
       codex_max_context_tokens: null,
       claude_transcript: null,
+      codex_transcript: null,
     };
     Promise.all([readListing(base), tryRequest ? readListing({ ...base, ...tryRequest }) : null])
       .then(([now, tried]) => live && setLoad({ kind: "ready", now, tried }))

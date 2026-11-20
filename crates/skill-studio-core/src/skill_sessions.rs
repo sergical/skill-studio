@@ -650,7 +650,7 @@ fn subdirs(rt: &Runtime, dir: &Path) -> Vec<PathBuf> {
 }
 
 /// The newest files changed since `since`, newest first.
-fn newest(
+pub(crate) fn newest(
     mut files: Vec<(DateTime<Utc>, PathBuf)>,
     since: DateTime<Utc>,
     limit: usize,
@@ -715,7 +715,13 @@ fn read_claude_sessions(
     let projects = rt.scope.global_root_path(Path::new(".claude/projects"));
     let dirs = match scope {
         RootScope::Project(project) => vec![projects.join(claude_project_slug(&project.0))],
-        RootScope::Global => subdirs(rt, &projects),
+        RootScope::Global => subdirs(rt, &projects)
+            .into_iter()
+            .filter(|dir| {
+                !dir.file_name()
+                    .is_some_and(|n| temporary_claude_project(rt, &n.to_string_lossy()))
+            })
+            .collect(),
     };
     let mut files = Vec::new();
     for dir in dirs {
@@ -734,14 +740,34 @@ fn read_claude_sessions(
     Ok(out)
 }
 
-/// `sessions/YYYY/MM/DD/*.jsonl` and `archived_sessions/*.jsonl`.
-fn read_codex_sessions(
-    rt: &Runtime,
-    ctx: &OpContext,
-    scope: &RootScope,
-    since: DateTime<Utc>,
-    limit: usize,
-) -> Result<Vec<ParsedSession>, CoreError> {
+/// Folders the system clears: one-off runs such as evals, not the owner's
+/// coding sessions.
+const TEMPORARY_DIRS: &[&str] = &[
+    "/tmp/",
+    "/private/tmp/",
+    "/var/folders/",
+    "/private/var/folders/",
+];
+
+/// True when a session ran in a temporary folder outside the home folder.
+/// A disposable home (a test, a verify run) can itself be temporary.
+pub(crate) fn temporary_dir(rt: &Runtime, path: &str) -> bool {
+    TEMPORARY_DIRS.iter().any(|dir| path.starts_with(dir))
+        && !Path::new(path).starts_with(&rt.scope.home.lexical)
+}
+
+/// True for a Claude Code project folder name of a temporary folder
+/// outside the home folder.
+pub(crate) fn temporary_claude_project(rt: &Runtime, slug: &str) -> bool {
+    TEMPORARY_DIRS
+        .iter()
+        .any(|dir| slug.starts_with(&dir.replace('/', "-")))
+        && !slug.starts_with(&claude_project_slug(&rt.scope.home.lexical))
+}
+
+/// Codex rollouts, `sessions/YYYY/MM/DD/*.jsonl` and
+/// `archived_sessions/*.jsonl`, with their change times.
+pub(crate) fn codex_rollouts(rt: &Runtime) -> Vec<(DateTime<Utc>, PathBuf)> {
     let home = &rt.scope.codex_home;
     let mut files = Vec::new();
     jsonl_files(rt, &home.join("archived_sessions"), &mut files);
@@ -752,6 +778,18 @@ fn read_codex_sessions(
             }
         }
     }
+    files
+}
+
+/// Codex rollouts, newest first, without sessions in temporary folders.
+fn read_codex_sessions(
+    rt: &Runtime,
+    ctx: &OpContext,
+    scope: &RootScope,
+    since: DateTime<Utc>,
+    limit: usize,
+) -> Result<Vec<ParsedSession>, CoreError> {
+    let files = codex_rollouts(rt);
     let project = match scope {
         RootScope::Project(p) => Some(p.0.to_string_lossy().into_owned()),
         RootScope::Global => None,
@@ -769,7 +807,12 @@ fn read_codex_sessions(
             continue;
         }
         let mut session = parser.finish();
-        if project.is_some() && session.project_path != project {
+        if (project.is_some() && session.project_path != project)
+            || session
+                .project_path
+                .as_deref()
+                .is_some_and(|p| temporary_dir(rt, p))
+        {
             continue;
         }
         session.transcript = path;

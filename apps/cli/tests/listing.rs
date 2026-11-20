@@ -200,10 +200,17 @@ fn codex_listing_shortens_descriptions_then_omits_entries_instead_of_reporting_o
     for name in ["x", "y"] {
         skill(home, ".codex/skills", name, &"d".repeat(400));
     }
+    // Codex quotes a value with `: ` in it and reads the YAML again.
+    write(
+        home,
+        ".codex/skills/colon/SKILL.md",
+        "---\nname: colon\ndescription: Triggers on: video\n---\n",
+    );
+    // A repeated key is invalid YAML that Codex does not repair.
     write(
         home,
         ".codex/skills/bad/SKILL.md",
-        "---\nname: bad\ndescription: Triggers on: video\n---\n",
+        "---\nname: bad\ndescription: d\nmetadata:\n  a: 1\nmetadata:\n  b: 2\n---\n",
     );
     write(home, ".codex/config.toml", "model = \"m\"\n");
     write(
@@ -217,7 +224,16 @@ fn codex_listing_shortens_descriptions_then_omits_entries_instead_of_reporting_o
     assert_eq!(codex["budget_unit"], "tokens");
     assert_eq!(state(&codex, "x"), "truncated");
     assert_eq!(state(&codex, "y"), "truncated");
-    assert_eq!(state(&codex, "bad"), "hidden", "Codex rejects invalid YAML");
+    assert_ne!(
+        state(&codex, "colon"),
+        "hidden",
+        "Codex repairs `: ` values"
+    );
+    assert_eq!(
+        state(&codex, "bad"),
+        "hidden",
+        "Codex rejects a repeated key"
+    );
 
     let tight = row(&listing(home, &["--codex-max-tokens", "1"]), "codex");
     assert_eq!(state(&tight, "x"), "omitted");
@@ -225,4 +241,103 @@ fn codex_listing_shortens_descriptions_then_omits_entries_instead_of_reporting_o
         tight["setting"]["snippet"],
         "[skills]\nmax_context_tokens = 1"
     );
+}
+
+fn codex_rollout(home: &std::path::Path, file: &str, cwd: &str, block: &str) {
+    let lines = [
+        serde_json::json!({"type":"session_meta","payload":{"id":"s","cwd":cwd,"timestamp":"2026-11-20T00:00:00Z"}}).to_string(),
+        serde_json::json!({"type":"turn_context","payload":{"model":"m"}}).to_string(),
+        serde_json::json!({"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":block}]}}).to_string(),
+    ];
+    write(
+        home,
+        &format!(".codex/sessions/2026/11/20/{file}"),
+        &(lines.join("\n") + "\n"),
+    );
+}
+
+#[test]
+fn codex_listing_adds_system_skills_from_the_newest_session_in_catalog_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    skill(home, ".agents/skills", "a", &"d".repeat(40));
+    // Enough skills that the order check covers more than two entries.
+    for i in 0..30 {
+        skill(home, ".agents/skills", &format!("z{i:02}"), "Filler");
+    }
+    // Codex system skills are not scanned; the session names them.
+    skill(home, ".codex/skills/.system", "sys", "System skill");
+    write(home, ".codex/config.toml", "model = \"m\"\n");
+    write(
+        home,
+        ".codex/models_cache.json",
+        r#"{"models":[{"slug":"m","context_window":1000000}]}"#,
+    );
+    let agents = home.join(".agents/skills");
+    let system = home.join(".codex/skills/.system");
+    let block = format!(
+        "<skills_instructions>\n## Skills\n### Skill roots\n- `r0` = `{}`\n- `r1` = `{}`\n### Available skills\n- sys: System skill (file: r1/sys/SKILL.md)\n- a: {} (file: r0/a/SKILL.md)\n</skills_instructions>",
+        agents.display(),
+        system.display(),
+        "d".repeat(40)
+    );
+    codex_rollout(home, "rollout-1.jsonl", home.to_str().unwrap(), &block);
+    // A newer session in a temporary folder (an eval run) is not the reference.
+    codex_rollout(
+        home,
+        "rollout-2.jsonl",
+        "/tmp/eval-run",
+        "<skills_instructions>\n### Available skills\n</skills_instructions>",
+    );
+    let later = std::time::SystemTime::now() + std::time::Duration::from_mins(1);
+    std::fs::File::options()
+        .write(true)
+        .open(home.join(".codex/sessions/2026/11/20/rollout-2.jsonl"))
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+
+    let codex = row(&listing(home, &[]), "codex");
+    let entries = codex["entries"].as_array().unwrap();
+    let names: Vec<&str> = entries
+        .iter()
+        .map(|e| e["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names[..2], ["sys", "a"], "system skills first: {codex}");
+    assert_eq!(names.len(), 32, "{codex}");
+    assert_eq!(entries[0]["scanned"], false);
+    assert_eq!(entries[1]["observed_description_chars"], 40);
+    assert_eq!(codex["thresholds"]["tier"], "all_described", "{codex}");
+    // The roots table can cost 0 tokens: its header is shorter than the
+    // absolute-path one (Codex subtracts the two), as on a short Linux path.
+    assert!(codex["thresholds"]["roots_table_cost"].is_u64());
+    assert_eq!(codex["thresholds"]["cap"], 10000);
+    assert!(codex["observed_session"]["transcript"]
+        .as_str()
+        .unwrap()
+        .ends_with("rollout-1.jsonl"));
+}
+
+#[test]
+fn codex_session_comparison_reads_only_rollouts_in_this_homes_session_folders() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let other = tempfile::tempdir().unwrap();
+    // Named like a rollout, in a folder named like Codex's, outside this home.
+    let foreign = other.path().join(".codex/sessions/rollout-1.jsonl");
+    std::fs::create_dir_all(foreign.parent().unwrap()).unwrap();
+    std::fs::write(&foreign, "").unwrap();
+    let mut cmd = test_home::command(env!("CARGO_BIN_EXE_skill-studio"), home);
+    cmd.args(["listing", "--fixture", home.to_str().unwrap(), "--json"])
+        .args(["--codex-session", foreign.to_str().unwrap()])
+        .env("HOME", home)
+        .env("CODEX_HOME", home.join(".codex"))
+        .env("SKILL_STUDIO_TELEMETRY", "0");
+    let out = cmd.output().unwrap();
+    let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(envelope["status"], "error", "{envelope}");
+    assert!(envelope["errors"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("in this home"));
 }

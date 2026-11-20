@@ -170,11 +170,11 @@ rules are firm:
 # Type check only (no emit)
 pnpm run typecheck
 
-# Lint (oxlint)
+# Lint (bun lint, reads .oxlintrc.json and runs the anti-slop plugin)
 pnpm run lint
 pnpm run lint:fix
 
-# Format (oxfmt)
+# Format (bun fmt, reads .oxfmtrc.json)
 pnpm run format
 pnpm run format:check
 
@@ -197,8 +197,8 @@ The app, CLI, MCP server, npm packages and workspace packages share one version,
 | Frontend    | React 19.1, TypeScript 5.8                                      |
 | Styling     | Tailwind CSS 4.x                                                |
 | State       | Zustand 5.x                                                     |
-| Linting     | oxlint (JS/TS), clippy (Rust)                                   |
-| Formatting  | oxfmt (JS/TS), rustfmt (Rust)                                   |
+| Linting     | bun lint (JS/TS, `.oxlintrc.json`), clippy (Rust)               |
+| Formatting  | bun fmt (JS/TS, `.oxfmtrc.json`), rustfmt (Rust)                |
 | Lint plugin | anti-slop (local oxlint JS plugin in `tools/oxlint/anti-slop/`) |
 | Icons       | lucide-react                                                    |
 | Backend     | Rust 2021 Edition                                               |

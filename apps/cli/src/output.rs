@@ -1030,6 +1030,27 @@ pub fn print_listing_table(
             count(ListingState::Omitted),
             count(ListingState::Hidden),
         );
+        if let Some(t) = &row.thresholds {
+            println!(
+                "  Full listing {} {unit}, names and paths only {} {unit} (skill roots table {}). {}",
+                t.full_cost,
+                t.names_only_cost,
+                t.roots_table_cost,
+                t.summary,
+                unit = row.budget_unit
+            );
+        }
+        for entry in row
+            .entries
+            .iter()
+            .filter(|e| e.invocation_mismatch.is_some())
+        {
+            println!(
+                "  Mismatch {}: {}",
+                entry.name,
+                entry.invocation_mismatch.as_deref().unwrap_or_default()
+            );
+        }
         if row.budget.is_none() {
             continue;
         }

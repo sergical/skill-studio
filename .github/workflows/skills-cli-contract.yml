@@ -2,12 +2,32 @@ name: Skills CLI contract
 
 on:
   pull_request:
+    # Selection only narrows PR feedback: every main push runs the full
+    # workflow. These paths cannot change the Rust build or its tests; any
+    # other path, including one nobody listed, runs it. Not docs/ or *.md:
+    # the crates include_str! CHANGELOG.md and docs/flows.md.
+    paths-ignore:
+      - "packages/marketing/**"
+      - "packages/ui/**"
+      - "apps/server/**"
+      - "apps/desktop/src/**"
+      - "apps/desktop/e2e/**"
+      - "tools/oxlint/**"
+  # Main runs save the Rust cache that pull requests restore.
+  push:
+    branches: [main]
   schedule:
     - cron: "23 7 * * 1"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  # A new commit on a pull request cancels that branch's older run. Main runs
+  # and scheduled or manual runs each get their own group, so none is cancelled.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   skills-cli-contract:
@@ -22,6 +42,8 @@ jobs:
         with:
           toolchain: 1.95.0
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: mkdir -p apps/desktop/dist
       - run: cargo test --workspace --all-features -- --ignored skills_cli_contract
         env:

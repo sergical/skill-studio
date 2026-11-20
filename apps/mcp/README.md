@@ -118,8 +118,11 @@ The read-only `listing` tool returns, for each agent and scope, the state of
 each skill in the model's skill list: `described`, `truncated`, `name_only`,
 `omitted` or `hidden`. Optional `claude_budget_fraction`,
 `claude_context_window_tokens` and `codex_max_context_tokens` predict another
-budget. `claude_transcript` compares with one Claude Code session. It writes
-no agent settings.
+budget. `claude_transcript` compares with one Claude Code session and
+`codex_transcript` with one Codex rollout. Codex rows add `thresholds` (tier,
+full and names-only costs, the distance to the next tier, the cap) and
+`invocation_mismatch` on skills Claude Code keeps manual-only that Codex
+lists. It writes no agent settings.
 
 The read-only `skill_sessions` tool reads each agent's newest sessions (100 by
 default, `sessions` up to 500) and returns three lists: `skills`, one row per
