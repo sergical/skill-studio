@@ -26,6 +26,10 @@ import type {
   FrontmatterRepairKind,
   FrontmatterRepairPreview,
   InvocationConflictChoice,
+  ListingReport,
+  ListingRequest,
+  SkillSessionsReport,
+  SkillSessionsRequest,
   LocalEditsDto,
   PackActionReport,
   PackAddRequest,
@@ -606,6 +610,23 @@ export async function getAddMethodDefaults(
  */
 export async function packList(remote: boolean): Promise<PackReport> {
   return callCommand("pack_list", { request: { project_path: null, remote } });
+}
+
+/**
+ * Which skills each agent lists for the model with a description, with a name
+ * only, or not at all. Overrides predict the listing at another budget. Reads only.
+ */
+export async function skillListing(request: ListingRequest): Promise<ListingReport> {
+  return callCommand("skill_listing", { request });
+}
+
+/**
+ * For each agent's recent sessions: which skills were listed with a
+ * description, by name only, or not at all, which were used, and which were
+ * possibly missed. Reads only.
+ */
+export async function skillSessions(request: SkillSessionsRequest): Promise<SkillSessionsReport> {
+  return callCommand("skill_sessions", { request });
 }
 
 /**

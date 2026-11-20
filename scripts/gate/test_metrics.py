@@ -1,12 +1,13 @@
 import argparse
 import json
+import unittest
 from unittest.mock import patch
 
-from test_gate import GateTests
+from git_fixture import GitRepoFixture
 import metrics
 
 
-class MetricsTests(GateTests):
+class MetricsTests(GitRepoFixture, unittest.TestCase):
     def test_history_counts_review_before_merge_and_behind_main(self):
         self.write('contracts/api.json', '{}')
         self.commit()

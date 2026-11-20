@@ -871,7 +871,7 @@
         },
         "days": {
           "default": null,
-          "description": "Rolling window in days; defaults to 30.",
+          "description": "Rolling window in days, 30 at most; defaults to 30.",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -924,7 +924,7 @@
         },
         "since": {
           "default": null,
-          "description": "Inclusive start (YYYY-MM-DD or RFC 3339).",
+          "description": "Inclusive start (YYYY-MM-DD or RFC 3339), 30 days ago at the earliest.",
           "type": [
             "string",
             "null"
@@ -1040,6 +1040,91 @@
       "type": "object"
     },
     "name": "list_events"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "claude_budget_fraction": {
+          "description": "Predict Claude Code at this `skillListingBudgetFraction` (0 to 1).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "claude_context_window_tokens": {
+          "description": "Predict Claude Code with this context window in tokens.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "claude_transcript": {
+          "description": "Compare Claude Code with this session transcript instead of the newest one.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true
+        },
+        "codex_max_context_tokens": {
+          "description": "Predict Codex at this `skills.max_context_tokens` (capped at 10000).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "count_by": {
+          "default": null,
+          "description": "Count the rows of the whole main list by this field. A list field\ncounts each item.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cursor": {
+          "default": null,
+          "description": "A `next_cursor` from `page` or `page.also` of an earlier call with the\nsame filters. It continues that one list; the other lists return only\ntotals.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fields": {
+          "default": [],
+          "description": "Row fields to keep. Empty keeps every field.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "limit": {
+          "default": null,
+          "description": "Rows to return from the main list. `0` returns only `page` (totals\nand `counts`). Without it, rows until the answer is 32 KB.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "project_path": {
+          "description": "Also report this project. It must be in the runtime scope.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true
+        }
+      },
+      "type": "object"
+    },
+    "name": "listing"
   },
   {
     "inputSchema": {
@@ -1900,9 +1985,69 @@
             "null"
           ]
         },
+        "fields": {
+          "default": [],
+          "description": "Row fields to keep. Empty keeps every field.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "limit": {
+          "default": null,
+          "description": "Rows to return from the main list. `0` returns only `page` (totals\nand `counts`). Without it, rows until the answer is 32 KB.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "project_path": {
+          "description": "Only sessions recorded in this project, and its skills. It must be in\nthe runtime scope.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true
+        },
+        "sessions": {
+          "description": "Newest sessions to read per agent, at most 500. Default 100.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "skill_sessions"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "count_by": {
+          "default": null,
+          "description": "Count the rows of the whole main list by this field. A list field\ncounts each item.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cursor": {
+          "default": null,
+          "description": "A `next_cursor` from `page` or `page.also` of an earlier call with the\nsame filters. It continues that one list; the other lists return only\ntotals.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "days": {
           "default": null,
-          "description": "How many days back to count uses. Default 30.",
+          "description": "How many days back to count uses, 30 at most. Default 30.",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -1946,7 +2091,7 @@
         },
         "since": {
           "default": null,
-          "description": "Count uses from this date (YYYY-MM-DD or RFC 3339) instead of `days`.",
+          "description": "Count uses from this date (YYYY-MM-DD or RFC 3339) instead of `days`,\n30 days ago at the earliest.",
           "type": [
             "string",
             "null"

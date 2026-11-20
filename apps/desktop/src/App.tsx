@@ -13,6 +13,8 @@ import { CommandPalette } from "./components/CommandPalette/CommandPalette";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { SkillActivityView } from "./components/Activity/SkillActivityView";
 import { HomeView } from "./components/Home/HomeView";
+import { ListingView } from "./components/Listing/ListingView";
+import { SessionsView } from "./components/Sessions/SessionsView";
 import { SettingsView } from "./components/Settings/SettingsView";
 import { LearnView } from "./components/Learn/LearnView";
 import { SkillsView } from "./components/SkillList/SkillsView";
@@ -22,13 +24,8 @@ import { SkillPage } from "./components/SkillDetail/SkillPage";
 import { useAppShortcuts } from "./hooks/useAppShortcuts";
 import { useNativeShell } from "./hooks/useNativeShell";
 import { useSkillSnapshot } from "./hooks/useSkillSnapshot";
-import {
-  dataFolderStatus,
-  getTrackedProjects,
-  importTrackedProjects,
-  invokeErrorMessage,
-} from "./lib/skill-api";
-import { clearLegacyProjectPaths, readLegacyProjectPaths } from "./lib/legacy-project-paths";
+import { dataFolderStatus, invokeErrorMessage } from "./lib/skill-api";
+import { loadStartupTrackedProjects } from "./lib/legacy-project-paths";
 import type { ActiveView } from "./store/appStore";
 import { resolveSkillPageDeployment } from "./components/SkillDetail/skill-page-deployment";
 import { useAppStore } from "./store/appStore";
@@ -87,24 +84,16 @@ function App() {
 
   const onSelectSkill = (name: string, deploymentPath?: string) => openSkill(name, deploymentPath);
 
-  // Load the tracked project list once on startup. A machine with leftover
-  // localStorage entries imports them into `~/.agents/skill-studio.json`
-  // first (home-directory entries are the backend's job to drop, same as any
-  // other add) and clears localStorage only once that import succeeds; every
-  // other machine reads the saved list straight from the backend.
+  // Load the tracked project list once on startup, importing any leftover
+  // localStorage list first (see `loadStartupTrackedProjects`).
   const didLoadStartupProjects = useRef(false);
   useEffect(() => {
     if (didLoadStartupProjects.current) return;
     didLoadStartupProjects.current = true;
 
     (async () => {
-      const legacy = readLegacyProjectPaths();
       try {
-        const projects = legacy
-          ? await importTrackedProjects(legacy.added, legacy.excluded)
-          : await getTrackedProjects();
-        setTrackedProjects(projects);
-        if (legacy) clearLegacyProjectPaths();
+        setTrackedProjects(await loadStartupTrackedProjects());
       } catch (err) {
         addToast({
           type: "error",
@@ -248,6 +237,12 @@ function App() {
     case "packs":
       main = <PacksView />;
       break;
+    case "listing":
+      main = <ListingView snapshot={snapshot} />;
+      break;
+    case "sessions":
+      main = <SessionsView />;
+      break;
     case "skill": {
       // Opened from Learn or Settings: neither keeps a list worth reviving, so the
       // skill page fully replaces `main`, same as before.
@@ -294,8 +289,10 @@ function App() {
           requestRescan={requestRescan}
         />
         <div className="flex min-w-0 flex-1 flex-col pr-2 pb-2">
-          <div data-tauri-drag-region className="h-9 shrink-0" />
-          <main className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border bg-bg-primary">
+          {/* The page panel sits 8px in from the top, right and bottom window edges. The top gap
+              drags the window; so does the page header (PageShell). */}
+          <div data-tauri-drag-region className="h-2 shrink-0" />
+          <main className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border-subtle bg-bg-primary">
             {main}
           </main>
         </div>

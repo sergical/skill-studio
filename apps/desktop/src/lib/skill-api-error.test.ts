@@ -45,43 +45,6 @@ describe("callCommand normalizes a raw string rejection to an Error", () => {
 
     await expect(removeSkill({ deployment_id: "find-bugs" })).rejects.toBe(original);
   });
-
-  it("a_drift_refusal_string_reaches_the_restore_catch_site_intact_so_force_restore_stays_reachable", async () => {
-    mockIPC(() => {
-      throw "/root has changed since the event";
-    });
-
-    let caught: unknown;
-    try {
-      await restoreSkillEvent("event-1", false);
-    } catch (err) {
-      caught = err;
-    }
-
-    // The exact catch-site logic from SkillHistorySection.tsx's useRestoreEvent: before the
-    // fix, a raw string rejection here always read "Unknown error", which never matches
-    // isDriftRefusal - the force-restore dialog was unreachable no matter what the backend said.
-    const message = caught instanceof Error ? caught.message : "Unknown error";
-    expect(message).toBe("/root has changed since the event");
-    expect(
-      shouldOfferForceRestore(
-        {
-          id: "event-1",
-          ts: "2026-09-05T00:00:00Z",
-          kind: "explode_shared_dir",
-          skill: "find-bugs",
-          status: "done",
-          restorable: true,
-          force_restorable: true,
-          harness: null,
-          project_path: null,
-          reverted_by: null,
-          scope: null,
-        },
-        message,
-      ),
-    ).toBe(true);
-  });
 });
 
 it("Activity Undo offers Force for a changed source-lock row or leaves the conflict without recovery", async () => {

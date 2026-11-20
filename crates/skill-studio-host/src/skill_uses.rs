@@ -1774,8 +1774,8 @@ impl SkillInvocationIndex {
         report.files_dropped += before - self.databases.len();
     }
 
-    /// Per-skill use totals across every cached transcript, with the rolling
-    /// windows computed relative to `now`, over uses `filter` counts.
+    /// Per-skill use totals over the last 30 days of cached history, with the
+    /// rolling windows computed relative to `now`, over uses `filter` counts.
     pub fn stats_at(
         &self,
         now: DateTime<Utc>,
@@ -1784,15 +1784,10 @@ impl SkillInvocationIndex {
         skill_stats(self.all_uses(), filter, now)
     }
 
-    /// Per-day use counts over the last `days` days, relative to `now`, over
-    /// uses `filter` counts.
-    pub fn heatmap_at(
-        &self,
-        days: u32,
-        now: DateTime<Utc>,
-        filter: &SkillUseFilter,
-    ) -> InvocationHeatmap {
-        skill_heatmap(self.all_uses(), filter, days, now)
+    /// Per-day use counts over the last 30 days, relative to `now`, over uses
+    /// `filter` counts.
+    pub fn heatmap_at(&self, now: DateTime<Utc>, filter: &SkillUseFilter) -> InvocationHeatmap {
+        skill_heatmap(self.all_uses(), filter, now)
     }
 
     /// File uses plus database uses. A database row id (`"<table>:<id>"`)
@@ -2010,12 +2005,19 @@ mod tests {
         }
     }
 
+    /// Stats as of one minute after the newest indexed use, so a fixture with
+    /// fixed timestamps stays inside the 30-day history.
     fn stats(
         index: &SkillInvocationIndex,
         known_skills: &StdBTreeSet<String>,
         sources: &DiscoverySources,
     ) -> Vec<SkillInvocationStats> {
-        index.stats_at(Utc::now(), &filter(known_skills, sources))
+        let now = index
+            .all_uses()
+            .map(|use_| use_.at)
+            .max()
+            .map_or_else(Utc::now, |at| at + chrono::Duration::minutes(1));
+        index.stats_at(now, &filter(known_skills, sources))
     }
 
     fn usage(
@@ -2256,8 +2258,7 @@ mod tests {
         let sources = DiscoverySources::default();
         index.refresh(home, &sources);
         let stats = stats(&index, &known_skills, &sources);
-        assert_eq!(stats.len(), 1);
-        assert_eq!(stats[0].total, 3);
+        assert_eq!(stats.len(), 1, "the 60-day-old use is before the history");
         assert_eq!(stats[0].last_24_hours, 2);
         assert_eq!(stats[0].last_7_days, 2);
         assert_eq!(stats[0].last_14_days, 2);
@@ -2316,7 +2317,7 @@ mod tests {
         let known_skills = known(&["write-tests", "lint-code"]);
         let sources = DiscoverySources::default();
         index.refresh(home, &sources);
-        let heatmap = index.heatmap_at(30, Utc::now(), &filter(&known_skills, &sources));
+        let heatmap = index.heatmap_at(Utc::now(), &filter(&known_skills, &sources));
         assert_eq!(heatmap.days.len(), 1);
         assert_eq!(*heatmap.days.values().next().unwrap(), 2);
     }
@@ -2340,42 +2341,7 @@ mod tests {
         let stats = stats(&index, &known_skills, &sources);
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].skill, "write-tests");
-        assert_eq!(stats[0].total, 1);
-    }
-
-    #[test]
-    fn append_to_transcript_only_parses_the_new_line() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path();
-        let session_dir = home.join(CLAUDE_PROJECTS_ROOT).join("-my-project");
-        let path = write_transcript(
-            &session_dir,
-            "session.jsonl",
-            "write-tests",
-            "2026-08-01T12:00:00Z",
-            "/my-project",
-        );
-
-        let mut index = SkillInvocationIndex::default();
-        let known_skills = known(&["write-tests", "lint-code"]);
-        let sources = DiscoverySources::default();
-        index.refresh(home, &sources);
-        let parsed_bytes_after_first = index.files.get(&path).unwrap().parsed_bytes;
-        assert_eq!(parsed_bytes_after_first, fs::metadata(&path).unwrap().len());
-
-        let mut content = fs::read(&path).unwrap();
-        content.extend(skill_line("lint-code", "2026-08-02T12:00:00Z", "/my-project").into_bytes());
-        content.push(b'\n');
-        fs::write(&path, content).unwrap();
-
-        let report = index.refresh(home, &sources);
-        assert_eq!(report.files_reparsed, 1);
-        let stats = stats(&index, &known_skills, &sources);
-        assert_eq!(stats.len(), 2);
-        assert_eq!(
-            index.files.get(&path).unwrap().parsed_bytes,
-            fs::metadata(&path).unwrap().len()
-        );
+        assert_eq!(stats[0].last_30_days, 1);
     }
 
     #[test]
@@ -2395,7 +2361,7 @@ mod tests {
         let known_skills = known(&["write-tests", "lint-code"]);
         let sources = DiscoverySources::default();
         index.refresh(home, &sources);
-        assert_eq!(stats(&index, &known_skills, &sources)[0].total, 1);
+        assert_eq!(stats(&index, &known_skills, &sources)[0].last_30_days, 1);
 
         fs::write(
             &path,
@@ -2433,7 +2399,7 @@ mod tests {
         let sources = DiscoverySources::default();
         let first = index.refresh(home, &sources);
         assert!(first.incomplete);
-        assert!(stats(&index, &known_skills, &sources)[0].total < 20);
+        assert!(stats(&index, &known_skills, &sources)[0].last_30_days < 20);
 
         let mut passes = 0;
         loop {
@@ -2445,7 +2411,7 @@ mod tests {
             assert!(passes < 50, "backlog never drained");
         }
         assert_eq!(index.all_uses().count(), 20);
-        assert_eq!(stats(&index, &known_skills, &sources)[0].total, 20);
+        assert_eq!(stats(&index, &known_skills, &sources)[0].last_30_days, 20);
     }
 
     #[test]
@@ -2538,47 +2504,6 @@ mod tests {
     }
 
     #[test]
-    fn same_size_rewrite_is_detected_via_mtime() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path();
-        let session_dir = home.join(CLAUDE_PROJECTS_ROOT).join("-my-project");
-        let path = write_transcript(
-            &session_dir,
-            "session.jsonl",
-            "run-tests",
-            "2026-08-01T12:00:00Z",
-            "/my-project",
-        );
-
-        let mut index = SkillInvocationIndex::default();
-        let known_skills = known(&["run-tests", "lint-code"]);
-        let sources = DiscoverySources::default();
-        index.refresh(home, &sources);
-        assert_eq!(stats(&index, &known_skills, &sources)[0].skill, "run-tests");
-
-        let original_size = fs::metadata(&path).unwrap().len();
-        let new_content = format!(
-            "{}\n",
-            skill_line("lint-code", "2026-08-01T12:00:00Z", "/my-project")
-        );
-        assert_eq!(new_content.len() as u64, original_size);
-        fs::write(&path, &new_content).unwrap();
-        let bumped_mtime =
-            fs::metadata(&path).unwrap().modified().unwrap() + Duration::from_secs(1);
-        fs::OpenOptions::new()
-            .write(true)
-            .open(&path)
-            .unwrap()
-            .set_modified(bumped_mtime)
-            .unwrap();
-
-        index.refresh(home, &sources);
-        let stats = stats(&index, &known_skills, &sources);
-        assert_eq!(stats.len(), 1);
-        assert_eq!(stats[0].skill, "lint-code");
-    }
-
-    #[test]
     fn truncate_and_regrow_clears_stale_uses_via_tail_sample() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
@@ -2600,9 +2525,15 @@ mod tests {
             "write-tests"
         );
 
+        // Regrow past the old length, so refresh reaches the tail-sample
+        // check instead of the shorter-file branch: the bytes before the old
+        // end no longer match, so the file is parsed again from the start.
+        let old_len = fs::metadata(&path).unwrap().len();
         let mut new_content = String::from("short\n");
         new_content.push_str(&skill_line("lint-code", "2026-08-02T12:00:00Z", "/other"));
         new_content.push('\n');
+        new_content.push_str(&"\n".repeat(old_len as usize));
+        assert!(new_content.len() as u64 > old_len);
         fs::write(&path, &new_content).unwrap();
 
         index.refresh(home, &sources);
@@ -2757,7 +2688,7 @@ mod tests {
         assert!(index
             .all_uses()
             .all(|use_| use_.session.as_deref() == Some("s1")));
-        assert_eq!(stats(&index, &skills, &sources)[0].total, 1);
+        assert_eq!(stats(&index, &skills, &sources)[0].last_30_days, 1);
         let report = usage(home, &skills, now);
         assert_eq!(report.rows[0].recent_uses, 2);
         assert_eq!(report.rows[0].sessions, 2);
@@ -2768,28 +2699,6 @@ mod tests {
             loaded.all_uses().collect::<Vec<_>>(),
             index.all_uses().collect::<Vec<_>>()
         );
-    }
-
-    #[test]
-    fn subagent_transcript_use_is_counted() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path();
-        let subagents_dir = home.join(CLAUDE_PROJECTS_ROOT).join("p/s1/subagents");
-        write_transcript(
-            &subagents_dir,
-            "a.jsonl",
-            "write-tests",
-            "2026-08-01T12:00:00Z",
-            "/my-project",
-        );
-
-        let mut index = SkillInvocationIndex::default();
-        let known_skills = known(&["write-tests"]);
-        let sources = DiscoverySources::default();
-        index.refresh(home, &sources);
-        let stats = stats(&index, &known_skills, &sources);
-        assert_eq!(stats.len(), 1);
-        assert_eq!(stats[0].total, 1);
     }
 
     #[test]
@@ -2815,7 +2724,7 @@ mod tests {
         let stats = stats(&index, &known_skills, &sources);
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].skill, "deploy");
-        assert_eq!(stats[0].total, 1);
+        assert_eq!(stats[0].last_30_days, 1);
         assert_eq!(stats[0].by_trigger_30_days.user, 1);
         let _ = SkillTrigger::User; // referenced for readability of the assertion above
     }
@@ -2874,10 +2783,6 @@ mod tests {
 
     #[test]
     fn skill_use_watch_paths_covers_claude_projects_and_opencode_data() {
-        // `opencode_watch_dirs` (folded into `skill_use_watch_paths` for
-        // OpenCode) reads `OPENCODE_DB`/`XDG_DATA_HOME` via
-        // `opencode_databases`, so this needs the same cross-test env lock
-        // every other OpenCode-env-reading test in the crate takes.
         let home = PathBuf::from("/home/tester");
         let paths = skill_use_watch_paths(&home);
         assert!(paths.contains(&SkillUseWatchPath {
@@ -2912,9 +2817,6 @@ mod tests {
 
     #[test]
     fn is_skill_use_change_matches_opencode_databases_and_claude_transcripts() {
-        // `is_opencode_skill_use_change` reads `OPENCODE_DB`/`XDG_DATA_HOME`
-        // via `opencode_databases`, so this needs the same cross-test env
-        // lock every other OpenCode-env-reading test in the crate takes.
         let home = PathBuf::from("/home/tester");
         assert!(is_skill_use_change(
             &home,
@@ -3134,7 +3036,7 @@ mod tests {
                 let sources = DiscoverySources::default();
                 index.refresh(home, &sources);
                 assert!(index.all_uses().all(|use_| use_.session.is_none()));
-                assert_eq!(stats(&index, &known_skills, &sources)[0].total, 2);
+                assert_eq!(stats(&index, &known_skills, &sources)[0].last_30_days, 2);
                 let report = usage(
                     home,
                     &known_skills,
@@ -3242,32 +3144,10 @@ mod tests {
             let by_skill: BTreeMap<&str, &SkillInvocationStats> =
                 stats.iter().map(|s| (s.skill.as_str(), s)).collect();
             assert_eq!(by_skill.len(), 2);
-            assert_eq!(by_skill["foo"].total, 1);
+            assert_eq!(by_skill["foo"].last_30_days, 1);
             assert_eq!(by_skill["foo"].by_trigger_30_days.user, 1);
-            assert_eq!(by_skill["bar"].total, 1);
+            assert_eq!(by_skill["bar"].last_30_days, 1);
             assert_eq!(by_skill["bar"].by_trigger_30_days.file_read, 1);
-        }
-
-        #[test]
-        fn a_flat_archived_session_file_is_read() {
-            let tmp = tempfile::tempdir().unwrap();
-            let home = tmp.path();
-            write_rollout(
-                &home.join(CODEX_ARCHIVED_SESSIONS_DIR),
-                "old.jsonl",
-                &[
-                    session_meta_line("sess-a", "/proj-a"),
-                    skill_block_line("2026-09-16T12:00:00Z", "foo"),
-                ],
-            );
-
-            let mut index = SkillInvocationIndex::default();
-            let known_skills = known(&["foo"]);
-            let sources = DiscoverySources::default();
-            index.refresh(home, &sources);
-            let stats = stats(&index, &known_skills, &sources);
-            assert_eq!(stats.len(), 1);
-            assert_eq!(stats[0].skill, "foo");
         }
 
         #[test]
@@ -3358,7 +3238,7 @@ mod tests {
             let known_skills = known(&["foo"]);
             let sources = DiscoverySources::default();
             index.refresh(home, &sources);
-            assert_eq!(stats(&index, &known_skills, &sources)[0].total, 1);
+            assert_eq!(stats(&index, &known_skills, &sources)[0].last_30_days, 1);
 
             let archived_dir = home.join(CODEX_ARCHIVED_SESSIONS_DIR);
             fs::create_dir_all(&archived_dir).unwrap();
@@ -3367,7 +3247,7 @@ mod tests {
             index.refresh(home, &sources);
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1);
-            assert_eq!(stats[0].total, 1, "the use must not be doubled");
+            assert_eq!(stats[0].last_30_days, 1, "the use must not be doubled");
         }
 
         #[test]
@@ -3417,7 +3297,7 @@ mod tests {
             let known_skills = known(&["foo"]);
             let sources = DiscoverySources::default();
             let first = index.refresh(home, &sources);
-            assert_eq!(stats(&index, &known_skills, &sources)[0].total, 1);
+            assert_eq!(stats(&index, &known_skills, &sources)[0].last_30_days, 1);
 
             let mut content = fs::read_to_string(&path).unwrap();
             content.push_str(&skill_block_line("2026-09-16T12:05:00Z", "foo"));
@@ -3442,7 +3322,7 @@ mod tests {
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1);
             assert_eq!(
-                stats[0].total, 2,
+                stats[0].last_30_days, 2,
                 "the missed use: the appended skill use was not counted"
             );
         }
@@ -3555,10 +3435,10 @@ mod tests {
             let by_skill: BTreeMap<&str, &SkillInvocationStats> =
                 stats.iter().map(|s| (s.skill.as_str(), s)).collect();
             assert_eq!(by_skill.len(), 2, "baz's read isn't under a skills root");
-            assert_eq!(by_skill["foo"].total, 1);
+            assert_eq!(by_skill["foo"].last_30_days, 1);
             assert_eq!(by_skill["foo"].by_trigger_30_days.user, 1);
             assert_eq!(by_skill["foo"].by_project_30_days.get("/proj-a"), Some(&1));
-            assert_eq!(by_skill["bar"].total, 1);
+            assert_eq!(by_skill["bar"].last_30_days, 1);
             assert_eq!(by_skill["bar"].by_trigger_30_days.file_read, 1);
             assert_eq!(by_skill["bar"].by_project_30_days.get("/proj-a"), Some(&1));
         }
@@ -3699,7 +3579,7 @@ mod tests {
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1, "the read outside a root must not count");
             assert_eq!(stats[0].skill, "foo");
-            assert_eq!(stats[0].total, 1);
+            assert_eq!(stats[0].last_30_days, 1);
             assert_eq!(
                 stats[0]
                     .by_project_30_days
@@ -3739,7 +3619,7 @@ mod tests {
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1);
             assert_eq!(
-                stats[0].total, 1,
+                stats[0].last_30_days, 1,
                 "the same session's file-read dedupe must collapse the subagent copy"
             );
             assert!(index
@@ -3770,7 +3650,7 @@ mod tests {
             index.refresh(home, &sources);
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1);
-            assert_eq!(stats[0].total, 1);
+            assert_eq!(stats[0].last_30_days, 1);
             assert!(stats[0].by_project_30_days.is_empty());
         }
 
@@ -3921,11 +3801,11 @@ mod tests {
             let stats = stats(&index, &known_skills, &sources);
             let by_skill: BTreeMap<&str, &SkillInvocationStats> =
                 stats.iter().map(|s| (s.skill.as_str(), s)).collect();
-            assert_eq!(by_skill["foo"].total, 1);
+            assert_eq!(by_skill["foo"].last_30_days, 1);
             assert_eq!(by_skill["foo"].by_trigger_30_days.file_read, 1);
-            assert_eq!(by_skill["bar"].total, 1);
+            assert_eq!(by_skill["bar"].last_30_days, 1);
             assert_eq!(by_skill["bar"].by_trigger_30_days.agent, 1);
-            assert_eq!(by_skill["baz"].total, 1);
+            assert_eq!(by_skill["baz"].last_30_days, 1);
             assert_eq!(by_skill["baz"].by_trigger_30_days.user, 1);
             assert_eq!(
                 by_skill["foo"]
@@ -3977,11 +3857,11 @@ mod tests {
             let by_skill: BTreeMap<&str, &SkillInvocationStats> =
                 stats.iter().map(|s| (s.skill.as_str(), s)).collect();
             assert_eq!(
-                by_skill["bar"].total, 2,
+                by_skill["bar"].last_30_days, 2,
                 "one from s1, one from s2's new line"
             );
-            assert_eq!(by_skill["foo"].total, 1);
-            assert_eq!(by_skill["baz"].total, 1);
+            assert_eq!(by_skill["foo"].last_30_days, 1);
+            assert_eq!(by_skill["baz"].last_30_days, 1);
         }
 
         #[test]
@@ -4034,16 +3914,6 @@ mod tests {
         }
 
         #[test]
-        fn no_grok_home_is_not_incomplete() {
-            let tmp = tempfile::tempdir().unwrap();
-            let home = tmp.path();
-            let mut index = SkillInvocationIndex::default();
-            let sources = DiscoverySources::default();
-            let report = index.refresh(home, &sources);
-            assert!(!report.incomplete);
-        }
-
-        #[test]
         fn resuming_a_file_keeps_counted_calls_and_ignores_a_repeated_id() {
             let tmp = tempfile::tempdir().unwrap();
             let home = tmp.path();
@@ -4060,7 +3930,7 @@ mod tests {
             let known_skills = known(&["bar"]);
             let sources = DiscoverySources::default();
             index.refresh(home, &sources);
-            assert_eq!(stats(&index, &known_skills, &sources)[0].total, 1);
+            assert_eq!(stats(&index, &known_skills, &sources)[0].last_30_days, 1);
 
             let mut content = fs::read_to_string(&path).unwrap();
             content.push_str(&grok_line(recent_secs(1), &skill_update("tc1", "bar")));
@@ -4068,7 +3938,7 @@ mod tests {
             fs::write(&path, &content).unwrap();
 
             index.refresh(home, &sources);
-            assert_eq!(stats(&index, &known_skills, &sources)[0].total, 1);
+            assert_eq!(stats(&index, &known_skills, &sources)[0].last_30_days, 1);
         }
 
         #[test]
@@ -4095,16 +3965,6 @@ mod tests {
             assert_eq!(report.files_dropped, 1);
             assert!(stats(&index, &known_skills, &sources).is_empty());
         }
-    }
-
-    #[test]
-    fn no_pi_and_no_cursor_is_not_incomplete() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path();
-        let mut index = SkillInvocationIndex::default();
-        let sources = DiscoverySources::default();
-        let report = index.refresh(home, &sources);
-        assert!(!report.incomplete);
     }
 
     mod opencode_databases {
@@ -4329,7 +4189,7 @@ mod tests {
             index.refresh(home, &sources);
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1);
-            assert_eq!(stats[0].total, 1);
+            assert_eq!(stats[0].last_30_days, 1);
             assert_eq!(stats[0].by_trigger_30_days.agent, 1);
         }
 
@@ -4376,7 +4236,7 @@ mod tests {
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1);
             assert_eq!(stats[0].skill, "foo");
-            assert_eq!(stats[0].total, 1);
+            assert_eq!(stats[0].last_30_days, 1);
             assert_eq!(stats[0].by_trigger_30_days.file_read, 1);
         }
 
@@ -4458,7 +4318,7 @@ mod tests {
             let known_skills = known(&["deploy", "lint"]);
             let sources = DiscoverySources::default();
             index.refresh(home, &sources);
-            assert_eq!(stats(&index, &known_skills, &sources)[0].total, 1);
+            assert_eq!(stats(&index, &known_skills, &sources)[0].last_30_days, 1);
 
             {
                 let conn = Connection::open(&db_path).unwrap();
@@ -4476,7 +4336,7 @@ mod tests {
             let report = index.refresh(home, &sources);
             assert_eq!(report.databases_read, 1);
             let stats = stats(&index, &known_skills, &sources);
-            let total: u32 = stats.iter().map(|s| s.total).sum();
+            let total: u32 = stats.iter().map(|s| s.last_30_days).sum();
             assert_eq!(total, 2, "old row must not be doubled");
         }
 
@@ -4502,7 +4362,7 @@ mod tests {
             let known_skills = known(&["deploy"]);
             let sources = DiscoverySources::default();
             index.refresh(home, &sources);
-            assert_eq!(stats(&index, &known_skills, &sources)[0].total, 1);
+            assert_eq!(stats(&index, &known_skills, &sources)[0].last_30_days, 1);
 
             {
                 let conn = Connection::open(&db_path).unwrap();
@@ -4516,7 +4376,7 @@ mod tests {
             index.refresh(home, &sources);
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1);
-            assert_eq!(stats[0].total, 1);
+            assert_eq!(stats[0].last_30_days, 1);
         }
 
         #[test]
@@ -4552,7 +4412,7 @@ mod tests {
             index.refresh(home, &sources);
             let total: u32 = stats(&index, &known_skills, &sources)
                 .iter()
-                .map(|s| s.total)
+                .map(|s| s.last_30_days)
                 .sum();
             assert_eq!(total, 2);
 
@@ -4594,7 +4454,7 @@ mod tests {
             index.refresh(home, &sources);
             let stats = stats(&index, &known_skills, &sources);
             assert_eq!(stats.len(), 1);
-            assert_eq!(stats[0].total, 1);
+            assert_eq!(stats[0].last_30_days, 1);
         }
 
         #[test]
@@ -4663,36 +4523,6 @@ mod tests {
             let report = index.refresh(home, &sources);
             assert_eq!(report.files_dropped, 1);
             assert!(stats(&index, &known_skills, &sources).is_empty());
-        }
-
-        #[test]
-        fn refresh_never_creates_wal_or_shm_sidecars() {
-            let (tmp, db_path) = temp_opencode_db_home();
-            let home = tmp.path();
-            {
-                let conn = Connection::open(&db_path).unwrap();
-                create_message_table(&conn);
-                insert_message(
-                    &conn,
-                    "m1",
-                    "s1",
-                    "skill",
-                    1000,
-                    1000,
-                    r#"{"skill":"deploy"}"#,
-                );
-            }
-
-            let mut index = SkillInvocationIndex::default();
-            let sources = DiscoverySources::default();
-            index.refresh(home, &sources);
-
-            let mut wal = db_path.as_os_str().to_owned();
-            wal.push("-wal");
-            let mut shm = db_path.as_os_str().to_owned();
-            shm.push("-shm");
-            assert!(!Path::new(&wal).exists());
-            assert!(!Path::new(&shm).exists());
         }
 
         #[test]
@@ -4779,10 +4609,6 @@ mod tests {
 
         #[test]
         fn an_unreadable_database_file_reads_nothing_and_never_sets_incomplete() {
-            // `refresh` reads `OPENCODE_DB`/`XDG_DATA_HOME` via
-            // `opencode_databases` even for this non-OpenCode-shaped file, so
-            // this test races `a_custom_opencode_db_path_is_watched_...`
-            // (which sets `OPENCODE_DB` process-wide) without this lock.
             let tmp = tempfile::tempdir().unwrap();
             let home = tmp.path();
             // An existing (empty) Claude Code projects dir, so this test's

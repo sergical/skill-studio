@@ -42,7 +42,7 @@ pub(crate) fn is_opencode_database_name(name: &str) -> bool {
 /// (`discovery::opencode_worktrees`), and the skill-use reader's root and
 /// disk watch (`skill_uses::opencode_root`, `SOURCES`'s `OPEN_CODE` watch).
 pub(crate) fn opencode_data_dir(home: &Path) -> PathBuf {
-    match std::env::var_os("XDG_DATA_HOME") {
+    match agent_env_var("XDG_DATA_HOME") {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir).join("opencode"),
         _ => home.join(OPENCODE_DATA_ROOT),
     }
@@ -58,7 +58,7 @@ pub(crate) fn opencode_data_dir(home: &Path) -> PathBuf {
 /// [`opencode_data_dir`].
 pub fn opencode_databases(home: &Path) -> Vec<PathBuf> {
     let data_dir = opencode_data_dir(home);
-    if let Some(over) = std::env::var_os("OPENCODE_DB") {
+    if let Some(over) = agent_env_var("OPENCODE_DB") {
         if over.is_empty() || over == ":memory:" {
             return Vec::new();
         }
@@ -136,6 +136,16 @@ pub(crate) fn table_exists(conn: &Connection, table: &str) -> rusqlite::Result<b
     .map(|found| found.is_some())
 }
 
+/// Reads an environment variable that moves an agent's folders
+/// (`CODEX_HOME`, `XDG_DATA_HOME`, `OPENCODE_DB`, ...). In unit tests it reads
+/// nothing outside a `run_with_env_in_child` child, so the test runner's own
+/// variables never send a fixture home to real folders.
+pub(crate) fn agent_env_var(name: &str) -> Option<std::ffi::OsString> {
+    #[cfg(test)]
+    std::env::var_os(ENV_CHILD_ROOT)?;
+    std::env::var_os(name)
+}
+
 /// Set on the child test process that `run_with_env_in_child` starts; holds
 /// the temp directory the child builds its fixture under.
 #[cfg(test)]
@@ -143,7 +153,7 @@ const ENV_CHILD_ROOT: &str = "SKILL_STUDIO_HOST_ENV_CHILD_ROOT";
 
 /// Runs `body` in a child copy of this test binary with the env vars from
 /// `env` set, so they never reach the tests running in parallel in this
-/// process. The child drops any `OpenCode` path override it inherits, so a
+/// process. The child drops any agent path override it inherits, so a
 /// developer's own setting cannot change the result. `module` is the caller's `module_path!()` and `test` its function
 /// name. Both calls run `body` with the same temp root: the parent picks it,
 /// the child receives it.
@@ -163,6 +173,7 @@ pub(crate) fn run_with_env_in_child(
     let name = format!("{module}::{test}");
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args([name.as_str(), "--exact", "--nocapture", "--test-threads=1"])
+        .env_remove("CODEX_HOME")
         .env_remove("XDG_DATA_HOME")
         .env_remove("XDG_CONFIG_HOME")
         .env_remove("OPENCODE_CONFIG_DIR")

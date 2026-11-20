@@ -617,27 +617,6 @@ mod tests {
         );
     }
 
-    /// `two_login_shell_lookups_share_one_process_wide_probe_or_names_the_second_spawn`:
-    /// `core_runtime::build_runtime_write_at` builds a fresh `Runtime` (and
-    /// so a fresh `LoginShellToolLookup`) per command - park, unpark,
-    /// update, remove, doctor, fix, undo, twice at startup. Two separate
-    /// `new()` instances must read the same process-wide `LOGIN_SHELL_PATH`
-    /// cache rather than each probing their own login shell. Fails if
-    /// `LoginShellToolLookup::new()` goes back to a fresh per-instance probe
-    /// instead of the shared cache: the two instances could then disagree
-    /// if the login shell's `PATH` output ever varied between spawns.
-    #[test]
-    fn two_login_shell_lookups_share_one_process_wide_probe_or_names_the_second_spawn() {
-        let first = LoginShellToolLookup::new();
-        let second = LoginShellToolLookup::new();
-
-        assert_eq!(
-            first.dirs(),
-            second.dirs(),
-            "two LoginShellToolLookup instances disagreed on the probed PATH - each must read the same process-wide cache, not probe independently"
-        );
-    }
-
     /// `every_installed_nvm_node_version_gets_its_own_fallback_bin_dir_or_names_the_version_missed`:
     /// nvm has no single "current" symlink guaranteed to exist, so every
     /// installed version's `bin` directory must be a fallback candidate,

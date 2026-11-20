@@ -4,7 +4,6 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  coverageGaps,
   deploymentWithSpecViolations,
   findDuplicateSkills,
   findLeftBehindPairs,
@@ -13,6 +12,7 @@ import {
   findSpecViolations,
   findSpecWarnings,
   specViolationSeverity,
+  HEALTH_ISSUE_KIND_LABEL,
   HEALTH_ISSUE_KIND_ORDER,
   isBlockingSpecViolation,
 } from "./skill-health";
@@ -142,26 +142,6 @@ describe("findSpecWarnings", () => {
   it("ignores a notes-only skill, or a harmless length note would raise a warning", () => {
     const skill = fixtureSkill({ spec_violations: [NAME_FORMAT] });
     expect(findSpecWarnings([skill])).toEqual([]);
-  });
-});
-
-describe("coverageGaps", () => {
-  it("flags a skill deployed to some, but not all, first-class agents at the same scope", () => {
-    const skill = fixtureSkill({
-      deployments: [fixtureDeployment({ agent: "Claude Code", scope: "global" })],
-    });
-    const gaps = coverageGaps([skill]);
-    expect(gaps).toHaveLength(1);
-    expect(gaps[0].scopeLabel).toBe("Global");
-    expect(gaps[0].missing).not.toContain("Claude Code");
-  });
-
-  it("does not flag a parked skill", () => {
-    const skill = fixtureSkill({
-      parked: true,
-      deployments: [fixtureDeployment({ agent: "Claude Code", scope: "global" })],
-    });
-    expect(coverageGaps([skill])).toEqual([]);
   });
 });
 
@@ -296,13 +276,10 @@ describe("findLinkedRootIssues", () => {
 });
 
 describe("HEALTH_ISSUE_KIND_ORDER", () => {
-  it("includes parked-but-reinstalled", () => {
-    expect(HEALTH_ISSUE_KIND_ORDER).toContain("parked-but-reinstalled");
-  });
-
-  it("does not include update-available or missing-from-agents", () => {
-    expect(HEALTH_ISSUE_KIND_ORDER).not.toContain("update-available");
-    expect(HEALTH_ISSUE_KIND_ORDER).not.toContain("missing-from-agents");
+  it("ranks every health issue kind exactly once, or a new kind sorts unpredictably on Home", () => {
+    const kinds = Object.keys(HEALTH_ISSUE_KIND_LABEL);
+    expect(new Set(HEALTH_ISSUE_KIND_ORDER).size).toBe(HEALTH_ISSUE_KIND_ORDER.length);
+    expect([...HEALTH_ISSUE_KIND_ORDER].sort()).toEqual([...kinds].sort());
   });
 });
 

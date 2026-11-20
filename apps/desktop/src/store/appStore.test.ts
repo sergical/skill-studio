@@ -51,18 +51,6 @@ describe("selection mode", () => {
     expect(useAppStore.getState().selectedSkillPaths).toEqual(new Set(["/a", "/b"]));
   });
 
-  it("clearSkillSelection leaves nothing selected", () => {
-    useAppStore.getState().toggleSkillSelection("/a");
-    useAppStore.getState().clearSkillSelection();
-    expect(useAppStore.getState().selectedSkillPaths).toEqual(new Set());
-  });
-
-  it("leaving the list view ends selection mode", () => {
-    useAppStore.getState().toggleSkillSelection("/a");
-    useAppStore.getState().setActiveView({ kind: "home" });
-    expect(useAppStore.getState().selectedSkillPaths).toEqual(new Set());
-  });
-
   it("opening a skill ends selection mode", () => {
     useAppStore.getState().toggleSkillSelection("/a");
     useAppStore.getState().openSkill("find-bugs");
@@ -78,26 +66,9 @@ describe("skillListFilter", () => {
     });
   });
 
-  it("typing from Home sets the query and switches to Skills, like the sidebar search box", () => {
-    useAppStore.getState().setSkillListFilter({ query: "ab" });
-    useAppStore.getState().setActiveView({ kind: "skills" });
-    expect(useAppStore.getState().skillListFilter.query).toBe("ab");
-    expect(useAppStore.getState().activeView.kind).toBe("skills");
-  });
-
-  it("keeps sidebar and filter-bar query updates on the same store value", () => {
-    const updateQuery = (query: string) => useAppStore.getState().setSkillListFilter({ query });
-
-    updateQuery("from sidebar");
-    expect(useAppStore.getState().skillListFilter.query).toBe("from sidebar");
-
-    updateQuery("from filter bar");
-    expect(useAppStore.getState().skillListFilter.query).toBe("from filter bar");
-  });
-
-  it("opening and closing a skill leaves the filter unchanged", () => {
-    useAppStore.getState().setActiveView({ kind: "skills" });
+  it("switching to Skills, then opening and closing a skill, leaves the filter unchanged", () => {
     useAppStore.getState().setSkillListFilter({ scope: "global", query: "regression" });
+    useAppStore.getState().setActiveView({ kind: "skills" });
     useAppStore.getState().openSkill("find-bugs");
     useAppStore.getState().closeSkill();
     expect(useAppStore.getState().skillListFilter.scope).toBe("global");

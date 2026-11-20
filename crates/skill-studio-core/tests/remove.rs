@@ -277,6 +277,8 @@ fn runtime_with_scope(
         catalog: Arc::new(HarnessCatalog::builtin()),
 
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+
+        scan_memo: None,
     };
     Runtime::new(scope, ports).unwrap()
 }
@@ -586,44 +588,6 @@ fn copy_remove_moves_the_tree_into_quarantine_with_the_same_tree_hash_or_names_t
             .values()
             .any(|v| v.get("name").and_then(|n| n.as_str()) == Some("beta"))),
         "the removed copy's registry entry must be dropped"
-    );
-}
-
-/// `remove_undo_restores_the_copy_tree_with_the_same_tree_hash_or_names_the_diverging_file`
-/// (round 1, Q1): `restore_event` on a `Copy` removal's own event id must
-/// bring the tree back to the universal root, byte-for-byte - it fails
-/// without Q1's fix, whose `remove` recorded `inverse: None` for every
-/// branch, so `restore_event` returned `Unsupported` instead of moving
-/// anything back.
-#[test]
-fn remove_undo_restores_the_copy_tree_with_the_same_tree_hash_or_names_the_diverging_file() {
-    let home = unique_temp_dir("remove_undo_copy");
-    std::fs::create_dir_all(&home).unwrap();
-    let rt = runtime_for(&home);
-    let deployment_id = install_and_resolve(&rt, "epsilon");
-
-    let outcome = ops::remove(&rt, &ctx(), &RemoveRequest { deployment_id }).unwrap();
-    let restored = ops::restore_event(
-        &rt,
-        &ctx(),
-        &RestoreRequest {
-            event_id: outcome.event_id,
-            force: false,
-        },
-    )
-    .unwrap();
-
-    let restored_path = home.join(UNIVERSAL_ROOT_RELATIVE).join("epsilon");
-    assert!(
-        restored.restored_paths.contains(&restored_path),
-        "restore must name the deployment path among what it put back: {:?}",
-        restored.restored_paths
-    );
-    let tree_hash_after = skill_studio_core::tree_hash::tree_hash(&RealFs::new(), &restored_path)
-        .expect("the tree must be back at the universal root, byte-for-byte");
-    assert_eq!(
-        outcome.tree_hash_before, tree_hash_after,
-        "the undone tree must match the original hash exactly"
     );
 }
 
@@ -1751,6 +1715,7 @@ fn project_install(label: &str) -> ProjectInstall {
         tools: None,
         catalog: Arc::new(HarnessCatalog::builtin()),
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+        scan_memo: None,
     };
     let rt = Runtime::new(&scope, ports).unwrap();
     ProjectInstall {

@@ -108,7 +108,7 @@ interface FirstRunScreenState {
  * defaults to off (`skill_fork_registry.rs`) so a build that never shows
  * this screen never opts a user in. `save_harnesses_choice` writes
  * whatever the user leaves the switch at when they continue. */
-export const FIRST_RUN_TELEMETRY_DEFAULT = true;
+const FIRST_RUN_TELEMETRY_DEFAULT = true;
 
 interface FirstRunSave {
   choice: HarnessesChoice;

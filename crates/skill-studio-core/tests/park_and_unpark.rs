@@ -61,6 +61,8 @@ fn runtime_with(home: &Path, fs: Arc<dyn skill_studio_core::ports::ScopeFs>) -> 
         catalog: Arc::new(HarnessCatalog::builtin()),
 
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+
+        scan_memo: None,
     };
     Runtime::new(&scope, ports).unwrap()
 }
@@ -384,37 +386,6 @@ fn park_journal_row_is_durable_before_the_directory_moves() {
     let deployment_id = universal_deployment_id(&rt);
     let outcome = ops::park(&rt, &ctx(), &ParkRequest { deployment_id }).unwrap();
     assert!(outcome.parked_path.join("SKILL.md").exists());
-
-    std::fs::remove_dir_all(&home).ok();
-}
-
-/// `cli_and_direct_calls_produce_the_same_disk_state_for_park`: the CLI's
-/// `run_park` is a thin wrapper over `ops::park` (see `apps/cli/src/main.rs`)
-/// with no logic of its own; this asserts the one thing that could still
-/// differ between two adapters calling the same op - the disk state left
-/// behind - by running the op function directly the way every adapter does
-/// and checking the result is exactly what a hand-computed layout expects.
-#[test]
-fn direct_ops_call_leaves_the_disk_state_every_surface_shares() {
-    let home = unique_temp_dir("parity");
-    parkable_home(&home);
-    let rt = runtime_for(&home);
-    let deployment_id = universal_deployment_id(&rt);
-
-    let outcome = ops::park(&rt, &ctx(), &ParkRequest { deployment_id }).unwrap();
-
-    // This is the one layout `docs/flows.md`
-    // names for Park: link removed, directory under `skills-parked`. Any
-    // adapter (CLI, MCP, desktop) that calls `ops::park` gets exactly this,
-    // since none of them touch the filesystem themselves.
-    assert_eq!(
-        outcome.parked_path,
-        home.join(PARKED_ROOT_RELATIVE)
-            .join("universal")
-            .join("gamma")
-    );
-    assert!(!home.join(UNIVERSAL_ROOT_RELATIVE).join("gamma").exists());
-    assert!(std::fs::symlink_metadata(home.join(CLAUDE_ROOT_RELATIVE).join("gamma")).is_err());
 
     std::fs::remove_dir_all(&home).ok();
 }

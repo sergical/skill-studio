@@ -210,9 +210,7 @@ function LifecycleScopePicker({
 }) {
   return (
     <div className="mb-2">
-      <h4 className="m-0 mb-2 text-caption font-medium tracking-[0.08em] text-text-tertiary uppercase">
-        Manage scope
-      </h4>
+      <h4 className="m-0 mb-2 text-small font-medium text-text-secondary">Manage scope</h4>
       {hasGlobalLifecycleScope && hasProjectLifecycleScope && (
         <ScopeToggleGroup
           scope={selectedLifecycleScope.scope}

@@ -4505,6 +4505,410 @@
     "title": "ListEventsRequest",
     "type": "object"
   },
+  "crates/skill-studio-core/schema/listing_report.schema.json": {
+    "$defs": {
+      "AgentIdentity": {
+        "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
+        "type": "string"
+      },
+      "HarnessListing": {
+        "description": "One harness listing in one scope.",
+        "properties": {
+          "budget": {
+            "description": "Budget, or null when the harness has no known limit.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "budget_source": {
+            "description": "How the budget was resolved.",
+            "type": "string",
+            "x-untrusted": true
+          },
+          "budget_unit": {
+            "description": "`characters` or `tokens` (UTF-8 bytes divided by four).",
+            "type": "string"
+          },
+          "context_source": {
+            "description": "Where the context window came from.",
+            "type": "string",
+            "x-untrusted": true
+          },
+          "context_window_tokens": {
+            "description": "Context window in tokens, when known.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "entries": {
+            "description": "Entries in listing order; hidden entries last.",
+            "items": {
+              "$ref": "#/$defs/ListingEntry"
+            },
+            "type": "array"
+          },
+          "full_size": {
+            "description": "The whole listing with every description, in `budget_unit`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "harness": {
+            "$ref": "#/$defs/AgentIdentity",
+            "description": "Harness id."
+          },
+          "notes": {
+            "description": "What Skill Studio infers instead of reading.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "observed_session": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ObservedSession"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The session that supplied `observed` states."
+          },
+          "scope": {
+            "$ref": "#/$defs/RootScope",
+            "description": "Project sessions include global skills."
+          },
+          "setting": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ListingSetting"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The setting that controls the budget."
+          },
+          "uses_default_context_window": {
+            "description": "True when no model or context size was found.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "harness",
+          "scope",
+          "budget_unit",
+          "full_size",
+          "budget_source",
+          "context_source",
+          "uses_default_context_window",
+          "notes",
+          "entries"
+        ],
+        "type": "object"
+      },
+      "ListingEntry": {
+        "description": "One skill in one harness listing.",
+        "properties": {
+          "full_description_chars": {
+            "description": "Description characters before any cut.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hidden_reason": {
+            "description": "Why a hidden skill is hidden.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Name as the harness lists it. Claude Code prefixes plugin skills.",
+            "type": "string",
+            "x-untrusted": true
+          },
+          "observed": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ListingState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "State in the last recorded session, when one was found."
+          },
+          "path": {
+            "description": "Deployment folder. Null for entries known only from a session.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
+          "scanned": {
+            "description": "False for entries Skill Studio does not scan, such as bundled skills.",
+            "type": "boolean"
+          },
+          "shown_description_chars": {
+            "description": "Description characters the model sees.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/$defs/ListingState",
+            "description": "Predicted state."
+          },
+          "usage_score": {
+            "description": "Claude Code's usage score: uses times a 7-day half-life decay, at least 10%.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "state",
+          "shown_description_chars",
+          "full_description_chars",
+          "scanned"
+        ],
+        "type": "object"
+      },
+      "ListingSetting": {
+        "description": "The setting that controls the budget, and how to change it.",
+        "properties": {
+          "chezmoi_source": {
+            "description": "chezmoi source file when chezmoi manages `file`: edit this one, or\nchezmoi reverts the change.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
+          "current": {
+            "description": "Current value, when set.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
+          "file": {
+            "description": "File to edit.",
+            "type": "string",
+            "x-untrusted": true
+          },
+          "key": {
+            "description": "Setting key.",
+            "type": "string"
+          },
+          "snippet": {
+            "description": "The text to put in `file` for the requested budget.",
+            "type": "string",
+            "x-untrusted": true
+          }
+        },
+        "required": [
+          "key",
+          "file",
+          "snippet"
+        ],
+        "type": "object"
+      },
+      "ListingState": {
+        "description": "What one harness shows the model for one skill.",
+        "oneOf": [
+          {
+            "const": "described",
+            "description": "Name and full description.",
+            "type": "string"
+          },
+          {
+            "const": "truncated",
+            "description": "Name and a shortened description.",
+            "type": "string"
+          },
+          {
+            "const": "name_only",
+            "description": "Name only.",
+            "type": "string"
+          },
+          {
+            "const": "omitted",
+            "description": "Not listed: the budget ran out.",
+            "type": "string"
+          },
+          {
+            "const": "hidden",
+            "description": "Not listed: manual-only, off, parked, or rejected.",
+            "type": "string"
+          }
+        ]
+      },
+      "ObservedSession": {
+        "description": "The session the observed states come from.",
+        "properties": {
+          "at": {
+            "description": "Time of the listing, as recorded.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
+          "described": {
+            "description": "Entries with a description.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "listed": {
+            "description": "Entries in that listing.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "model": {
+            "description": "Model id that answered in that session.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
+          "transcript": {
+            "description": "Transcript file.",
+            "type": "string",
+            "x-untrusted": true
+          }
+        },
+        "required": [
+          "transcript",
+          "listed",
+          "described"
+        ],
+        "type": "object"
+      },
+      "ProjectRef": {
+        "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
+        "type": "string",
+        "x-untrusted": true
+      },
+      "RootScope": {
+        "description": "Where a root lives.",
+        "oneOf": [
+          {
+            "description": "Under the scope home.",
+            "properties": {
+              "scope": {
+                "const": "global",
+                "type": "string"
+              }
+            },
+            "required": [
+              "scope"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Under one tracked project.",
+            "properties": {
+              "project": {
+                "$ref": "#/$defs/ProjectRef"
+              },
+              "scope": {
+                "const": "project",
+                "type": "string"
+              }
+            },
+            "required": [
+              "scope",
+              "project"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Every harness listing for the global scope and the requested project.",
+    "properties": {
+      "listings": {
+        "description": "Rows in scope, then harness, order.",
+        "items": {
+          "$ref": "#/$defs/HarnessListing"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "listings"
+    ],
+    "title": "ListingReport",
+    "type": "object"
+  },
+  "crates/skill-studio-core/schema/listing_request.schema.json": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Input for `listing`.",
+    "properties": {
+      "claude_budget_fraction": {
+        "description": "Predict Claude Code at this `skillListingBudgetFraction` (0 to 1).",
+        "format": "double",
+        "type": [
+          "number",
+          "null"
+        ]
+      },
+      "claude_context_window_tokens": {
+        "description": "Predict Claude Code with this context window in tokens.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "claude_transcript": {
+        "description": "Compare Claude Code with this session transcript instead of the newest one.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "x-untrusted": true
+      },
+      "codex_max_context_tokens": {
+        "description": "Predict Codex at this `skills.max_context_tokens` (capped at 10000).",
+        "format": "uint64",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "project_path": {
+        "description": "Also report this project. It must be in the runtime scope.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "x-untrusted": true
+      }
+    },
+    "title": "ListingRequest",
+    "type": "object"
+  },
   "crates/skill-studio-core/schema/outdated_result.schema.json": {
     "$defs": {
       "Currency": {
@@ -6632,6 +7036,557 @@
       }
     },
     "title": "ScanRequest",
+    "type": "object"
+  },
+  "crates/skill-studio-core/schema/skill_sessions_report.schema.json": {
+    "$defs": {
+      "AgentIdentity": {
+        "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
+        "type": "string"
+      },
+      "AgentSessions": {
+        "description": "One agent's sessions and per-skill rollup.",
+        "properties": {
+          "doc": {
+            "description": "The agent's skills documentation.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "harness": {
+            "$ref": "#/$defs/AgentIdentity",
+            "description": "Agent id."
+          },
+          "note": {
+            "description": "What this agent records, in plain words.",
+            "type": "string"
+          },
+          "records": {
+            "$ref": "#/$defs/SessionRecords",
+            "description": "What this agent records."
+          },
+          "sessions_read": {
+            "description": "Sessions read.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sessions_with_listing": {
+            "description": "Sessions that recorded a listing.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sessions_with_miss": {
+            "description": "Sessions with a possible miss.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sessions_with_use": {
+            "description": "Sessions that used a skill.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "harness",
+          "records",
+          "note",
+          "sessions_read",
+          "sessions_with_listing",
+          "sessions_with_use",
+          "sessions_with_miss"
+        ],
+        "type": "object"
+      },
+      "ListingState": {
+        "description": "What one harness shows the model for one skill.",
+        "oneOf": [
+          {
+            "const": "described",
+            "description": "Name and full description.",
+            "type": "string"
+          },
+          {
+            "const": "truncated",
+            "description": "Name and a shortened description.",
+            "type": "string"
+          },
+          {
+            "const": "name_only",
+            "description": "Name only.",
+            "type": "string"
+          },
+          {
+            "const": "omitted",
+            "description": "Not listed: the budget ran out.",
+            "type": "string"
+          },
+          {
+            "const": "hidden",
+            "description": "Not listed: manual-only, off, parked, or rejected.",
+            "type": "string"
+          }
+        ]
+      },
+      "MissedSkill": {
+        "description": "A skill the session may have needed but did not use. A guess.",
+        "properties": {
+          "listed_as": {
+            "$ref": "#/$defs/SessionListingState",
+            "description": "How this session listed the skill."
+          },
+          "score": {
+            "description": "Match score of the first prompt against the description (BM25).",
+            "format": "double",
+            "type": "number"
+          },
+          "skill": {
+            "description": "Skill name.",
+            "type": "string",
+            "x-untrusted": true
+          },
+          "words": {
+            "description": "Prompt words, stemmed, that matched the description, best first.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "x-untrusted": true
+          }
+        },
+        "required": [
+          "skill",
+          "listed_as",
+          "score",
+          "words"
+        ],
+        "type": "object"
+      },
+      "SessionListedSkill": {
+        "description": "One entry in a session's listing.",
+        "properties": {
+          "listed_as": {
+            "$ref": "#/$defs/SessionListingState",
+            "description": "How the session listed it."
+          },
+          "skill": {
+            "description": "Name as the session recorded it.",
+            "type": "string",
+            "x-untrusted": true
+          }
+        },
+        "required": [
+          "skill",
+          "listed_as"
+        ],
+        "type": "object"
+      },
+      "SessionListingState": {
+        "description": "How one session showed one skill to the model.",
+        "oneOf": [
+          {
+            "const": "described",
+            "description": "Name and full description.",
+            "type": "string"
+          },
+          {
+            "const": "truncated",
+            "description": "Name and a shortened description.",
+            "type": "string"
+          },
+          {
+            "const": "name_only",
+            "description": "Name only. The model guesses from the name.",
+            "type": "string"
+          },
+          {
+            "const": "not_listed",
+            "description": "Not in the listing. The model can find it only by path.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The session recorded no listing.",
+            "type": "string"
+          }
+        ]
+      },
+      "SessionRecords": {
+        "description": "What an agent records about its sessions.",
+        "oneOf": [
+          {
+            "const": "listing_and_uses",
+            "description": "Each session records its skill listing and its skill uses.",
+            "type": "string"
+          },
+          {
+            "const": "uses_only",
+            "description": "Sessions record skill uses only. The Activity page counts them.",
+            "type": "string"
+          }
+        ]
+      },
+      "SessionSkillUse": {
+        "description": "One skill a session used.",
+        "properties": {
+          "listed_as": {
+            "$ref": "#/$defs/SessionListingState",
+            "description": "How this session listed the skill."
+          },
+          "skill": {
+            "description": "Skill name, as the listing shows it when the listing has it.",
+            "type": "string",
+            "x-untrusted": true
+          },
+          "trigger": {
+            "$ref": "#/$defs/SkillTrigger",
+            "description": "How the first use started."
+          }
+        },
+        "required": [
+          "skill",
+          "listed_as",
+          "trigger"
+        ],
+        "type": "object"
+      },
+      "SessionSummary": {
+        "description": "One recorded session.",
+        "properties": {
+          "at": {
+            "description": "Start time, as recorded.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
+          "described": {
+            "description": "Entries with a full or shortened description.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "entries": {
+            "description": "Every listing entry, in listing order, as recorded.",
+            "items": {
+              "$ref": "#/$defs/SessionListedSkill"
+            },
+            "type": "array"
+          },
+          "harness": {
+            "$ref": "#/$defs/AgentIdentity",
+            "description": "Agent id."
+          },
+          "id": {
+            "description": "The agent's session id.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
+          "listed": {
+            "description": "Entries in the listing.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "listing_recorded": {
+            "description": "False when the session recorded no listing.",
+            "type": "boolean"
+          },
+          "missed": {
+            "description": "Possible misses. A guess, not a fact.",
+            "items": {
+              "$ref": "#/$defs/MissedSkill"
+            },
+            "type": "array"
+          },
+          "model": {
+            "description": "Model id.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
+          "name_only": {
+            "description": "Entries with a name only.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "project_path": {
+            "description": "Working folder.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
+          "prompt": {
+            "description": "Start of the first user prompt.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
+          "transcript": {
+            "description": "Transcript file.",
+            "type": "string",
+            "x-untrusted": true
+          },
+          "used": {
+            "description": "Skills used, one row per skill.",
+            "items": {
+              "$ref": "#/$defs/SessionSkillUse"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "harness",
+          "transcript",
+          "listing_recorded",
+          "listed",
+          "described",
+          "name_only",
+          "entries",
+          "used",
+          "missed"
+        ],
+        "type": "object"
+      },
+      "SkillSessionFlag": {
+        "description": "A finding about one skill across sessions.",
+        "oneOf": [
+          {
+            "const": "listed_never_used",
+            "description": "Listed in nearly every session, never used: it costs listing space.",
+            "type": "string"
+          },
+          {
+            "const": "used_while_name_only",
+            "description": "Used in a session that listed it by name only.",
+            "type": "string"
+          },
+          {
+            "const": "possibly_missed",
+            "description": "A session may have needed it and did not use it (a guess).",
+            "type": "string"
+          },
+          {
+            "const": "not_described_now",
+            "description": "The current listing shows it by name only, leaves it out, or hides it.",
+            "type": "string"
+          },
+          {
+            "const": "not_reachable",
+            "description": "Installed, but not in a folder this agent reads.",
+            "type": "string"
+          }
+        ]
+      },
+      "SkillSessionRollup": {
+        "description": "One skill across the sessions read.",
+        "properties": {
+          "described": {
+            "description": "Sessions that listed it with its full description.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "flags": {
+            "description": "Findings, most important first.",
+            "items": {
+              "$ref": "#/$defs/SkillSessionFlag"
+            },
+            "type": "array"
+          },
+          "harness": {
+            "$ref": "#/$defs/AgentIdentity",
+            "description": "Agent id."
+          },
+          "missed": {
+            "description": "Sessions that may have missed it (a guess).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "description": "Name as the agent lists it.",
+            "type": "string",
+            "x-untrusted": true
+          },
+          "name_only": {
+            "description": "Sessions that listed it by name only.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "not_listed": {
+            "description": "Sessions with a listing that did not list it.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "now": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ListingState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The current listing prediction. Null when the agent does not read it\nor Skill Studio does not scan it."
+          },
+          "path": {
+            "description": "Installed folder, when Skill Studio scans it.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
+          "reach": {
+            "description": "Why it is not described now, in plain words.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
+          "truncated": {
+            "description": "Sessions that listed it with a shortened description.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "used": {
+            "description": "Sessions that used it.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "used_name_only": {
+            "description": "Sessions that used it while it was listed by name only.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "used_not_listed": {
+            "description": "Sessions that used it while it was not listed.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "harness",
+          "name",
+          "described",
+          "truncated",
+          "name_only",
+          "not_listed",
+          "used",
+          "used_name_only",
+          "used_not_listed",
+          "missed",
+          "flags"
+        ],
+        "type": "object"
+      },
+      "SkillTrigger": {
+        "description": "How a skill use started.",
+        "oneOf": [
+          {
+            "const": "user",
+            "description": "The user typed the skill's command.",
+            "type": "string"
+          },
+          {
+            "const": "agent",
+            "description": "The model called a skill tool.",
+            "type": "string"
+          },
+          {
+            "const": "file_read",
+            "description": "The model read the skill's `SKILL.md` without a skill tool.",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Every agent's sessions.",
+    "properties": {
+      "agents": {
+        "description": "Agents in catalog order.",
+        "items": {
+          "$ref": "#/$defs/AgentSessions"
+        },
+        "type": "array"
+      },
+      "history_days": {
+        "description": "Days of history read.",
+        "format": "uint32",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "sessions": {
+        "description": "Sessions, by agent, newest first.",
+        "items": {
+          "$ref": "#/$defs/SessionSummary"
+        },
+        "type": "array"
+      },
+      "skills": {
+        "description": "Skills with findings first, then by agent and name.",
+        "items": {
+          "$ref": "#/$defs/SkillSessionRollup"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "skills",
+      "sessions",
+      "agents",
+      "history_days"
+    ],
+    "title": "SkillSessionsReport",
+    "type": "object"
+  },
+  "crates/skill-studio-core/schema/skill_sessions_request.schema.json": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Input for `skill_sessions`.",
+    "properties": {
+      "project_path": {
+        "description": "Only sessions recorded in this project, and its skills. It must be in\nthe runtime scope.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "x-untrusted": true
+      },
+      "sessions": {
+        "description": "Newest sessions to read per agent, at most 500. Default 100.",
+        "format": "uint",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      }
+    },
+    "title": "SkillSessionsRequest",
     "type": "object"
   },
   "crates/skill-studio-core/schema/split_outcome.schema.json": {

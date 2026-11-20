@@ -8,6 +8,26 @@
 // ============================================================================
 
 /**
+ * Absolute path of a tracked project directory.
+ *
+ * Invariant: the path is canonical inside a [`crate::scope::NormalizedScope`].
+ * Wire values are the lexical path the caller gave.
+ */
+export type ProjectRef = string;
+/**
+ * What one harness shows the model for one skill.
+ */
+export type ListingState = "described" | "truncated" | "name_only" | "omitted" | "hidden";
+/**
+ * A finding about one skill across sessions.
+ */
+export type SkillSessionFlag =
+  | "listed_never_used"
+  | "used_while_name_only"
+  | "possibly_missed"
+  | "not_described_now"
+  | "not_reachable";
+/**
  * Lexical skill name: the directory name that holds `SKILL.md`.
  *
  * Invariant: two deployments with the same `SkillName` are the same skill,
@@ -141,13 +161,6 @@ export type RootScope =
       project: ProjectRef;
     };
 /**
- * Absolute path of a tracked project directory.
- *
- * Invariant: the path is canonical inside a [`crate::scope::NormalizedScope`].
- * Wire values are the lexical path the caller gave.
- */
-export type ProjectRef = string;
-/**
  * Kebab-case harness identifier, for example `claude-code` or `opencode`.
  *
  * Legacy spellings are normalized at input boundaries.
@@ -226,6 +239,442 @@ export interface ExtraEntry {
    * `found` or `unreadable`. Parser errors are never exposed.
    */
   status: string;
+}
+/**
+ * Every harness listing for the global scope and the requested project.
+ */
+export interface ListingReport {
+  /**
+   * Rows in scope, then harness, order.
+   */
+  listings: HarnessListing[];
+}
+/**
+ * One harness listing in one scope.
+ */
+export interface HarnessListing {
+  /**
+   * Harness id.
+   */
+  harness: string;
+  /**
+   * Project sessions include global skills.
+   */
+  scope:
+    | {
+        scope: "global";
+      }
+    | {
+        scope: "project";
+        project: ProjectRef;
+      };
+  /**
+   * Budget, or null when the harness has no known limit.
+   */
+  budget: number | null;
+  /**
+   * `characters` or `tokens` (UTF-8 bytes divided by four).
+   */
+  budget_unit: string;
+  /**
+   * The whole listing with every description, in `budget_unit`.
+   */
+  full_size: number;
+  /**
+   * How the budget was resolved.
+   */
+  budget_source: string;
+  /**
+   * Context window in tokens, when known.
+   */
+  context_window_tokens: number | null;
+  /**
+   * Where the context window came from.
+   */
+  context_source: string;
+  /**
+   * True when no model or context size was found.
+   */
+  uses_default_context_window: boolean;
+  /**
+   * What Skill Studio infers instead of reading.
+   */
+  notes: string[];
+  /**
+   * The setting that controls the budget.
+   */
+  setting: ListingSetting | null;
+  /**
+   * The session that supplied `observed` states.
+   */
+  observed_session: ObservedSession | null;
+  /**
+   * Entries in listing order; hidden entries last.
+   */
+  entries: ListingEntry[];
+}
+/**
+ * The setting that controls the budget, and how to change it.
+ */
+export interface ListingSetting {
+  /**
+   * Setting key.
+   */
+  key: string;
+  /**
+   * Current value, when set.
+   */
+  current: string | null;
+  /**
+   * File to edit.
+   */
+  file: string;
+  /**
+   * chezmoi source file when chezmoi manages `file`: edit this one, or
+   * chezmoi reverts the change.
+   */
+  chezmoi_source: string | null;
+  /**
+   * The text to put in `file` for the requested budget.
+   */
+  snippet: string;
+}
+/**
+ * The session the observed states come from.
+ */
+export interface ObservedSession {
+  /**
+   * Transcript file.
+   */
+  transcript: string;
+  /**
+   * Time of the listing, as recorded.
+   */
+  at: string | null;
+  /**
+   * Model id that answered in that session.
+   */
+  model: string | null;
+  /**
+   * Entries in that listing.
+   */
+  listed: number;
+  /**
+   * Entries with a description.
+   */
+  described: number;
+}
+/**
+ * One skill in one harness listing.
+ */
+export interface ListingEntry {
+  /**
+   * Name as the harness lists it. Claude Code prefixes plugin skills.
+   */
+  name: string;
+  /**
+   * Deployment folder. Null for entries known only from a session.
+   */
+  path: string | null;
+  /**
+   * Predicted state.
+   */
+  state: "described" | "truncated" | "name_only" | "omitted" | "hidden";
+  /**
+   * Why a hidden skill is hidden.
+   */
+  hidden_reason: string | null;
+  /**
+   * Description characters the model sees.
+   */
+  shown_description_chars: number;
+  /**
+   * Description characters before any cut.
+   */
+  full_description_chars: number;
+  /**
+   * Claude Code's usage score: uses times a 7-day half-life decay, at least 10%.
+   */
+  usage_score: number | null;
+  /**
+   * State in the last recorded session, when one was found.
+   */
+  observed: ListingState | null;
+  /**
+   * False for entries Skill Studio does not scan, such as bundled skills.
+   */
+  scanned: boolean;
+}
+/**
+ * Input for `listing`.
+ */
+export interface ListingRequest {
+  /**
+   * Also report this project. It must be in the runtime scope.
+   */
+  project_path: string | null;
+  /**
+   * Predict Claude Code at this `skillListingBudgetFraction` (0 to 1).
+   */
+  claude_budget_fraction: number | null;
+  /**
+   * Predict Claude Code with this context window in tokens.
+   */
+  claude_context_window_tokens: number | null;
+  /**
+   * Predict Codex at this `skills.max_context_tokens` (capped at 10000).
+   */
+  codex_max_context_tokens: number | null;
+  /**
+   * Compare Claude Code with this session transcript instead of the newest one.
+   */
+  claude_transcript: string | null;
+}
+/**
+ * Every agent's sessions.
+ */
+export interface SkillSessionsReport {
+  /**
+   * Skills with findings first, then by agent and name.
+   */
+  skills: SkillSessionRollup[];
+  /**
+   * Sessions, by agent, newest first.
+   */
+  sessions: SessionSummary[];
+  /**
+   * Agents in catalog order.
+   */
+  agents: AgentSessions[];
+  /**
+   * Days of history read.
+   */
+  history_days: number;
+}
+/**
+ * One skill across the sessions read.
+ */
+export interface SkillSessionRollup {
+  /**
+   * Agent id.
+   */
+  harness: string;
+  /**
+   * Name as the agent lists it.
+   */
+  name: string;
+  /**
+   * Installed folder, when Skill Studio scans it.
+   */
+  path: string | null;
+  /**
+   * Sessions that listed it with its full description.
+   */
+  described: number;
+  /**
+   * Sessions that listed it with a shortened description.
+   */
+  truncated: number;
+  /**
+   * Sessions that listed it by name only.
+   */
+  name_only: number;
+  /**
+   * Sessions with a listing that did not list it.
+   */
+  not_listed: number;
+  /**
+   * Sessions that used it.
+   */
+  used: number;
+  /**
+   * Sessions that used it while it was listed by name only.
+   */
+  used_name_only: number;
+  /**
+   * Sessions that used it while it was not listed.
+   */
+  used_not_listed: number;
+  /**
+   * Sessions that may have missed it (a guess).
+   */
+  missed: number;
+  /**
+   * The current listing prediction. Null when the agent does not read it
+   * or Skill Studio does not scan it.
+   */
+  now: ListingState | null;
+  /**
+   * Why it is not described now, in plain words.
+   */
+  reach: string | null;
+  /**
+   * Findings, most important first.
+   */
+  flags: SkillSessionFlag[];
+}
+/**
+ * One recorded session.
+ */
+export interface SessionSummary {
+  /**
+   * Agent id.
+   */
+  harness: string;
+  /**
+   * The agent's session id.
+   */
+  id: string | null;
+  /**
+   * Transcript file.
+   */
+  transcript: string;
+  /**
+   * Working folder.
+   */
+  project_path: string | null;
+  /**
+   * Start time, as recorded.
+   */
+  at: string | null;
+  /**
+   * Model id.
+   */
+  model: string | null;
+  /**
+   * Start of the first user prompt.
+   */
+  prompt: string | null;
+  /**
+   * False when the session recorded no listing.
+   */
+  listing_recorded: boolean;
+  /**
+   * Entries in the listing.
+   */
+  listed: number;
+  /**
+   * Entries with a full or shortened description.
+   */
+  described: number;
+  /**
+   * Entries with a name only.
+   */
+  name_only: number;
+  /**
+   * Every listing entry, in listing order, as recorded.
+   */
+  entries: SessionListedSkill[];
+  /**
+   * Skills used, one row per skill.
+   */
+  used: SessionSkillUse[];
+  /**
+   * Possible misses. A guess, not a fact.
+   */
+  missed: MissedSkill[];
+}
+/**
+ * One entry in a session's listing.
+ */
+export interface SessionListedSkill {
+  /**
+   * Name as the session recorded it.
+   */
+  skill: string;
+  /**
+   * How the session listed it.
+   */
+  listed_as: "described" | "truncated" | "name_only" | "not_listed" | "unknown";
+}
+/**
+ * One skill a session used.
+ */
+export interface SessionSkillUse {
+  /**
+   * Skill name, as the listing shows it when the listing has it.
+   */
+  skill: string;
+  /**
+   * How this session listed the skill.
+   */
+  listed_as: "described" | "truncated" | "name_only" | "not_listed" | "unknown";
+  /**
+   * How the first use started.
+   */
+  trigger: "user" | "agent" | "file_read";
+}
+/**
+ * A skill the session may have needed but did not use. A guess.
+ */
+export interface MissedSkill {
+  /**
+   * Skill name.
+   */
+  skill: string;
+  /**
+   * How this session listed the skill.
+   */
+  listed_as: "described" | "truncated" | "name_only" | "not_listed" | "unknown";
+  /**
+   * Match score of the first prompt against the description (BM25).
+   */
+  score: number;
+  /**
+   * Prompt words, stemmed, that matched the description, best first.
+   */
+  words: string[];
+}
+/**
+ * One agent's sessions and per-skill rollup.
+ */
+export interface AgentSessions {
+  /**
+   * Agent id.
+   */
+  harness: string;
+  /**
+   * What this agent records.
+   */
+  records: "listing_and_uses" | "uses_only";
+  /**
+   * What this agent records, in plain words.
+   */
+  note: string;
+  /**
+   * The agent's skills documentation.
+   */
+  doc: string | null;
+  /**
+   * Sessions read.
+   */
+  sessions_read: number;
+  /**
+   * Sessions that recorded a listing.
+   */
+  sessions_with_listing: number;
+  /**
+   * Sessions that used a skill.
+   */
+  sessions_with_use: number;
+  /**
+   * Sessions with a possible miss.
+   */
+  sessions_with_miss: number;
+}
+/**
+ * Input for `skill_sessions`.
+ */
+export interface SkillSessionsRequest {
+  /**
+   * Only sessions recorded in this project, and its skills. It must be in
+   * the runtime scope.
+   */
+  project_path: string | null;
+  /**
+   * Newest sessions to read per agent, at most 500. Default 100.
+   */
+  sessions: number | null;
 }
 /**
  * Empty input. The runtime scope selects the home and projects.
@@ -777,10 +1226,6 @@ export interface SkillInvocationStats {
    */
   skill: string;
   /**
-   * Total counted uses across every cached transcript.
-   */
-  total: number;
-  /**
    * Counted uses in the last 24 hours.
    */
   last_24_hours: number;
@@ -793,11 +1238,11 @@ export interface SkillInvocationStats {
    */
   last_14_days: number;
   /**
-   * Counted uses in the last 30 days.
+   * Counted uses in the last 30 days: every use in the history.
    */
   last_30_days: number;
   /**
-   * The most recent use's timestamp, RFC 3339.
+   * The most recent use's timestamp in the last 30 days, RFC 3339.
    */
   last_used: string | null;
   /**
@@ -807,7 +1252,7 @@ export interface SkillInvocationStats {
     [k: string]: number;
   };
   /**
-   * Per-day use counts, "YYYY-MM-DD" (UTC), over the last 365 days.
+   * Per-day use counts, "YYYY-MM-DD" (UTC), over the last 30 days.
    */
   by_day: {
     [k: string]: number;
@@ -821,7 +1266,7 @@ export interface SkillInvocationStats {
   by_trigger_30_days: SkillTriggerCounts;
   /**
    * Hourly use buckets, grouped by (hour, harness, trigger, project),
-   * over the last 365 days.
+   * over the last 30 days.
    */
   by_hour: SkillUseHour[];
 }
@@ -869,7 +1314,8 @@ export interface SkillUseHour {
   count: number;
 }
 /**
- * Per-day use counts for the heatmap (date "YYYY-MM-DD" -> count).
+ * Per-day use counts for the heatmap (date "YYYY-MM-DD" -> count), over
+ * the last 30 days.
  */
 export interface InvocationHeatmap {
   /**

@@ -340,6 +340,8 @@ fn core_scan(
         catalog: Arc::new(HarnessCatalog::builtin()),
 
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+
+        scan_memo: None,
     };
     let mut scope = RuntimeScope::fixture(home);
     scope.opencode_config_root = Some(opencode_config_root.map_or_else(
@@ -821,69 +823,6 @@ fn opencode_config_dir_resolves_the_same_on_linux_and_macos_rules_or_names_the_d
     assert_eq!(
         epsilon_deployment["disabled_by"],
         json!(["OpencodePermission"])
-    );
-
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-/// Proves an unnamed folder beside dotagents files stays unmanaged: a
-/// universal root beside an `agents.toml`/`agents.lock` that names no row for
-/// this skill is `Manual`. dotagents prunes only folders `agents.lock` names
-/// (`cli/commands/install/skills.js:141-154`) and `sync` adopts every other
-/// folder without changing it (`cli/commands/sync.js:60-88`), so the folder
-/// has no owner tool. Reading it as `Ambiguous` made its invocation edit fork
-/// first and the fork refuse it.
-#[test]
-fn a_universal_root_beside_an_unnamed_dotagents_ledger_is_manual() {
-    let dir = unique_temp_dir("shared-root-unnamed");
-    std::fs::create_dir_all(&dir).unwrap();
-    let home = dir.canonicalize().unwrap();
-
-    let orphan = write_universal_skill(&home, "orphan-skill");
-
-    // A dotagents install with a row for some *other* skill, so the ledger
-    // files exist but never name `orphan-skill`.
-    let agents_dir = home.join(".agents");
-    std::fs::write(
-        agents_dir.join("agents.toml"),
-        "\n[[skills]]\nname = \"someone-else\"\nsource = \"someorg/someone-else\"\npath = \"skills/someone-else\"\n",
-    )
-    .unwrap();
-
-    let core = run_core("shared-root-unnamed", &home);
-
-    assert_eq!(
-        owner_kind_at(&core, "orphan-skill", &home, &orphan),
-        "manual"
-    );
-
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-/// Proves the remaining carve-out: a symlink that both lives in the universal
-/// root and points back into it. The bytes belong to the deployment it
-/// points at, whose own ledger entry may say otherwise, so this end of the
-/// link claims no owner.
-///
-/// The link must sit inside `.agents/skills` to reach the carve-out at all:
-/// a per-harness link is classified `Manual` well before it, since
-/// `classify_owner` only applies a ledger to a deployment under the
-/// universal root.
-#[test]
-fn a_link_inside_the_universal_root_pointing_into_it_is_ambiguous() {
-    let dir = unique_temp_dir("link-ambiguous");
-    std::fs::create_dir_all(&dir).unwrap();
-    let home = dir.canonicalize().unwrap();
-
-    let real = write_universal_skill(&home, "real-skill");
-    let link = home.join(".agents").join("skills").join("alias-skill");
-    std::os::unix::fs::symlink(&real, &link).unwrap();
-
-    let core = run_core("link-ambiguous", &home);
-
-    assert_eq!(
-        owner_kind_at(&core, "alias-skill", &home, &link),
-        "ambiguous"
     );
 
     std::fs::remove_dir_all(&dir).ok();

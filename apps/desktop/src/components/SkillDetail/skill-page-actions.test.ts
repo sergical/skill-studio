@@ -7,12 +7,7 @@ import type { BulkTargetResult, Deployment, InstalledSkill, PullResult } from "@
 
 import { pullUpstreamToast } from "../../lib/skill-lifecycle-target";
 import type { UpdateFinish } from "../../hooks/useGuardedSkillUpdate";
-import {
-  headerUpdateLabel,
-  parkForEveryAgent,
-  removeSuccessToast,
-  runHeaderUpdate,
-} from "./skill-page-actions";
+import { headerUpdateLabel, parkForEveryAgent, runHeaderUpdate } from "./skill-page-actions";
 
 function fixtureResult(overrides: Partial<PullResult> = {}): PullResult {
   return {
@@ -66,16 +61,6 @@ describe("pullUpstreamToast", () => {
     const toast = pullUpstreamToast(result);
 
     expect(toast).toEqual({ type: "success", title: "Updated 3 files" });
-  });
-});
-
-describe("removeSuccessToast", () => {
-  it("the_remove_success_toast_reads_removed_not_updated_n_deployments", () => {
-    const toast = removeSuccessToast("find-bugs");
-
-    expect(toast).toEqual({ type: "success", title: "Removed", message: "find-bugs" });
-    expect(toast.title).not.toMatch(/updated/i);
-    expect(toast.title).not.toMatch(/deployments/i);
   });
 });
 

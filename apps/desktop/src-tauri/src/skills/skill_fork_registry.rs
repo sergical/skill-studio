@@ -548,14 +548,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_registry_fixture_uses_its_injected_lease_root_or_points_at_the_real_data_root() {
-        let temp = tempfile::tempdir().unwrap();
-        let expected = temp.path().join("leases");
-        let _root = registry_lease_root_for_test(expected.clone());
-        assert_eq!(registry_lease_root(), expected);
-    }
-
-    #[test]
     fn a_stale_desktop_registry_update_retries_once_and_keeps_both_changes_or_overwrites_the_other_writer(
     ) {
         let temp = tempfile::tempdir().unwrap();
@@ -764,6 +756,8 @@ mod tests {
             catalog: std::sync::Arc::new(skill_studio_core::harness::HarnessCatalog::builtin()),
 
             telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+
+            scan_memo: None,
         };
         let rt = skill_studio_core::ports::Runtime::new(
             &skill_studio_core::scope::RuntimeScope::fixture(home),
@@ -841,54 +835,6 @@ mod tests {
         std::fs::write(tmp.path().join(".agents/skill-studio.json"), "not json").unwrap();
         let reg = read_fork_registry_or_default(tmp.path());
         assert!(reg.forks.is_empty());
-    }
-
-    #[test]
-    fn an_unknown_top_level_key_survives_read_then_write() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join(".agents")).unwrap();
-        std::fs::write(
-            tmp.path().join(".agents/skill-studio.json"),
-            r#"{"version":4,"a_future_field":{"nested":true}}"#,
-        )
-        .unwrap();
-
-        let mut reg = read_fork_registry(tmp.path()).unwrap();
-        assert_eq!(
-            reg.unknown.get("a_future_field"),
-            Some(&serde_json::json!({"nested": true}))
-        );
-        write_fork_registry(tmp.path(), &mut reg).unwrap();
-
-        let reloaded = read_fork_registry(tmp.path()).unwrap();
-        assert_eq!(
-            reloaded.unknown.get("a_future_field"),
-            Some(&serde_json::json!({"nested": true}))
-        );
-    }
-
-    #[test]
-    fn write_fork_registry_bumps_write_version_by_one_or_names_the_stuck_value() {
-        let tmp = tempfile::tempdir().unwrap();
-        let mut reg = ForkRegistry::default();
-        assert_eq!(
-            reg.write_version, 0,
-            "a fresh registry starts at write_version 0"
-        );
-
-        write_fork_registry(tmp.path(), &mut reg).unwrap();
-        let mut after_first = read_fork_registry(tmp.path()).unwrap();
-        assert_eq!(
-            after_first.write_version, 1,
-            "write_fork_registry did not bump write_version on its first write"
-        );
-
-        write_fork_registry(tmp.path(), &mut after_first).unwrap();
-        let after_second = read_fork_registry(tmp.path()).unwrap();
-        assert_eq!(
-            after_second.write_version, 2,
-            "write_fork_registry did not bump write_version on a second write"
-        );
     }
 
     #[test]

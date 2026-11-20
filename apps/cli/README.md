@@ -32,6 +32,8 @@ outdated    List skills that have an update
 update      Update installed skills
 mcp         Start the MCP server
 extras      List hook events, MCP server names, and instruction file paths
+listing     Show which skills each agent lists with a description
+sessions    Show per session which skills were listed, used, or missed
 doctor      Check skill state and model listing budgets
 ```
 
@@ -40,8 +42,9 @@ Run `skill-studio <command> --help` for each command's flags.
 - `park`, `unpark` and `remove` take a skill name. When the name matches
   more than one copy, the command lists each copy's path and id and exits 2;
   run it again with `--id`. `scan` prints the id of each copy.
-- `usage` lists skills not used in the last `--days` (default 30) first,
-  then the used ones, then a summary line.
+- `usage` lists skills not used in the last `--days` (default and maximum
+  30, the history Skill Studio counts) first, then the used ones, then a
+  summary line.
 - `mcp` serves the Skill Studio MCP server over stdio.
 
 `--fixture`, `--timings` and the commands below other than `scan` and
@@ -166,6 +169,34 @@ List hook events and counts, MCP server names, and instruction file paths:
 ```sh
 skill-studio extras --project /path/to/repo --json
 ```
+
+Show which skills each agent lists for the model with a description, with a
+name only, or not at all, and what changes at a 2% Claude Code budget:
+
+```sh
+skill-studio listing --claude-fraction 0.02
+```
+
+`--codex-max-tokens N` does the same for Codex. `--claude-session <file.jsonl>`
+compares with one recorded Claude Code session instead of the newest. The
+command writes no agent settings; it prints the setting text and the file to
+put it in.
+
+Show, for the newest 100 sessions of each agent, which skills the model saw
+with a description, by name only, or not at all, which ones each session
+used, and which ones it possibly missed:
+
+```sh
+skill-studio sessions
+```
+
+The text output groups skills by finding: listed in nearly every session but
+never used, used while listed by name only, possibly missed (a guess from the
+session's first prompt), not described now, and installed but out of the
+agent's reach. `--sessions N` reads up to 500 sessions per agent;
+`--for-project <path>` reads one project's sessions. Claude Code and Codex
+record their listing; the other agents record uses only, and the report says
+so.
 
 This reads declarations only. It does not show config values or instruction
 contents. Unreadable files have an `unreadable` row. Agent trust and enable

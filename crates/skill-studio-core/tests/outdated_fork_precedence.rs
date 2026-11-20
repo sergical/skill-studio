@@ -86,6 +86,8 @@ fn runtime(fs: Arc<dyn ScopeFs>) -> Runtime {
         catalog: Arc::new(HarnessCatalog::builtin()),
 
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+
+        scan_memo: None,
     };
     let scope = scope_for("outdated-fork-precedence", Path::new(HOME));
     Runtime::new(&scope, ports).expect("runtime")

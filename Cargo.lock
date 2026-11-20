@@ -4567,6 +4567,7 @@ dependencies = [
  "dirs",
  "libc",
  "notify-debouncer-mini",
+ "proptest",
  "reqwest",
  "rusqlite",
  "schemars 1.2.3",

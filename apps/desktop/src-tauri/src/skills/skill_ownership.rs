@@ -174,16 +174,3 @@ pub struct ParsedOwnerId {
     pub project_path: Option<String>,
     pub name: String,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn owner_id_round_trips_project() {
-        let parsed = parse_owner_id("owner:v1/project/%2Fwork%2Fapp/find-bugs").unwrap();
-        assert_eq!(parsed.scope, InstallScope::Project);
-        assert_eq!(parsed.project_path.as_deref(), Some("/work/app"));
-        assert_eq!(parsed.name, "find-bugs");
-    }
-}

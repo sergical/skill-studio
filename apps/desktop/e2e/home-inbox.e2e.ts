@@ -96,12 +96,24 @@ test("Park on an idle Home row takes the skill out of Who can invoke and the idl
   const idleBefore = await idleCount();
   expect(idleBefore).toBeGreaterThan(0);
 
+  // Park moves one folder and the links into it; a skill whose only folder is the Universal one
+  // has no copy left on after it.
+  const universalOnly = await page.evaluate(
+    () =>
+      window.__harness
+        ?.snapshot()
+        .skills.filter((skill) => skill.deployments.length === 1)
+        .map((skill) => skill.name) ?? [],
+  );
   // The idle segment shows the group; its first rows are the skills the model can invoke.
   await idle.click();
-  await page
-    .locator('[data-group="unused"]')
+  const rows = page.locator('[data-group="unused"]').getByRole("row");
+  const names = await rows.getByRole("gridcell").allTextContents();
+  const target = names.find((name) => universalOnly.includes(name));
+  expect(target).toBeDefined();
+  await rows
+    .filter({ has: page.getByRole("gridcell", { name: target, exact: true }) })
     .getByRole("button", { name: "Park", exact: true })
-    .first()
     .click();
 
   await expect.poll(idleCount).toBe(idleBefore - 1);

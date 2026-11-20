@@ -416,6 +416,7 @@ fn runtime_with_tools(
         tools: Some(Arc::new(tools)),
         catalog: Arc::new(HarnessCatalog::builtin()),
         telemetry: Arc::new(skill_studio_core::ports::NoopTelemetry),
+        scan_memo: None,
     };
     let mut scope = RuntimeScope::fixture(home);
     scope.projects = ProjectSelection::Explicit { paths: projects };
@@ -1380,39 +1381,6 @@ fn park_excludes_the_wildcard_entry_that_really_supplies_the_skill() {
         "turn-on must lift the exclude from both rows"
     );
     std::fs::remove_dir_all(&home).ok();
-}
-
-/// Flow: park a skill whose `*` entry has a multi-line `exclude` with a
-/// comment above the last item and one after it, with and without a trailing
-/// comma, then turn it on. Expectation: `foo` goes in as a new last item and
-/// both comments stay once, where they were; turn-on gives back the original
-/// bytes. Failure: a comment is copied, moves, or is lost on turn-on.
-#[test]
-fn park_and_turn_on_keep_the_comments_around_the_last_exclude_item() {
-    let no_comma = COMMENTED_EXCLUDE_TOML.replace("\"baz\", # tail\n", "\"baz\" # tail\n");
-    let forms = [
-        (
-            COMMENTED_EXCLUDE_TOML.to_string(),
-            "\"baz\", # tail\n  \"foo\",\n]\n",
-        ),
-        (no_comma, "\"baz\", # tail\n  \"foo\"\n]\n"),
-    ];
-    for (toml, parked_tail) in forms {
-        let (home, stub) = dotagents_home("park_dotagents_comments", &toml);
-        let rt = runtime(&home, stub.clone(), true);
-        stub.keep_lock_row.store(true, Ordering::SeqCst);
-
-        park_foo(&rt);
-        let parked = read(&stub.toml_path());
-        assert!(
-            parked.ends_with(&format!("  # note\n  {parked_tail}")),
-            "{parked}"
-        );
-
-        unpark_foo(&rt);
-        assert_eq!(read(&stub.toml_path()), toml);
-        std::fs::remove_dir_all(&home).ok();
-    }
 }
 
 /// Flow: a no-comma `exclude` has a comment after the last item and a

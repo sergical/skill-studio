@@ -2,18 +2,20 @@
 // Skill Studio - skill-coverage tests
 // ============================================================================
 
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
   AGENT_MATRIX_LABELS,
   agentMatrix,
   agentIdFromDeploymentLabel,
+  deploymentLabelFromAgentId,
   driftingCopies,
-  groupDeploymentsForDisplay,
   locationSummary,
   pickCompareDefaults,
   resolveCompareSelection,
   skillVisibleToAgent,
 } from "./skill-coverage";
+import { INSTALL_HARNESSES } from "./skill-install-destination";
 import type { Deployment, InstalledSkill } from "./skill-types";
 
 function fixtureDeployment(overrides: Partial<Deployment> = {}): Deployment {
@@ -54,124 +56,6 @@ function fixtureSkill(overrides: Partial<InstalledSkill> = {}): InstalledSkill {
     update_owner_ids: overrides.update_owner_ids ?? [],
   };
 }
-
-describe("groupDeploymentsForDisplay", () => {
-  it("groups a Universal root with the harnesses that read it through a whole-root link", () => {
-    const shared = fixtureDeployment({ agent: "shared" });
-    const readers = [
-      fixtureDeployment({
-        agent: "Claude Code",
-        path: "/home/.claude/skills/find-bugs",
-        resolved_path: "/home/.agents/skills/find-bugs",
-        shared_via_whole_dir_link: true,
-      }),
-      fixtureDeployment({
-        agent: "Codex",
-        path: "/home/.codex/skills/find-bugs",
-        resolved_path: "/home/.agents/skills/find-bugs",
-        shared_via_whole_dir_link: true,
-      }),
-    ];
-    const result = groupDeploymentsForDisplay([shared, ...readers]);
-    expect(result.groups).toHaveLength(1);
-    expect(result.groups[0]?.shared).toBe(shared);
-    expect(result.groups[0]?.linked).toEqual(readers);
-    expect(result.standalone).toEqual([]);
-  });
-
-  it("keeps a per-skill symlink out of the group - it is a location of its own", () => {
-    const shared = fixtureDeployment({ agent: "shared" });
-    const symlink = fixtureDeployment({
-      agent: "Claude Code",
-      is_symlink: true,
-      symlink_target: "/home/.agents/skills/find-bugs",
-    });
-    const result = groupDeploymentsForDisplay([shared, symlink]);
-    expect(result.groups[0]?.linked).toEqual([]);
-    expect(result.standalone).toEqual([symlink]);
-  });
-
-  it("produces only standalone rows when there is no Universal root", () => {
-    const deployments = [
-      fixtureDeployment({ agent: "Claude Code" }),
-      fixtureDeployment({ agent: "Codex" }),
-    ];
-    const result = groupDeploymentsForDisplay(deployments);
-    expect(result.groups).toEqual([]);
-    expect(result.standalone).toEqual(deployments);
-  });
-
-  it("never puts a broken link inside the Universal group", () => {
-    const shared = fixtureDeployment({ agent: "shared" });
-    const broken = fixtureDeployment({
-      agent: "Claude Code",
-      is_symlink: true,
-      symlink_is_broken: true,
-      symlink_target: "/home/.agents/skills/find-bugs",
-    });
-    const result = groupDeploymentsForDisplay([shared, broken]);
-    expect(result.groups[0]?.linked).toEqual([]);
-    expect(result.standalone).toEqual([broken]);
-  });
-
-  it("keeps global and project Universal roots separate", () => {
-    const globalShared = fixtureDeployment({
-      agent: "shared",
-      scope: "global",
-      path: "/home/.agents/skills/find-bugs",
-    });
-    const globalReader = fixtureDeployment({
-      agent: "Codex",
-      scope: "global",
-      path: "/home/.codex/skills/find-bugs",
-      resolved_path: "/home/.agents/skills/find-bugs",
-      shared_via_whole_dir_link: true,
-    });
-    const projectShared = fixtureDeployment({
-      agent: "shared",
-      scope: "project",
-      project_path: "/home/src/sentry",
-      path: "/home/src/sentry/.agents/skills/find-bugs",
-    });
-    const projectReader = fixtureDeployment({
-      agent: "Claude Code",
-      scope: "project",
-      project_path: "/home/src/sentry",
-      path: "/home/src/sentry/.claude/skills/find-bugs",
-      resolved_path: "/home/src/sentry/.agents/skills/find-bugs",
-      shared_via_whole_dir_link: true,
-    });
-
-    const result = groupDeploymentsForDisplay([
-      globalShared,
-      globalReader,
-      projectShared,
-      projectReader,
-    ]);
-
-    expect(result.groups).toHaveLength(2);
-    const globalGroup = result.groups.find((g) => g.shared === globalShared);
-    const projectGroup = result.groups.find((g) => g.shared === projectShared);
-    expect(globalGroup?.linked).toEqual([globalReader]);
-    expect(projectGroup?.linked).toEqual([projectReader]);
-    expect(result.standalone).toEqual([]);
-  });
-
-  it("leaves a reader standalone when its root link matches no Universal root", () => {
-    const shared = fixtureDeployment({ agent: "shared", path: "/home/.agents/skills/find-bugs" });
-    const unrelatedReader = fixtureDeployment({
-      agent: "Codex",
-      scope: "project",
-      project_path: "/home/other",
-      path: "/home/other/.codex/skills/find-bugs",
-      resolved_path: "/home/other/.agents/skills/find-bugs",
-      shared_via_whole_dir_link: true,
-    });
-    const result = groupDeploymentsForDisplay([shared, unrelatedReader]);
-    expect(result.groups[0]?.linked).toEqual([]);
-    expect(result.standalone).toEqual([unrelatedReader]);
-  });
-});
 
 describe("pickCompareDefaults", () => {
   it("picks the strict-majority copy as the left side", () => {
@@ -216,13 +100,30 @@ describe("resolveCompareSelection", () => {
   });
 });
 
-describe("agentIdFromDeploymentLabel", () => {
-  it("maps Cursor to cursor", () => {
-    expect(agentIdFromDeploymentLabel("Cursor")).toBe("cursor");
+describe("agent label <-> id", () => {
+  it("round-trips every first-class agent label through its id, or a chip and its filter name different agents", () => {
+    for (const label of AGENT_MATRIX_LABELS) {
+      const id = agentIdFromDeploymentLabel(label);
+      expect(id, label).not.toBeNull();
+      expect(deploymentLabelFromAgentId(id ?? ""), label).toBe(label);
+    }
   });
 
-  it("maps Grok Build to grok-build", () => {
-    expect(agentIdFromDeploymentLabel("Grok Build")).toBe("grok-build");
+  it("round-trips every installable harness id through its label", () => {
+    for (const { id } of INSTALL_HARNESSES) {
+      expect(agentIdFromDeploymentLabel(deploymentLabelFromAgentId(id)), id).toBe(id);
+    }
+  });
+
+  it("maps an unknown label to no agent and shows an unknown id as itself", () => {
+    const known = new Set<string>([...AGENT_MATRIX_LABELS, "shared"]);
+    const knownIds = new Set<string>(INSTALL_HARNESSES.map((h) => h.id));
+    fc.assert(
+      fc.property(fc.string(), (text) => {
+        if (!known.has(text)) expect(agentIdFromDeploymentLabel(text)).toBeNull();
+        if (!knownIds.has(text)) expect(deploymentLabelFromAgentId(text)).toBe(text);
+      }),
+    );
   });
 });
 
@@ -322,19 +223,6 @@ describe("driftingCopies", () => {
     const truth = fixtureDeployment({ agent: "shared", content_hash: "abc" });
     const copy = fixtureDeployment({ agent: "Codex", content_hash: "xyz" });
     expect(driftingCopies({ truth, links: [], copies: [copy], broken: [] })).toEqual([copy]);
-  });
-});
-
-describe("AGENT_MATRIX_LABELS", () => {
-  it("includes Cursor and Grok Build alongside the original four", () => {
-    expect(AGENT_MATRIX_LABELS).toEqual([
-      "Claude Code",
-      "Codex",
-      "OpenCode",
-      "pi",
-      "Cursor",
-      "Grok Build",
-    ]);
   });
 });
 

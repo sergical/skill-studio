@@ -176,6 +176,7 @@ fn runtime_with_fake_spawner(home: &Path, data_root: &Path) -> Runtime {
         tools: None,
         catalog: Arc::new(HarnessCatalog::builtin()),
         telemetry: Arc::new(skill_studio_core::ports::NoopTelemetry),
+        scan_memo: None,
     };
     Runtime::new(&scope, ports).unwrap()
 }

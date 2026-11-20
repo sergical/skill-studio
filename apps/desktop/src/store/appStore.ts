@@ -15,6 +15,10 @@ import { ALL_ACTIVITY, USAGE_WINDOWS } from "@skill-studio/lib";
 import type { ActivityFilter, UsageWindow } from "@skill-studio/lib";
 import type { Toast, TrackedProjects, SkillSnapshot } from "@skill-studio/lib";
 import type {
+  ListingReport,
+  SkillSessionsReport,
+  SkillSessionsRequest,
+  ListingRequest,
   PackActionReport,
   PackExportReport,
   PackExportRequest,
@@ -28,6 +32,8 @@ import {
   packAdd,
   packExport,
   packList,
+  skillListing,
+  skillSessions,
   packRemove,
   packUpdate,
 } from "../lib/skill-api";
@@ -58,7 +64,7 @@ import type { ResolvedTheme, Theme } from "../lib/theme";
  * (global/project/parked), harness, source, and issue all live in the
  * store's `skillListFilter`, not on this view, so places (the sidebar) stay
  * distinct from filters (the list) and opening a skill and coming back
- * never loses them; `activity` is the full invocation history (year
+ * never loses them; `activity` is the 30-day invocation history (day
  * heatmap, per-skill and per-project breakdowns); `skill` is the full-page
  * view of one installed skill, opened from any other view.
  */
@@ -70,6 +76,8 @@ export type ActiveView =
   | { kind: "skills" }
   | { kind: "plugins" }
   | { kind: "packs" }
+  | { kind: "listing" }
+  | { kind: "sessions" }
   | { kind: "activity" }
   | { kind: "learn"; section?: LearnSection }
   | { kind: "settings" }
@@ -252,6 +260,12 @@ interface AppState {
   runPackAction: (intent: PackIntent, dryRun: boolean) => Promise<PackActionReport>;
   /** Plans (`dryRun`) or writes a new pack folder from installed skills. Rejects with the command's message. */
   exportPack: (request: PackExportRequest) => Promise<PackExportReport>;
+
+  // === Model listing ===
+  /** Per-skill listing state for each agent, from the core's `listing`. Reads only. */
+  readListing: (request: ListingRequest) => Promise<ListingReport>;
+  /** Per-session listing states and uses, rolled up per skill. Reads only. */
+  readSkillSessions: (request: SkillSessionsRequest) => Promise<SkillSessionsReport>;
 
   // === Add-skill Sheet ===
   addSkillSheet: { open: boolean; prefill?: string };
@@ -534,6 +548,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   checkSkillUpdates: checkSkillUpdatesNow,
 
   listPacks: (remote) => withCommandMessage(packList(remote)),
+  readListing: (request) => withCommandMessage(skillListing(request)),
+  readSkillSessions: (request) => withCommandMessage(skillSessions(request)),
   runPackAction: (intent, dryRun) =>
     withCommandMessage(packActionCall(intent, dryRun, get().harnessDetection.choice?.kept ?? [])),
   exportPack: (request) => withCommandMessage(packExport(request)),

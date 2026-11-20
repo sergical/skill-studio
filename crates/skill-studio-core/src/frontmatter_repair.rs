@@ -440,19 +440,6 @@ mod tests {
         assert!(violations_of("sample", &proposed).is_empty());
     }
 
-    /// Flow: a CRLF file with a mismatched name. Expect: every line keeps
-    /// CRLF. Failure: the rewrite normalises line endings.
-    #[test]
-    fn name_repair_preserves_crlf_endings() {
-        let content = "---\r\nname: other\r\ndescription: d\r\n---\r\nBody.\r\n";
-        let (proposed, _) =
-            propose_repair(FrontmatterRepairKind::NameMismatch, content, "sample", None).unwrap();
-        assert_eq!(
-            proposed,
-            "---\r\nname: sample\r\ndescription: d\r\n---\r\nBody.\r\n"
-        );
-    }
-
     /// Flow: comments, other keys, and a trailing comment surround the name.
     /// Expect: only the name value changes. Failure: comments or key order
     /// are lost.

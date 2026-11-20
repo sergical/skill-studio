@@ -412,12 +412,7 @@ pub fn print_usage_table(envelope: &ResultEnvelope<UsageReport>) {
     if !unused.is_empty() {
         println!("Not used ({}):", report.window);
         for row in &unused {
-            println!(
-                "  {:width$}  last used {}  ({} uses all time)",
-                row.skill,
-                last_used(row),
-                row.total_uses
-            );
+            println!("  {:width$}  last used {}", row.skill, last_used(row));
         }
     }
     if !used.is_empty() {
@@ -439,10 +434,7 @@ pub fn print_usage_table(envelope: &ResultEnvelope<UsageReport>) {
                 if row.recent_uses == 1 { "use " } else { "uses" },
                 last_used(row),
             );
-            println!(
-                "    triggers {:?}; {} uses all time",
-                row.triggers, row.total_uses
-            );
+            println!("    triggers {:?}", row.triggers);
         }
     }
     if !report.rows.is_empty() {
@@ -465,11 +457,11 @@ pub fn print_usage_table(envelope: &ResultEnvelope<UsageReport>) {
     }
 }
 
-/// The date part of a row's last use, or "never".
+/// The date part of a row's last use, or "not in 30 days".
 fn last_used(row: &SkillUsageRow) -> &str {
     row.last_used
         .as_deref()
-        .map_or("never", |at| at.get(..10).unwrap_or(at))
+        .map_or("not in 30 days", |at| at.get(..10).unwrap_or(at))
 }
 
 /// Prints `install`'s table: what got installed, or the trust prompt.
@@ -806,6 +798,18 @@ pub fn write_schemas(out: Option<PathBuf>) -> ExitCode {
         ("extras_report", || {
             schemars::schema_for!(skill_studio_core::extras::ExtrasReport)
         }),
+        ("listing_request", || {
+            schemars::schema_for!(skill_studio_core::listing_visibility::ListingRequest)
+        }),
+        ("listing_report", || {
+            schemars::schema_for!(skill_studio_core::listing_visibility::ListingReport)
+        }),
+        ("skill_sessions_request", || {
+            schemars::schema_for!(skill_studio_core::skill_sessions::SkillSessionsRequest)
+        }),
+        ("skill_sessions_report", || {
+            schemars::schema_for!(skill_studio_core::skill_sessions::SkillSessionsReport)
+        }),
         ("pack_list_request", || {
             schemars::schema_for!(skill_studio_core::pack::PackListRequest)
         }),
@@ -994,6 +998,139 @@ pub fn print_extras_table(envelope: &ResultEnvelope<skill_studio_core::extras::E
                 row.status
             );
         }
+    }
+}
+
+pub fn print_listing_table(
+    envelope: &ResultEnvelope<skill_studio_core::listing_visibility::ListingReport>,
+) {
+    use skill_studio_core::listing_visibility::ListingState;
+    print_errors(envelope);
+    let Some(report) = &envelope.data else { return };
+    for row in &report.listings {
+        let scope = match &row.scope {
+            skill_studio_core::identity::RootScope::Global => "global".to_string(),
+            skill_studio_core::identity::RootScope::Project(p) => {
+                format!("project {}", p.0.display())
+            }
+        };
+        let count = |state: ListingState| row.entries.iter().filter(|e| e.state == state).count();
+        let budget = row.budget.map_or_else(
+            || "no known limit".to_string(),
+            |b| format!("{b} {}", row.budget_unit),
+        );
+        println!(
+            "{} {scope}: budget {budget}, full listing {} {}. Described {}, truncated {}, name only {}, omitted {}, hidden {}.",
+            row.harness,
+            row.full_size,
+            row.budget_unit,
+            count(ListingState::Described),
+            count(ListingState::Truncated),
+            count(ListingState::NameOnly),
+            count(ListingState::Omitted),
+            count(ListingState::Hidden),
+        );
+        if row.budget.is_none() {
+            continue;
+        }
+        for entry in &row.entries {
+            let observed = entry
+                .observed
+                .map(|o| format!("  (last session: {})", state_label(o)))
+                .unwrap_or_default();
+            println!(
+                "  {:<10} {}{observed}",
+                state_label(entry.state),
+                entry.name
+            );
+        }
+    }
+}
+
+/// Plain-words report: what each term means, then for each agent the skills
+/// worth acting on.
+pub fn print_sessions_table(
+    envelope: &ResultEnvelope<skill_studio_core::skill_sessions::SkillSessionsReport>,
+) {
+    use skill_studio_core::skill_sessions::{SessionRecords, SkillSessionFlag};
+    print_errors(envelope);
+    let Some(report) = &envelope.data else { return };
+    println!("Described: the model sees the name and the description, so it can pick the skill from your words.");
+    println!(
+        "Name only: the model sees only the name and must guess from it. The skill can still run."
+    );
+    println!("Not listed: the model does not see the skill. It can still read SKILL.md by path.");
+    println!("Possibly missed is a guess: a short first prompt matched the skill's description, and the session used no skill.");
+    for agent in &report.agents {
+        println!();
+        println!("{}: {}", agent.harness, agent.note);
+        if let Some(doc) = &agent.doc {
+            println!("  Docs: {doc}");
+        }
+        if agent.records == SessionRecords::ListingAndUses {
+            println!(
+                "  {} sessions read, {} with a listing, {} used a skill, {} possibly missed one.",
+                agent.sessions_read,
+                agent.sessions_with_listing,
+                agent.sessions_with_use,
+                agent.sessions_with_miss
+            );
+        }
+        let groups = [
+            (
+                SkillSessionFlag::ListedNeverUsed,
+                "Listed in nearly every session, never used (costs listing space; park it or set it to user-invocable only):",
+            ),
+            (
+                SkillSessionFlag::UsedWhileNameOnly,
+                "Used while listed by name only (raise the budget or shorten other descriptions so it keeps one):",
+            ),
+            (
+                SkillSessionFlag::PossiblyMissed,
+                "Possibly missed (a guess; reword the description so it names the task):",
+            ),
+            (
+                SkillSessionFlag::NotDescribedNow,
+                "Not described in the current listing:",
+            ),
+            (
+                SkillSessionFlag::NotReachable,
+                "Installed but not reachable by this agent:",
+            ),
+        ];
+        for (flag, title) in groups {
+            let rows: Vec<_> = report
+                .skills
+                .iter()
+                .filter(|s| s.harness == agent.harness && s.flags.contains(&flag))
+                .collect();
+            if rows.is_empty() {
+                continue;
+            }
+            println!("  {title}");
+            for s in rows {
+                let reach = s
+                    .reach
+                    .as_deref()
+                    .map(|r| format!("  {r}"))
+                    .unwrap_or_default();
+                println!(
+                    "    {:<40} described {:>3}  shortened {:>3}  name only {:>3}  not listed {:>3}  used {:>3}  missed {:>3}{reach}",
+                    s.name, s.described, s.truncated, s.name_only, s.not_listed, s.used, s.missed
+                );
+            }
+        }
+    }
+}
+
+fn state_label(state: skill_studio_core::listing_visibility::ListingState) -> &'static str {
+    use skill_studio_core::listing_visibility::ListingState;
+    match state {
+        ListingState::Described => "described",
+        ListingState::Truncated => "truncated",
+        ListingState::NameOnly => "name only",
+        ListingState::Omitted => "omitted",
+        ListingState::Hidden => "hidden",
     }
 }
 

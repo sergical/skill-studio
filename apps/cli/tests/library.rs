@@ -9,6 +9,14 @@
 mod headless;
 use serde_json::json;
 
+/// A UTC day `days` before today, as `YYYY-MM-DD`: windows must sit inside
+/// the 30-day history, so fixtures date their uses from now.
+fn day_ago(days: i64) -> String {
+    (chrono::Utc::now() - chrono::Duration::days(days))
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
 #[test]
 fn library_matches_usage_scan_and_mcp() {
     let home = tempfile::tempdir().unwrap();
@@ -49,6 +57,7 @@ fn library_matches_usage_scan_and_mcp() {
     }}).to_string()).unwrap();
     let history = root.join(".claude/projects/work");
     std::fs::create_dir_all(&history).unwrap();
+    let (since, until) = (day_ago(20), day_ago(5));
     let record = |id: &str, at: &str| {
         json!({"type":"assistant","uuid":id,"timestamp":at,"sessionId":"one-session","message":{"content":[{"type":"tool_use","id":id,"name":"Skill","input":{"skill":"skill-00"}}]}}).to_string()
     };
@@ -56,16 +65,16 @@ fn library_matches_usage_scan_and_mcp() {
         history.join("session.jsonl"),
         format!(
             "{}\n{}\n{}\n{}\n",
-            record("a", "2026-10-05T00:00:00Z"),
-            record("a", "2026-10-05T00:00:00Z"),
-            record("b", "2026-10-06T00:00:00Z"),
-            record("c", "2026-11-01T00:00:00Z")
+            record("a", &format!("{}T00:00:00Z", day_ago(15))),
+            record("a", &format!("{}T00:00:00Z", day_ago(15))),
+            record("b", &format!("{}T00:00:00Z", day_ago(14))),
+            record("c", &format!("{until}T00:00:00Z"))
         ),
     )
     .unwrap();
-    let args = ["library", "--since", "2026-10-01", "--until", "2026-11-01"];
+    let args = ["library", "--since", &since, "--until", &until];
     let cli = headless::cli(root, &args);
-    let input = json!({"since":"2026-10-01","until":"2026-11-01"});
+    let input = json!({"since": since, "until": until});
     let mcp = headless::mcp(root, "library", &input);
     let data = &cli["data"];
     assert_eq!(
@@ -74,14 +83,7 @@ fn library_matches_usage_scan_and_mcp() {
     );
     let all = headless::cli(
         root,
-        &[
-            "library",
-            "--all",
-            "--since",
-            "2026-10-01",
-            "--until",
-            "2026-11-01",
-        ],
+        &["library", "--all", "--since", &since, "--until", &until],
     );
     assert_eq!(
         data, &all["data"],
@@ -97,10 +99,7 @@ fn library_matches_usage_scan_and_mcp() {
     assert_eq!(data["rows"][0]["modes"]["codex"], "auto");
     assert_eq!(data["rows"][0]["modes"]["claude-code"], "manual");
     assert_eq!(data["rows"][0]["copies"]["claude-code"], "link");
-    let usage = headless::cli(
-        root,
-        &["usage", "--since", "2026-10-01", "--until", "2026-11-01"],
-    );
+    let usage = headless::cli(root, &["usage", "--since", &since, "--until", &until]);
     let scan = headless::cli(root, &["scan", "--limit", "1000"]);
     for row in data["rows"].as_array().unwrap() {
         let used = usage["data"]["rows"]
@@ -135,15 +134,7 @@ fn library_matches_usage_scan_and_mcp() {
     let top = headless::cli(
         root,
         &[
-            "library",
-            "--since",
-            "2026-10-01",
-            "--until",
-            "2026-11-01",
-            "--sort",
-            "uses",
-            "--top",
-            "1",
+            "library", "--since", &since, "--until", &until, "--sort", "uses", "--top", "1",
         ],
     );
     assert_eq!(top["data"]["count"], 40);
@@ -202,8 +193,8 @@ fn library_keeps_partial_tables_and_the_worst_agent_copy() {
     )
     .unwrap();
     let call = || {
-        let cli = headless::cli(root, &["library", "--days", "45"]);
-        let mcp = headless::mcp(root, "library", &json!({"days":45}));
+        let cli = headless::cli(root, &["library", "--days", "14"]);
+        let mcp = headless::mcp(root, "library", &json!({"days":14}));
         assert_eq!(
             cli["data"], mcp["result"]["structuredContent"]["data"],
             "{cli}\n{mcp}"
@@ -221,7 +212,7 @@ fn library_keeps_partial_tables_and_the_worst_agent_copy() {
     };
     let intact = call();
     assert_eq!(intact["status"], "ok", "{intact}");
-    assert_eq!(intact["data"]["days"], 45);
+    assert_eq!(intact["data"]["days"], 14);
     let lock = root.join(".agents/.skill-lock.json");
     std::fs::write(&lock, "invalid json").unwrap();
     let bad_lock = call();
@@ -324,7 +315,14 @@ fn explicit_window_echo_matches_counted_boundaries_on_both_surfaces() {
     .unwrap();
     let history = home.path().join(".claude/projects/work");
     std::fs::create_dir_all(&history).unwrap();
-    let records: Vec<_> = ["2026-09-30T23:59:59Z", "2026-10-01T00:00:00Z", "2026-11-15T23:59:59Z", "2026-11-16T00:00:00Z"].iter().enumerate().map(|(id, at)| json!({"type":"assistant","uuid":id.to_string(),"sessionId":id.to_string(),"timestamp":at,"message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"window"}}]}}).to_string()).collect();
+    let (since, until) = (day_ago(20), day_ago(5));
+    let bounds = [
+        format!("{}T23:59:59Z", day_ago(21)),
+        format!("{since}T00:00:00Z"),
+        format!("{}T23:59:59Z", day_ago(6)),
+        format!("{until}T00:00:00Z"),
+    ];
+    let records: Vec<_> = bounds.iter().enumerate().map(|(id, at)| json!({"type":"assistant","uuid":id.to_string(),"sessionId":id.to_string(),"timestamp":at,"message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"window"}}]}}).to_string()).collect();
     std::fs::write(history.join("session.jsonl"), records.join("\n") + "\n").unwrap();
     for (command, tool, uses) in [
         ("library", "library", "uses"),
@@ -332,17 +330,13 @@ fn explicit_window_echo_matches_counted_boundaries_on_both_surfaces() {
     ] {
         let cli = headless::cli(
             home.path(),
-            &[command, "--since", "2026-10-01", "--until", "2026-11-16"],
+            &[command, "--since", &since, "--until", &until],
         );
-        let mcp = headless::mcp(
-            home.path(),
-            tool,
-            &json!({"since":"2026-10-01","until":"2026-11-16"}),
-        );
+        let mcp = headless::mcp(home.path(), tool, &json!({"since": since, "until": until}));
         assert_eq!(cli["data"], mcp["result"]["structuredContent"]["data"]);
         assert!(cli["data"].get("days").is_none(), "{cli}");
-        assert_eq!(cli["data"]["since"], "2026-10-01T00:00:00+00:00");
-        assert_eq!(cli["data"]["until"], "2026-11-16T00:00:00+00:00");
+        assert_eq!(cli["data"]["since"], format!("{since}T00:00:00+00:00"));
+        assert_eq!(cli["data"]["until"], format!("{until}T00:00:00+00:00"));
         assert_eq!(cli["data"]["rows"][0][uses], 2, "{cli}");
         let text = std::process::Command::new(env!("CARGO_BIN_EXE_skill-studio"))
             .args([
@@ -350,9 +344,9 @@ fn explicit_window_echo_matches_counted_boundaries_on_both_surfaces() {
                 "--home",
                 home.path().to_str().unwrap(),
                 "--since",
-                "2026-10-01",
+                &since,
                 "--until",
-                "2026-11-16",
+                &until,
             ])
             .env_clear()
             .env("HOME", home.path())
@@ -364,7 +358,9 @@ fn explicit_window_echo_matches_counted_boundaries_on_both_surfaces() {
         assert!(text.status.success());
         let text = String::from_utf8(text.stdout).unwrap();
         assert!(
-            text.contains("since=2026-10-01T00:00:00+00:00 until=2026-11-16T00:00:00+00:00"),
+            text.contains(&format!(
+                "since={since}T00:00:00+00:00 until={until}T00:00:00+00:00"
+            )),
             "{text}"
         );
         assert!(!text.contains("30 days"), "{text}");

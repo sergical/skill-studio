@@ -45,6 +45,13 @@ pub struct FileFacts {
     pub modified: Option<DateTime<Utc>>,
     /// Unix mode bits, when the platform reports them.
     pub mode: Option<u32>,
+    /// Last status change time (ctime), when the platform reports one. Any
+    /// write sets it to the current time, and user space cannot set it back.
+    #[serde(default)]
+    pub changed: Option<DateTime<Utc>>,
+    /// Inode number, when the platform reports one.
+    #[serde(default)]
+    pub inode: Option<u64>,
 }
 
 /// One entry of a directory listing.
@@ -58,7 +65,7 @@ pub struct DirEntryFacts {
 
 /// Whether a directory entry can be a skill folder: a directory or a
 /// symlink (never a plain file), and not dot-prefixed. Shared by every root
-/// reader (`ops::read_root_entries`, `harness::claude_code_skill_entries`)
+/// reader (`ops::read_root_entries` and the plugin and harness readers)
 /// so "what counts as a skill-shaped entry" has one definition.
 pub(crate) fn is_skill_shaped_entry(entry: &DirEntryFacts) -> bool {
     matches!(entry.kind, FileKind::Dir | FileKind::Symlink) && !entry.name.starts_with('.')
@@ -1329,6 +1336,9 @@ pub struct Ports {
     pub catalog: Arc<HarnessCatalog>,
     /// Op-call telemetry sink.
     pub telemetry: Arc<dyn Telemetry>,
+    /// Skill folder facts kept between scans; `None` reads each folder in
+    /// full on each scan. See [`crate::scan_memo`].
+    pub scan_memo: Option<Arc<crate::scan_memo::ScanMemo>>,
 }
 
 /// Per-call context.

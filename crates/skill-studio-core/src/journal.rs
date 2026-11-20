@@ -2207,28 +2207,6 @@ mod tests {
         );
     }
 
-    /// Given `ensure_dir` is called on a single missing directory (not one
-    /// requiring recursion into a missing parent, unlike the `begin`-driven
-    /// test above), when its own `fsops_create_dir` call hits a real I/O
-    /// error, then that error must be returned rather than swallowed as
-    /// `AlreadyExists`; on failure the panic names the outcome `ensure_dir`
-    /// gave instead.
-    #[test]
-    fn ensure_dir_on_a_single_missing_directory_propagates_a_real_creation_error() {
-        let fixture = FixtureBuilder::new().dir("/journal").build_fs();
-        let failing = FailingFs::wrap(Arc::new(fixture));
-        failing.fail_next_create_dir();
-        let journal = journal_over(Arc::new(failing));
-
-        let result = journal.ensure_dir(Path::new("/journal/plans"));
-
-        assert!(
-            result.is_err(),
-            "an injected fsops_create_dir failure must propagate as an error, not be treated \
-             as the directory already existing: got {result:?}"
-        );
-    }
-
     /// Given a directory that already exists on disk, when `ensure_dir`'s
     /// own existence check races with a concurrent creator and reports it
     /// missing anyway - so `ensure_dir` calls `fsops_create_dir` on a

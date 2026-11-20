@@ -79,7 +79,7 @@ impl From<AddMethod> for InstallMethod {
 const QUESTIONS: &str = "\
 Common questions:
   Which library skills did I load most, and where did they come from?
-      skill-studio library --since 2026-10-01 --until 2026-11-16 --sort uses --top 10 --json
+      skill-studio library --days 7 --sort uses --top 10 --json
   Library uses = loads in the window, once per session; a sub-agent log is its own session; resumed or forked session copies and names no longer in the library do not count.
   Fields: count = matching rows after scope and filters, before --top; name = skill; library = shared folder; agents = loads by agent; source null = not installed from a repo; modes = manual/auto; copies = link/same/old/changed.
   Which skills are installed outside my library too?
@@ -209,10 +209,10 @@ enum Command {
 
         #[command(flatten)]
         scope: ScopeArgs,
-        /// How many days back to count uses.
+        /// How many days back to count uses, 30 at most.
         #[arg(long, default_value_t = skill_studio_host::DEFAULT_USAGE_DAYS)]
         days: u32,
-        /// Count uses from this date (YYYY-MM-DD or RFC 3339).
+        /// Count uses from this date (YYYY-MM-DD or RFC 3339), 30 days ago at the earliest.
         #[arg(long, value_parser = skill_studio_host::parse_usage_time)]
         since: Option<chrono::DateTime<chrono::Utc>>,
         /// Count uses before this date (YYYY-MM-DD or RFC 3339).
@@ -245,7 +245,7 @@ enum Command {
         #[command(subcommand)]
         action: RecoveryCommand,
     },
-    /// Show which skills your agents used, and which they never used.
+    /// Show which skills your agents used in the last 30 days, and which they did not.
     ///
     /// Uses = loads in the window, once per session; a sub-agent log is its own session; resumed or forked session copies and names no longer in the library do not count.
     Usage {
@@ -254,10 +254,11 @@ enum Command {
         harness: Option<String>,
         #[command(flatten)]
         scope: ScopeArgs,
-        /// How many days back to count uses.
+        /// How many days back to count uses, 30 at most.
         #[arg(long, default_value_t = skill_studio_host::DEFAULT_USAGE_DAYS)]
         days: u32,
-        /// Count uses from this date (YYYY-MM-DD or RFC 3339) instead of --days.
+        /// Count uses from this date (YYYY-MM-DD or RFC 3339) instead of --days,
+        /// 30 days ago at the earliest.
         #[arg(long, value_parser = skill_studio_host::parse_usage_time)]
         since: Option<chrono::DateTime<chrono::Utc>>,
         /// Count uses before this date (YYYY-MM-DD or RFC 3339).
@@ -483,6 +484,48 @@ enum Command {
         scope: ScopeArgs,
         #[command(flatten)]
         view: ViewArgs,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show which skills each agent lists for the model with a description,
+    /// with a name only, or not at all. This writes nothing.
+    Listing {
+        #[command(flatten)]
+        scope: ScopeArgs,
+        #[command(flatten)]
+        view: ViewArgs,
+        /// Also show this project's sessions. It must be in the scope.
+        #[arg(long = "for-project")]
+        for_project: Option<PathBuf>,
+        /// Predict Claude Code at this `skillListingBudgetFraction`, for example 0.02.
+        #[arg(long = "claude-fraction")]
+        claude_fraction: Option<f64>,
+        /// Predict Claude Code with this context window, in tokens.
+        #[arg(long = "claude-context")]
+        claude_context: Option<u64>,
+        /// Predict Codex at this `skills.max_context_tokens`.
+        #[arg(long = "codex-max-tokens")]
+        codex_max_tokens: Option<u64>,
+        /// Compare Claude Code with this session transcript (.jsonl) instead of the newest one.
+        #[arg(long = "claude-session")]
+        claude_session: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show, per recent session, which skills were listed with a description,
+    /// by name only, or not at all, which were used, and which were possibly
+    /// missed. This writes nothing.
+    Sessions {
+        #[command(flatten)]
+        scope: ScopeArgs,
+        #[command(flatten)]
+        view: ViewArgs,
+        /// Only this project's sessions. It must be in the scope.
+        #[arg(long = "for-project")]
+        for_project: Option<PathBuf>,
+        /// Newest sessions to read per agent (default 100, at most 500).
+        #[arg(long)]
+        sessions: Option<usize>,
         #[arg(long)]
         json: bool,
     },
@@ -1050,6 +1093,38 @@ fn main() -> ExitCode {
             run_diagnose_conflict(&scope, &view.into(), json, time)
         }
         Command::Extras { scope, view, json } => run_extras(&scope, &view.into(), json, time),
+        Command::Sessions {
+            scope,
+            view,
+            for_project,
+            sessions,
+            json,
+        } => {
+            let request = skill_studio_core::skill_sessions::SkillSessionsRequest {
+                project_path: for_project.map(|p| std::fs::canonicalize(&p).unwrap_or(p)),
+                sessions,
+            };
+            run_skill_sessions(&scope, &request, &view.into(), json, time)
+        }
+        Command::Listing {
+            scope,
+            view,
+            for_project,
+            claude_fraction,
+            claude_context,
+            codex_max_tokens,
+            claude_session,
+            json,
+        } => {
+            let request = skill_studio_core::listing_visibility::ListingRequest {
+                project_path: for_project.map(|p| std::fs::canonicalize(&p).unwrap_or(p)),
+                claude_budget_fraction: claude_fraction,
+                claude_context_window_tokens: claude_context,
+                codex_max_context_tokens: codex_max_tokens,
+                claude_transcript: claude_session,
+            };
+            run_listing(&scope, &request, &view.into(), json, time)
+        }
         Command::Invocation {
             scope,
             mismatches: true,
@@ -2446,7 +2521,7 @@ fn run_usage(
     )];
     let scan_start = clock.monotonic();
     let result = filter
-        .check_window(chrono::Utc::now())
+        .check_window(days, chrono::Utc::now())
         .map_err(|message| {
             skill_studio_core::CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
         })
@@ -2885,6 +2960,48 @@ fn run_extras(scope: &ScopeArgs, view: &ViewRequest, json: bool, time: bool) -> 
     );
     let envelope = ResultEnvelope::from_result(Operation::Extras, &rt.scope, &ctx, result);
     finish_view(&envelope, view, json, time, output::print_extras_table)
+}
+
+fn run_skill_sessions(
+    scope: &ScopeArgs,
+    request: &skill_studio_core::skill_sessions::SkillSessionsRequest,
+    view: &ViewRequest,
+    json: bool,
+    time: bool,
+) -> ExitCode {
+    let rt = match build_runtime::<skill_studio_core::skill_sessions::SkillSessionsReport>(
+        scope,
+        Operation::SkillSessions,
+        json,
+    ) {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let result = skill_studio_core::skill_sessions::skill_sessions(&rt, &ctx, request);
+    let envelope = ResultEnvelope::from_result(Operation::SkillSessions, &rt.scope, &ctx, result);
+    finish_view(&envelope, view, json, time, output::print_sessions_table)
+}
+
+fn run_listing(
+    scope: &ScopeArgs,
+    request: &skill_studio_core::listing_visibility::ListingRequest,
+    view: &ViewRequest,
+    json: bool,
+    time: bool,
+) -> ExitCode {
+    let rt = match build_runtime::<skill_studio_core::listing_visibility::ListingReport>(
+        scope,
+        Operation::Listing,
+        json,
+    ) {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let result = skill_studio_core::listing_visibility::listing(&rt, &ctx, request);
+    let envelope = ResultEnvelope::from_result(Operation::Listing, &rt.scope, &ctx, result);
+    finish_view(&envelope, view, json, time, output::print_listing_table)
 }
 
 fn run_invocation(

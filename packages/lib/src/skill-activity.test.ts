@@ -8,12 +8,16 @@ import {
   dayBreakdown,
   dayDetail,
   dayTotals,
+  historyByHarness,
+  historyByTrigger,
   shiftDay,
   skillRows,
+  statsInRange,
   usualDay,
   windowSummary,
 } from "./skill-activity";
 import type { ActivityFilter } from "./skill-activity";
+import { localDateKey } from "./skill-stats";
 import type { SkillInvocationStats, SkillUseHour } from "./skill-types";
 
 /** One hourly bucket, overridable per test. */
@@ -39,7 +43,6 @@ function fixtureStats(
 ): SkillInvocationStats {
   return {
     skill,
-    total: byHour.reduce((sum, b) => sum + b.count, 0),
     last_24_hours: 0,
     last_7_days: 0,
     last_14_days: 0,
@@ -197,5 +200,24 @@ describe("dayTotals", () => {
     ];
     const totals = dayTotals(stats, ALL_ACTIVITY);
     expect(totals[baseDayKey]).toBe(2);
+  });
+});
+
+describe("statsInRange", () => {
+  it("keeps only the calendar's days, so menu counts and day totals match it", () => {
+    const start = localDateKey(new Date((BASE_HOUR + 24) * 3_600_000));
+    const end = localDateKey(new Date((BASE_HOUR + 48) * 3_600_000));
+    const stats: SkillInvocationStats[] = [
+      fixtureStats("write-tests", [
+        hourBucket(BASE_HOUR, { harness: "codex", trigger: "user", count: 5 }),
+        hourBucket(BASE_HOUR + 24, { harness: "codex", trigger: "user", count: 2 }),
+        hourBucket(BASE_HOUR + 72, { harness: "codex", trigger: "user", count: 3 }),
+      ]),
+    ];
+    const shown = statsInRange(stats, { start, end });
+    expect(historyByHarness(shown, "all")).toEqual({ codex: 2 });
+    expect(historyByTrigger(shown, "all")).toEqual({ user: 2 });
+    expect(dayTotals(shown, ALL_ACTIVITY)).toEqual({ [start]: 2 });
+    expect(statsInRange(stats, { start, end })).toBe(shown);
   });
 });

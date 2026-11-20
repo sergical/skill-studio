@@ -1482,24 +1482,6 @@ mod tests {
     }
 
     #[test]
-    fn inverse_is_seeded_before_the_link_is_replaced() {
-        let (temp, store, source, link) = setup();
-        let home = temp.path().join("home");
-        let guard = test_guard(&home);
-        let id =
-            make_skill_independent_copy(&store, request(&home, &link, &source), &guard).unwrap();
-        let event = store.get(&id).unwrap().unwrap();
-        let inverse: InverseOp = serde_json::from_value(event.inverse.unwrap()).unwrap();
-        let InverseOp::RecreateSymlink {
-            post_fingerprint, ..
-        } = inverse
-        else {
-            panic!("expected symlink inverse");
-        };
-        assert_eq!(post_fingerprint, Some(fingerprint_path(&link)));
-    }
-
-    #[test]
     fn restore_refuses_after_the_materialized_parent_becomes_a_whole_root_link() {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
@@ -1581,26 +1563,6 @@ mod tests {
             .unwrap()
             .copies
             .contains_key(&data.copy_deployment_id));
-        assert_eq!(store.get(&id).unwrap().unwrap().status, "done");
-        recover_make(&store, &home, &id).unwrap();
-        assert_eq!(store.get(&id).unwrap().unwrap().status, "done");
-    }
-
-    #[test]
-    fn startup_recovery_after_registry_write_is_idempotent() {
-        let (temp, store, source, link) = setup();
-        let home = temp.path().join("home");
-        let id = {
-            let guard = test_guard(&home);
-            make_skill_independent_copy(&store, request(&home, &link, &source), &guard).unwrap()
-        };
-        let event = store.get(&id).unwrap().unwrap();
-        let data = independent_copy_event_data(&event).unwrap();
-        symlink(data.original_link_target.unwrap(), &data.saved_link).unwrap();
-        mark_pending(&store, &id);
-        recover_make(&store, &home, &id).unwrap();
-        assert!(link.is_dir());
-        assert!(fs::symlink_metadata(&data.saved_link).is_err());
         assert_eq!(store.get(&id).unwrap().unwrap().status, "done");
         recover_make(&store, &home, &id).unwrap();
         assert_eq!(store.get(&id).unwrap().unwrap().status, "done");
@@ -2164,6 +2126,8 @@ mod tests {
         recover_make(&store, &home, &event_id).unwrap();
         recover_make(&store, &home, &event_id).unwrap();
         assert!(link.is_dir());
+        let data = independent_copy_event_data(&store.get(&event_id).unwrap().unwrap()).unwrap();
+        assert!(fs::symlink_metadata(&data.saved_link).is_err());
         assert!(!read_fork_registry(&home).unwrap().copies.is_empty());
         assert_eq!(store.get(&event_id).unwrap().unwrap().status, "done");
     }

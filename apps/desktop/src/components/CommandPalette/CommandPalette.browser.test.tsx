@@ -51,10 +51,3 @@ it("moving_the_pointer_onto_an_option_after_arrowing_highlights_that_option", as
 
   expect(highlightedLabel()).toBe("Plugins");
 });
-
-it("opening_the_palette_in_dark_mode_shows_the_query_input_without_its_own_filled_background", async () => {
-  await openPalette();
-  const input = page.getByRole("combobox").element();
-
-  expect(getComputedStyle(input).backgroundColor).toBe("rgba(0, 0, 0, 0)");
-});

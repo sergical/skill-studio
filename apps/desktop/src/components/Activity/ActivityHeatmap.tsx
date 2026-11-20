@@ -1,17 +1,20 @@
 // ============================================================================
-// ActivityHeatmap - Year heatmap with Monday-aligned weeks, quantile shading,
-// and one shared hover card. Pointer hover waits 150ms for the first card,
-// then moves instantly between days. Arrow keys move the active day and show
-// its card.
+// ActivityHeatmap - Calendar heatmap: one row per Monday-first week, one
+// column per weekday, quantile shading, and one shared hover card. Pointer
+// hover waits 150ms for the first card, then moves instantly between days.
+// Arrow keys move the active day and show its card.
 // ============================================================================
 
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent, MouseEvent, PointerEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { formatDay, mondayLead, uses, weekColumns } from "@skill-studio/lib";
+import { calendarWeeks, formatDay, localDateKey, mondayLead, uses } from "@skill-studio/lib";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const SHADES = [0, 18, 36, 58, 82];
+// Day numbers keep 4.5:1 contrast on every level in both themes: secondary text on levels 0-1,
+// primary text from level 2. A top shade above 70% drops white text under 4.5:1 in the dark theme.
+const SHADES = [0, 18, 36, 54, 70];
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const OPEN_DELAY_MS = 150;
 const REOPEN_GRACE_MS = 300;
 
@@ -42,7 +45,7 @@ function useActiveKey(dates: string[], selected: string | null) {
     setPrevSelected(selected);
     if (selected) setActiveKey(selected);
   }
-  // A narrow grid drops its oldest weeks, so a day picked elsewhere can be outside `dates`.
+  // A day picked elsewhere can be outside `dates`, for example after the date rolls over.
   const shownKey = dates.includes(activeKey) ? activeKey : dates[dates.length - 1];
   return [shownKey, setActiveKey] as const;
 }
@@ -58,9 +61,20 @@ interface GridProps {
 
 function Grid({ slots, days, idPrefix, activeKey, selected, tint }: GridProps) {
   const levelOf = levels(days);
+  const firstKey = slots.find((key) => key !== null);
+  const todayKey = localDateKey(new Date());
   return slots.map((key, i) => {
     if (!key) return <div key={`blank-${i}`} role="presentation" data-blank="" />;
     const count = days[key] ?? 0;
+    const level = levelOf(count);
+    const day = Number(key.slice(8));
+    // The first day shown and each 1st name their month, so the calendar needs no month row.
+    const dayLabel =
+      key === todayKey
+        ? "Today"
+        : key === firstKey || day === 1
+          ? `${MONTHS[Number(key.slice(5, 7)) - 1]} ${day}`
+          : day;
     return (
       <div
         key={key}
@@ -71,9 +85,13 @@ function Grid({ slots, days, idPrefix, activeKey, selected, tint }: GridProps) {
         data-key={key}
         data-active={activeKey === key ? "" : undefined}
         data-selected={selected === key ? "true" : undefined}
-        className="aspect-square cursor-default rounded-[2px] bg-bg-tertiary outline-offset-1 group-focus-visible:data-active:outline-2 group-focus-visible:data-active:outline-text-secondary data-selected:z-1 data-selected:ring-1 data-selected:ring-text-primary data-selected:ring-offset-1 data-selected:ring-offset-bg-primary"
-        style={{ backgroundColor: shade(levelOf(count), tint) }}
-      />
+        className="flex h-8 cursor-default items-center rounded-[3px] bg-bg-tertiary px-2 text-caption tabular-nums text-text-secondary outline-offset-1 data-strong:text-text-primary data-today:font-medium group-focus-visible:data-active:outline-2 group-focus-visible:data-active:outline-text-secondary data-selected:z-1 data-selected:ring-1 data-selected:ring-text-primary data-selected:ring-offset-1 data-selected:ring-offset-bg-primary"
+        data-strong={level >= 2 ? "" : undefined}
+        data-today={key === todayKey ? "" : undefined}
+        style={{ backgroundColor: shade(level, tint) }}
+      >
+        {dayLabel}
+      </div>
     );
   });
 }
@@ -113,28 +131,9 @@ export function ActivityHeatmap({
   const cardRef = useRef<HTMLDivElement>(null);
 
   const lead = mondayLead(dates[0]);
-  const weeks = weekColumns(dates);
-  const slots: (string | null)[] = Array.from({ length: weeks * 7 }, (_, i) =>
+  const slots: (string | null)[] = Array.from({ length: calendarWeeks(dates) * 7 }, (_, i) =>
     i >= lead && i < lead + dates.length ? dates[i - lead] : null,
   );
-
-  const monthLabels: { col: number; span: number; label: string }[] = [];
-  let lastMonth = -1;
-  for (let col = 0; col < weeks; col++) {
-    const first = slots.slice(col * 7, col * 7 + 7).find((k) => k !== null);
-    if (!first) continue;
-    const month = Number(first.slice(5, 7)) - 1;
-    if (month !== lastMonth) {
-      if (monthLabels.length) {
-        const previous = monthLabels[monthLabels.length - 1];
-        previous.span = col - previous.col;
-      }
-      monthLabels.push({ col, span: weeks - col, label: MONTHS[month] });
-      lastMonth = month;
-    }
-  }
-  // A sliver of a month at the left edge has no room for its label.
-  const visibleMonthLabels = monthLabels.filter((m) => m.span >= 2);
 
   const shownKey = hoverKey ?? (keyboardOpen ? activeKey : null);
   const isOpen = shownKey !== null;
@@ -201,10 +200,10 @@ export function ActivityHeatmap({
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
     const index = dates.indexOf(activeKey);
     const moves = {
-      ArrowLeft: -7,
-      ArrowRight: 7,
-      ArrowUp: -1,
-      ArrowDown: 1,
+      ArrowLeft: -1,
+      ArrowRight: 1,
+      ArrowUp: -7,
+      ArrowDown: 7,
       Home: -index,
       End: dates.length - 1 - index,
     } satisfies Record<string, number>;
@@ -238,54 +237,33 @@ export function ActivityHeatmap({
 
   return (
     <div className="flex flex-col gap-1.5">
-      <div
-        className="ml-8.5 grid gap-[3px] text-small text-text-tertiary"
-        style={{ gridTemplateColumns: `repeat(${weeks}, minmax(0, 1fr))` }}
-        aria-hidden="true"
-      >
-        {visibleMonthLabels.map(({ col, span, label: month }) => (
-          <span
-            key={`${col}-${month}`}
-            className="overflow-hidden whitespace-nowrap"
-            style={{ gridColumn: `${col + 1} / span ${span}` }}
-          >
-            {month}
+      <div className="grid grid-cols-7 gap-1 text-caption text-text-tertiary" aria-hidden="true">
+        {WEEKDAYS.map((d) => (
+          <span key={d} className="px-2">
+            {d}
           </span>
         ))}
       </div>
-      <div className="flex gap-1.5">
-        <div
-          className="grid w-7 shrink-0 grid-rows-7 gap-[3px] text-caption leading-none text-text-tertiary"
-          aria-hidden="true"
-        >
-          {["Mon", "", "Wed", "", "Fri", "", ""].map((d, i) => (
-            <span key={i} className="flex items-center">
-              {d}
-            </span>
-          ))}
-        </div>
-        <div
-          role="listbox"
-          tabIndex={0}
-          aria-label={`${label}, ${uses(total)}. Arrow keys move by day and week.`}
-          aria-activedescendant={`${idPrefix}-${activeKey}`}
-          className="group grid flex-1 grid-flow-col grid-rows-7 gap-[3px] rounded-[3px]"
-          style={{ gridTemplateColumns: `repeat(${weeks}, minmax(0, 1fr))` }}
-          onPointerOver={onPointerOver}
-          onPointerLeave={close}
-          onClick={onClick}
-          onKeyDown={onKeyDown}
-          onBlur={close}
-        >
-          <Grid
-            slots={slots}
-            days={days}
-            idPrefix={idPrefix}
-            activeKey={activeKey}
-            selected={selected}
-            tint={tint}
-          />
-        </div>
+      <div
+        role="listbox"
+        tabIndex={0}
+        aria-label={`${label}, ${uses(total)}. Arrow keys move by day and week.`}
+        aria-activedescendant={`${idPrefix}-${activeKey}`}
+        className="group grid grid-cols-7 gap-1 rounded-[3px]"
+        onPointerOver={onPointerOver}
+        onPointerLeave={close}
+        onClick={onClick}
+        onKeyDown={onKeyDown}
+        onBlur={close}
+      >
+        <Grid
+          slots={slots}
+          days={days}
+          idPrefix={idPrefix}
+          activeKey={activeKey}
+          selected={selected}
+          tint={tint}
+        />
       </div>
       <div
         className="flex items-center justify-end gap-1 text-caption text-text-tertiary"
@@ -295,7 +273,7 @@ export function ActivityHeatmap({
         {[0, 1, 2, 3, 4].map((level) => (
           <span
             key={level}
-            className="size-2.5 rounded-[2px] bg-bg-tertiary"
+            className="h-2.5 w-4 rounded-[2px] bg-bg-tertiary"
             style={{ backgroundColor: shade(level, tint) }}
           />
         ))}

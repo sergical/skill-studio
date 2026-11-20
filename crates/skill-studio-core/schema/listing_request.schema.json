@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ListingRequest",
+  "description": "Input for `listing`.",
+  "type": "object",
+  "properties": {
+    "project_path": {
+      "description": "Also report this project. It must be in the runtime scope.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
+    },
+    "claude_budget_fraction": {
+      "description": "Predict Claude Code at this `skillListingBudgetFraction` (0 to 1).",
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double"
+    },
+    "claude_context_window_tokens": {
+      "description": "Predict Claude Code with this context window in tokens.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "codex_max_context_tokens": {
+      "description": "Predict Codex at this `skills.max_context_tokens` (capped at 10000).",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "claude_transcript": {
+      "description": "Compare Claude Code with this session transcript instead of the newest one.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
+    }
+  }
+}

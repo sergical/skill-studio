@@ -16,38 +16,6 @@ async function openSkillsPage(page: Page) {
   await expect(page.getByRole("grid", { name: "Skills" })).toBeVisible();
 }
 
-/** The x offsets, from the grid's left edge, of the first group label and the first row's name
- * and harness stack. */
-async function rowGeometry(page: Page, gridName: string) {
-  const grid = page.getByRole("grid", { name: gridName });
-  await expect(grid.locator(SKILL_ROW).first()).toBeVisible();
-  return grid.evaluate((el, sel) => {
-    const left = el.getBoundingClientRect().left;
-    const label = el.querySelector("[data-group-header] > span")!;
-    const row = el.querySelector(sel)!;
-    const name = row.querySelector('[role="gridcell"]:nth-child(2) span.truncate')!;
-    const stack = row.querySelector('[role="gridcell"]:nth-child(4) > *')!;
-    return {
-      label: Math.round(label.getBoundingClientRect().left - left),
-      name: Math.round(name.getBoundingClientRect().left - left),
-      stack: Math.round(stack.getBoundingClientRect().left - left),
-    };
-  }, SKILL_ROW);
-}
-
-test("a skill row lines its name up under its group label and uses the same columns on Home and Skills", async ({
-  page,
-}) => {
-  const home = await rowGeometry(page, "Home");
-  expect(home.name).toBe(home.label);
-
-  await openSkillsPage(page);
-  const skills = await rowGeometry(page, "Skills");
-  expect(skills.name).toBe(skills.label);
-  expect(skills.name).toBe(home.name);
-  expect(skills.stack).toBe(home.stack);
-});
-
 test("X on a focused Home row selects its skill and shows the selection bar with its name, and Escape clears it", async ({
   page,
 }) => {

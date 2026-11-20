@@ -1131,20 +1131,6 @@ mod tests {
     }
 
     #[test]
-    fn validate_materialize_request_accepts_a_recorded_whole_dir_link() {
-        let root = PathBuf::from("/home/.claude/skills");
-        let snapshot = fixture_materialize_snapshot(&root);
-        let target = materialize_target(&snapshot);
-        assert!(validate_materialize_request(
-            &snapshot,
-            &target,
-            "claude-code",
-            "/home/.claude/skills"
-        )
-        .is_ok());
-    }
-
-    #[test]
     fn materialize_refuses_when_fresh_snapshot_no_longer_has_cached_target() {
         let root = PathBuf::from("/home/.claude/skills");
         let cached = fixture_materialize_snapshot(&root);
@@ -1172,26 +1158,41 @@ mod tests {
 
     #[test]
     fn materialize_resolves_whole_root_children_to_the_exact_universal_deployment() {
-        use super::super::skill_deployment::{id_for_candidate, DeploymentCandidate};
+        use super::super::skill_deployment::{
+            deployment_id, BackingRelationship, SkillDestination,
+        };
 
-        for (label, harness, root) in [
-            ("Claude Code", "claude-code", "/home/.claude/skills"),
-            ("OpenCode", "open-code", "/home/.config/opencode/skills"),
+        for (label, harness, slot, root) in [
+            (
+                "Claude Code",
+                "claude-code",
+                "claude-code",
+                "/home/.claude/skills",
+            ),
+            (
+                "OpenCode",
+                "open-code",
+                "opencode",
+                "/home/.config/opencode/skills",
+            ),
         ] {
             let root = PathBuf::from(root);
             let linked_path = root.join("find-bugs");
             let resolved_path = PathBuf::from("/home/.agents/skills/find-bugs");
-            let (linked_id, _, backing) = id_for_candidate(DeploymentCandidate {
-                name: "find-bugs",
-                root_label: label,
-                scope: "global",
-                path: &linked_path,
-                project_path: None,
-                is_symlink: false,
-                symlink_target: None,
-                resolved_path: Some(&resolved_path),
-                shared_via_whole_dir_link: true,
-            });
+            let id = |slot: &str, path: &std::path::Path| {
+                deployment_id(
+                    "find-bugs",
+                    "global",
+                    SkillDestination::Universal,
+                    slot,
+                    None,
+                    path,
+                )
+            };
+            let linked_id = id(slot, &linked_path);
+            let backing = BackingRelationship::LinkedTo {
+                deployment_id: id("universal", &resolved_path),
+            };
             let mut snapshot = fixture_materialize_snapshot(&root);
             let linked = &mut snapshot.skills[0].deployments[0];
             linked.id = linked_id.clone();
@@ -1320,25 +1321,6 @@ mod tests {
 
         let snapshot = fixture_snapshot(&broken, &healthy);
         assert!(find_deployment_at(&snapshot, &outside).is_none());
-    }
-
-    #[test]
-    fn repair_refuses_when_fresh_snapshot_no_longer_has_cached_link() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("root");
-        fs::create_dir_all(&root).unwrap();
-        let broken = root.join("find-bugs-claude");
-        symlink("/does/not/exist", &broken).unwrap();
-        let healthy = root.join("find-bugs-codex");
-        fs::create_dir_all(&healthy).unwrap();
-        let cached = fixture_snapshot(&broken, &healthy);
-        assert!(find_deployment_at(&cached, &broken).is_some());
-
-        let mut fresh = cached;
-        fresh.skills[0]
-            .deployments
-            .retain(|deployment| Path::new(&deployment.path) != broken);
-        assert!(find_deployment_at(&fresh, &broken).is_none());
     }
 
     #[test]

@@ -113,3 +113,18 @@ The read-only `extras` tool takes `{}` and uses the server's existing home and
 project scope. It returns the same declaration list as `skill-studio extras
 --json`: hook events and counts, MCP server names, and instruction file paths.
 It returns no config values or instruction contents.
+
+The read-only `listing` tool returns, for each agent and scope, the state of
+each skill in the model's skill list: `described`, `truncated`, `name_only`,
+`omitted` or `hidden`. Optional `claude_budget_fraction`,
+`claude_context_window_tokens` and `codex_max_context_tokens` predict another
+budget. `claude_transcript` compares with one Claude Code session. It writes
+no agent settings.
+
+The read-only `skill_sessions` tool reads each agent's newest sessions (100 by
+default, `sessions` up to 500) and returns three lists: `skills`, one row per
+agent and skill with counts of sessions that listed it `described`,
+`truncated` or `name_only`, used it, or possibly missed it, plus `flags` and
+the reason it is not described now; `sessions`, each session's listing totals,
+uses and possible misses; and `agents`, what each agent records. Flagged skills
+come first, so the first page holds the findings. Possible misses are a guess.

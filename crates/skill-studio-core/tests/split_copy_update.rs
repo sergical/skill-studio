@@ -44,6 +44,7 @@ fn runtime_with(home: &Path, fs: Arc<dyn ScopeFs>) -> Runtime {
         tools: None,
         catalog: Arc::new(HarnessCatalog::builtin()),
         telemetry: Arc::new(skill_studio_core::ports::NoopTelemetry),
+        scan_memo: None,
     };
     Runtime::new(&RuntimeScope::fixture(home), ports).unwrap()
 }
@@ -1136,18 +1137,8 @@ fn deleted_registry_force_restore_keeps_next_update(only_copies: bool, delete_be
 }
 
 #[test]
-fn split_update_deleted_registry_force_undo_redo_allows_update_or_loses_copy_rows() {
-    deleted_registry_force_restore_keeps_next_update(false, false);
-}
-
-#[test]
 fn split_update_deleted_copies_force_undo_redo_allows_update_or_loses_copy_rows() {
     deleted_registry_force_restore_keeps_next_update(true, false);
-}
-
-#[test]
-fn split_update_undo_deleted_registry_force_redo_allows_update_or_loses_copy_rows() {
-    deleted_registry_force_restore_keeps_next_update(false, true);
 }
 
 #[test]

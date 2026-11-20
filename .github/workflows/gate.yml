@@ -17,6 +17,7 @@ jobs:
         with:
           persist-credentials: false
       - run: python3 -m unittest discover -s scripts/gate -p 'test_*.py'
+      - run: python3 -m unittest discover -s tools/agent-bench -p 'test_*.py'
   contracts:
     permissions:
       contents: read

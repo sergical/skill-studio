@@ -1,6 +1,7 @@
 //! Per-skill use counts over a rolling window of days, shared by the CLI's
 //! `usage` command and the MCP server's `skill_usage` tool so both answer
-//! "which skills did I not use?" the same way.
+//! "which skills did I not use?" the same way. Every window sits inside the
+//! last [`HISTORY_DAYS`] days: older history is not counted.
 //!
 //! The desktop app owns the use cache (`skill-uses.json` in its app data
 //! folder). This module only ever reads it: it seeds an in-memory
@@ -17,13 +18,14 @@ use skill_studio_core::discovery_sources::DiscoverySources;
 use skill_studio_core::dto::{Completeness, Inventory};
 use skill_studio_core::identity::RootKind;
 use skill_studio_core::ops::{OpStatus, Outcome};
-use skill_studio_core::skill_uses::{SkillInvocation, SkillTrigger};
+use skill_studio_core::skill_uses::{history_start, SkillInvocation, SkillTrigger, HISTORY_DAYS};
 
 use crate::fs::RealFs;
 use crate::skill_uses::SkillInvocationIndex;
 
-/// The window `usage` and `skill_usage` use when the caller names none.
-pub const DEFAULT_USAGE_DAYS: u32 = 30;
+/// The window `usage` and `skill_usage` use when the caller names none: the
+/// whole history.
+pub const DEFAULT_USAGE_DAYS: u32 = HISTORY_DAYS;
 
 /// The desktop app's use cache under the platform data folder (`dirs::data_dir()`,
 /// `~/Library/Application Support` on macOS): Tauri's `app_data_dir()` for
@@ -52,11 +54,8 @@ pub struct SkillUsageRow {
     pub skill: String,
     /// Uses inside the report window: `since`..`until`, or the last `days`.
     pub recent_uses: u32,
-    /// Uses across all the session history that was read, outside the
-    /// window too.
-    pub total_uses: u32,
-    /// The most recent use at any time, outside the window too, RFC 3339,
-    /// or `None` when never used.
+    /// The most recent use in the last 30 days, outside the window too,
+    /// RFC 3339, or `None` when not used in that time.
     pub last_used: Option<String>,
     /// Uses in the last `days` days, by agent id.
     pub agents: BTreeMap<String, u32>,
@@ -120,18 +119,45 @@ pub struct UsageFilter {
 }
 
 impl UsageFilter {
-    /// Rejects a window that holds no time: `since` at or after `until`, or
-    /// after `now` when there is no `until`. Such a window would report
-    /// every skill as unused.
-    pub fn check_window(&self, now: DateTime<Utc>) -> Result<(), String> {
-        match self.since {
-            Some(since) if since >= self.until.unwrap_or(now) => Err(format!(
+    /// Rejects a window that holds no time (`since` at or after `until`, or
+    /// after `now` when there is no `until`), which would report every skill
+    /// as unused. Also rejects a window that starts before the history
+    /// ([`HISTORY_DAYS`] days before `now`, to the second), by `days`, by
+    /// `since` or by an old `until`, which would report uses that are not
+    /// counted.
+    pub fn check_window(&self, days: u32, now: DateTime<Utc>) -> Result<(), String> {
+        let end = self.until.unwrap_or(now);
+        if let Some(since) = self.since.filter(|since| *since >= end) {
+            return Err(format!(
                 "the usage window is empty: since {} is not before {}",
                 since.to_rfc3339(),
-                self.until.unwrap_or(now).to_rfc3339()
-            )),
-            _ => Ok(()),
+                end.to_rfc3339()
+            ));
         }
+        let history = history_start(now);
+        let too_old = || {
+            format!(
+                "Skill Studio counts only the last {HISTORY_DAYS} days of history: \
+                 the window must start at {} or later",
+                history.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            )
+        };
+        // Checked first, so `days` stays small enough to subtract from a date.
+        if self.since.is_none() && days > HISTORY_DAYS {
+            return Err(too_old());
+        }
+        // `until` can be any date the parser takes, down to chrono's minimum, so the
+        // subtraction is checked; a start before that minimum is before the history too.
+        let start = match self.since {
+            Some(since) => since,
+            None => end
+                .checked_sub_signed(chrono::Duration::days(i64::from(days)))
+                .ok_or_else(too_old)?,
+        };
+        if start < history {
+            return Err(too_old());
+        }
+        Ok(())
     }
 }
 
@@ -248,6 +274,7 @@ impl SkillUsage {
         let cutoff = selection
             .since
             .unwrap_or_else(|| end - chrono::Duration::days(i64::from(days)));
+        let history = history_start(now);
         let mut by_skill: BTreeMap<&str, Tally> = installed
             .iter()
             .map(|name| (name.as_str(), Tally::default()))
@@ -255,6 +282,7 @@ impl SkillUsage {
         let selected: Vec<_> = self
             .index
             .all_uses()
+            .filter(|u| u.at >= history)
             .filter(|u| {
                 selection.harness.as_ref().is_none_or(|h| {
                     skill_studio_core::identity::AgentId::parse_harness(h)
@@ -275,14 +303,6 @@ impl SkillUsage {
                     tally.last_used = Some(use_.at);
                 }
             }
-        }
-        for use_ in session_uses(selected.iter().copied(), installed, &sources) {
-            let Some(tally) =
-                installed_name(&use_.skill, installed).and_then(|name| by_skill.get_mut(name))
-            else {
-                continue;
-            };
-            tally.total += 1;
         }
         for use_ in session_uses(
             selected
@@ -326,7 +346,6 @@ impl SkillUsage {
                     })
                     .collect(),
                 recent_uses: tally.recent,
-                total_uses: tally.total,
                 last_used: tally.last_used.map(|at| at.to_rfc3339()),
                 agents: tally.agents,
             })
@@ -397,7 +416,6 @@ struct Tally {
     sessions: BTreeSet<(String, String)>,
     triggers: BTreeMap<String, u32>,
     recent: u32,
-    total: u32,
     last_used: Option<DateTime<Utc>>,
     agents: BTreeMap<String, u32>,
 }
@@ -457,14 +475,15 @@ pub fn library_report(
         ..Default::default()
     };
     let now = rt.ports.clock.now();
-    filter.check_window(now).map_err(|message| {
+    let days = request.days.unwrap_or(DEFAULT_USAGE_DAYS);
+    filter.check_window(days, now).map_err(|message| {
         skill_studio_core::CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
     })?;
     let inventory = skill_studio_core::ops::scan_for_usage(rt, ctx)?;
     let report = SkillUsage::load_read_only(cache).report_filtered(
         &rt.scope.home.canonical,
         &inventory,
-        request.days.unwrap_or(DEFAULT_USAGE_DAYS),
+        days,
         now,
         &filter,
     );
@@ -527,9 +546,9 @@ mod tests {
     }
 
     /// A home with three skills and one Claude Code transcript:
-    /// - `gamma` (universal root) used 3 and 60 days ago, once through a
+    /// - `gamma` (universal root) used 3 and 20 days ago, once through a
     ///   plugin-qualified `tools:gamma` name;
-    /// - `idle` (Claude Code root) used once, 45 days ago;
+    /// - `idle` (Claude Code root) used once, 45 days ago, before the history;
     /// - `resting` (parked root) used 2 days ago, but parked;
     /// - `ghost`, used 1 day ago, is not installed anywhere.
     fn fixture() -> Fixture {
@@ -543,7 +562,7 @@ mod tests {
         fs::create_dir_all(&transcript_dir).unwrap();
         let lines = [
             claude_skill_line("gamma", &days_ago(3)),
-            claude_skill_line("tools:gamma", &days_ago(60)),
+            claude_skill_line("tools:gamma", &days_ago(20)),
             claude_skill_line("idle", &days_ago(45)),
             claude_skill_line("resting", &days_ago(2)),
             claude_skill_line("ghost", &days_ago(1)),
@@ -608,14 +627,9 @@ mod tests {
         let report =
             SkillUsage::load_read_only(Some(&cache)).report(&fixture.home, &inventory, 30, now());
         assert_eq!(
-            row(&report, "gamma").total_uses,
-            3,
-            "CLI and MCP must discard stale doubled counts"
-        );
-        assert_eq!(
             row(&report, "gamma").recent_uses,
-            2,
-            "the resumed use must count once in the recent window"
+            3,
+            "CLI and MCP must discard stale doubled counts, and the resumed use counts once"
         );
         assert_eq!(
             fs::read(&cache).unwrap(),
@@ -684,10 +698,10 @@ mod tests {
     }
 
     /// Flow: report a 30-day window over the fixture home.
-    /// Expectation: `gamma` has 1 recent use by claude-code and 2 in total
-    /// (the plugin-qualified use folds into it); `idle` has none recent, 1
-    /// in total, and is the only `unused` name, listed first; the parked
-    /// `resting` and the uninstalled `ghost` get no row.
+    /// Expectation: `gamma` has 2 uses by claude-code (the plugin-qualified
+    /// use folds into it); `idle`'s only use is before the history, so it has
+    /// no use and no `last_used`, and is the only `unused` name, listed first;
+    /// the parked `resting` and the uninstalled `ghost` get no row.
     /// Failure means the CLI and MCP would name the wrong skills as safe to
     /// park.
     #[test]
@@ -704,48 +718,29 @@ mod tests {
         assert_eq!(report.unused, ["idle"]);
 
         let gamma = row(&report, "gamma");
-        assert_eq!(gamma.recent_uses, 1);
-        assert_eq!(gamma.total_uses, 2);
+        assert_eq!(gamma.recent_uses, 2);
         assert_eq!(gamma.last_used.as_deref(), Some(days_ago(3).as_str()));
         assert_eq!(
             gamma.agents,
-            BTreeMap::from([("claude-code".to_string(), 1)])
+            BTreeMap::from([("claude-code".to_string(), 2)])
         );
 
         let idle = row(&report, "idle");
         assert_eq!(idle.recent_uses, 0);
-        assert_eq!(idle.total_uses, 1);
-        assert_eq!(idle.last_used.as_deref(), Some(days_ago(45).as_str()));
+        assert_eq!(idle.last_used, None);
         assert!(idle.agents.is_empty());
     }
 
-    /// Flow: report a 90-day window over the same home.
-    /// Expectation: `idle`'s 45-day-old use now counts, so nothing is unused
-    /// and `gamma` (2 recent) sorts before `idle` (1 recent).
-    /// Failure means `days` is ignored and the window is fixed.
-    #[test]
-    fn a_wider_window_counts_older_uses() {
-        let fixture = fixture();
-        let inventory = scan(&fixture.home);
-
-        let report = SkillUsage::default().report(&fixture.home, &inventory, 90, now());
-
-        assert!(report.unused.is_empty(), "{report:?}");
-        assert_eq!(row(&report, "gamma").recent_uses, 2);
-        assert_eq!(row(&report, "idle").recent_uses, 1);
-        assert_eq!(report.rows[0].skill, "gamma");
-    }
-
-    /// Flow: report the window from 50 to 10 days ago (`since`, `until`).
-    /// Expectation: only `idle`'s 45-day-old use counts; `gamma`'s uses 3
-    /// and 60 days ago fall outside, and the report echoes both bounds.
-    /// Failure means an agent asking about a past month gets uses from
+    /// Flow: report the window from 25 to 10 days ago (`since`, `until`).
+    /// Expectation: only `gamma`'s 20-day-old use counts; its 3-day-old use
+    /// falls outside, and the report echoes both bounds.
+    /// Failure means an agent asking about a past week gets uses from
     /// outside it.
     #[test]
     fn a_since_until_window_counts_only_uses_inside_it() {
         let fixture = fixture();
         let inventory = scan(&fixture.home);
-        let since = now() - chrono::Duration::days(50);
+        let since = now() - chrono::Duration::days(25);
         let until = now() - chrono::Duration::days(10);
         let filter = UsageFilter {
             since: Some(since),
@@ -756,23 +751,25 @@ mod tests {
         let report =
             SkillUsage::default().report_filtered(&fixture.home, &inventory, 30, now(), &filter);
 
-        assert_eq!(row(&report, "idle").recent_uses, 1, "{report:?}");
-        assert_eq!(row(&report, "gamma").recent_uses, 0, "{report:?}");
-        assert_eq!(report.unused, ["gamma"]);
+        assert_eq!(row(&report, "gamma").recent_uses, 1, "{report:?}");
+        assert_eq!(row(&report, "idle").recent_uses, 0, "{report:?}");
+        assert_eq!(report.unused, ["idle"]);
         assert_eq!(report.window.since, Some(since.to_rfc3339()));
         assert_eq!(report.window.until, Some(until.to_rfc3339()));
     }
 
-    /// Flow: report the 30 days before a date 50 days ago (`until` only).
-    /// Expectation: the window is days 80 to 50 back, so only `gamma`'s
-    /// 60-day-old use counts, not `idle`'s 45-day-old one.
-    /// Failure means `until` alone still counts back from now.
+    /// Flow: report the 30 days before a date 10 days ago (`until` only).
+    /// Expectation: the window is days 40 to 10 back, cut at the 30-day
+    /// history, so `gamma`'s 20-day-old use counts and its 3-day-old use and
+    /// `idle`'s 45-day-old use do not.
+    /// Failure means `until` alone still counts back from now, or a use
+    /// before the history counts.
     #[test]
-    fn an_until_without_since_counts_the_days_before_it() {
+    fn an_until_without_since_counts_the_history_days_before_it() {
         let fixture = fixture();
         let inventory = scan(&fixture.home);
         let filter = UsageFilter {
-            until: Some(now() - chrono::Duration::days(50)),
+            until: Some(now() - chrono::Duration::days(10)),
             ..UsageFilter::default()
         };
 
@@ -783,7 +780,7 @@ mod tests {
         assert_eq!(row(&report, "idle").recent_uses, 0, "{report:?}");
     }
 
-    /// Flow: report a 90-day window with `top` 1.
+    /// Flow: report a 30-day window with `top` 1.
     /// Expectation: one row, `gamma` (2 uses), and no unused names.
     /// Failure means "my most used skill" still returns every installed
     /// skill.
@@ -797,7 +794,7 @@ mod tests {
         };
 
         let report =
-            SkillUsage::default().report_filtered(&fixture.home, &inventory, 90, now(), &filter);
+            SkillUsage::default().report_filtered(&fixture.home, &inventory, 30, now(), &filter);
 
         let names: Vec<&str> = report.rows.iter().map(|r| r.skill.as_str()).collect();
         assert_eq!(names, ["gamma"]);
@@ -815,17 +812,63 @@ mod tests {
             until,
             ..UsageFilter::default()
         };
-        assert!(window(at("2026-11-01"), at("2026-10-01"))
-            .check_window(now)
+        assert!(window(at("2026-11-01"), at("2026-10-20"))
+            .check_window(30, now)
             .is_err());
-        assert!(window(at("2026-10-01"), at("2026-10-01"))
-            .check_window(now)
+        assert!(window(at("2026-10-20"), at("2026-10-20"))
+            .check_window(30, now)
             .is_err());
-        assert!(window(at("2026-11-15"), None).check_window(now).is_err());
-        assert!(window(at("2026-10-01"), at("2026-11-01"))
-            .check_window(now)
+        assert!(window(at("2026-11-15"), None)
+            .check_window(30, now)
+            .is_err());
+        assert!(window(at("2026-10-20"), at("2026-11-01"))
+            .check_window(30, now)
             .is_ok());
-        assert!(window(None, at("2026-10-01")).check_window(now).is_ok());
+        assert!(window(None, at("2026-11-10")).check_window(7, now).is_ok());
+    }
+
+    /// Flow: ask for more than the 30-day history, by `days`, by `since`, or
+    /// by an `until` so old that `days` before it reach past the history.
+    /// Expectation: 31 days (and `u32::MAX` days, without a panic), a `since`
+    /// before 2026-10-15 (30 days before 2026-11-14), 7 days before
+    /// 2026-10-20, and a window before the history's start hour on its first
+    /// day are refused with the start named; 30 days and a `since` exactly at
+    /// the start pass.
+    /// Failure means a report counts a window whose older part has no
+    /// history, and shows every skill used only then as unused.
+    #[test]
+    fn a_window_before_the_history_is_refused() {
+        let now = parse_usage_time("2026-11-14").unwrap();
+        let since = |text| UsageFilter {
+            since: Some(parse_usage_time(text).unwrap()),
+            ..UsageFilter::default()
+        };
+        let error = UsageFilter::default().check_window(31, now).unwrap_err();
+        assert!(error.contains("last 30 days"), "{error}");
+        assert!(UsageFilter::default().check_window(30, now).is_ok());
+        let error = since("2026-10-14").check_window(30, now).unwrap_err();
+        assert!(error.contains("2026-10-15T00:00:00Z or later"), "{error}");
+        assert!(since("2026-10-15").check_window(30, now).is_ok());
+        let old_until = UsageFilter {
+            until: Some(parse_usage_time("2026-10-20").unwrap()),
+            ..UsageFilter::default()
+        };
+        let error = old_until.check_window(7, now).unwrap_err();
+        assert!(error.contains("2026-10-15T00:00:00Z or later"), "{error}");
+        assert!(UsageFilter::default().check_window(u32::MAX, now).is_err());
+        let earliest = UsageFilter {
+            until: Some(DateTime::<Utc>::MIN_UTC),
+            ..UsageFilter::default()
+        };
+        assert!(earliest.check_window(1, now).is_err());
+        // At noon the history starts at noon 30 days back; midnight that day is before it.
+        let noon = parse_usage_time("2026-11-14T12:00:00Z").unwrap();
+        let first_morning = UsageFilter {
+            since: Some(parse_usage_time("2026-10-15").unwrap()),
+            until: Some(parse_usage_time("2026-10-15T11:00:00Z").unwrap()),
+            ..UsageFilter::default()
+        };
+        assert!(first_morning.check_window(30, noon).is_err());
     }
     /// Flow: parse the window bounds a user types.
     /// Expectation: a bare date is the start of that day in UTC, an RFC 3339
@@ -863,14 +906,14 @@ mod tests {
         let valid_before = fs::read(&valid).unwrap();
         let report =
             SkillUsage::load_read_only(Some(&valid)).report(&fixture.home, &inventory, 30, now());
-        assert_eq!(row(&report, "gamma").recent_uses, 1);
+        assert_eq!(row(&report, "gamma").recent_uses, 2);
         assert_eq!(fs::read(&valid).unwrap(), valid_before);
 
         let corrupt = cache_dir.path().join("corrupt.json");
         fs::write(&corrupt, b"{not json").unwrap();
         let report =
             SkillUsage::load_read_only(Some(&corrupt)).report(&fixture.home, &inventory, 30, now());
-        assert_eq!(row(&report, "gamma").recent_uses, 1);
+        assert_eq!(row(&report, "gamma").recent_uses, 2);
         assert_eq!(fs::read(&corrupt).unwrap(), b"{not json");
         assert!(!cache_dir.path().join("corrupt.json.corrupt").exists());
     }
@@ -926,7 +969,6 @@ mod tests {
         let report =
             SkillUsage::default().report_filtered(&fixture.home, &inventory, 30, now(), &filter);
         let gamma = row(&report, "gamma");
-        assert_eq!(gamma.total_uses, 1);
         assert_eq!(gamma.recent_uses, 1);
         assert_eq!(gamma.last_used.as_deref(), Some(days_ago(1).as_str()));
     }

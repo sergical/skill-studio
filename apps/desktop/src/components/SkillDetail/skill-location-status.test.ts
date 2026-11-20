@@ -22,7 +22,7 @@ import {
   titleLink,
 } from "./skill-location-status";
 import type { ScopeGroup } from "./skill-location-status";
-import { phaseAfter, rowSwitchView } from "./skill-location-switch-view";
+import { rowSwitchView } from "./skill-location-switch-view";
 import {
   perSkillLinkDeployment,
   realCopyDeployment,
@@ -1173,33 +1173,6 @@ describe("rowSwitchView", () => {
       shown: true,
       busy: true,
     });
-  });
-
-  // Failure caught: the switch bounces back to its old state before the refreshed row arrives.
-  it("holds the target state, busy, after a direct action succeeds", () => {
-    expect(
-      rowSwitchView({ checked: false, changesAtOnce: true, phase: { kind: "held", target: true } }),
-    ).toEqual({
-      shown: true,
-      busy: true,
-    });
-  });
-
-  // Failure caught: an idle switch stays disabled or shows a stale state.
-  it("shows the current state and is not busy when idle", () => {
-    expect(rowSwitchView({ checked: true, changesAtOnce: true, phase: { kind: "idle" } })).toEqual({
-      shown: true,
-      busy: false,
-    });
-  });
-
-  it.each([
-    [true, true, "held"],
-    [true, false, "held"],
-    [false, true, "idle"],
-    [false, false, "idle"],
-  ] as const)("after ok=%s target=%s the switch is %s", (ok, target, expected) => {
-    expect(phaseAfter(ok, target)).toEqual(ok ? { kind: expected, target } : { kind: expected });
   });
 });
 

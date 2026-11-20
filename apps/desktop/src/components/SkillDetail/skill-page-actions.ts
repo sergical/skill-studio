@@ -112,7 +112,7 @@ export function headerUpdateLabel(
  * not "Updated N deployments" (unit 3.9b) - `removeSkill` takes exactly one
  * deployment off disk, so a deployment count has nothing to count.
  */
-export function removeSuccessToast(skillName: string): Omit<Toast, "id"> {
+function removeSuccessToast(skillName: string): Omit<Toast, "id"> {
   return { type: "success", title: "Removed", message: skillName };
 }
 

@@ -421,6 +421,8 @@ pub fn run() {
             skills::skill_park::park_skill,
             skills::skill_park::unpark_skill,
             skills::skill_park::park_check,
+            skills::skill_listing::skill_listing,
+            skills::skill_sessions::skill_sessions,
             skills::skill_park::discard_skill_copy,
             skills::skill_park::unlist_parked_dotagents,
             skills::skill_park::park_skills,

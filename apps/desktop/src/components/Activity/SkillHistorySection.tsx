@@ -4,15 +4,17 @@
 // force-restore, and "Reveal in Finder" for backed-up events.
 // ============================================================================
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   Archive,
   ArchiveRestore,
+  FolderOpen,
   FolderSymlink,
   History as HistoryIcon,
   Link2,
   Link2Off,
+  RotateCcw,
   Undo2,
   Download,
   Trash2,
@@ -23,11 +25,10 @@ import {
   GitBranch,
 } from "lucide-react";
 import { Button } from "@skill-studio/ui";
-import { formatRelativeTime } from "@skill-studio/lib";
+import { deploymentLabelFromAgentId, formatRelativeTime } from "@skill-studio/lib";
 import type { SkillEvent } from "@skill-studio/lib";
 import { listSkillEvents, openSkillPath, restoreSkillEvent } from "../../lib/skill-api";
 import { useAppStore } from "../../store/appStore";
-import { HARNESS_LABELS } from "../../lib/harness-labels";
 import {
   canRestoreSkillEvent,
   eventLabel,
@@ -35,8 +36,7 @@ import {
   shouldOfferForceRestore,
   restoreUnavailableReason,
 } from "./skill-history-restore-policy";
-
-const HARNESS_LABEL_BY_ID = new Map<string, string>(HARNESS_LABELS);
+import { CappedList, SectionHeader } from "./ActivityParts";
 
 /** Icon per event kind - see the Materialize section of spec-event-store.md for what each kind does. */
 function iconForKind(kind: string, className: string) {
@@ -147,36 +147,37 @@ function useRestoreEvent(event: SkillEvent, onRestored: () => void) {
   return { isRestoring, handleRestoreClick };
 }
 
-/** Status text on the right of a row: "Interrupted…" is a friendlier spelling of that one status value. */
-function EventStatusBadge({
-  isFailed,
-  isInterrupted,
-  status,
-}: {
-  isFailed: boolean;
-  isInterrupted: boolean;
-  status: string;
-}) {
+/** Status text before the time, only when the event did not finish: "done" is every normal row. */
+function EventStatus({ status }: { status: string }) {
+  if (status === "done") return null;
+  const isFailed = status === "failed";
+  const isInterrupted = status === "interrupted";
   return (
     <span
-      className={`shrink-0 text-caption font-semibold ${
+      className={`text-small font-medium ${
         isFailed ? "text-error-text" : isInterrupted ? "text-warning" : "text-text-tertiary"
       }`}
     >
-      {isInterrupted ? "Interrupted - the app was quit during this operation" : status}
+      {status.charAt(0).toUpperCase() + status.slice(1)}
     </span>
   );
 }
 
-/** Trailing action buttons: "Reveal in Finder" for backed-up events, and Restore where offered. */
+/**
+ * The row's actions: Restore, or why it can't restore, and "Reveal in Finder" for backed-up events.
+ * They cover the time while the row is hovered or holds focus, so a resting list shows only what
+ * happened and when.
+ */
 function EventActions({
   event,
   isRestoring,
   onRestoreClick,
+  reasonId,
 }: {
   event: SkillEvent;
   isRestoring: boolean;
   onRestoreClick: () => void;
+  reasonId: string;
 }) {
   const addToast = useAppStore((state) => state.addToast);
 
@@ -192,63 +193,88 @@ function EventActions({
   };
 
   return (
-    <>
-      {event.restore_unavailable_reason && (
-        <span className="text-small text-text-muted">{event.restore_unavailable_reason}</span>
-      )}
-      {event.backup_path && (
-        <Button variant="link" className="h-auto shrink-0 p-0 text-small" onClick={handleReveal}>
-          Reveal in Finder
-        </Button>
-      )}
+    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center gap-1 bg-bg-primary pl-3 whitespace-nowrap opacity-0 group-focus-within/row:pointer-events-auto group-focus-within/row:opacity-100 group-hover/row:pointer-events-auto group-hover/row:opacity-100 has-aria-busy:pointer-events-auto has-aria-busy:opacity-100">
       {canRestoreSkillEvent(event) ? (
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-auto shrink-0 rounded-sm border-border-subtle px-2 py-1 text-small text-text-secondary"
-          onClick={onRestoreClick}
-          disabled={isRestoring}
-        >
+        <Button variant="outline" size="xs" onClick={onRestoreClick} busy={isRestoring}>
           Restore
         </Button>
       ) : (
-        <span className="text-caption text-text-tertiary">{restoreUnavailableReason(event)}</span>
+        <span id={reasonId} className="text-small text-text-tertiary">
+          {event.restore_unavailable_reason ?? restoreUnavailableReason(event)}
+        </span>
       )}
-    </>
+      {event.backup_path && (
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Reveal in Finder"
+          title="Reveal in Finder"
+          className="text-text-tertiary"
+          onClick={handleReveal}
+        >
+          <FolderOpen />
+        </Button>
+      )}
+    </div>
   );
 }
 
 function EventRow({ event, onRestored }: { event: SkillEvent; onRestored: () => void }) {
   const { isRestoring, handleRestoreClick } = useRestoreEvent(event, onRestored);
-  const isFailed = event.status === "failed";
-  const isInterrupted = event.status === "interrupted";
-  const icon = iconForKind(
-    event.kind,
-    isFailed ? "text-error" : isInterrupted ? "text-warning" : "text-text-tertiary",
-  );
-  const harnessLabel = event.harness
-    ? (HARNESS_LABEL_BY_ID.get(event.harness) ?? event.harness)
-    : null;
+  const iconColor =
+    event.status === "failed"
+      ? "text-error"
+      : event.status === "interrupted"
+        ? "text-warning"
+        : "text-text-tertiary";
+  const harnessLabel = event.harness ? deploymentLabelFromAgentId(event.harness) : null;
+  const subject = event.skill || (harnessLabel ?? kindLabel(event.kind));
+  // An agent-only event names the agent as its subject; a skill event for one agent names it here.
+  const agent = event.skill && harnessLabel && event.kind !== "split" ? ` · ${harnessLabel}` : "";
+  const id = useId();
+  // A row with no button takes focus itself, so Tab still shows why it cannot be restored. As a
+  // named group, a screen reader says what happened on focus, then why it cannot be restored.
+  const focusable = !canRestoreSkillEvent(event) && !event.backup_path;
 
   return (
     <div
-      className={`flex min-h-9 items-center gap-3 border-b border-border-subtle px-2 py-1.5 last:border-b-0 ${
-        isFailed ? "bg-error-soft" : isInterrupted ? "bg-warning-soft" : ""
-      }`}
+      tabIndex={focusable ? 0 : undefined}
+      role={focusable ? "group" : undefined}
+      aria-labelledby={focusable ? `${id}-subject ${id}-what` : undefined}
+      aria-describedby={focusable ? `${id}-reason` : undefined}
+      className="group/row relative flex h-8 items-center gap-3 rounded-sm border-b border-border-subtle px-2 outline-none last:border-b-0 focus-visible:ring-1 focus-visible:ring-text-secondary"
     >
-      {icon}
-      <span className="min-w-0 flex-1 truncate text-body text-text-primary" title={event.skill}>
-        {event.skill || (event.harness ?? kindLabel(event.kind))}
-      </span>
-      <span className="text-small text-text-tertiary">{eventLabel(event, harnessLabel)}</span>
-      {harnessLabel && event.kind !== "split" && (
-        <span className="shrink-0 text-small text-text-tertiary">{harnessLabel}</span>
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        {iconForKind(event.kind, iconColor)}
+        <span
+          id={`${id}-subject`}
+          className="min-w-0 shrink truncate text-body text-text-primary"
+          title={subject}
+        >
+          {subject}
+        </span>
+        <span
+          id={`${id}-what`}
+          className="min-w-0 shrink-[2] truncate text-small text-text-tertiary"
+        >
+          {eventLabel(event, harnessLabel)}
+          {agent}
+        </span>
+      </div>
+      <EventStatus status={event.status} />
+      {canRestoreSkillEvent(event) && (
+        // At rest, marks the rows that Restore can undo; the button itself shows on hover.
+        <RotateCcw aria-hidden size={12} className="shrink-0 text-text-tertiary" />
       )}
       <span className="shrink-0 text-small text-text-tertiary tabular-nums">
         {formatRelativeTime(event.ts)}
       </span>
-      <EventStatusBadge isFailed={isFailed} isInterrupted={isInterrupted} status={event.status} />
-      <EventActions event={event} isRestoring={isRestoring} onRestoreClick={handleRestoreClick} />
+      <EventActions
+        event={event}
+        isRestoring={isRestoring}
+        onRestoreClick={handleRestoreClick}
+        reasonId={`${id}-reason`}
+      />
     </div>
   );
 }
@@ -293,19 +319,16 @@ export function SkillHistorySection() {
 
   return (
     <div className="flex flex-col gap-3">
-      <span className="text-caption font-medium tracking-[0.08em] text-text-tertiary uppercase">
-        History
-      </span>
+      <SectionHeader title="History" />
       {events === null ? (
         <p className="text-wrap-pretty text-body text-text-tertiary">Loading…</p>
       ) : events.length === 0 ? (
         <p className="text-wrap-pretty text-body text-text-tertiary">No events recorded yet.</p>
       ) : (
-        <div className="flex flex-col">
-          {events.map((event) => (
-            <EventRow key={event.id} event={event} onRestored={refresh} />
-          ))}
-        </div>
+        <CappedList
+          items={events}
+          render={(event) => <EventRow key={event.id} event={event} onRestored={refresh} />}
+        />
       )}
     </div>
   );

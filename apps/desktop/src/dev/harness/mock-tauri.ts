@@ -11,7 +11,11 @@ import type { InvokeArgs } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { z } from "zod";
-import { deploymentLabelFromAgentId, isProjectPattern } from "@skill-studio/lib";
+import {
+  agentIdFromDeploymentLabel,
+  deploymentLabelFromAgentId,
+  isProjectPattern,
+} from "@skill-studio/lib";
 import type {
   AddSkillOperationEvent,
   BackgroundStatus,
@@ -20,6 +24,7 @@ import type {
   InstalledSkill,
   ProjectFolder,
   RemoveOutcome,
+  SkillEvent,
   SkillSnapshot,
   TrackedProjects,
 } from "@skill-studio/lib";
@@ -32,6 +37,8 @@ import {
   harnessSkillContent,
   skill,
 } from "./skill-fixture";
+import { mockListingReport } from "./mock-listing";
+import { mockSkillSessionsReport } from "./mock-sessions";
 import { mockPackAdd, mockPackChange, mockPackReport } from "./mock-packs";
 
 /** Mirrors the core's `split_target_root` with default `CODEX_HOME` and OpenCode config root. */
@@ -50,6 +57,13 @@ function splitCopyPath(harness: string, skillName: string, projectPath: string |
   return `${projectPath ?? HARNESS_HOME}/${root}/${skillName}`;
 }
 
+/** One native confirm (`ask`) the app showed, and the answer the harness gave it. */
+interface AskedDialog {
+  title: string | null;
+  message: string;
+  answer: boolean;
+}
+
 /** What the harness exposes on `window.__harness` for an agent driving the app. */
 interface HarnessControl {
   snapshot(): SkillSnapshot;
@@ -59,6 +73,12 @@ interface HarnessControl {
   updateSkill(name: string, transform: (skill: InstalledSkill) => InstalledSkill): Promise<void>;
   /** Replaces the background status and emits `skills://background-status`, like a worker starting or finishing. */
   publishBackgroundStatus(next: BackgroundStatus): Promise<void>;
+  /** Every native confirm the app showed, oldest first. */
+  asked(): AskedDialog[];
+  /** Answers the next native confirm with `answer`; every other one gets OK. */
+  answerNextAsk(answer: boolean): void;
+  /** Replaces a SKILL.md on "disk", like an edit made outside the app. */
+  writeSkillMd(path: string, content: string): void;
 }
 
 declare global {
@@ -77,6 +97,7 @@ const addRequestSchema = z
     method: z.enum(["dotagents", "skills-sh", "copy"]),
     source: z
       .object({
+        kind: z.enum(["github", "git", "local"]),
         skillName: z.string().nullable(),
         repo: z.string().nullable(),
         url: z.string().nullable(),
@@ -122,7 +143,22 @@ const DISCOVERY_HARNESSES = ["claude-code", "codex", "opencode", "pi", "cursor",
  * capture page) drives it with. */
 export function installMockTauri(initial: SkillSnapshot): HarnessControl {
   let currentSnapshot = initial;
+  // Mirrors the event store: newest first, as `list_skill_events` returns it. A remove keeps the
+  // skill it took out, so restoring that event puts the same skill back.
+  const events: SkillEvent[] = [];
+  const removedByEvent = new Map<string, InstalledSkill>();
+  // What each parked folder was before it moved, keyed by the parked deployment's id, so unpark
+  // puts back the same folder and the links that pointed at it.
+  const parkedFrom = new Map<string, Deployment[]>();
+  const askedDialogs: AskedDialog[] = [];
+  const askAnswers: boolean[] = [];
+  let telemetryEnabled = false;
   const addOperations = new Map<string, AddSkillOperationEvent>();
+  const pausedForTrust = new Map<string, { request: AddRequestLike; batch: boolean }>();
+  // Mirrors `trusted_dotagents_sources`: every repository a fixture skill came from was trusted
+  // when it was added.
+  const trustedSources = new Set<string>();
+  for (const item of initial.skills) trustedSources.add(item.source.toLowerCase());
   // Mirrors the backend's `~/.agents/skill-studio.json` `projects` key - the register/unregister/
   // import handlers below mutate it with the same track/untrack rules as `TrackedProjects` in
   // `crates/skill-studio-core`, and `get_tracked_projects` reads it back.
@@ -262,6 +298,90 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
     await emit("skills://snapshot", currentSnapshot);
   }
 
+  function recordEvent(kind: string, skillName: string, restorable: boolean): SkillEvent {
+    const event: SkillEvent = {
+      id: `evt:v1/harness/${events.length + 1}`,
+      ts: new Date().toISOString(),
+      kind,
+      skill: skillName,
+      harness: null,
+      scope: "global",
+      project_path: null,
+      status: "done",
+      restorable,
+      force_restorable: false,
+      reverted_by: null,
+    };
+    events.unshift(event);
+    return event;
+  }
+
+  /** Mirrors the core's park: each target folder moves under `~/.agents/skills-parked/` (a project
+   * copy under `projects/<project-key>/`, so global and project copies never share a slot), and the
+   * links that pointed at it go with it. The skill is parked once no live copy is left. */
+  function parkCopies(item: InstalledSkill, targetIds: Set<string>): InstalledSkill {
+    const parkedAt = new Date().toISOString();
+    const moved = item.deployments.filter((entry) => targetIds.has(entry.id));
+    const kept = item.deployments.filter(
+      (entry) =>
+        !targetIds.has(entry.id) &&
+        !(entry.backing.kind === "linked-to" && targetIds.has(entry.backing.deployment_id)),
+    );
+    const parked = moved.map((entry) => {
+      const agent = agentIdFromDeploymentLabel(entry.agent);
+      const kind = agent === "shared" ? "universal" : (agent ?? entry.agent);
+      const slot = entry.project_path
+        ? `projects/${entry.project_path.replace(/[^A-Za-z0-9_-]/g, "-")}/${kind}`
+        : kind;
+      const copy = deployment({
+        agent: "parked",
+        scope: "parked",
+        path: `${HARNESS_HOME}/.agents/skills-parked/${slot}/${item.name}`,
+        parked_origin: { kind, scope: entry.scope, project_path: entry.project_path ?? null },
+      });
+      parkedFrom.set(
+        copy.id,
+        item.deployments.filter(
+          (each) =>
+            each.id === entry.id ||
+            (each.backing.kind === "linked-to" && each.backing.deployment_id === entry.id),
+        ),
+      );
+      return copy;
+    });
+    const deployments = [...kept, ...parked];
+    const allParked = deployments.every((entry) => entry.scope === "parked");
+    return { ...item, deployments, parked: allParked, parked_at: allParked ? parkedAt : null };
+  }
+
+  /** Reverses `parkCopies`. A target may name the parked folder or the folder it was before. A
+   * fixture skill parked before the harness started returns to the Universal folder it came from. */
+  function unparkCopies(item: InstalledSkill, targetIds: Set<string>): InstalledSkill {
+    const deployments = item.deployments.flatMap((entry) => {
+      if (entry.scope !== "parked") return [entry];
+      const before = parkedFrom.get(entry.id);
+      const named = targetIds.has(entry.id) || before?.some((each) => targetIds.has(each.id));
+      if (!named) return [entry];
+      parkedFrom.delete(entry.id);
+      return (
+        before ?? [
+          deployment({
+            agent: "shared",
+            scope: "global",
+            path: `${HARNESS_HOME}/.agents/skills/${item.name}`,
+          }),
+        ]
+      );
+    });
+    return { ...item, deployments, parked: false, parked_at: null };
+  }
+
+  /** The SKILL.md text the app reads at `path`: the harness's copy, else the fixture fallback. */
+  function skillMdOnDisk(path: string): string {
+    const name = path.split("/").filter(Boolean).pop() ?? "skill";
+    return harnessSkillContent.get(path) ?? fallbackSkillContent(name);
+  }
+
   function updateSkill(
     name: string,
     transform: (item: InstalledSkill) => InstalledSkill,
@@ -288,6 +408,75 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
     const name = key.split("/").pop();
     if (!name) throw new Error(`harness: target names no skill: ${JSON.stringify(target)}`);
     return name;
+  }
+
+  /** Mirrors `normalize_dotagents_source_identity`: an add from a GitHub or git repository the
+   * user has not trusted pauses until they confirm it, for every method. Local folders are never
+   * gated. */
+  function untrustedIdentity(request: AddRequestLike): string | null {
+    const { kind, repo, url } = request.source;
+    const raw = kind === "github" ? repo : kind === "git" ? url?.trim().replace(/\/+$/, "") : null;
+    const identity = raw
+      ?.trim()
+      .replace(/\.git$/, "")
+      .toLowerCase();
+    return identity && !trustedSources.has(identity) ? identity : null;
+  }
+
+  async function emitOperation(event: AddSkillOperationEvent): Promise<AddSkillOperationEvent> {
+    addOperations.set(event.operation_id, event);
+    await emit("skills://add-skill-operation", event);
+    return event;
+  }
+
+  /** Adds every skill the request names: a batch, each listed skill; a single add, the one its
+   * source names. */
+  async function addSkills(request: AddRequestLike) {
+    const names = request.skills?.map((entry) => entry.name) ?? [
+      request.source.skillName ?? request.source.repo?.split("/").pop() ?? "added-skill",
+    ];
+    const added = names.map((skillName) =>
+      buildAddedSkill(request, skillName, "A skill added through the harness fixture."),
+    );
+    await publish({ ...currentSnapshot, skills: [...currentSnapshot.skills, ...added] });
+    return added.map((each) => ({
+      name: each.name,
+      tool: "dotagents",
+      command: `dotagents add ${request.source.repo ?? each.name}`,
+      deployments_created: each.deployments.map((entry) => entry.path),
+      warning: null,
+    }));
+  }
+
+  async function completeAdd(
+    operationId: string,
+    request: AddRequestLike,
+    batch: boolean,
+    retryOf?: string,
+  ): Promise<AddSkillOperationEvent> {
+    const results = await addSkills(request);
+    const completed: AddSkillOperationEvent = {
+      operation_id: operationId,
+      sequence: 1,
+      phase: "completed",
+      message: `Added ${results[0].name}`,
+      ...(batch
+        ? { outcomes: results.map((each) => ({ name: each.name, result: each, error: null })) }
+        : { result: results[0] }),
+    };
+    if (retryOf) completed.retry_of = retryOf;
+    return emitOperation(completed);
+  }
+
+  /** The folders a park target names: its deployment, or every folder of the skill for an owner
+   * target, which names the skill and not one folder. */
+  function targetIdsOf(item: InstalledSkill, deploymentId: string | null | undefined): Set<string> {
+    if (deploymentId) return new Set([deploymentId]);
+    const ids = new Set<string>();
+    for (const entry of item.deployments) {
+      if (entry.backing.kind !== "linked-to") ids.add(entry.id);
+    }
+    return ids;
   }
 
   function buildAddedSkill(
@@ -355,6 +544,9 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
           return currentSnapshot.update_check;
         case "get_background_status":
           return currentBackgroundStatus;
+        // `?fullscreen=1` shows the layout of a window in macOS full screen.
+        case "plugin:window|is_fullscreen":
+          return new URLSearchParams(location.search).has("fullscreen");
         case "get_skill_snapshot":
           return currentSnapshot;
         case "get_installed_skills":
@@ -460,21 +652,28 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
           editorPreference = payload.appName == null ? null : String(payload.appName);
           return undefined;
         case "get_telemetry_enabled":
-          return false;
+          return telemetryEnabled;
         case "set_telemetry_enabled":
-          return Boolean(payload.enabled);
+          telemetryEnabled = z.boolean().parse(payload.enabled);
+          return telemetryEnabled;
         case "get_webview_telemetry":
           return false;
         case "send_webview_envelope":
           return 0;
 
-        case "read_installed_skill_md": {
-          const path = String(payload.path);
-          const name = path.split("/").filter(Boolean).pop() ?? "skill";
-          return harnessSkillContent.get(path) ?? fallbackSkillContent(name);
-        }
+        case "read_installed_skill_md":
+          return skillMdOnDisk(String(payload.path));
         case "write_installed_skill_md_if_unchanged": {
-          harnessSkillContent.set(String(payload.path), String(payload.content));
+          const { path, expectedContent, content } = z
+            .object({ path: z.string(), expectedContent: z.string(), content: z.string() })
+            .parse(payload);
+          // The same compare-and-swap refusal `skill_md_write.rs` returns.
+          if (skillMdOnDisk(path) !== expectedContent) {
+            throw new Error(
+              "SKILL.md changed on disk since it was loaded. Reload the file and run the audit again.",
+            );
+          }
+          harnessSkillContent.set(path, content);
           return undefined;
         }
 
@@ -497,8 +696,12 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
         case "open_conflict_paths":
           return undefined;
 
-        case "list_skill_events":
-          return [];
+        case "list_skill_events": {
+          const { limit, skill: only } = z
+            .object({ limit: z.number().nullish(), skill: z.string().nullish() })
+            .parse(payload);
+          return events.filter((event) => !only || event.skill === only).slice(0, limit ?? 200);
+        }
         case "get_add_method_defaults":
           return {
             dotagents_installed: true,
@@ -548,6 +751,17 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
         case "get_install_counts":
           return [];
 
+        case "skill_listing": {
+          const request = z
+            .object({
+              claude_budget_fraction: z.number().nullish(),
+              codex_max_context_tokens: z.number().nullish(),
+            })
+            .parse(payload.request);
+          return mockListingReport(currentSnapshot, request);
+        }
+        case "skill_sessions":
+          return mockSkillSessionsReport(currentSnapshot);
         case "pack_list": {
           const { remote } = z.object({ remote: z.boolean() }).parse(payload.request);
           return mockPackReport(currentSnapshot, remote);
@@ -634,12 +848,9 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
             .object({ deployment_id: z.string().nullish(), owner_id: z.string().nullish() })
             .parse(payload.target);
           const name = skillNameForTarget({ deployment_id, owner_id });
-          await updateSkill(name, (item) => ({
-            ...item,
-            parked: true,
-            parked_at: new Date().toISOString(),
-            deployments: item.deployments.map((d) => ({ ...d, disabled: true })),
-          }));
+          await updateSkill(name, (item) => parkCopies(item, targetIdsOf(item, deployment_id)));
+          // A park has no inverse in the event store; unpark reverses it.
+          recordEvent("park", name, false);
           return undefined;
         }
         case "park_check":
@@ -673,12 +884,8 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
             .object({ deployment_id: z.string().nullish(), owner_id: z.string().nullish() })
             .parse(payload.target);
           const name = skillNameForTarget({ deployment_id, owner_id });
-          await updateSkill(name, (item) => ({
-            ...item,
-            parked: false,
-            parked_at: null,
-            deployments: item.deployments.map((d) => ({ ...d, disabled: false })),
-          }));
+          await updateSkill(name, (item) => unparkCopies(item, targetIdsOf(item, deployment_id)));
+          recordEvent("unpark", name, false);
           return undefined;
         }
 
@@ -790,12 +997,10 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
           for (const target of targets) {
             const name = skillNameForTarget(target);
             // react-doctor-disable-next-line react-doctor/async-await-in-loop -- each update publishes the snapshot the next one reads
-            await updateSkill(name, (item) => ({
-              ...item,
-              parked,
-              parked_at: parked ? new Date().toISOString() : null,
-              deployments: item.deployments.map((d) => ({ ...d, disabled: parked })),
-            }));
+            await updateSkill(name, (item) =>
+              (parked ? parkCopies : unparkCopies)(item, targetIdsOf(item, target.deployment_id)),
+            );
+            recordEvent(parked ? "park" : "unpark", name, false);
           }
           return targets.map(() => ({ error: null }));
         }
@@ -810,16 +1015,17 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
             .object({ deployment_id: z.string().nullish(), owner_id: z.string().nullish() })
             .parse(payload.target);
           const name = skillNameForTarget(target);
+          const removed = currentSnapshot.skills.find((s) => s.name === name);
           const deploymentId =
-            target.deployment_id ??
-            currentSnapshot.skills.find((s) => s.name === name)?.deployments[0]?.id ??
-            `dep:v1/mock/${name}`;
+            target.deployment_id ?? removed?.deployments[0]?.id ?? `dep:v1/mock/${name}`;
           await publish({
             ...currentSnapshot,
             skills: currentSnapshot.skills.filter((s) => s.name !== name),
           });
+          const event = recordEvent("remove", name, true);
+          if (removed) removedByEvent.set(event.id, removed);
           return {
-            event_id: `evt:v1/mock/${name}`,
+            event_id: event.id,
             deployment_id: deploymentId,
             skill: name,
             tree_hash_before: "mock-tree-hash",
@@ -911,43 +1117,30 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
             to_commit: "fixture",
             message: "Already up to date",
           };
-        case "add_skill":
+        case "add_skill": {
+          const request = addRequestSchema.parse(payload.request);
+          return (await addSkills(request))[0];
+        }
         case "start_add_skill_operation":
         case "start_add_skills_operation": {
           const request = addRequestSchema.parse(payload.request);
-          // A batch adds every requested skill; a single add, the one it names.
-          const names = request.skills?.map((entry) => entry.name) ?? [
-            request.source.skillName ?? request.source.repo?.split("/").pop() ?? "added-skill",
-          ];
-          const added = names.map((skillName) =>
-            buildAddedSkill(request, skillName, "A skill added through the harness fixture."),
-          );
-          await publish({ ...currentSnapshot, skills: [...currentSnapshot.skills, ...added] });
-          const results = added.map((skill) => ({
-            name: skill.name,
-            tool: "dotagents",
-            command: `dotagents add ${request.source.repo ?? skill.name}`,
-            deployments_created: skill.deployments.map((entry) => entry.path),
-            warning: null,
-          }));
-          const result = results[0];
-          const name = result.name;
-          if (command === "add_skill") return result;
           const operationId = z.string().parse(payload.operationId);
-          const completed: AddSkillOperationEvent = {
-            operation_id: operationId,
-            sequence: 1,
-            phase: "completed",
-            message: `Added ${name}`,
-            ...(command === "start_add_skills_operation"
-              ? {
-                  outcomes: results.map((each) => ({ name: each.name, result: each, error: null })),
-                }
-              : { result }),
-          };
-          addOperations.set(operationId, completed);
-          await emit("skills://add-skill-operation", completed);
-          return completed;
+          const identity = untrustedIdentity(request);
+          if (identity) {
+            pausedForTrust.set(operationId, {
+              request,
+              batch: command === "start_add_skills_operation",
+            });
+            return emitOperation({
+              operation_id: operationId,
+              sequence: 1,
+              phase: "needs-trust",
+              message:
+                "This repository is not trusted. Confirm Trust repository and retry to install it.",
+              untrusted_source: { identity },
+            });
+          }
+          return completeAdd(operationId, request, command === "start_add_skills_operation");
         }
         case "get_add_skill_operation": {
           const operationId = z.string().parse(payload.operationId);
@@ -955,12 +1148,33 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
           if (!operation) throw new Error(`harness: unknown add-skill operation ${operationId}`);
           return operation;
         }
-        case "cancel_add_skill_operation":
-        case "confirm_add_skill_trust": {
-          const operationId = z.string().parse(payload.operationId ?? payload.retryOperationId);
+        case "cancel_add_skill_operation": {
+          const operationId = z.string().parse(payload.operationId);
           const operation = addOperations.get(operationId);
           if (!operation) throw new Error(`harness: unknown add-skill operation ${operationId}`);
-          return operation;
+          if (!pausedForTrust.delete(operationId)) return operation;
+          return emitOperation({
+            operation_id: operationId,
+            sequence: operation.sequence + 1,
+            phase: "cancelled",
+            message: "Cancelled",
+          });
+        }
+        case "confirm_add_skill_trust": {
+          const { operationId, retryOperationId, identity } = z
+            .object({ operationId: z.string(), retryOperationId: z.string(), identity: z.string() })
+            .parse(payload);
+          const paused = pausedForTrust.get(operationId);
+          if (!paused)
+            throw new Error(`harness: operation ${operationId} is not waiting for trust`);
+          if (identity !== untrustedIdentity(paused.request)) {
+            throw new Error(
+              `harness: ${identity} is not the source operation ${operationId} needs`,
+            );
+          }
+          pausedForTrust.delete(operationId);
+          trustedSources.add(identity);
+          return completeAdd(retryOperationId, paused.request, paused.batch, operationId);
         }
 
         case "repair_skill_link": {
@@ -991,15 +1205,47 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
           });
           return undefined;
         }
-        case "restore_skill_event":
-          await publish(currentSnapshot);
+        case "restore_skill_event": {
+          const eventId = z.string().parse(payload.eventId);
+          const event = events.find((each) => each.id === eventId);
+          if (!event?.restorable) throw new Error(`harness: event ${eventId} cannot be restored`);
+          const removed = removedByEvent.get(eventId);
+          await publish(
+            removed
+              ? { ...currentSnapshot, skills: [...currentSnapshot.skills, removed] }
+              : currentSnapshot,
+          );
+          const restore = recordEvent("restore", event.skill, false);
+          event.restorable = false;
+          event.reverted_by = restore.id;
           return undefined;
+        }
 
         case "plugin:path|home_dir":
         case "plugin:path|resolve_directory":
           return HARNESS_HOME;
-        case "plugin:dialog|ask":
-          return true;
+        case "plugin:dialog|message": {
+          // `ask()` sends `buttons` and treats the label it gets back as the answer: the OK label
+          // means yes, any other label means no.
+          const { message, title, buttons } = z
+            .object({
+              message: z.string(),
+              title: z.string().nullish(),
+              buttons: z
+                .union([
+                  z
+                    .object({ OkCancelCustom: z.tuple([z.string(), z.string()]) })
+                    .transform((custom) => custom.OkCancelCustom),
+                  z.literal("YesNo").transform((): [string, string] => ["Yes", "No"]),
+                ])
+                .nullish(),
+            })
+            .parse(payload);
+          const [ok, cancel] = buttons ?? ["Yes", "No"];
+          const answer = askAnswers.shift() ?? true;
+          askedDialogs.push({ title: title ?? null, message, answer });
+          return answer ? ok : cancel;
+        }
         case "plugin:dialog|save":
           return `${HARNESS_HOME}/my-skills`;
         case "plugin:dialog|open": {
@@ -1034,5 +1280,12 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
     publish,
     updateSkill,
     publishBackgroundStatus,
+    asked: () => [...askedDialogs],
+    answerNextAsk: (answer) => {
+      askAnswers.push(answer);
+    },
+    writeSkillMd: (path, content) => {
+      harnessSkillContent.set(path, content);
+    },
   };
 }

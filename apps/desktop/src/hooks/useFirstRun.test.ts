@@ -1,12 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+// @vitest-environment happy-dom
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   loadLaunchChoice,
   buildFirstRunSave,
   continueIsBlocked,
-  FIRST_RUN_TELEMETRY_DEFAULT,
   saveChoiceThenOpenApp,
   showScreenForChoiceRead,
+  useFirstRunScreen,
 } from "./useFirstRun";
+
+afterEach(() => {
+  clearMocks();
+});
 
 describe("showScreenForChoiceRead", () => {
   it("an unreadable registry opens the app instead of trapping the user on the first-run screen", () => {
@@ -39,9 +46,21 @@ describe("continueIsBlocked", () => {
   });
 });
 
-describe("FIRST_RUN_TELEMETRY_DEFAULT", () => {
-  it("the welcome screen starts the telemetry switch on or the registry's off default silently opts users out", () => {
-    expect(FIRST_RUN_TELEMETRY_DEFAULT).toBe(true);
+describe("useFirstRunScreen telemetry", () => {
+  it("the welcome screen starts the telemetry switch on and saves it on, or the registry's off default silently opts users out", async () => {
+    const saved: unknown[] = [];
+    mockIPC((command, args) => {
+      if (command === "detect_harnesses") throw "fixture: no harness probe";
+      if (command === "save_harnesses_choice") saved.push(args);
+      return null;
+    });
+    const { result } = renderHook(() => useFirstRunScreen(() => {}));
+    expect(result.current.telemetryEnabled).toBe(true);
+
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+    act(() => result.current.continue());
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0]).toMatchObject({ telemetryEnabled: true });
   });
 });
 

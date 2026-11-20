@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   chosenInstallHarnesses,
@@ -16,6 +17,12 @@ import {
 } from "./skill-install-destination";
 import type { AgentId } from "./skill-types";
 
+/** The Rust core's install target table, which decides the folder a copy install writes. */
+const installTargetsRs = readFileSync(
+  new URL("../../../crates/skill-studio-core/src/install_targets.rs", import.meta.url),
+  "utf8",
+);
+
 const ALL: readonly AgentId[] = ["claude-code", "codex", "opencode", "pi", "cursor", "grok-build"];
 
 describe("Destination rows", () => {
@@ -24,16 +31,16 @@ describe("Destination rows", () => {
     expect(universalDestinationPath("project")).toBe(".agents/skills");
   });
 
-  it("add skill: gives every harness its own folder per scope, else the caption promises a folder the copy does not write", () => {
-    const folders = Object.fromEntries(ALL.map((id) => [id, installHarness(id)?.folder] as const));
-    expect(folders).toEqual({
-      "claude-code": { global: "~/.claude/skills", project: ".claude/skills" },
-      codex: { global: "~/.codex/skills", project: ".codex/skills" },
-      opencode: { global: "~/.config/opencode/skills", project: ".opencode/skills" },
-      pi: { global: "~/.pi/agent/skills", project: ".pi/skills" },
-      cursor: { global: "~/.cursor/skills", project: ".cursor/skills" },
-      "grok-build": { global: "~/.grok/skills", project: ".grok/skills" },
+  it("add skill: names, per scope, a folder the core install writes, else the caption promises a folder the copy does not write", () => {
+    const literals = new Set([...installTargetsRs.matchAll(/"([^"\n]+)"/g)].map((m) => m[1]));
+    const missing = ALL.flatMap((id) => {
+      const folder = installHarness(id)?.folder;
+      if (!folder) return [`${id}: no folder`];
+      return [folder.global.replace(/^~\//, ""), folder.project]
+        .filter((path) => !literals.has(path))
+        .map((path) => `${id}: ${path}`);
     });
+    expect(missing, "not in crates/skill-studio-core/src/install_targets.rs").toEqual([]);
   });
 
   it("add skill: offers Claude Code plus detected and kept harnesses in declaration order, else unknown ids leak in", () => {

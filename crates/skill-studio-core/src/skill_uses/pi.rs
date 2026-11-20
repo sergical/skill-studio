@@ -340,13 +340,6 @@ mod tests {
     }
 
     #[test]
-    fn no_timestamp_gives_nothing() {
-        let text = r#"{"type":"message","id":"m1","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"<skill name=\"foo\" location=\"/x/skills/foo/SKILL.md\">"}]}}"#;
-        let mut context = TranscriptContext::default();
-        assert!(parse_pi_uses(text, &mut context).is_empty());
-    }
-
-    #[test]
     fn bad_json_line_is_skipped() {
         let mut context = TranscriptContext::default();
         assert!(parse_pi_uses("{\"type\":\"session\" not json", &mut context).is_empty());

@@ -3,8 +3,9 @@
 // the same allow needs to be declared here too.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-//! `usage` counts each installed skill's uses from agent session history,
-//! lists the never-used ones first, and ends with a summary line.
+//! `usage` counts each installed skill's uses from the last 30 days of agent
+//! session history, lists the unused ones first, and ends with a summary
+//! line.
 
 #[allow(dead_code)]
 #[path = "support/test_home.rs"]
@@ -66,9 +67,10 @@ fn run(home: &Path, args: &[&str]) -> Output {
         .expect("run skill-studio usage")
 }
 
-/// Flow: `usage --json` over a home with one recent and one old use.
-/// Expectation: `idle` first and in `unused`; `gamma` with one recent use
-/// by Claude Code.
+/// Flow: `usage --json` over a home with one recent use and one use before
+/// the 30-day history.
+/// Expectation: `idle` first and in `unused`, with no last use; `gamma`
+/// with one recent use by Claude Code.
 /// A failure means the report counts uses wrong or hides unused skills.
 #[test]
 fn usage_json_lists_unused_skills_first_with_counts_per_agent() {
@@ -88,17 +90,21 @@ fn usage_json_lists_unused_skills_first_with_counts_per_agent() {
     let rows = data["rows"].as_array().unwrap();
     assert_eq!(rows[0]["skill"], "idle", "{data}");
     assert_eq!(rows[0]["recent_uses"], 0);
-    assert_eq!(rows[0]["total_uses"], 1);
+    assert_eq!(rows[0]["last_used"], serde_json::Value::Null);
+    assert!(rows.iter().all(|row| row.get("total_uses").is_none()));
     assert_eq!(rows[1]["skill"], "gamma", "{data}");
     assert_eq!(rows[1]["recent_uses"], 1);
     assert!(rows.iter().all(|row| row.get("sessions").is_none()));
     assert_eq!(rows[1]["agents"], serde_json::json!({"claude-code": 1}));
 }
 
-/// Flow: `usage` as text, with the default window and with `--days 60`.
+/// Flow: `usage` as text, with the default window, with `--days 7`, and
+/// with `--days 60`.
 /// Expectation: the unused skill comes before the used one, and the
-/// summary line counts unused skills for the window asked for.
-/// A failure means the text report and the window flag disagree.
+/// summary line counts unused skills for the window asked for; 60 days is
+/// refused because the history holds only 30.
+/// A failure means the text report and the window flag disagree, or a
+/// window past the history reports uses that are not counted.
 #[test]
 fn usage_text_ends_with_a_summary_for_the_window() {
     let (_dir, home) = home();
@@ -112,11 +118,22 @@ fn usage_text_ends_with_a_summary_for_the_window() {
         "{stdout}"
     );
 
-    let stdout = String::from_utf8(run(&home, &["--days", "60"]).stdout).unwrap();
+    assert!(stdout.contains("last used not in 30 days"), "{stdout}");
+
+    let stdout = String::from_utf8(run(&home, &["--days", "7"]).stdout).unwrap();
     assert!(
-        stdout.contains("0 of 2 skills not used in 60 days"),
+        stdout.contains("1 of 2 skills not used in 7 days"),
         "{stdout}"
     );
+
+    let output = run(&home, &["--days", "60"]);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("last 30 days of history"), "{text}");
 }
 
 /// Flow: CLI usage selects a harness and project from two recorded projects.
@@ -126,8 +143,8 @@ fn usage_filters_history_by_harness_and_project() {
     let (_dir, home) = home();
     let project = home.join("work");
     std::fs::create_dir_all(&project).unwrap();
-    let matching = claude_skill_line("gamma", "2026-09-29T12:00:00Z")
-        .replace("/work", project.to_str().unwrap());
+    let matching =
+        claude_skill_line("gamma", &days_ago(2)).replace("/work", project.to_str().unwrap());
     std::fs::write(
         home.join(".claude/projects/-work/other.jsonl"),
         format!("{matching}\n"),
@@ -155,7 +172,7 @@ fn usage_filters_history_by_harness_and_project() {
         .iter()
         .find(|r| r["skill"] == "gamma")
         .unwrap();
-    assert_eq!(gamma["total_uses"], 1, "{json}");
+    assert_eq!(gamma["recent_uses"], 1, "{json}");
     let output = run(&home, &["--json", "--harness", "codex"]);
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(
@@ -163,7 +180,7 @@ fn usage_filters_history_by_harness_and_project() {
             .as_array()
             .unwrap()
             .iter()
-            .all(|r| r["total_uses"] == 0),
+            .all(|r| r["recent_uses"] == 0),
         "{json}"
     );
     let output = run(&home, &[]);
@@ -325,7 +342,7 @@ fn explicit_home_usage_ignores_codex_home_or_counts_foreign_sessions() {
             .as_array()
             .unwrap()
             .iter()
-            .all(|r| r["total_uses"] == u64::from(r["skill"] == "gamma")),
+            .all(|r| r["recent_uses"] == u64::from(r["skill"] == "gamma")),
         "{json}"
     );
 }

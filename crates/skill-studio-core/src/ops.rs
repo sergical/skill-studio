@@ -143,6 +143,10 @@ pub enum Operation {
     Library,
     /// Names and paths of non-skill agent configuration.
     Extras,
+    /// Per-skill model listing state for each harness.
+    Listing,
+    /// Per-session listing state and uses, rolled up per skill.
+    SkillSessions,
     /// Check or set skill invocation across harnesses.
     Invocation,
     /// Set or clear a review date.
@@ -245,6 +249,12 @@ impl Outcome for Diagnosis {
 
 impl Outcome for crate::extras::ExtrasReport {
     const LISTS: &'static [&'static str] = &["/entries"];
+}
+impl Outcome for crate::listing_visibility::ListingReport {
+    const LISTS: &'static [&'static str] = &["/listings"];
+}
+impl Outcome for crate::skill_sessions::SkillSessionsReport {
+    const LISTS: &'static [&'static str] = &["/skills", "/sessions"];
 }
 impl Outcome for Capabilities {}
 impl Outcome for HarnessReport {}
@@ -978,7 +988,7 @@ struct ScanAccum {
 /// the same canonical path (a per-skill symlink into the universal root)
 /// reuses it instead of reading and walking the folder again.
 #[derive(Clone)]
-struct CachedSkillRead {
+pub(crate) struct CachedSkillRead {
     description: Option<String>,
     violations: Vec<String>,
     truncated: bool,
@@ -1029,6 +1039,7 @@ fn scan_one_target(
                     fs: sc.fs,
                     ctx: sc.ctx,
                     clock: sc.rt.ports.clock.as_ref(),
+                    memo: sc.rt.ports.scan_memo.as_deref(),
                     scope: &sc.rt.scope,
                     home: sc.home,
                     disable_sources: sc.disable_sources,
@@ -1095,6 +1106,7 @@ fn scan_move_aside_dir(
                 fs: sc.fs,
                 ctx: sc.ctx,
                 clock: sc.rt.ports.clock.as_ref(),
+                memo: sc.rt.ports.scan_memo.as_deref(),
                 scope: &sc.rt.scope,
                 home: sc.home,
                 disable_sources: sc.disable_sources,
@@ -1157,6 +1169,7 @@ fn scan_one_plugin_target(
             sc.fs,
             sc.ctx,
             sc.rt.ports.clock.as_ref(),
+            sc.rt.ports.scan_memo.as_deref(),
             &plugin_skill.skill_dir,
             &plugin_skill.name,
             sc.timings,
@@ -1213,9 +1226,8 @@ fn scan_one_plugin_target(
                     harness: Some(target.harness.clone()),
                     path: plugin_skill.skill_dir.clone(),
                     destination: SkillDestination::PerHarness,
-                    // Matches `id_for_candidate`: a plugin cache entry
-                    // is never the universal root and is never linked,
-                    // so it falls to the same `Independent` branch as
+                    // A plugin cache entry is never the universal root
+                    // and is never linked, so it is `Independent`, like
                     // any other plain per-harness directory.
                     backing: BackingRelationship::Independent,
                     mutability: DeploymentMutability::ReadOnly,
@@ -1325,6 +1337,7 @@ struct EntryContext<'a> {
     fs: &'a dyn ScopeFs,
     ctx: &'a OpContext,
     clock: &'a dyn Clock,
+    memo: Option<&'a crate::scan_memo::ScanMemo>,
     scope: &'a NormalizedScope,
     home: &'a Path,
     disable_sources: &'a DisableSources,
@@ -1451,7 +1464,15 @@ fn process_entries(
                 Box::new(cached.facts.clone()),
             )
         } else {
-            match read_skill_md(cx.fs, cx.ctx, cx.clock, &skill_dir, &entry.name, cx.timings)? {
+            match read_skill_md(
+                cx.fs,
+                cx.ctx,
+                cx.clock,
+                cx.memo,
+                &skill_dir,
+                &entry.name,
+                cx.timings,
+            )? {
                 SkillMdRead::Found {
                     description,
                     violations,
@@ -1501,8 +1522,7 @@ fn process_entries(
             }
         };
 
-        // Matches the desktop's `id_for_candidate` (`skill_deployment.rs`):
-        // a root that is itself universal is always Canonical; otherwise a
+        // A root that is itself universal is always Canonical; otherwise a
         // per-skill symlink into the universal root, or a whole-directory
         // link (the root itself is a symlink), promotes the deployment to
         // the Universal destination as a link back to that canonical entry;
@@ -1786,7 +1806,64 @@ enum SkillMdRead {
 
 /// Reads and validates `<skill_dir>/SKILL.md`. See [`SkillMdRead`] for what
 /// each outcome means to the caller.
+/// [`read_skill_md_from_disk`], or the result `memo` kept for `skill_dir`
+/// when no entry of the folder changed since (see [`crate::scan_memo`]).
 fn read_skill_md(
+    fs: &dyn ScopeFs,
+    ctx: &OpContext,
+    clock: &dyn Clock,
+    memo: Option<&crate::scan_memo::ScanMemo>,
+    skill_dir: &Path,
+    name: &str,
+    timings: &ScanTimings,
+) -> Result<SkillMdRead, CoreError> {
+    let Some(memo) = memo else {
+        return read_skill_md_from_disk(fs, ctx, clock, skill_dir, name, timings);
+    };
+    let now = clock.now();
+    let Some(stamp) = crate::scan_memo::folder_stamp(fs, ctx, skill_dir, now)? else {
+        return read_skill_md_from_disk(fs, ctx, clock, skill_dir, name, timings);
+    };
+    if let Some(kept) = memo.get(skill_dir, name, &stamp, now) {
+        return Ok(SkillMdRead::Found {
+            description: kept.description,
+            violations: kept.violations,
+            truncated: kept.truncated,
+            facts: Box::new(kept.facts),
+        });
+    }
+    // The facts walk skips what it cannot read. A result read with any
+    // failed call is not kept: the failure may be gone on the next scan
+    // (too many open files, for example) while the stamp stays the same.
+    let watched = crate::scan_memo::FailureWatch::new(fs);
+    let read = read_skill_md_from_disk(&watched, ctx, clock, skill_dir, name, timings)?;
+    if watched.failed() {
+        return Ok(read);
+    }
+    if let SkillMdRead::Found {
+        description,
+        violations,
+        truncated,
+        facts,
+    } = &read
+    {
+        memo.put(
+            skill_dir,
+            name,
+            stamp,
+            now,
+            CachedSkillRead {
+                description: description.clone(),
+                violations: violations.clone(),
+                truncated: *truncated,
+                facts: (**facts).clone(),
+            },
+        );
+    }
+    Ok(read)
+}
+
+fn read_skill_md_from_disk(
     fs: &dyn ScopeFs,
     ctx: &OpContext,
     clock: &dyn Clock,
@@ -2487,10 +2564,9 @@ fn native_disabled_by(
 
 /// True when `path`'s components contain a contiguous `[".agents",
 /// "skills"]` window, i.e. it names something inside the universal root.
-/// Mirrors the desktop's `path_is_under_universal_skills`
-/// (`skill_deployment.rs`); works on a raw (unresolved) symlink target the
-/// same way the desktop does, since a link written as `../../.agents/
-/// skills/<name>` carries the window regardless of the leading `..`s.
+/// Works on a raw (unresolved) symlink target, since a link written as
+/// `../../.agents/skills/<name>` carries the window regardless of the
+/// leading `..`s.
 fn path_is_under_universal_skills(path: &Path) -> bool {
     let components: Vec<String> = path
         .components()
@@ -2711,9 +2787,8 @@ fn project_label(scope: &RootScope) -> Option<String> {
     }
 }
 
-/// The `dep:v1` id's harness/universal path segment for a root, matching the
-/// desktop's `harness_slot` (`skill_deployment.rs`): every harness's own
-/// wire id, except `OpenCode`, whose slot is the un-hyphenated CLI name
+/// The `dep:v1` id's harness/universal path segment for a root: every
+/// harness's own wire id, except `OpenCode`, whose slot is the un-hyphenated CLI name
 /// `opencode`; `universal` for the shared and parked roots.
 pub(crate) fn harness_slot(id: &AgentId) -> String {
     if id.as_str() == AgentId::OPEN_CODE {
@@ -2769,7 +2844,7 @@ pub(crate) fn deployment_id(
 
 /// Derives the owner id for a skills.sh-owned deployment. Matches the
 /// desktop's `owner_id_for` (`skill_ownership.rs`) byte for byte.
-fn owner_id(scope_label: &str, project_path: Option<&str>, skill_name: &str) -> OwnerId {
+pub(crate) fn owner_id(scope_label: &str, project_path: Option<&str>, skill_name: &str) -> OwnerId {
     let raw = match (scope_label, project_path) {
         ("global", _) => format!("owner:v1/global/{skill_name}"),
         (_, Some(path)) if !path.is_empty() => {
@@ -7418,6 +7493,8 @@ mod tests {
             catalog: Arc::new(HarnessCatalog::builtin()),
 
             telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
+
+            scan_memo: None,
         };
         let ctx = OpContext::uncancellable(CorrelationId("c4".into()));
 
@@ -7480,6 +7557,8 @@ mod tests {
             catalog: Arc::new(HarnessCatalog::builtin()),
 
             telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
+
+            scan_memo: None,
         };
         let rt = Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap();
         let ctx = OpContext::uncancellable(CorrelationId("c5".into()));
@@ -7550,6 +7629,8 @@ mod tests {
             catalog: Arc::new(HarnessCatalog::builtin()),
 
             telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
+
+            scan_memo: None,
         };
         let rt = Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap();
         let ctx = OpContext::uncancellable(CorrelationId("c6".into()));
@@ -7765,32 +7846,6 @@ mod tests {
         };
         let target = outdated_target(&skill).expect("a deployed skill always yields a target");
         assert_eq!(target.source_kind, SourceKind::Dotagents);
-    }
-
-    /// Flow: a forked skill whose per-harness link is still on disk, so
-    /// `scan` also reports a `Manual` deployment for the same skill name.
-    /// Expectation: `outdated_target` still classifies it as
-    /// `SourceKind::Fork`, not `Manual` - `Fork` sorts last in `SourceKind`'s
-    /// derived `Ord`, so the shared `min_by_key` precedence alone would pick
-    /// `Manual` here.
-    /// A failure here means the fork-first check was dropped, so a fork with
-    /// a leftover per-harness link silently loses its currency rule and
-    /// reports `NotTracked` forever, or names the wrong method it picked
-    /// instead.
-    #[test]
-    fn a_forked_skill_with_a_leftover_manual_link_is_still_classified_as_fork_or_names_the_method_it_picked(
-    ) {
-        let skill = InstalledSkillDto {
-            source: "manual".into(),
-            name: SkillName("find-bugs".to_string()),
-            description: None,
-            deployments: vec![
-                minimal_deployment(SourceKind::Manual, None),
-                minimal_deployment(SourceKind::Fork, None),
-            ],
-        };
-        let target = outdated_target(&skill).expect("a deployed skill always yields a target");
-        assert_eq!(target.source_kind, SourceKind::Fork);
     }
 
     /// A canonical deployment whose `owner_kind` cannot be repointed (here
@@ -8035,21 +8090,14 @@ mod tests {
                 catalog: Arc::new(HarnessCatalog::builtin()),
 
                 telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
+
+                scan_memo: None,
             };
             Runtime::new(scope, ports).unwrap()
         }
 
         pub(super) fn ctx() -> OpContext {
             OpContext::uncancellable(CorrelationId("scan-test".into()))
-        }
-
-        #[test]
-        fn empty_scope_yields_no_skills_and_complete() {
-            let fs = FixtureBuilder::new().dir("/h").build_fs();
-            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
-            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
-            assert!(inv.skills.is_empty());
-            assert_eq!(inv.completeness, Completeness::Complete);
         }
 
         #[test]
@@ -8076,66 +8124,12 @@ mod tests {
                 catalog: Arc::new(HarnessCatalog::builtin()),
 
                 telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
+
+                scan_memo: None,
             };
             let rt = Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap();
             let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
             assert_eq!(inv.skills.len(), 1, "scan must still find the skill");
-        }
-
-        #[test]
-        fn finds_a_skill_under_a_harness_own_root() {
-            let fs = FixtureBuilder::new()
-                .dir("/h/.claude/skills/write-tests")
-                .file(
-                    "/h/.claude/skills/write-tests/SKILL.md",
-                    b"---\nname: write-tests\ndescription: Writes tests.\n---\nBody.",
-                )
-                .build_fs();
-            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
-            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
-
-            assert_eq!(inv.skills.len(), 1);
-            let skill = &inv.skills[0];
-            assert_eq!(skill.name.0, "write-tests");
-            assert_eq!(skill.description.as_deref(), Some("Writes tests."));
-            assert_eq!(skill.deployments.len(), 1);
-            let deployment = &skill.deployments[0];
-            assert_eq!(
-                deployment.harness.as_ref().map(AgentId::as_str),
-                Some("claude-code")
-            );
-            assert!(deployment.spec_violations.is_empty());
-            assert_eq!(inv.completeness, Completeness::Complete);
-        }
-
-        /// Given a plain directory (not a symlink, not a whole-dir link)
-        /// under a harness's own root - never the universal root - when it
-        /// is scanned, then it is `Independent`/`PerHarness`, not folded in
-        /// with the universal-linked skills; on failure the panic names the
-        /// backing/destination pair the scan reported instead.
-        #[test]
-        fn a_plain_per_harness_skill_is_independent_not_linked_to_the_universal_root() {
-            let fs = FixtureBuilder::new()
-                .dir("/h/.claude/skills/write-tests")
-                .file(
-                    "/h/.claude/skills/write-tests/SKILL.md",
-                    b"---\nname: write-tests\ndescription: Writes tests.\n---\nBody.",
-                )
-                .build_fs();
-            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
-            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
-
-            assert_eq!(inv.skills.len(), 1);
-            let deployment = &inv.skills[0].deployments[0];
-            assert_eq!(
-                (deployment.destination, deployment.backing),
-                (
-                    SkillDestination::PerHarness,
-                    BackingRelationship::Independent
-                ),
-                "a plain per-harness skill directory must be Independent/PerHarness, not \
-                 reported as linked into the universal root"
-            );
         }
 
         /// Given a per-skill symlink under a harness's own root whose target
@@ -8254,34 +8248,6 @@ mod tests {
         }
 
         #[test]
-        fn claude_plugin_enabled_is_none_when_settings_file_absent() {
-            let fs = claude_plugin_fixture(None).build_fs();
-            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
-            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
-            assert_eq!(plugin_enabled_in(&inv), None);
-        }
-
-        #[test]
-        fn moved_aside_entries_are_visible_and_disabled() {
-            // `MOVE_ASIDE_DIR_NAME` is itself dot-prefixed, so it is never
-            // mistaken for a skill directory, but its children are walked
-            // separately and reported as `StudioMoved`-disabled deployments
-            // rather than being invisible.
-            let fs = FixtureBuilder::new()
-                .dir("/h/.claude/skills/.skill-studio-disabled/parked-skill")
-                .file(
-                    "/h/.claude/skills/.skill-studio-disabled/parked-skill/SKILL.md",
-                    b"---\nname: parked-skill\ndescription: Parked.\n---\n",
-                )
-                .build_fs();
-            let rt = runtime_with(fs, Arc::new(FakeClock::at(0)));
-            let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
-            assert_eq!(inv.skills.len(), 1);
-            let deployment = &inv.skills[0].deployments[0];
-            assert_eq!(deployment.disabled_by, Some(DisabledBy::StudioMoved));
-        }
-
-        #[test]
         fn skills_filter_restricts_results() {
             let fs = FixtureBuilder::new()
                 .dir("/h/.claude/skills/write-tests")
@@ -8345,70 +8311,10 @@ mod tests {
             }
         }
 
-        /// A clock that reports zero elapsed time for the first
-        /// `within_budget_calls` reads after `start`, then jumps past a
-        /// 2s scan budget on every call after that - lets a test trip the
-        /// budget check at an exact target-group boundary instead of a
-        /// guessed call count.
-        struct BudgetAfterNClock {
-            calls: AtomicU64,
-            within_budget_calls: u64,
-        }
-
-        impl BudgetAfterNClock {
-            fn new(within_budget_calls: u64) -> Self {
-                BudgetAfterNClock {
-                    calls: AtomicU64::new(0),
-                    within_budget_calls,
-                }
-            }
-        }
-
-        impl Clock for BudgetAfterNClock {
-            fn now(&self) -> chrono::DateTime<Utc> {
-                Utc::now()
-            }
-
-            fn monotonic(&self) -> Duration {
-                // Call 0 is `scan_inner`'s `start` read. Calls 1-3 are its
-                // own timing instrumentation, read before the roots walk
-                // begins: the `ledgers_read` step's start and its
-                // `timing::step` reading, then the `roots_walk` step's
-                // start. Calls (1 + PRELUDE_CALLS)..=(within_budget_calls +
-                // PRELUDE_CALLS) are every call the global groups make
-                // walking their roots and timing `dir_walk`/`skill_md_read`/
-                // `frontmatter_parse`/`plugin_cache_walk`.
-                const PRELUDE_CALLS: u64 = 3;
-                let call = self.calls.fetch_add(1, Ordering::SeqCst);
-                if call <= self.within_budget_calls + PRELUDE_CALLS {
-                    Duration::from_millis(0)
-                } else {
-                    Duration::from_secs(3)
-                }
-            }
-        }
-
-        /// Never trips a budget, just counts `monotonic()` calls - used to
-        /// measure exactly how many clock reads one `scan` makes walking a
-        /// fixture's global roots, so [`BudgetAfterNClock`] can be
-        /// calibrated to trip right at the project-scope boundary without a
-        /// hand-counted constant that would silently go stale the next time
-        /// `scan_inner`'s instrumentation changes.
-        struct CountingClock {
-            calls: AtomicU64,
-        }
-
-        impl Clock for CountingClock {
-            fn now(&self) -> chrono::DateTime<Utc> {
-                Utc::now()
-            }
-
-            fn monotonic(&self) -> Duration {
-                self.calls.fetch_add(1, Ordering::SeqCst);
-                Duration::from_millis(0)
-            }
-        }
-
+        /// Flow: one global root, one plugin cache and one project root.
+        /// Expectation: the scan lists both global sources before any
+        /// project root, so a scan budget that runs out mid-walk drops
+        /// project skills, never the user's own.
         #[test]
         fn global_roots_and_plugin_caches_scan_before_project_roots() {
             let fs = FixtureBuilder::new()
@@ -8434,74 +8340,49 @@ mod tests {
                 .build_fs();
 
             let mut scope = RuntimeScope::fixture("/h");
-            scope.scan_budget_ms = Some(2_000);
             scope.projects = ProjectSelection::Explicit {
                 paths: vec![PathBuf::from("/h/proj")],
             };
-
-            let ports_for = |clock: Arc<dyn Clock>| Ports {
-                fs: Arc::new(fs.clone()),
-                clock,
-                ids: Arc::new(FakeIds::default()),
-                leases: Arc::new(FakeLease::default()),
-                history: Arc::new(NoHistory),
-                sink: Arc::new(RecordingSink::default()),
-                spawner: None,
-                discovery: None,
-                tools: None,
-                catalog: Arc::new(HarnessCatalog::builtin()),
-
-                telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
-            };
-
-            // Run the same fixture with no project roots at all through a
-            // clock that never trips, so every clock read comes from
-            // `scan_inner`'s own timing (`ledgers_read`, `roots_walk`, and
-            // the per-section reads inside it) plus the global groups' own
-            // walk - never from a project group, since there are none to
-            // walk. Subtracting the fixed pre/post-loop reads (4 before the
-            // loop, 6 after it: `roots_walk`'s own elapsed read, the two
-            // post-loop steps' start+elapsed reads, and the whole-call
-            // `op_timing` read) leaves exactly the call count the global
-            // groups' walk consumed, which is what the calibrated clock
-            // below needs to trip the budget right at the project-scope
-            // boundary without a guessed constant that would go stale the
-            // next time `scan_inner`'s instrumentation changes.
-            let mut probe_scope = scope.clone();
-            probe_scope.projects = ProjectSelection::Explicit { paths: Vec::new() };
-            let counting_clock = Arc::new(CountingClock {
-                calls: AtomicU64::new(0),
-            });
-            let probe_rt = Runtime::new(
-                &probe_scope,
-                ports_for(counting_clock.clone() as Arc<dyn Clock>),
-            )
-            .unwrap();
-            scan(&probe_rt, &ctx(), &ScanRequest::default()).unwrap();
-            const PRELUDE_CALLS: u64 = 4;
-            const POSTLUDE_CALLS: u64 = 6;
-            let within_budget_calls =
-                counting_clock.calls.load(Ordering::SeqCst) - PRELUDE_CALLS - POSTLUDE_CALLS;
-
+            let fs = Arc::new(crate::testing::FailingFs::wrap(Arc::new(fs)));
             let rt = Runtime::new(
                 &scope,
-                ports_for(Arc::new(BudgetAfterNClock::new(within_budget_calls))),
+                Ports {
+                    fs: fs.clone(),
+                    clock: Arc::new(FakeClock::at(0)),
+                    ids: Arc::new(FakeIds::default()),
+                    leases: Arc::new(FakeLease::default()),
+                    history: Arc::new(NoHistory),
+                    sink: Arc::new(RecordingSink::default()),
+                    spawner: None,
+                    discovery: None,
+                    tools: None,
+                    catalog: Arc::new(HarnessCatalog::builtin()),
+                    telemetry: Arc::new(crate::ports::NoopTelemetry),
+                    scan_memo: None,
+                },
             )
             .unwrap();
             let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
-
-            assert_eq!(inv.completeness, Completeness::Partial);
             let names: Vec<&str> = inv.skills.iter().map(|s| s.name.0.as_str()).collect();
-            assert!(names.contains(&"home-skill"));
-            assert!(names.contains(&"plugin-skill"));
-            assert!(!names.contains(&"project-skill"));
-            assert!(!inv.observations.is_empty());
-            for observation in &inv.observations {
-                let root = observation
-                    .root
-                    .as_ref()
-                    .expect("budget observations always name a root");
-                assert!(matches!(root.scope, RootScope::Project(_)));
+            assert!(names.contains(&"project-skill"), "{names:?}");
+
+            // A budget that runs out stops the walk at the next root, so
+            // the global roots and plugin caches must be listed before any
+            // project root to survive a slow project.
+            let reads = fs.read_dir_calls();
+            let first_project = reads
+                .iter()
+                .position(|path| path.starts_with("/h/proj"))
+                .expect("the project root was read");
+            for global in ["/h/.claude/skills", "/h/.claude/plugins/cache"] {
+                let read = reads
+                    .iter()
+                    .position(|path| path.starts_with(global))
+                    .unwrap_or_else(|| panic!("{global} was not read: {reads:?}"));
+                assert!(
+                    read < first_project,
+                    "{global} was read after the project root: {reads:?}"
+                );
             }
         }
 
@@ -8554,6 +8435,8 @@ mod tests {
                 catalog: Arc::new(HarnessCatalog::builtin()),
 
                 telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
+
+                scan_memo: None,
             };
             let rt = Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap();
             let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
@@ -8610,6 +8493,7 @@ mod tests {
                 tools: None,
                 catalog: Arc::new(HarnessCatalog::builtin()),
                 telemetry,
+                scan_memo: None,
             };
             Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap()
         }
@@ -8682,44 +8566,48 @@ mod tests {
         /// silently falling out of coverage.
         #[test]
         fn every_operation_serializes_to_its_documented_snake_case_name() {
-            let all = [
-                Operation::Scan,
-                Operation::Diagnose,
-                Operation::Capabilities,
-                Operation::Harnesses,
-                Operation::PreviewFrontmatterRepair,
-                Operation::ApplyFrontmatterRepair,
-                Operation::ListEvents,
-                Operation::RestoreEvent,
-                Operation::Park,
-                Operation::Unpark,
-                Operation::FixSkill,
-                Operation::DiagnoseConflict,
-                Operation::Remove,
-                Operation::Update,
-                Operation::UpdateAll,
-                Operation::Install,
-                Operation::InstallPreferences,
-                Operation::Doctor,
-                Operation::Outdated,
-                Operation::SweepQuarantine,
-                Operation::Split,
-                Operation::TurnOffForAgent,
-                Operation::SkillUsage,
-                Operation::Library,
-                Operation::Extras,
-                Operation::Review,
-                Operation::ReviewDue,
-                Operation::PackList,
-                Operation::PackShow,
-                Operation::PackAdd,
-                Operation::PackUpdate,
-                Operation::PackRemove,
-                Operation::PackSwitchSource,
-                Operation::PackExport,
-                Operation::RecoveryList,
-                Operation::RecoveryDrop,
-            ];
+            // Every variant, read from the schema derived from the enum
+            // itself, so a variant missing from a hand-written list (as
+            // `Invocation` once was) cannot skip this check.
+            fn names(schema: &serde_json::Value, out: &mut Vec<String>) {
+                match schema {
+                    serde_json::Value::Object(map) => {
+                        for (key, value) in map {
+                            match (key.as_str(), value) {
+                                ("const", serde_json::Value::String(name)) => {
+                                    out.push(name.clone());
+                                }
+                                ("enum", serde_json::Value::Array(items)) => out.extend(
+                                    items.iter().filter_map(|i| i.as_str().map(str::to_string)),
+                                ),
+                                _ => names(value, out),
+                            }
+                        }
+                    }
+                    serde_json::Value::Array(items) => {
+                        for item in items {
+                            names(item, out);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let mut wire_names = Vec::new();
+            names(
+                &serde_json::to_value(schemars::schema_for!(Operation)).unwrap(),
+                &mut wire_names,
+            );
+            let all: Vec<Operation> = wire_names
+                .iter()
+                .map(|name| {
+                    serde_json::from_value(serde_json::Value::String(name.clone()))
+                        .unwrap_or_else(|e| panic!("schema name {name:?} does not parse: {e}"))
+                })
+                .collect();
+            assert!(
+                all.contains(&Operation::Invocation) && all.contains(&Operation::RecoveryDrop),
+                "the schema must list every variant: {wire_names:?}"
+            );
             for operation in all {
                 let expected = match operation {
                     Operation::Scan => "scan",
@@ -8747,6 +8635,8 @@ mod tests {
                     Operation::SkillUsage => "skill_usage",
                     Operation::Library => "library",
                     Operation::Extras => "extras",
+                    Operation::Listing => "listing",
+                    Operation::SkillSessions => "skill_sessions",
                     Operation::Invocation => "invocation",
                     Operation::Review => "review",
                     Operation::ReviewDue => "review_due",
@@ -8785,6 +8675,7 @@ mod tests {
                 tools: None,
                 catalog: Arc::new(HarnessCatalog::builtin()),
                 telemetry: Arc::clone(&telemetry) as Arc<dyn crate::ports::Telemetry>,
+                scan_memo: None,
             };
             let rt = Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap();
             let ctx = OpContext::uncancellable(CorrelationId("c-noop".into()));

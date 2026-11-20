@@ -928,7 +928,7 @@ const fillerSkills = fillerSpecs.map((spec) =>
   }),
 );
 
-// --- Invocation history: a seeded year of uses across every harness, so the
+// --- Invocation history: 30 seeded days of uses across every harness, so the
 // Activity page's heatmap, by-skill/by-project lists, and docked panel all
 // have something to show without a real disk scan.
 
@@ -973,7 +973,8 @@ const INVOCATION_PROJECTS = [
 type FixtureTrigger = "user" | "agent" | "file_read";
 type FixtureHarness = "claude-code" | "codex" | "opencode" | "pi" | "cursor" | "grok-build";
 
-const DAY_COUNT = 364;
+/** The 30-day history `HISTORY_DAYS` names; older uses are not counted. */
+const DAY_COUNT = 30;
 
 /** The UTC "YYYY-MM-DD" key for the day `daysAgo` days before `CAPTURE_NOW`'s date, 0 = today. */
 function fixtureDateKey(daysAgo: number): string {
@@ -1013,7 +1014,8 @@ function pickWeighted(rand: () => number, cumulative: number[]): number {
 
 interface HarnessPlan {
   id: FixtureHarness;
-  perYear: number;
+  /** Uses over the whole `DAY_COUNT` days. */
+  perHistory: number;
   mix: [FixtureTrigger, number][];
   /** How many of the ranked skills this harness ever uses. */
   skillCount: number;
@@ -1024,7 +1026,7 @@ interface HarnessPlan {
 const HARNESS_PLANS: HarnessPlan[] = [
   {
     id: "claude-code",
-    perYear: 5100,
+    perHistory: 420,
     mix: [
       ["agent", 0.68],
       ["user", 0.32],
@@ -1035,45 +1037,45 @@ const HARNESS_PLANS: HarnessPlan[] = [
   },
   {
     id: "codex",
-    perYear: 1450,
+    perHistory: 120,
     mix: [
       ["file_read", 0.94],
       ["user", 0.06],
     ],
     skillCount: 18,
-    weight: (daysAgo) => (daysAgo > 240 ? 0 : daysAgo < 60 ? 1 : 0.4),
+    weight: (daysAgo) => (daysAgo > 24 ? 0 : daysAgo < 8 ? 1 : 0.4),
   },
   {
     id: "opencode",
-    perYear: 780,
+    perHistory: 64,
     mix: [
       ["agent", 0.85],
       ["file_read", 0.14],
       ["user", 0.01],
     ],
     skillCount: 12,
-    weight: (daysAgo) => (daysAgo > 300 ? 0 : daysAgo > 120 ? 1 : 0.2),
+    weight: (daysAgo) => (daysAgo > 26 ? 0 : daysAgo > 12 ? 1 : 0.2),
   },
   {
     id: "pi",
-    perYear: 240,
+    perHistory: 20,
     mix: [["file_read", 1]],
     skillCount: 7,
-    weight: (daysAgo) => (daysAgo > 110 ? 0 : 1),
+    weight: (daysAgo) => (daysAgo > 10 ? 0 : 1),
   },
   {
     id: "cursor",
-    perYear: 110,
+    perHistory: 10,
     mix: [["file_read", 1]],
     skillCount: 5,
-    weight: (daysAgo) => (daysAgo % 29 < 6 ? 1 : 0.1),
+    weight: (daysAgo) => (daysAgo % 9 < 3 ? 1 : 0.1),
   },
   {
     id: "grok-build",
-    perYear: 95,
+    perHistory: 8,
     mix: [["file_read", 1]],
     skillCount: 4,
-    weight: (daysAgo) => (daysAgo % 23 < 5 ? 1 : 0.1),
+    weight: (daysAgo) => (daysAgo % 7 < 2 ? 1 : 0.1),
   },
 ];
 
@@ -1087,8 +1089,8 @@ interface FixtureUse {
   project: string;
 }
 
-/** One seeded year of uses across every harness: daytime/evening-weighted hours, a busier
- * recent quarter, and each harness favoring its own slice of the skill list. */
+/** 30 seeded days of uses across every harness: daytime/evening-weighted hours, busier
+ * recent days, and each harness favoring its own slice of the skill list. */
 function generateInvocations(): FixtureUse[] {
   const rand = mulberry32(20260916);
   const dayWeight = Array.from({ length: DAY_COUNT }, (_, daysAgo) => {
@@ -1118,7 +1120,7 @@ function generateInvocations(): FixtureUse[] {
     const skills = shuffled.slice(0, plan.skillCount);
     const skillCumulative = cumulate(skills.map((_, rank) => 1 / Math.pow(rank + 1, 1.05)));
     const triggerCumulative = cumulate(plan.mix.map(([, share]) => share));
-    for (let n = 0; n < plan.perYear; n++) {
+    for (let n = 0; n < plan.perHistory; n++) {
       const daysAgo = DAY_COUNT - 1 - pickWeighted(rand, days);
       uses.push({
         daysAgo,
@@ -1133,7 +1135,10 @@ function generateInvocations(): FixtureUse[] {
   return uses;
 }
 
-const FIXTURE_USES = generateInvocations();
+// The oldest day starts before the 30-day cutoff hour; drop those uses, as the Rust side does.
+const FIXTURE_USES = generateInvocations().filter(
+  (use) => Math.floor(CAPTURE_NOW / 3_600_000) - epochHourOf(use) < DAY_COUNT * 24,
+);
 
 /** Epoch-hour timestamp for one generated use, matching `SkillUseHour.hour`'s meaning. */
 function epochHourOf(use: FixtureUse): number {
@@ -1144,7 +1149,6 @@ function epochHourOf(use: FixtureUse): number {
 }
 
 interface FixtureSkillStats {
-  total: number;
   last_used: string | null;
   last_24_hours: number;
   last_7_days: number;
@@ -1168,7 +1172,6 @@ const WINDOW_HOURS = {
   "24h": 24,
   "7d": 7 * 24,
   "14d": 14 * 24,
-  "30d": 30 * 24,
 } satisfies Record<string, number>;
 
 /** Every generated use, aggregated into the exact shape `skill_stats()` produces on the Rust
@@ -1181,7 +1184,6 @@ function buildInvocationStats(): Map<string, FixtureSkillStats> {
     let stats = bySkill.get(use.skill);
     if (!stats) {
       stats = {
-        total: 0,
         last_used: null,
         last_24_hours: 0,
         last_7_days: 0,
@@ -1199,7 +1201,6 @@ function buildInvocationStats(): Map<string, FixtureSkillStats> {
 
     const epochHour = epochHourOf(use);
     const iso = new Date(epochHour * 3_600_000).toISOString();
-    stats.total++;
     if (!stats.last_used || iso > stats.last_used) stats.last_used = iso;
     const dayKey = fixtureDateKey(use.daysAgo);
     stats.by_day[dayKey] = (stats.by_day[dayKey] ?? 0) + 1;
@@ -1208,12 +1209,11 @@ function buildInvocationStats(): Map<string, FixtureSkillStats> {
     if (hoursAgo < WINDOW_HOURS["24h"]) stats.last_24_hours++;
     if (hoursAgo < WINDOW_HOURS["7d"]) stats.last_7_days++;
     if (hoursAgo < WINDOW_HOURS["14d"]) stats.last_14_days++;
-    if (hoursAgo < WINDOW_HOURS["30d"]) {
-      stats.last_30_days++;
-      stats.by_harness_30_days[use.harness] = (stats.by_harness_30_days[use.harness] ?? 0) + 1;
-      stats.by_project_30_days[use.project] = (stats.by_project_30_days[use.project] ?? 0) + 1;
-      stats.by_trigger_30_days[use.trigger]++;
-    }
+    // Every fixture use is inside the 30-day history.
+    stats.last_30_days++;
+    stats.by_harness_30_days[use.harness] = (stats.by_harness_30_days[use.harness] ?? 0) + 1;
+    stats.by_project_30_days[use.project] = (stats.by_project_30_days[use.project] ?? 0) + 1;
+    stats.by_trigger_30_days[use.trigger]++;
 
     const buckets = hourBuckets.get(use.skill)!;
     const bucketKey = `${epochHour}|${use.harness}|${use.trigger}|${use.project}`;
@@ -1305,7 +1305,6 @@ export function buildHarnessSnapshot(skillCount = 0): SkillSnapshot {
     projects: [HARNESS_PROJECT, ACME_PROJECT, PERSONAL_PROJECT, BACKEND_PROJECT, MOBILE_PROJECT],
     invocations: [...invocationStatsBySkill.entries()].map(([skill, stats]) => ({
       skill,
-      total: stats.total,
       last_24_hours: stats.last_24_hours,
       last_7_days: stats.last_7_days,
       last_14_days: stats.last_14_days,
