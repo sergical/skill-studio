@@ -87,11 +87,15 @@ impl ScanMemo {
 /// The stamp of skill folder `dir` at `now`, or `None` when the folder
 /// cannot be kept: an entry has no ctime or inode (a test filesystem), an
 /// entry changed less than [`RACY_WINDOW`] before `now`, a folder could not
-/// be listed, or the folder has more than [`MAX_STAMP_ENTRIES`] entries.
+/// be listed, a link target cannot be read, or the folder has more than
+/// [`MAX_STAMP_ENTRIES`] entries.
 ///
 /// Entries are listed in name order and never followed into a linked
 /// folder, as the facts walk does. A link adds the facts of its target too,
 /// so a link that now points at other content changes the stamp.
+///
+/// The caller keeps a result only when every read behind it succeeded
+/// (`ContentFacts::reads_complete`).
 pub(crate) fn folder_stamp(
     fs: &dyn ScopeFs,
     ctx: &OpContext,
@@ -151,17 +155,15 @@ impl Stamp {
         Some(())
     }
 
-    /// Adds the facts of what `path` points at, or a marker when it points
-    /// at nothing.
+    /// Adds the facts of what `path` points at. A link whose target cannot
+    /// be read (missing, or outside the scope) refuses the stamp: a read
+    /// through the link can still see bytes whose changes no stamp shows.
     fn push_target(&mut self, fs: &dyn ScopeFs, path: &Path) -> Option<()> {
-        if let Ok(target) = fs
+        let target = fs
             .canonicalize(path)
             .and_then(|target| fs.symlink_metadata(&target))
-        {
-            return self.push(Path::new(""), &target);
-        }
-        self.bytes.push(0xff);
-        Some(())
+            .ok()?;
+        self.push(Path::new(""), &target)
     }
 }
 

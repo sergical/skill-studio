@@ -1834,6 +1834,9 @@ fn read_skill_md(
         facts,
     } = &read
     {
+        if !facts.reads_complete {
+            return Ok(read);
+        }
         memo.put(
             skill_dir,
             name,
@@ -2895,6 +2898,9 @@ struct SkillMdBytes<'a> {
     path: &'a Path,
     bytes: &'a [u8],
     truncated: bool,
+    /// Set when a read through [`SkillMdBytes::read_capped`] failed: the
+    /// digests then cover fewer bytes than the folder holds.
+    read_failed: Cell<bool>,
 }
 
 impl SkillMdBytes<'_> {
@@ -2902,7 +2908,11 @@ impl SkillMdBytes<'_> {
         if !self.truncated && path == self.path && want == self.bytes.len() as u64 {
             return Ok(self.bytes.to_vec());
         }
-        fs.read_capped(path, want)
+        let read = fs.read_capped(path, want);
+        if read.is_err() {
+            self.read_failed.set(true);
+        }
+        read
     }
 }
 
@@ -2987,6 +2997,8 @@ struct FactsWalk {
     fingerprint_files: Vec<(PathBuf, PathBuf, u64)>,
     fingerprint_total_bytes: u64,
     fingerprint_file_count: usize,
+    /// A listing or `lstat` failed and the walk skipped that entry.
+    read_failed: bool,
 }
 
 impl FactsWalk {
@@ -3030,6 +3042,7 @@ fn walk_folder_for_facts(
         return Ok(());
     }
     let Ok(mut entries) = fs.read_dir(dir) else {
+        walk.read_failed = true;
         return Ok(());
     };
     if dir == root {
@@ -3061,6 +3074,7 @@ fn walk_folder_for_facts(
             }
             FileKind::File => {
                 let Ok(meta) = fs.symlink_metadata(&path) else {
+                    walk.read_failed = true;
                     continue;
                 };
                 if !walk.truncated {
@@ -3190,6 +3204,11 @@ struct ContentFacts {
     content_fingerprint: Fingerprint,
     modified_at: Option<DateTime<Utc>>,
     folder_truncated: bool,
+    /// Every listing, `lstat` and file read behind these facts succeeded.
+    /// A [`crate::scan_memo::ScanMemo`] keeps only such facts: a read that
+    /// failed once (too many open files, for example) must not stay in the
+    /// digests after it would succeed.
+    reads_complete: bool,
 }
 
 impl Default for ContentFacts {
@@ -3209,6 +3228,7 @@ impl Default for ContentFacts {
             content_fingerprint: Fingerprint::of_bytes(&[]),
             modified_at: None,
             folder_truncated: false,
+            reads_complete: false,
         }
     }
 }
@@ -3256,6 +3276,7 @@ fn compute_content_facts(
         path: &skill_md_path,
         bytes: skill_md_bytes,
         truncated: skill_md_truncated,
+        read_failed: Cell::new(false),
     };
     let same_files = walk.hashable.len() == walk.fingerprint_files.len()
         && walk
@@ -3286,6 +3307,7 @@ fn compute_content_facts(
         content_hash,
         modified_at: walk.newest,
         folder_truncated: walk.truncated || skill_md_truncated,
+        reads_complete: !walk.read_failed && !skill_md.read_failed.get(),
         frontmatter,
     })
 }
@@ -3374,6 +3396,7 @@ pub fn skill_content_hash(
         path: &skill_md_path,
         bytes: &bytes,
         truncated,
+        read_failed: Cell::new(false),
     };
     content_hash_from_walk(walk.hashable, fs, ctx, MAX_FOLDER_BYTES, &skill_md)
 }

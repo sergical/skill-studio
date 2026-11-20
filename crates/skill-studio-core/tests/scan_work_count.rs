@@ -47,6 +47,9 @@ struct CountingFs {
     write_atomic: AtomicU64,
     rename: AtomicU64,
     skill_md_reads: AtomicU64,
+    /// The next `read_capped` of this path fails once, as a read does when
+    /// the process has too many open files.
+    fail_next_read_of: Mutex<Option<PathBuf>>,
 }
 
 impl CountingFs {
@@ -96,6 +99,15 @@ impl ScopeFs for CountingFs {
     }
     fn read_capped(&self, path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
         Self::count(&self.read_capped);
+        let mut fail = self
+            .fail_next_read_of
+            .lock()
+            .expect("fail_next_read_of lock");
+        if fail.as_deref() == Some(path) {
+            *fail = None;
+            return Err(std::io::Error::other("too many open files"));
+        }
+        drop(fail);
         if path.ends_with("SKILL.md") {
             Self::count(&self.skill_md_reads);
         }
@@ -360,21 +372,7 @@ fn a_rescan_with_a_scan_memo_reads_only_the_skill_md_that_changed() {
         .expect("materialize 400-skill estate");
 
     let counting_fs = Arc::new(CountingFs::wrap(Arc::new(RealFs::new())));
-    // The files were written just now; a clock an hour ahead puts them
-    // outside the memo's racy window.
-    let an_hour_ahead = chrono::Utc::now().timestamp_millis() as u64 + 3_600_000;
-    let ports = Ports {
-        clock: Arc::new(FakeClock::at(an_hour_ahead)),
-        scan_memo: Some(Arc::new(ScanMemo::new())),
-        ..materialized_ports(
-            counting_fs.clone(),
-            Arc::new(FileLease::new(home.join(".leases"))),
-        )
-    };
-    let rt = Runtime::new(&scope_for(&home, &generated.project_dirs), ports).expect("runtime");
-    let skills = |inventory: &skill_studio_core::dto::Inventory| {
-        serde_json::to_value(&inventory.skills).expect("skills to JSON")
-    };
+    let rt = memo_runtime(&home, &generated.project_dirs, counting_fs.clone());
 
     let first = scan(&rt, &ctx(), &ScanRequest::default()).expect("first scan");
     let after_first = CountingFs::get(&counting_fs.skill_md_reads);
@@ -425,4 +423,93 @@ fn a_rescan_with_a_scan_memo_reads_only_the_skill_md_that_changed() {
     );
 
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A runtime over `fs` with a [`ScanMemo`]. The fixture files were written
+/// just now; a clock an hour ahead puts them outside the memo's racy window.
+fn memo_runtime(home: &Path, project_dirs: &[PathBuf], fs: Arc<CountingFs>) -> Runtime {
+    let an_hour_ahead = chrono::Utc::now().timestamp_millis() as u64 + 3_600_000;
+    let ports = Ports {
+        clock: Arc::new(FakeClock::at(an_hour_ahead)),
+        scan_memo: Some(Arc::new(ScanMemo::new())),
+        ..materialized_ports(fs, Arc::new(FileLease::new(home.join(".leases"))))
+    };
+    Runtime::new(&scope_for(home, project_dirs), ports).expect("runtime")
+}
+
+fn skills(inventory: &skill_studio_core::dto::Inventory) -> serde_json::Value {
+    serde_json::to_value(&inventory.skills).expect("skills to JSON")
+}
+
+/// A small home: one Claude skill with a support file, and one whose folder
+/// holds a link to a file that does not exist.
+fn two_skill_home(name: &str) -> PathBuf {
+    let dir = unique_temp_dir(name);
+    let skills = dir.join(".claude/skills");
+    for skill in ["notes", "linked"] {
+        std::fs::create_dir_all(skills.join(skill)).expect("create skill folder");
+        std::fs::write(
+            skills.join(skill).join("SKILL.md"),
+            format!("---\nname: {skill}\ndescription: The {skill} skill.\n---\nBody.\n"),
+        )
+        .expect("write SKILL.md");
+    }
+    std::fs::write(skills.join("notes/notes.md"), "Support text.\n").expect("write notes.md");
+    std::os::unix::fs::symlink(dir.join("gone.md"), skills.join("linked/gone.md"))
+        .expect("link to a missing file");
+    dir.canonicalize().expect("canonicalize home")
+}
+
+/// Given a skill whose support file fails to read once during a scan with
+/// a [`ScanMemo`], when the app rescans, the rescan reads that folder again
+/// and returns the same skills as a scan in which no read failed. Fails if
+/// the memo keeps the hash of the failed read.
+#[test]
+fn a_scan_memo_does_not_keep_facts_from_a_failed_read() {
+    let home = two_skill_home("scan-memo-failed-read");
+    let notes = home.join(".claude/skills/notes/notes.md");
+
+    let clean_fs = Arc::new(CountingFs::wrap(Arc::new(RealFs::new())));
+    let clean_rt = memo_runtime(&home, &[], clean_fs);
+    let clean = scan(&clean_rt, &ctx(), &ScanRequest::default()).expect("clean scan");
+
+    let counting_fs = Arc::new(CountingFs::wrap(Arc::new(RealFs::new())));
+    let rt = memo_runtime(&home, &[], counting_fs.clone());
+    *counting_fs
+        .fail_next_read_of
+        .lock()
+        .expect("fail_next_read_of lock") = Some(notes);
+    let failed = scan(&rt, &ctx(), &ScanRequest::default()).expect("scan with a failed read");
+    assert_ne!(
+        skills(&failed),
+        skills(&clean),
+        "the failed read must change the hash"
+    );
+
+    let rescan = scan(&rt, &ctx(), &ScanRequest::default()).expect("rescan");
+    assert_eq!(skills(&rescan), skills(&clean));
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Given a skill folder that holds a link to a missing file, when the app
+/// rescans with a [`ScanMemo`], the rescan reads that `SKILL.md` again (a
+/// link target the stamp cannot read is never kept), while the other skill
+/// comes from the memo. Fails if such a folder is kept.
+#[test]
+fn a_scan_memo_does_not_keep_a_folder_with_an_unreadable_link_target() {
+    let home = two_skill_home("scan-memo-dangling-link");
+    let counting_fs = Arc::new(CountingFs::wrap(Arc::new(RealFs::new())));
+    let rt = memo_runtime(&home, &[], counting_fs.clone());
+
+    scan(&rt, &ctx(), &ScanRequest::default()).expect("first scan");
+    assert_eq!(CountingFs::get(&counting_fs.skill_md_reads), 2);
+    scan(&rt, &ctx(), &ScanRequest::default()).expect("rescan");
+    assert_eq!(
+        CountingFs::get(&counting_fs.skill_md_reads),
+        3,
+        "only the folder with the missing link target is read again"
+    );
+
+    std::fs::remove_dir_all(&home).ok();
 }
