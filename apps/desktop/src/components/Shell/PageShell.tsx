@@ -76,7 +76,9 @@ export function PageShell({
                 <h1 className="m-0 truncate text-body font-medium text-text-primary">{title}</h1>
               </>
             ) : (
-              <h1 className="m-0 flex min-w-0">
+              // The title keeps its width; the subtitle truncates first, so a narrow window
+              // never draws one over the other.
+              <h1 className="m-0 flex shrink-0">
                 <RootCrumb label={title} />
               </h1>
             )}
