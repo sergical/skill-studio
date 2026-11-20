@@ -203,6 +203,9 @@ importers:
       '@playwright/test':
         specifier: ^1.65.0
         version: 1.65.0
+      bun:
+        specifier: 1.4.5-canary.20261120.1
+        version: 1.4.5-canary.20261120.1
       knip:
         specifier: ^6.44.2
         version: 6.44.2
@@ -1451,6 +1454,70 @@ packages:
   '@opentelemetry/semantic-conventions@1.43.0':
     resolution: {integrity: sha512-eSYWTm620tTk45EKSedaUL8MFYI8hW164hIXsgIHyxu3VobUB3fFCu5t0hQby6OoWRPsG1KkKUG2M5UadiLiVg==}
     engines: {node: '>=14'}
+
+  '@oven/bun-darwin-aarch64@1.4.5-canary.20261120.1':
+    resolution: {integrity: sha512-Hif4uT/VQH8H3s34XkP8BeZ11M3NYE0eIdHughcYRgoCxkojrDkY+Ecu7F4e7GyMzD/vBscwoF7ZASMHg7LkpQ==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@oven/bun-darwin-x64@1.4.5-canary.20261120.1':
+    resolution: {integrity: sha512-w/OzDBR7K+3dBSrLWvpEfJ7y6meRJjAI9pHP+HwbOBrxNnVYoUsVWxzRDy3XOjszhU8qXh4jEnm/BYLTLHZ2nA==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@oven/bun-freebsd-aarch64@1.4.5-canary.20261120.1':
+    resolution: {integrity: sha512-rdpN43q2MZGuxIU8W7WEqQ7Pj/V6Pe6j3lJa06LGbV6KdTR/jdlnIl+Lw74Ps2lxE1oihxC57vAOiiESnoPgOQ==}
+    cpu: [arm64]
+    os: [freebsd]
+
+  '@oven/bun-freebsd-x64@1.4.5-canary.20261120.1':
+    resolution: {integrity: sha512-QisxXeU1dDcKP18DaTxUDB6lyn4aUzsZc4C6u2ckTnNhggEU0xUdQIqLvMppDfRCKYo4fVf/M6pHOcmtjf3j9g==}
+    cpu: [x64]
+    os: [freebsd]
+
+  '@oven/bun-linux-aarch64-android@1.4.5-canary.20261120.1':
+    resolution: {integrity: sha512-Z1uZcrkYZouedwyD8TDNuj1xBXaVU7a8R+4wgSmhXc836BpbEWtFjNdDIyGOePhEA2cK3gJihk+P2YVafIpdFQ==}
+    cpu: [arm64]
+    os: [android]
+
+  '@oven/bun-linux-aarch64-musl@1.4.5-canary.20261120.1':
+    resolution: {integrity: sha512-vO0/+GqYSY3Sd39+D2hwciqTmk6ZLU3aKNCjxnFlaZLiuNCt3K8jUeg/ggNSPp/FvZOiZlBzXG7LOrp6gjobuw==}
+    cpu: [arm64]
+    os: [linux]
+    libc: [musl]
+
+  '@oven/bun-linux-aarch64@1.4.5-canary.20261120.1':
+    resolution: {integrity: sha512-SrxL7YlYt+hKr6AnKEWKR/dmcnJppx+sn3fDkTRm2JOijKjlFTV3hC5aLwwxpbCn+SUtB3bs8qejWTpJBifAMg==}
+    cpu: [arm64]
+    os: [linux]
+    libc: [glibc]
+
+  '@oven/bun-linux-x64-android@1.4.5-canary.20261120.1':
+    resolution: {integrity: sha512-/Xtwpqzm6pe+FSUtTDAbk2d1FT75rUNX9eZpwsiOHUY2/b9grz4U5pFBCFFACFPRkqgdjW4FoefVY8tVY9hJXQ==}
+    cpu: [x64]
+    os: [android]
+
+  '@oven/bun-linux-x64-musl@1.4.5-canary.20261120.1':
+    resolution: {integrity: sha512-qx+gqg3zwpLm4eJ0HlUqSIid103njAGtz4c5+13XM9nNiBVOZgB9kVFgsQSJB37O/T9zqEFTqkKckZpmQ/myYQ==}
+    cpu: [x64]
+    os: [linux]
+    libc: [musl]
+
+  '@oven/bun-linux-x64@1.4.5-canary.20261120.1':
+    resolution: {integrity: sha512-WeORe6WhB0QEhPu739WCWKFswaplOIoP21RgEk3NmHC5gNOOKmHMiQZuy29bnEwtGqQ8LuBZ+SI57RHxbOhfZQ==}
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
+
+  '@oven/bun-windows-aarch64@1.4.5-canary.20261120.1':
+    resolution: {integrity: sha512-NwQ/rrE25m1/yBPvDv0VKrCNTajxGi3az1Fvk+x/TBHlQ3NL6gQzbK2vB1ZVucVSI05xtKmaUWfrt8UwT+3YIQ==}
+    cpu: [arm64]
+    os: [win32]
+
+  '@oven/bun-windows-x64@1.4.5-canary.20261120.1':
+    resolution: {integrity: sha512-tekkM05MRHeosfwWD26hKJ1c9HB4qmQqQkjPfBQhFAljPoA1hj5N5YqPSNYtgRWn69tPJv7mnnzyDJLE3gLOyQ==}
+    cpu: [x64]
+    os: [win32]
 
   '@oxc-parser/binding-android-arm-eabi@0.143.0':
     resolution: {integrity: sha512-n9uozULWflPqBtdmI8lAabLqGKNgLVNN0ZH8HfgCwpKGNtzRzauB76jTiW/3YLkcA7N1zskpi9GdVnZuu1SAvg==}
@@ -3617,6 +3684,12 @@ packages:
   buffer-image-size@0.6.4:
     resolution: {integrity: sha512-nEh+kZOPY1w+gcCMobZ6ETUp9WfibndnosbpwB1iJk/8Gt5ZF2bhS6+B6bPYz424KtwsR6Rflc3tCz1/ghX2dQ==}
     engines: {node: '>=4.0'}
+
+  bun@1.4.5-canary.20261120.1:
+    resolution: {integrity: sha512-j7LZ2/9+OoevkuS416k1/1nsw+Zqvb1Y0Nl3smIROQhAfDHfl2W7duebe7EgvWY2rwKed258u63+GoEukY6FPA==}
+    cpu: [arm64, x64]
+    os: [darwin, linux, android, freebsd, win32]
+    hasBin: true
 
   callsites@3.1.0:
     resolution: {integrity: sha512-P8BjAsXvZS+VIDUI11hHCQEv74YT67YUi5JJFNWIqL235sBmjX4+qx9Muvls5ivyNENctx46xQLQ3aTuE7ssaQ==}
@@ -6264,6 +6337,42 @@ snapshots:
 
   '@opentelemetry/semantic-conventions@1.43.0': {}
 
+  '@oven/bun-darwin-aarch64@1.4.5-canary.20261120.1':
+    optional: true
+
+  '@oven/bun-darwin-x64@1.4.5-canary.20261120.1':
+    optional: true
+
+  '@oven/bun-freebsd-aarch64@1.4.5-canary.20261120.1':
+    optional: true
+
+  '@oven/bun-freebsd-x64@1.4.5-canary.20261120.1':
+    optional: true
+
+  '@oven/bun-linux-aarch64-android@1.4.5-canary.20261120.1':
+    optional: true
+
+  '@oven/bun-linux-aarch64-musl@1.4.5-canary.20261120.1':
+    optional: true
+
+  '@oven/bun-linux-aarch64@1.4.5-canary.20261120.1':
+    optional: true
+
+  '@oven/bun-linux-x64-android@1.4.5-canary.20261120.1':
+    optional: true
+
+  '@oven/bun-linux-x64-musl@1.4.5-canary.20261120.1':
+    optional: true
+
+  '@oven/bun-linux-x64@1.4.5-canary.20261120.1':
+    optional: true
+
+  '@oven/bun-windows-aarch64@1.4.5-canary.20261120.1':
+    optional: true
+
+  '@oven/bun-windows-x64@1.4.5-canary.20261120.1':
+    optional: true
+
   '@oxc-parser/binding-android-arm-eabi@0.143.0':
     optional: true
 
@@ -8085,6 +8194,21 @@ snapshots:
   buffer-image-size@0.6.4:
     dependencies:
       '@types/node': 26.6.6
+
+  bun@1.4.5-canary.20261120.1:
+    optionalDependencies:
+      '@oven/bun-darwin-aarch64': 1.4.5-canary.20261120.1
+      '@oven/bun-darwin-x64': 1.4.5-canary.20261120.1
+      '@oven/bun-freebsd-aarch64': 1.4.5-canary.20261120.1
+      '@oven/bun-freebsd-x64': 1.4.5-canary.20261120.1
+      '@oven/bun-linux-aarch64': 1.4.5-canary.20261120.1
+      '@oven/bun-linux-aarch64-android': 1.4.5-canary.20261120.1
+      '@oven/bun-linux-aarch64-musl': 1.4.5-canary.20261120.1
+      '@oven/bun-linux-x64': 1.4.5-canary.20261120.1
+      '@oven/bun-linux-x64-android': 1.4.5-canary.20261120.1
+      '@oven/bun-linux-x64-musl': 1.4.5-canary.20261120.1
+      '@oven/bun-windows-aarch64': 1.4.5-canary.20261120.1
+      '@oven/bun-windows-x64': 1.4.5-canary.20261120.1
 
   callsites@3.1.0: {}
 
