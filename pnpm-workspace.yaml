@@ -3,6 +3,8 @@ packages:
   - "packages/*"
 
 allowBuilds:
+  # Its postinstall links the platform binary (@oven/bun-*).
+  bun: true
   esbuild: true
   workerd: true
 
@@ -100,6 +102,19 @@ minimumReleaseAgeExclude:
   - miniflare@5.20261109.0-beta
   - remotion@4.0.542
   - wrangler@4.159.0
+  - "@oven/bun-darwin-aarch64@1.4.5-canary.20261120.1"
+  - "@oven/bun-darwin-x64@1.4.5-canary.20261120.1"
+  - "@oven/bun-freebsd-aarch64@1.4.5-canary.20261120.1"
+  - "@oven/bun-freebsd-x64@1.4.5-canary.20261120.1"
+  - "@oven/bun-linux-aarch64-android@1.4.5-canary.20261120.1"
+  - "@oven/bun-linux-aarch64-musl@1.4.5-canary.20261120.1"
+  - "@oven/bun-linux-aarch64@1.4.5-canary.20261120.1"
+  - "@oven/bun-linux-x64-android@1.4.5-canary.20261120.1"
+  - "@oven/bun-linux-x64-musl@1.4.5-canary.20261120.1"
+  - "@oven/bun-linux-x64@1.4.5-canary.20261120.1"
+  - "@oven/bun-windows-aarch64@1.4.5-canary.20261120.1"
+  - "@oven/bun-windows-x64@1.4.5-canary.20261120.1"
+  - bun@1.4.5-canary.20261120.1
 
 overrides:
   sharp: 0.35.5
