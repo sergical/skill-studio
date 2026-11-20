@@ -62,36 +62,34 @@ fn mcp_bin() -> PathBuf {
     )
 }
 
-/// The CLI binary's path. Not a Cargo dependency of this crate (artifact
-/// dependencies still need nightly `-Z bindeps`), so this builds it directly
-/// via `cargo build -p skill-studio-cli` and locates it next to this crate's
-/// own binary, under the shared workspace `target/` directory.
+/// The CLI binary the outer `cargo test --workspace` run built, next to
+/// this crate's own binary in `target/debug/`. Not a Cargo dependency of
+/// this crate (artifact dependencies still need nightly `-Z bindeps`).
+/// This does not build it: `cargo build` and `cargo test` keep separate
+/// copies and each copies its own over `target/debug/skill-studio`, so a
+/// build here swapped the file while other test binaries ran it. A run
+/// narrowed with `--test mcp_server` does not build the CLI; build it first
+/// with `cargo build --workspace --all-features --bin skill-studio`, or set
+/// `SKILL_STUDIO_TEST_BINARY`.
 fn cli_bin() -> PathBuf {
     if let Some(binary) = std::env::var_os("SKILL_STUDIO_TEST_BINARY") {
         return binary.into();
     }
-    // Same command shape as `cargo test --workspace --all-features`, so this
-    // is a no-op after that build. A different feature set would rebuild
-    // `target/debug/skill-studio` while other test binaries run it.
-    let status = std::process::Command::new(env!("CARGO"))
-        .args([
-            "build",
-            "--workspace",
-            "--all-features",
-            "--bin",
-            "skill-studio",
-        ])
-        .status()
-        .expect("run cargo build --bin skill-studio");
-    assert!(status.success(), "failed to build skill-studio-cli");
-    Path::new(&mcp_bin())
+    let binary = Path::new(&mcp_bin())
         .parent()
         .unwrap()
         .join(if cfg!(windows) {
             "skill-studio.exe"
         } else {
             "skill-studio"
-        })
+        });
+    assert!(
+        binary.is_file(),
+        "{} is missing: run `cargo test --workspace --all-features`, or \
+         `cargo build --workspace --all-features --bin skill-studio` first",
+        binary.display()
+    );
+    binary
 }
 
 /// Materializes a named fixture (see `skill_studio_core::testing::fixtures`)
@@ -518,8 +516,8 @@ fn run_cli(args: &[&str]) -> serde_json::Value {
 
 /// `watch --json` and a fresh MCP `scan` must agree on the current state:
 /// starts `watch` against a fixture, mutates a skill through the CLI's
-/// `preview-repair`/`apply-repair`, and checks that the inventory `watch`
-/// reports after the change is the same one a fresh MCP `scan` reports.
+/// `preview-repair`/`apply-repair`, and checks that the inventory on the
+/// change line `watch` prints is the same one a fresh MCP `scan` reports.
 ///
 /// There is no shared numeric revision authority between an independent
 /// `watch` process and an independent MCP process (each MCP call is a fresh,
@@ -590,11 +588,9 @@ async fn watch_and_a_fresh_mcp_scan_agree_after_a_cli_mutation() {
     assert_eq!(apply["status"], "ok", "{apply:?}");
 
     // `watch` polls; wait for the change line that follows the mutation.
-    let _change: serde_json::Value = serde_json::from_str(&recv_line(&line_rx)).unwrap();
+    let change: serde_json::Value = serde_json::from_str(&recv_line(&line_rx)).unwrap();
     let _ = watch.kill();
     let _ = watch.wait();
-
-    let watch_scan = run_cli(&["scan", "--fixture", home.to_str().unwrap(), "--json"]);
 
     let env = [("SKILL_STUDIO_FIXTURE", home.to_str().unwrap())];
     let (client, _) = connect(&env).await;
@@ -606,8 +602,8 @@ async fn watch_and_a_fresh_mcp_scan_agree_after_a_cli_mutation() {
         "the mutation through the CLI did not change what a fresh scan sees"
     );
     assert_eq!(
-        mcp_scan["data"]["skills"], watch_scan["data"]["skills"],
-        "watch and a fresh MCP scan disagreed on the post-mutation state"
+        mcp_scan["data"]["skills"], change["inventory"]["skills"],
+        "watch's change line and a fresh MCP scan disagreed on the post-mutation state"
     );
 
     std::fs::remove_dir_all(&home).ok();
