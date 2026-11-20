@@ -40,3 +40,27 @@ it("reads the full-screen state again once the window stops resizing, so leaving
   expect(latest).toBe(false);
   stop();
 });
+
+it("reads nothing after stop, even when a resize arrives late", async () => {
+  let reads = 0;
+  let resize = () => {};
+  const stop = watchFullscreen(
+    {
+      isFullscreen: () => {
+        reads++;
+        return Promise.resolve(false);
+      },
+      onResized: (handler) => {
+        resize = handler;
+        return Promise.resolve(() => {});
+      },
+    },
+    () => {},
+  );
+  await vi.runAllTimersAsync();
+  expect(reads).toBe(1);
+  stop();
+  resize();
+  await vi.runAllTimersAsync();
+  expect(reads).toBe(1);
+});

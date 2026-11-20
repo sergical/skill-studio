@@ -28,6 +28,8 @@ export function watchFullscreen(
   let stopped = false;
   let settle: ReturnType<typeof setTimeout> | undefined;
   const read = () => {
+    // A resize event can arrive after stop while the listener is still registering.
+    if (stopped) return;
     appWindow
       .isFullscreen()
       .then((next) => {

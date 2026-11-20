@@ -87,7 +87,10 @@ export function PageShell({
             )}
           </div>
           {actions && (
-            <div className="flex shrink-0 items-center gap-1.5 [--control-height:28px]">
+            <div
+              data-tauri-drag-region
+              className="flex shrink-0 items-center gap-1.5 [--control-height:28px]"
+            >
               {actions}
             </div>
           )}
