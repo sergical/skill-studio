@@ -145,7 +145,7 @@ fn exercise(flow: &str, surface: Surface) {
             let report = f.call(&["usage"], "skill_usage", "skill_usage", &json!({}));
             let row = &report["data"]["rows"][0];
             assert_eq!(row["skill"], "gamma", "{report}");
-            assert_eq!(row["total_uses"], 1, "{report}");
+            assert_eq!(row["recent_uses"], 1, "{report}");
             assert!(row.get("sessions").is_none(), "{report}");
             assert_eq!(row["triggers"]["agent"], 1, "{report}");
             assert_eq!(report["data"]["observations"], json!([]), "{report}");

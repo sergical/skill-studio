@@ -1,7 +1,7 @@
 // ============================================================================
 // Skill Studio - skill-activity
 // Pure aggregation over SkillInvocationStats.by_hour for the Activity page's
-// "Docked" layout: the year heatmap, a day's details, the window overview,
+// "Docked" layout: the 30-day heatmap, a day's details, the window overview,
 // per-skill and per-project rows, and the harness/trigger filter menus'
 // counts. Every count on this page comes from the same flattened hourly
 // buckets, so a day's splits always add up to its total and the totals
@@ -118,7 +118,7 @@ function bump<K extends string>(counts: Counts<K>, key: K, n: number): void {
   counts[key] = (counts[key] ?? 0) + n;
 }
 
-/** Per-local-day use totals over the whole (365-day) window, for the heatmap. */
+/** Per-local-day use totals over the whole 30-day history, for the heatmap. */
 export function dayTotals(stats: SkillInvocationStats[], filter: ActivityFilter) {
   const out: Record<string, number> = {};
   for (const u of flattenUses(stats)) {
@@ -284,8 +284,8 @@ export function projectRows(
   return ranked(counts).map(([project, count]) => ({ project, count }));
 }
 
-/** Year totals per harness under a trigger filter - the harness menu's counts. */
-export function yearByHarness(stats: SkillInvocationStats[], trigger: TriggerFilter) {
+/** History totals per harness under a trigger filter - the harness menu's counts. */
+export function historyByHarness(stats: SkillInvocationStats[], trigger: TriggerFilter) {
   const out: Counts<string> = {};
   for (const u of flattenUses(stats)) {
     if (trigger !== "all" && u.trigger !== trigger) continue;
@@ -294,8 +294,8 @@ export function yearByHarness(stats: SkillInvocationStats[], trigger: TriggerFil
   return out;
 }
 
-/** Year totals per trigger under a harness filter - the trigger menu's counts. */
-export function yearByTrigger(stats: SkillInvocationStats[], harness: HarnessFilter) {
+/** History totals per trigger under a harness filter - the trigger menu's counts. */
+export function historyByTrigger(stats: SkillInvocationStats[], harness: HarnessFilter) {
   const out: Counts<SkillTrigger> = {};
   for (const u of flattenUses(stats)) {
     if (harness !== "all" && u.harness !== harness) continue;

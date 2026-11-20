@@ -27,6 +27,17 @@ pub use opencode::{
 };
 pub use pi::{parse_pi_uses, parse_pi_uses_checked};
 
+/// Days of agent history Skill Studio counts. Claude Code deletes its
+/// transcripts after 30 days by default, so older history is missing for
+/// most people; counting it would make a number depend on how long each
+/// agent happens to keep its logs.
+pub const HISTORY_DAYS: u32 = 30;
+
+/// The earliest use time Skill Studio counts, relative to `now`.
+pub fn history_start(now: DateTime<Utc>) -> DateTime<Utc> {
+    now - chrono::Duration::days(i64::from(HISTORY_DAYS))
+}
+
 fn contains_marker(text: &str, marker: &str) -> bool {
     memchr::memmem::find(text.as_bytes(), marker.as_bytes()).is_some()
 }
@@ -176,32 +187,31 @@ pub struct SkillUseHour {
 pub struct SkillInvocationStats {
     /// The skill's name.
     pub skill: String,
-    /// Total counted uses across every cached transcript.
-    pub total: u32,
     /// Counted uses in the last 24 hours.
     pub last_24_hours: u32,
     /// Counted uses in the last 7 days.
     pub last_7_days: u32,
     /// Counted uses in the last 14 days.
     pub last_14_days: u32,
-    /// Counted uses in the last 30 days.
+    /// Counted uses in the last 30 days: every use in the history.
     pub last_30_days: u32,
-    /// The most recent use's timestamp, RFC 3339.
+    /// The most recent use's timestamp in the last 30 days, RFC 3339.
     pub last_used: Option<String>,
     /// Use counts by full project path, over the last 30 days only.
     pub by_project_30_days: BTreeMap<String, u32>,
-    /// Per-day use counts, "YYYY-MM-DD" (UTC), over the last 365 days.
+    /// Per-day use counts, "YYYY-MM-DD" (UTC), over the last 30 days.
     pub by_day: BTreeMap<String, u32>,
     /// Use counts by harness id, over the last 30 days only.
     pub by_harness_30_days: BTreeMap<String, u32>,
     /// Use counts by trigger, over the last 30 days only.
     pub by_trigger_30_days: SkillTriggerCounts,
     /// Hourly use buckets, grouped by (hour, harness, trigger, project),
-    /// over the last 365 days.
+    /// over the last 30 days.
     pub by_hour: Vec<SkillUseHour>,
 }
 
-/// Per-day use counts for the heatmap (date "YYYY-MM-DD" -> count).
+/// Per-day use counts for the heatmap (date "YYYY-MM-DD" -> count), over
+/// the last 30 days.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct InvocationHeatmap {
     /// Counted uses per day.
@@ -229,13 +239,14 @@ fn is_known_skill(skill: &str, known_skills: &BTreeSet<String>) -> bool {
     }
 }
 
-/// The subset of `uses` that count under `filter`, applying the enabled-harness,
-/// known-skill, and file-read-dedupe rules shared by [`skill_stats`] and
-/// [`skill_heatmap`]. Public for callers that need a window other than the
-/// fixed ones `skill_stats` computes.
-pub fn counted_uses<'a>(
+/// The subset of `uses` that count under `filter` at `now`, applying the
+/// enabled-harness, known-skill, file-read-dedupe, and history rules shared by
+/// [`skill_stats`] and [`skill_heatmap`]. The history cut comes last, so a
+/// resumed session still counts once, at its first load.
+fn counted_uses<'a>(
     uses: impl IntoIterator<Item = &'a SkillInvocation>,
     filter: &SkillUseFilter,
+    now: DateTime<Utc>,
 ) -> Vec<&'a SkillInvocation> {
     let candidates: Vec<&SkillInvocation> = uses
         .into_iter()
@@ -283,12 +294,13 @@ pub fn counted_uses<'a>(
     }
     kept.extend(earliest_file_read.into_values());
 
+    let start = history_start(now);
+    kept.retain(|use_| use_.at >= start);
     kept
 }
 
-/// Per-skill use totals across `uses`, with the rolling windows
-/// (24h/7d/14d/30d, `by_project_30_days`, `by_day`, `by_harness_30_days`,
-/// `by_trigger_30_days`) computed relative to `now` rather than the wall
+/// Per-skill use totals over the last 30 days of `uses`, with the rolling
+/// windows (24h/7d/14d/30d) computed relative to `now` rather than the wall
 /// clock. Output is sorted by skill name.
 pub fn skill_stats<'a>(
     uses: impl IntoIterator<Item = &'a SkillInvocation>,
@@ -296,7 +308,6 @@ pub fn skill_stats<'a>(
     now: DateTime<Utc>,
 ) -> Vec<SkillInvocationStats> {
     struct Acc {
-        total: u32,
         last_24_hours: u32,
         last_7_days: u32,
         last_14_days: u32,
@@ -312,13 +323,10 @@ pub fn skill_stats<'a>(
     let cutoff_24h = now - chrono::Duration::hours(24);
     let cutoff_7 = now - chrono::Duration::days(7);
     let cutoff_14 = now - chrono::Duration::days(14);
-    let cutoff_30 = now - chrono::Duration::days(30);
-    let cutoff_365 = now - chrono::Duration::days(365);
     let mut by_skill: BTreeMap<String, Acc> = BTreeMap::new();
 
-    for use_ in counted_uses(uses, filter) {
+    for use_ in counted_uses(uses, filter, now) {
         let acc = by_skill.entry(use_.skill.clone()).or_insert(Acc {
-            total: 0,
             last_24_hours: 0,
             last_7_days: 0,
             last_14_days: 0,
@@ -330,7 +338,6 @@ pub fn skill_stats<'a>(
             by_trigger_30_days: SkillTriggerCounts::default(),
             by_hour: BTreeMap::new(),
         });
-        acc.total += 1;
         if use_.at >= cutoff_24h {
             acc.last_24_hours += 1;
         }
@@ -343,39 +350,34 @@ pub fn skill_stats<'a>(
         if acc.last_used.is_none_or(|last| use_.at > last) {
             acc.last_used = Some(use_.at);
         }
-        if use_.at >= cutoff_30 {
-            acc.last_30_days += 1;
-            if let Some(project) = &use_.project_path {
-                *acc.by_project_30_days.entry(project.clone()).or_insert(0) += 1;
-            }
-            *acc.by_harness_30_days
-                .entry(use_.harness.clone())
-                .or_insert(0) += 1;
-            match use_.trigger {
-                SkillTrigger::User => acc.by_trigger_30_days.user += 1,
-                SkillTrigger::Agent => acc.by_trigger_30_days.agent += 1,
-                SkillTrigger::FileRead => acc.by_trigger_30_days.file_read += 1,
-            }
+        acc.last_30_days += 1;
+        if let Some(project) = &use_.project_path {
+            *acc.by_project_30_days.entry(project.clone()).or_insert(0) += 1;
         }
-        if use_.at >= cutoff_365 {
-            let day = use_.at.format("%Y-%m-%d").to_string();
-            *acc.by_day.entry(day).or_insert(0) += 1;
-            let hour = (use_.at.timestamp() / 3600) as u32;
-            let key = (
-                hour,
-                use_.harness.clone(),
-                use_.trigger,
-                use_.project_path.clone(),
-            );
-            *acc.by_hour.entry(key).or_insert(0) += 1;
+        *acc.by_harness_30_days
+            .entry(use_.harness.clone())
+            .or_insert(0) += 1;
+        match use_.trigger {
+            SkillTrigger::User => acc.by_trigger_30_days.user += 1,
+            SkillTrigger::Agent => acc.by_trigger_30_days.agent += 1,
+            SkillTrigger::FileRead => acc.by_trigger_30_days.file_read += 1,
         }
+        let day = use_.at.format("%Y-%m-%d").to_string();
+        *acc.by_day.entry(day).or_insert(0) += 1;
+        let hour = (use_.at.timestamp() / 3600) as u32;
+        let key = (
+            hour,
+            use_.harness.clone(),
+            use_.trigger,
+            use_.project_path.clone(),
+        );
+        *acc.by_hour.entry(key).or_insert(0) += 1;
     }
 
     by_skill
         .into_iter()
         .map(|(skill, acc)| SkillInvocationStats {
             skill,
-            total: acc.total,
             last_24_hours: acc.last_24_hours,
             last_7_days: acc.last_7_days,
             last_14_days: acc.last_14_days,
@@ -402,19 +404,14 @@ pub fn skill_stats<'a>(
         .collect()
 }
 
-/// Per-day use counts over the last `days` days, relative to `now`.
+/// Per-day use counts over the last 30 days, relative to `now`.
 pub fn skill_heatmap<'a>(
     uses: impl IntoIterator<Item = &'a SkillInvocation>,
     filter: &SkillUseFilter,
-    days: u32,
     now: DateTime<Utc>,
 ) -> InvocationHeatmap {
-    let cutoff = now - chrono::Duration::days(i64::from(days));
     let mut result = BTreeMap::new();
-    for use_ in counted_uses(uses, filter) {
-        if use_.at < cutoff {
-            continue;
-        }
+    for use_ in counted_uses(uses, filter, now) {
         let day = use_.at.format("%Y-%m-%d").to_string();
         *result.entry(day).or_insert(0) += 1;
     }
@@ -853,26 +850,16 @@ mod tests {
             agent_use("write-tests", Some("resumed"), old),
             file_read_use("write-tests", Some("resumed"), recent),
         ];
-        let stats = skill_stats(&uses, &filter(&known_skills, &sources), now);
-        assert_eq!(stats[0].last_30_days, 0);
-        assert_eq!(stats[0].last_used, Some(old.to_rfc3339()));
-        assert_eq!(
-            stats[0].by_day.get(&old.format("%Y-%m-%d").to_string()),
-            Some(&1)
-        );
-        assert!(!stats[0]
-            .by_day
-            .contains_key(&recent.format("%Y-%m-%d").to_string()));
-        assert_eq!(stats[0].by_hour.len(), 1);
-        assert!(
-            skill_heatmap(&uses, &filter(&known_skills, &sources), 30, now)
-                .days
-                .is_empty()
-        );
+        // The session's use is its 40-day-old load, outside the history; the
+        // recent re-read is the same use and does not count again.
+        assert!(skill_stats(&uses, &filter(&known_skills, &sources), now).is_empty());
+        assert!(skill_heatmap(&uses, &filter(&known_skills, &sources), now)
+            .days
+            .is_empty());
     }
 
     #[test]
-    fn desktop_multiday_tool_loads_keep_each_day_and_hour() {
+    fn desktop_multiday_tool_loads_keep_each_day_and_hour_in_the_history() {
         let now = DateTime::parse_from_rfc3339("2026-11-16T12:00:00Z")
             .unwrap()
             .to_utc();
@@ -889,17 +876,16 @@ mod tests {
             })
             .collect();
         let stats = skill_stats(&uses, &filter(&known_skills, &sources), now);
-        assert_eq!(stats[0].total, 3);
         assert_eq!(stats[0].last_30_days, 2);
         assert_eq!(
             stats[0].last_used,
             Some((now - chrono::Duration::days(2)).to_rfc3339())
         );
-        assert_eq!(stats[0].by_day.len(), 3);
+        assert_eq!(stats[0].by_day.len(), 2, "the 40-day-old day is dropped");
         assert!(stats[0].by_day.values().all(|count| *count == 1));
-        assert_eq!(stats[0].by_hour.len(), 3);
+        assert_eq!(stats[0].by_hour.len(), 2);
         assert!(stats[0].by_hour.iter().all(|hour| hour.count == 1));
-        let heatmap = skill_heatmap(&uses, &filter(&known_skills, &sources), 30, now);
+        let heatmap = skill_heatmap(&uses, &filter(&known_skills, &sources), now);
         assert_eq!(heatmap.days.len(), 2);
         assert!(heatmap.days.values().all(|count| *count == 1));
     }
@@ -916,7 +902,7 @@ mod tests {
             file_read_use("write-tests", Some("s1"), now),
         ];
         let stats = skill_stats(&uses, &filter(&known_skills, &sources), now);
-        assert_eq!(stats[0].total, 1);
+        assert_eq!(stats[0].last_30_days, 1);
 
         // two file reads in one session -> one.
         let uses = [
@@ -928,7 +914,7 @@ mod tests {
             file_read_use("write-tests", Some("s1"), now),
         ];
         let stats = skill_stats(&uses, &filter(&known_skills, &sources), now);
-        assert_eq!(stats[0].total, 1);
+        assert_eq!(stats[0].last_30_days, 1);
 
         // the same skill in two sessions -> two.
         let uses = [
@@ -936,7 +922,7 @@ mod tests {
             file_read_use("write-tests", Some("s2"), now),
         ];
         let stats = skill_stats(&uses, &filter(&known_skills, &sources), now);
-        assert_eq!(stats[0].total, 2);
+        assert_eq!(stats[0].last_30_days, 2);
 
         // session: None reads are each kept.
         let uses = [
@@ -944,20 +930,29 @@ mod tests {
             file_read_use("write-tests", None, now),
         ];
         let stats = skill_stats(&uses, &filter(&known_skills, &sources), now);
-        assert_eq!(stats[0].total, 2);
+        assert_eq!(stats[0].last_30_days, 2);
     }
 
     #[test]
-    fn by_harness_and_by_trigger_only_count_the_last_30_days() {
+    fn a_use_older_than_the_history_counts_nowhere_and_sets_no_last_used() {
         let known_skills = known(&["write-tests"]);
         let sources = DiscoverySources::default();
         let now = Utc::now();
         let recent = agent_use("write-tests", None, now);
         let mut old = agent_use("write-tests", None, now - chrono::Duration::days(31));
         old.session = None;
-        let uses = [recent, old];
+        let only_old = [old.clone()];
+        assert!(skill_stats(&only_old, &filter(&known_skills, &sources), now).is_empty());
+        assert!(
+            skill_heatmap(&only_old, &filter(&known_skills, &sources), now)
+                .days
+                .is_empty()
+        );
+        let uses = [recent.clone(), old];
         let stats = skill_stats(&uses, &filter(&known_skills, &sources), now);
-        assert_eq!(stats[0].total, 2);
+        assert_eq!(stats[0].last_30_days, 1);
+        assert_eq!(stats[0].last_used, Some(recent.at.to_rfc3339()));
+        assert_eq!(stats[0].by_day.len(), 1);
         assert_eq!(
             stats[0]
                 .by_harness_30_days
@@ -1021,7 +1016,6 @@ mod tests {
         ];
         let stats = skill_stats(&uses, &filter(&known_skills, &sources), now);
         assert_eq!(stats.len(), 1);
-        assert_eq!(stats[0].total, 3);
         assert_eq!(stats[0].last_30_days, 2);
         assert_eq!(stats[0].by_project_30_days.get("/proj-a"), Some(&1));
         assert_eq!(stats[0].by_project_30_days.get("/proj-b"), Some(&1));
@@ -1051,7 +1045,7 @@ mod tests {
         let mut different_trigger = same_hour_first.clone();
         different_trigger.trigger = SkillTrigger::User;
 
-        let too_old = agent_use("write-tests", None, now - chrono::Duration::days(366));
+        let too_old = agent_use("write-tests", None, now - chrono::Duration::days(31));
 
         let uses = [
             same_hour_first,
@@ -1085,7 +1079,7 @@ mod tests {
         assert_eq!(user_trigger.count, 1);
 
         let total: u32 = by_hour.iter().map(|b| b.count).sum();
-        assert_eq!(total, 4, "the 366-day-old use is excluded from by_hour");
+        assert_eq!(total, 4, "the 31-day-old use is excluded from by_hour");
     }
 
     #[test]
@@ -1097,12 +1091,12 @@ mod tests {
             agent_use("write-tests", None, now),
             agent_use("lint-code", None, now),
         ];
-        let heatmap = skill_heatmap(&uses, &filter(&known_skills, &sources), 30, now);
+        let heatmap = skill_heatmap(&uses, &filter(&known_skills, &sources), now);
         assert_eq!(heatmap.days.len(), 1);
         assert_eq!(*heatmap.days.values().next().unwrap(), 2);
 
         sources.set("claude-code", false);
-        let heatmap = skill_heatmap(&uses, &filter(&known_skills, &sources), 30, now);
+        let heatmap = skill_heatmap(&uses, &filter(&known_skills, &sources), now);
         assert!(heatmap.days.is_empty());
     }
 }

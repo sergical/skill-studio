@@ -969,7 +969,7 @@ async fn remove_then_restore_event_puts_the_copy_back() {
 /// with no input.
 /// The sub-agent log shares its parent's session id but records another load.
 /// Expectation: `gamma` has 2 recent uses by claude-code, and `manual-only`,
-/// never used, is the only name in `unused`.
+/// not used in the last 30 days, is the only name in `unused`.
 /// A failure here means an agent asking "what can I park?" gets the wrong
 /// list.
 #[tokio::test]
@@ -1051,7 +1051,7 @@ async fn skill_usage_counts_a_transcript_use_and_lists_the_unused_skill() {
             .as_array()
             .unwrap()
             .iter()
-            .all(|r| r["total_uses"] == 0),
+            .all(|r| r["recent_uses"] == 0),
         "{project_filtered}"
     );
     assert!(
@@ -1059,7 +1059,7 @@ async fn skill_usage_counts_a_transcript_use_and_lists_the_unused_skill() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|r| r["skill"] == "gamma" && r["total_uses"] == 2),
+            .any(|r| r["skill"] == "gamma" && r["recent_uses"] == 2),
         "{matched}"
     );
     assert!(
@@ -1067,7 +1067,7 @@ async fn skill_usage_counts_a_transcript_use_and_lists_the_unused_skill() {
             .as_array()
             .unwrap()
             .iter()
-            .all(|r| r["total_uses"] == 0),
+            .all(|r| r["recent_uses"] == 0),
         "{filtered}"
     );
 
@@ -1932,7 +1932,7 @@ async fn readonly_mcp_queries_use_selected_home_or_write_and_read_foreign_histor
         assert_eq!(result["status"], "ok", "{result}");
     }
     assert_eq!(
-        results[1]["data"]["rows"][0]["total_uses"], 0,
+        results[1]["data"]["rows"][0]["recent_uses"], 0,
         "{}",
         results[1]
     );

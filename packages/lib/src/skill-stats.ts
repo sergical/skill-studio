@@ -103,7 +103,14 @@ export function localDateKey(date: Date): string {
 }
 
 /**
- * One inclusive local calendar-date range of exactly 364 days ending on
+ * Days of agent history Skill Studio counts. Matches `HISTORY_DAYS` in
+ * `skill-studio-core`: Claude Code deletes transcripts after 30 days by
+ * default, so older days have no history to show.
+ */
+export const HISTORY_DAYS = 30;
+
+/**
+ * One inclusive local calendar-date range of `HISTORY_DAYS` days ending on
  * `now`'s local date, plus its "YYYY-MM-DD" day keys in order (oldest
  * first). Callers that need the heatmap's grid, header total, and
  * aria-label to agree on the exact same set of days should call this once
@@ -113,34 +120,21 @@ export function localDateKey(date: Date): string {
  */
 export function heatmapDateRangeLocal(now: Date): HeatmapDateRange {
   const dates: string[] = [];
-  for (let i = 363; i >= 0; i--) {
+  for (let i = HISTORY_DAYS - 1; i >= 0; i--) {
     dates.push(localDateKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - i)));
   }
   return { start: dates[0], end: dates[dates.length - 1], dates };
 }
 
 /**
- * Blank slots before `firstKey` in a heatmap whose first row is Monday, so a
- * range that starts on any other weekday doesn't misalign every day by that
- * many rows.
+ * Blank slots before `firstKey` in a calendar whose weeks start on Monday, so
+ * a range that starts on any other weekday lines up under its weekday.
  */
 export function mondayLead(firstKey: string): number {
   return (new Date(`${firstKey}T00:00:00`).getDay() + 6) % 7;
 }
 
-/** Number of Monday-aligned week columns a heatmap needs to fit `dates`. */
-export function weekColumns(dates: string[]): number {
+/** Number of Monday-first week rows a calendar needs to fit `dates`. */
+export function calendarWeeks(dates: string[]): number {
   return Math.ceil((mondayLead(dates[0]) + dates.length) / 7);
-}
-
-/**
- * The keys in the last `weeks` Monday-aligned week columns of `dates` (at
- * least one). A trimmed result always starts on a Monday.
- */
-export function recentWeeks(dates: string[], weeks: number): string[] {
-  if (dates.length === 0) return dates;
-  const lead = mondayLead(dates[0]);
-  const total = weekColumns(dates);
-  if (weeks >= total) return dates;
-  return dates.slice((total - Math.max(1, weeks)) * 7 - lead);
 }

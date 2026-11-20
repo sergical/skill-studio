@@ -247,9 +247,9 @@ pub struct LibraryRequest {
     pub modes:
         std::collections::BTreeMap<String, skill_studio_core::ops_invocation::InvocationMode>,
 
-    /// Rolling window in days; defaults to 30.
+    /// Rolling window in days, 30 at most; defaults to 30.
     pub days: Option<u32>,
-    /// Inclusive start (YYYY-MM-DD or RFC 3339).
+    /// Inclusive start (YYYY-MM-DD or RFC 3339), 30 days ago at the earliest.
     pub since: Option<String>,
     /// Exclusive end (YYYY-MM-DD or RFC 3339).
     pub until: Option<String>,
@@ -282,9 +282,10 @@ pub struct SkillUsageRequest {
     pub harness: Option<String>,
     /// Keep uses with this recorded project path only.
     pub project: Option<std::path::PathBuf>,
-    /// How many days back to count uses. Default 30.
+    /// How many days back to count uses, 30 at most. Default 30.
     pub days: Option<u32>,
-    /// Count uses from this date (YYYY-MM-DD or RFC 3339) instead of `days`.
+    /// Count uses from this date (YYYY-MM-DD or RFC 3339) instead of `days`,
+    /// 30 days ago at the earliest.
     pub since: Option<String>,
     /// Count uses before this date (YYYY-MM-DD or RFC 3339).
     pub until: Option<String>,
@@ -893,7 +894,7 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "History detail by harness, project and trigger, with window and all-time use counts. Use library for a per-skill answer that also includes agents, modes, sources and copies.\nUses = loads in the window, once per session; a sub-agent log is its own session; resumed or forked session copies and names no longer in the library do not count.",
+        description = "History detail by harness, project and trigger over the last 30 days: window use counts and the last use. Use library for a per-skill answer that also includes agents, modes, sources and copies.\nUses = loads in the window, once per session; a sub-agent log is its own session; resumed or forked session copies and names no longer in the library do not count.",
         annotations(read_only_hint = true)
     )]
     async fn skill_usage(
@@ -924,9 +925,11 @@ impl SkillStudioServer {
                     until: bound(&req.until)?,
                     top: req.top,
                 };
-                filter.check_window(chrono::Utc::now()).map_err(|message| {
-                    CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
-                })?;
+                filter
+                    .check_window(days, chrono::Utc::now())
+                    .map_err(|message| {
+                        CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
+                    })?;
                 let inventory = ops::scan_for_usage(rt, ctx)?;
                 let mut usage = self.usage.lock().unwrap_or_else(PoisonError::into_inner);
                 let usage = usage.get_or_insert_with(|| {

@@ -79,7 +79,7 @@ impl From<AddMethod> for InstallMethod {
 const QUESTIONS: &str = "\
 Common questions:
   Which library skills did I load most, and where did they come from?
-      skill-studio library --since 2026-10-01 --until 2026-11-16 --sort uses --top 10 --json
+      skill-studio library --days 7 --sort uses --top 10 --json
   Library uses = loads in the window, once per session; a sub-agent log is its own session; resumed or forked session copies and names no longer in the library do not count.
   Fields: count = matching rows after scope and filters, before --top; name = skill; library = shared folder; agents = loads by agent; source null = not installed from a repo; modes = manual/auto; copies = link/same/old/changed.
   Which skills are installed outside my library too?
@@ -209,10 +209,10 @@ enum Command {
 
         #[command(flatten)]
         scope: ScopeArgs,
-        /// How many days back to count uses.
+        /// How many days back to count uses, 30 at most.
         #[arg(long, default_value_t = skill_studio_host::DEFAULT_USAGE_DAYS)]
         days: u32,
-        /// Count uses from this date (YYYY-MM-DD or RFC 3339).
+        /// Count uses from this date (YYYY-MM-DD or RFC 3339), 30 days ago at the earliest.
         #[arg(long, value_parser = skill_studio_host::parse_usage_time)]
         since: Option<chrono::DateTime<chrono::Utc>>,
         /// Count uses before this date (YYYY-MM-DD or RFC 3339).
@@ -245,7 +245,7 @@ enum Command {
         #[command(subcommand)]
         action: RecoveryCommand,
     },
-    /// Show which skills your agents used, and which they never used.
+    /// Show which skills your agents used in the last 30 days, and which they did not.
     ///
     /// Uses = loads in the window, once per session; a sub-agent log is its own session; resumed or forked session copies and names no longer in the library do not count.
     Usage {
@@ -254,10 +254,11 @@ enum Command {
         harness: Option<String>,
         #[command(flatten)]
         scope: ScopeArgs,
-        /// How many days back to count uses.
+        /// How many days back to count uses, 30 at most.
         #[arg(long, default_value_t = skill_studio_host::DEFAULT_USAGE_DAYS)]
         days: u32,
-        /// Count uses from this date (YYYY-MM-DD or RFC 3339) instead of --days.
+        /// Count uses from this date (YYYY-MM-DD or RFC 3339) instead of --days,
+        /// 30 days ago at the earliest.
         #[arg(long, value_parser = skill_studio_host::parse_usage_time)]
         since: Option<chrono::DateTime<chrono::Utc>>,
         /// Count uses before this date (YYYY-MM-DD or RFC 3339).
@@ -2490,7 +2491,7 @@ fn run_usage(
     )];
     let scan_start = clock.monotonic();
     let result = filter
-        .check_window(chrono::Utc::now())
+        .check_window(days, chrono::Utc::now())
         .map_err(|message| {
             skill_studio_core::CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
         })

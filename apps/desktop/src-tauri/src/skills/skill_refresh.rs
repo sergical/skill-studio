@@ -1241,7 +1241,7 @@ pub(crate) fn rebuild_invocations_at(
         sources: &sources,
     };
     let invocations = invocation_index.stats_at(now, &filter);
-    let heatmap = invocation_index.heatmap_at(365, now, &filter);
+    let heatmap = invocation_index.heatmap_at(now, &filter);
     drop(invocation_index);
 
     if report.incomplete {
@@ -2566,7 +2566,7 @@ fn build_snapshot_releasing(
         };
         (
             index.stats_at(now, &filter),
-            index.heatmap_at(365, now, &filter),
+            index.heatmap_at(now, &filter),
             report,
         )
     } else {

@@ -178,6 +178,17 @@ does not rescan when they change (`harness::is_plugin_cache_bookkeeping`).
 
 ### Skill uses
 
+Skill Studio counts only the last 30 days of history (`HISTORY_DAYS` in
+`crates/skill-studio-core/src/skill_uses.rs`, mirrored in
+`packages/lib/src/skill-stats.ts`). Claude Code deletes its transcripts after
+30 days by default (`cleanupPeriodDays`), so older history is missing for most
+people, and agents keep their logs for different times. Every count, last
+use, heatmap day and window uses this one horizon. A use older than 30 days
+counts nowhere. A resumed session still counts once, at its first load: the
+session dedupe runs before the history cut. CLI `usage` and `library` and MCP
+`skill_usage` and `library` refuse `days` above 30 and a `since` before the
+first day of the history with `invalid_request`.
+
 Each skill use has one of three triggers. The names follow Grok Build's own
 telemetry (`SkillTrigger` in xai-org/grok-build
 `crates/codegen/xai-grok-telemetry/src/events/skills.rs`):
@@ -206,7 +217,7 @@ Claude Code adds an `isMeta` user message that starts with
 `Base directory for this skill:` after both the typed command and the `Skill`
 call. It is part of the same use; do not count it again.
 
-CLI `usage` and MCP `skill_usage` report `recent_uses` for the requested window and windowed `triggers`, plus `total_uses` and `last_used` across selected history. These reports count each installed skill once per session, after applying the window; the desktop keeps its separate event and file-read counting rules. Usage rows do not expose a separate session count. The review-date report keeps its standalone distinct `(harness, session identity)` count for the last 30 days. Transcript logs without a native session id use their file path as the identity; sub-agent logs have their own identity. The normalized `use_session` identity is shared with the review-date count. The native `session` remains unchanged for desktop counts. Database records without a session identity do not add a review-date session. Trigger keys are `user`, `agent`, `file_read`, and `unknown`; `unknown` is zero because readers require direct evidence. A mention of a skill is not evidence of use. The table above states which signals each reader accepts. In particular, pi has no agent skill tool, and Cursor supplies only file reads, with file mtime as the use time.
+CLI `usage` and MCP `skill_usage` report `recent_uses` for the requested window and windowed `triggers`, plus `last_used` across the 30-day history. These reports count each installed skill once per session, after applying the window; the desktop keeps its separate event and file-read counting rules. Usage rows do not expose a separate session count. The review-date report keeps its standalone distinct `(harness, session identity)` count for the last 30 days. Transcript logs without a native session id use their file path as the identity; sub-agent logs have their own identity. The normalized `use_session` identity is shared with the review-date count. The native `session` remains unchanged for desktop counts. Database records without a session identity do not add a review-date session. Trigger keys are `user`, `agent`, `file_read`, and `unknown`; `unknown` is zero because readers require direct evidence. A mention of a skill is not evidence of use. The table above states which signals each reader accepts. In particular, pi has no agent skill tool, and Cursor supplies only file reads, with file mtime as the use time.
 
 Codex history includes streaming reads of `.jsonl.zst` files in both `sessions`
 and `archived_sessions`. `$CODEX_HOME` moves both the reader and its live watch.

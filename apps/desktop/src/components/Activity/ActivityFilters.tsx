@@ -16,8 +16,8 @@ import {
   heatmapDateRangeLocal,
   TRIGGERS,
   triggerLabel,
-  yearByHarness,
-  yearByTrigger,
+  historyByHarness,
+  historyByTrigger,
 } from "@skill-studio/lib";
 import type {
   AgentId,
@@ -85,7 +85,7 @@ export function useActivityLens(stats: SkillInvocationStats[], now: Date) {
 
   const dates = heatmapDateRangeLocal(now).dates;
   const days = dayTotals(stats, filter);
-  const yearTotal = Object.values(days).reduce((a, b) => a + b, 0);
+  const historyTotal = Object.values(days).reduce((a, b) => a + b, 0);
 
   return {
     harness,
@@ -96,7 +96,7 @@ export function useActivityLens(stats: SkillInvocationStats[], now: Date) {
     filter,
     dates,
     days,
-    yearTotal,
+    historyTotal,
     enabledHarnesses,
   };
 }
@@ -120,8 +120,8 @@ export function ActivityFilters({
   const harnesses = enabledHarnesses
     ? USAGE_READER_HARNESSES.filter((id) => enabledHarnesses.has(id))
     : [];
-  const harnessCounts = yearByHarness(stats, trigger);
-  const triggerCounts = yearByTrigger(stats, harness);
+  const harnessCounts = historyByHarness(stats, trigger);
+  const triggerCounts = historyByTrigger(stats, harness);
   const harnessTotal = Object.values(harnessCounts).reduce((a: number, b) => a + (b ?? 0), 0);
   const triggerTotal = Object.values(triggerCounts).reduce((a: number, b) => a + (b ?? 0), 0);
   const showClear = harness !== "all" || trigger !== "all";
