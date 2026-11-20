@@ -468,6 +468,55 @@ root, then the repository trust root. Untrusted project layers do not apply.
 The active model supplies the context size; `model_context_window`
 can override it.
 
+Checked again on 2026-11-20 against the Codex 0.170.0 source (`ext/skills/src/render.rs`,
+`host_aliases.rs`, `aliases.rs`, `catalog_prompt.rs`, `skills/src/parser.rs`) and
+the `### Available skills` block of real sessions:
+
+- **Reading a skill.** Codex parses the frontmatter as YAML. On an error it
+  quotes each plain `key: value` line whose value holds `: ` and parses again
+  (`repair_frontmatter_scalar_fields`). Any other error, such as a repeated
+  `metadata:` key, drops the skill. Whitespace runs in `name` and
+  `description` become one space. Codex ignores `disable-model-invocation`:
+  only `policy.allow_implicit_invocation: false` in `agents/openai.yaml` hides
+  a skill, so a skill that Claude Code keeps manual-only can still be listed
+  by Codex. `listing` flags this as `invocation_mismatch`.
+- **Names and order.** Plugin skills are `plugin:name`. The list is in catalog
+  order: system skills (`$CODEX_HOME/skills/.system`), then repository skills,
+  then user skills, each by name, then path. The `description` is used, not
+  `metadata.short-description`.
+- **Short paths.** Each line ends in `(file: <path>)`. Codex renders the list
+  once with absolute paths and once with `rN/...` aliases plus a
+  `### Skill roots` table, and keeps the one that lists more skills, then cuts
+  fewer description characters, then costs less. The table costs the token
+  difference between the aliased and the absolute `## Skills` header. A plugin
+  version with one skill shares its `plugins/cache/<marketplace>` folder as
+  its root.
+- **Tiers.** All lines fit: every description is whole. Otherwise, if every
+  name-and-path line fits, every skill stays and the rest of the budget goes
+  round robin, one character at a time, so descriptions end up about the same
+  length. Otherwise there are no descriptions, lines are kept in order while
+  they fit, and a `- N additional skills omitted ...` line is added; listed
+  lines are dropped from the end until it fits. A line costs
+  `ceil(bytes / 4)` tokens with its newline.
+- **Budget.** The session model's window decides the budget: T3 Code sessions
+  on `gpt-6.1-sol` (500,000 tokens) get 10,000 tokens, while the configured
+  `gpt-6-astra` gets 5,440. Skill Studio predicts for the configured model.
+- **What Skill Studio adds from a session.** The newest rollout outside a
+  temporary folder gives the entries Skill Studio does not scan (system
+  skills, skills in nested folders such as `~/.agents/skills/synced/<id>/`),
+  with their descriptions read from their `SKILL.md`. It also gives the alias
+  order, and it tells which plugins Codex loaded: an installed plugin with no
+  skill in that session is hidden as "plugin not loaded" (`codex exec` does not
+  load the `openai-primary-runtime` plugins, while the T3 Code app does).
+  `--codex-session <rollout>` compares with one chosen session instead.
+- **Match rate.** Replaying 15 real sessions with `--codex-session` at their
+  model's budget listed 2,771 of 2,771 recorded entries, in the same order and
+  tier, and gave the exact description length for 2,711 (97.8%); every miss is
+  one to four characters. On 16
+  `codex exec` eval sessions (default budget and `max_context_tokens = 10000`)
+  it was 2,848 of 2,848 listed and 2,736 (96.1%) exact; most misses are
+  google-drive skills that changed version after those runs.
+
 Skill Studio estimates name, capped description, punctuation, and Codex's file
 locator in UTF-16 characters, or UTF-8 bytes for Codex, divided by four,
 rounded up. This is a planning

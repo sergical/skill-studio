@@ -1101,7 +1101,7 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Show which skills each harness lists for the model with a description, with a name only, truncated, omitted, or hidden. Optional inputs predict a different Claude Code skillListingBudgetFraction, context window, or Codex skills.max_context_tokens. This writes nothing.",
+        description = "Show which skills each harness lists for the model with a description, with a name only, truncated, omitted, or hidden. For Codex, `thresholds` gives the tier (all described, descriptions shortened, names only), the full and names-only costs, and how far the budget is from the next tier; `invocation_mismatch` flags skills Claude Code keeps manual-only that Codex still lists. Optional inputs predict a different Claude Code skillListingBudgetFraction, context window, or Codex skills.max_context_tokens, or compare with one Claude Code transcript or Codex rollout. This writes nothing.",
         annotations(read_only_hint = true)
     )]
     async fn listing(

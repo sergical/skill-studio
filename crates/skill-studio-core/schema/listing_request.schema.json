@@ -45,6 +45,15 @@
         "null"
       ],
       "x-untrusted": true
+    },
+    "codex_transcript": {
+      "description": "Compare Codex with this session rollout (`.codex/sessions/**/rollout-*.jsonl`)\ninstead of the newest one. Its listing also decides which plugins\nCodex loaded and the alias order.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-untrusted": true
     }
   }
 }

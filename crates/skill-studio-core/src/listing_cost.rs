@@ -1,5 +1,5 @@
 //! Estimated model-visible skill listing cost, before budget reduction.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use schemars::JsonSchema;
@@ -391,6 +391,132 @@ pub(crate) fn codex_listing_settings(
     Ok(out)
 }
 
+/// Name and description the way Codex 0.170.0 reads a `SKILL.md`
+/// (`codex-rs/skills/src/parser.rs`): YAML; on an error, values with a
+/// `: ` in them are quoted line by line and the YAML is read again; any
+/// other error (a duplicate key) rejects the skill. Whitespace runs become
+/// one space. `None` when Codex rejects the file.
+pub(crate) fn codex_frontmatter(contents: &str) -> Option<(Option<String>, String)> {
+    let mut lines = contents.lines();
+    if lines.next()?.trim() != "---" {
+        return None;
+    }
+    let mut body = Vec::new();
+    let mut closed = false;
+    for line in lines {
+        if line.trim() == "---" {
+            closed = true;
+            break;
+        }
+        body.push(line);
+    }
+    if body.is_empty() || !closed {
+        return None;
+    }
+    let text = body.join("\n");
+    // serde_yaml, which Codex uses, refuses a repeated top-level key.
+    let mut keys = BTreeSet::new();
+    for line in &body {
+        if let Some((key, _)) = line.split_once(':') {
+            if !key.is_empty()
+                && !key.starts_with([' ', '\t', '#', '-'])
+                && !keys.insert(key.trim())
+            {
+                return None;
+            }
+        }
+    }
+    let value: serde_json::Value = crate::yaml::from_str(&text)
+        .ok()
+        .or_else(|| crate::yaml::from_str(&codex_repair_scalars(&body)?).ok())?;
+    let one_line = |v: &serde_json::Value| {
+        v.as_str()
+            .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
+    };
+    let description = value
+        .get("description")
+        .and_then(one_line)
+        .unwrap_or_default();
+    let name = value
+        .get("name")
+        .and_then(one_line)
+        .filter(|n| !n.is_empty());
+    Some((name, description))
+}
+
+/// `repair_frontmatter_scalar_fields`: quotes each plain `key: value` whose
+/// value holds `: `. `None` when nothing changed.
+fn codex_repair_scalars(lines: &[&str]) -> Option<String> {
+    let mut changed = false;
+    let mut block_indent: Option<usize> = None;
+    let mut out = Vec::new();
+    for line in lines {
+        let indent = line.chars().take_while(|c| *c == ' ').count();
+        if let Some(block) = block_indent {
+            if line.trim().is_empty() || indent > block {
+                out.push((*line).to_string());
+                continue;
+            }
+            block_indent = None;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            out.push((*line).to_string());
+            continue;
+        };
+        if key.trim().is_empty() || !value.chars().next().is_none_or(char::is_whitespace) {
+            out.push((*line).to_string());
+            continue;
+        }
+        let trimmed = value.trim_start();
+        let lead = &value[..value.len() - trimmed.len()];
+        let mut scalar = trimmed;
+        let mut comment = "";
+        for (i, c) in trimmed.char_indices() {
+            if c == '#'
+                && (i == 0
+                    || trimmed[..i]
+                        .chars()
+                        .next_back()
+                        .is_some_and(char::is_whitespace))
+            {
+                let end = trimmed[..i].trim_end().len();
+                scalar = &trimmed[..end];
+                comment = &trimmed[end..];
+                break;
+            }
+        }
+        let scalar = scalar.trim_end();
+        let Some(first) = scalar.chars().next() else {
+            out.push((*line).to_string());
+            continue;
+        };
+        if matches!(first, '|' | '>') {
+            block_indent = Some(indent);
+            out.push((*line).to_string());
+            continue;
+        }
+        if matches!(first, '\'' | '"') {
+            out.push((*line).to_string());
+            continue;
+        }
+        let colon = scalar
+            .char_indices()
+            .any(|(i, c)| c == ':' && scalar[i + 1..].starts_with(char::is_whitespace));
+        let flow_like = matches!(first, '[' | '{' | '@' | '`')
+            && crate::yaml::from_str::<serde_json::Value>(scalar).is_err();
+        if !colon && !flow_like {
+            out.push((*line).to_string());
+            continue;
+        }
+        out.push(format!(
+            "{key}:{lead}'{}'{comment}",
+            scalar.replace('\'', "''")
+        ));
+        changed = true;
+    }
+    changed.then(|| out.join("\n"))
+}
+
 /// One model-visible skill entry, or a skill the harness hides.
 #[derive(Debug, Clone)]
 pub(crate) struct ListedSkill {
@@ -408,6 +534,9 @@ pub(crate) struct ListedSkill {
     pub project_root: bool,
     /// Why the harness does not list it, or `None` when it does.
     pub hidden: Option<&'static str>,
+    /// Manual-only in Claude Code (`disable-model-invocation`), read for
+    /// other harnesses to flag one that still lists it.
+    pub claude_manual: bool,
 }
 
 /// Every deployment `facts` reads in `scope`, keyed by the harness's
@@ -438,16 +567,35 @@ pub(crate) fn listed_skills(
                 if !visible && deployment.root.kind != RootKind::Parked {
                     continue;
                 }
-                let field = |key: &str| match &deployment.frontmatter {
-                    Some(f) => match key {
-                        "name" => f.name.clone(),
-                        _ => f.description.clone(),
-                    },
-                    // Codex rejects a document that is not valid YAML;
-                    // Claude Code and others still read its plain lines.
-                    None if harness == AgentId::CODEX => None,
-                    None => deployment.frontmatter_fields.get(key).cloned(),
+                // Codex reads the file its own way; see `codex_frontmatter`.
+                let codex = if harness == AgentId::CODEX {
+                    Some(
+                        read(rt, &deployment.path.join("SKILL.md"))
+                            .ok()
+                            .flatten()
+                            .and_then(|b| codex_frontmatter(&String::from_utf8_lossy(&b))),
+                    )
+                } else {
+                    None
                 };
+                let field =
+                    |key: &str| match &deployment.frontmatter {
+                        _ if codex.is_some() => codex.as_ref().and_then(|c| c.as_ref()).and_then(
+                            |(name, description)| match key {
+                                "name" => name.clone(),
+                                _ => Some(description.clone()),
+                            },
+                        ),
+                        Some(f) => match key {
+                            "name" => f.name.clone(),
+                            _ => f.description.clone(),
+                        },
+                        // Frontmatter that is not valid YAML (a description
+                        // with `: ` in it): every agent still reads its plain
+                        // lines. Codex 0.170.0 lists such a skill (checked
+                        // against recorded sessions on 2026-11-20).
+                        None => deployment.frontmatter_fields.get(key).cloned(),
+                    };
                 let name = field("name").unwrap_or_else(|| skill.name.0.clone());
                 let key = if matches!(harness, AgentId::CODEX | AgentId::CLAUDE_CODE) {
                     rt.ports
@@ -472,6 +620,8 @@ pub(crate) fn listed_skills(
                     path: deployment.path.clone(),
                     project_root: *selected_scope != RootScope::Global,
                     hidden: None,
+                    claude_manual: harness != AgentId::CLAUDE_CODE
+                        && manual_only(rt, deployment, AgentId::CLAUDE_CODE)?,
                 };
                 let filtered = if deployment.root.kind == RootKind::Parked {
                     // A parked copy is listed only when the harness reads it.
@@ -512,6 +662,13 @@ pub(crate) fn listed_skills(
                             ..entry
                         },
                     );
+                    continue;
+                }
+                if codex.as_ref().is_some_and(Option::is_none) {
+                    entries.entry(key).or_insert(ListedSkill {
+                        hidden: Some("frontmatter Codex cannot read"),
+                        ..entry
+                    });
                     continue;
                 }
                 if harness == AgentId::CODEX && entry.description.trim().is_empty() {

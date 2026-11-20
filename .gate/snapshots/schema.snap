@@ -4596,6 +4596,17 @@
             ],
             "description": "The setting that controls the budget."
           },
+          "thresholds": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ListingThresholds"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The costs that decide which tier the listing is in, when the\nharness has tiers (Codex)."
+          },
           "uses_default_context_window": {
             "description": "True when no model or context size was found.",
             "type": "boolean"
@@ -4630,6 +4641,13 @@
               "null"
             ]
           },
+          "invocation_mismatch": {
+            "description": "Set when another agent's invocation setting disagrees with this one,\nsuch as a skill Claude Code keeps manual-only that Codex still lists.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "name": {
             "description": "Name as the harness lists it. Claude Code prefixes plugin skills.",
             "type": "string",
@@ -4645,6 +4663,15 @@
               }
             ],
             "description": "State in the last recorded session, when one was found."
+          },
+          "observed_description_chars": {
+            "description": "Description characters in the last recorded session, when one was\nfound and the harness records them (Codex).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "path": {
             "description": "Deployment folder. Null for entries known only from a session.",
@@ -4753,6 +4780,88 @@
           {
             "const": "hidden",
             "description": "Not listed: manual-only, off, parked, or rejected.",
+            "type": "string"
+          }
+        ]
+      },
+      "ListingThresholds": {
+        "description": "The listing costs, in the listing's `budget_unit`.",
+        "properties": {
+          "average_description_chars": {
+            "description": "Average description characters each listed skill keeps.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "average_line_cost": {
+            "description": "Average cost of one more name-and-path line.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cap": {
+            "description": "The highest budget the setting accepts.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "full_cost": {
+            "description": "Cost with every description whole.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "names_only_cost": {
+            "description": "Cost with names and paths only.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "roots_table_cost": {
+            "description": "Cost of the skill roots table that short paths need; included in\nboth costs above.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "summary": {
+            "description": "The tier and the distance to the next one, in plain words.",
+            "type": "string"
+          },
+          "tier": {
+            "$ref": "#/$defs/ListingTier",
+            "description": "The tier the budget puts the listing in."
+          }
+        },
+        "required": [
+          "tier",
+          "full_cost",
+          "names_only_cost",
+          "roots_table_cost",
+          "average_line_cost",
+          "average_description_chars",
+          "summary"
+        ],
+        "type": "object"
+      },
+      "ListingTier": {
+        "description": "Which of Codex's three listing forms applies.",
+        "oneOf": [
+          {
+            "const": "all_described",
+            "description": "Every description is whole.",
+            "type": "string"
+          },
+          {
+            "const": "descriptions_shortened",
+            "description": "Every skill is listed; descriptions are cut to about the same length.",
+            "type": "string"
+          },
+          {
+            "const": "names_only",
+            "description": "No descriptions; skills past the budget are left out.",
             "type": "string"
           }
         ]
@@ -4896,6 +5005,15 @@
           "integer",
           "null"
         ]
+      },
+      "codex_transcript": {
+        "default": null,
+        "description": "Compare Codex with this session rollout (`.codex/sessions/**/rollout-*.jsonl`)\ninstead of the newest one. Its listing also decides which plugins\nCodex loaded and the alias order.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "x-untrusted": true
       },
       "project_path": {
         "description": "Also report this project. It must be in the runtime scope.",

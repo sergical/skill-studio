@@ -28,6 +28,8 @@ function entries(snapshot: SkillSnapshot, budget: number): ListingEntry[] {
       usage_score: 0,
       observed: hidden ? "hidden" : fits ? "described" : "name_only",
       scanned: true,
+      observed_description_chars: null,
+      invocation_mismatch: null,
     };
   });
 }
@@ -61,6 +63,20 @@ function row(
           }
         : null,
     observed_session: null,
+    thresholds:
+      harness === "codex"
+        ? {
+            tier: "descriptions_shortened",
+            full_cost: 22042,
+            names_only_cost: 3214,
+            roots_table_cost: 212,
+            average_line_cost: 17,
+            average_description_chars: 48,
+            cap: 10000,
+            summary:
+              "Every skill is listed, and descriptions are cut to about 48 characters. 16602 more tokens would keep every description whole. 2226 tokens are left before Codex drops all descriptions, about 130 more skills. The setting is capped at 10000 tokens.",
+          }
+        : null,
     entries: list,
   };
 }

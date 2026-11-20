@@ -33,3 +33,16 @@ test("a larger budget marks the skills that gain a description and gives the set
   await expect(setting).toContainText('"skillListingBudgetFraction": 0.02');
   await expect(setting).toContainText("chezmoi apply");
 });
+
+test("the Codex listing gives the tier and how far the budget is from the next one", async ({
+  page,
+}) => {
+  await page.getByRole("combobox", { name: "Agent" }).click();
+  await page.getByRole("option", { name: "Codex" }).click();
+  await expect(
+    page.getByText(/names and paths only 3,214 \(skill roots table 212\)\. Every skill is listed/),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/2226 tokens are left before Codex drops all descriptions/),
+  ).toBeVisible();
+});

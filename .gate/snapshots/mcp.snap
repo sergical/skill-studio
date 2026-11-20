@@ -1079,6 +1079,15 @@
             "null"
           ]
         },
+        "codex_transcript": {
+          "default": null,
+          "description": "Compare Codex with this session rollout (`.codex/sessions/**/rollout-*.jsonl`)\ninstead of the newest one. Its listing also decides which plugins\nCodex loaded and the alias order.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true
+        },
         "count_by": {
           "default": null,
           "description": "Count the rows of the whole main list by this field. A list field\ncounts each item.",

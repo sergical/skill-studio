@@ -99,6 +99,17 @@
             }
           ]
         },
+        "thresholds": {
+          "description": "The costs that decide which tier the listing is in, when the\nharness has tiers (Codex).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ListingThresholds"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "entries": {
           "description": "Entries in listing order; hidden entries last.",
           "type": "array",
@@ -248,6 +259,88 @@
         "described"
       ]
     },
+    "ListingThresholds": {
+      "description": "The listing costs, in the listing's `budget_unit`.",
+      "type": "object",
+      "properties": {
+        "tier": {
+          "description": "The tier the budget puts the listing in.",
+          "$ref": "#/$defs/ListingTier"
+        },
+        "full_cost": {
+          "description": "Cost with every description whole.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "names_only_cost": {
+          "description": "Cost with names and paths only.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "roots_table_cost": {
+          "description": "Cost of the skill roots table that short paths need; included in\nboth costs above.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "average_line_cost": {
+          "description": "Average cost of one more name-and-path line.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "average_description_chars": {
+          "description": "Average description characters each listed skill keeps.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cap": {
+          "description": "The highest budget the setting accepts.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "summary": {
+          "description": "The tier and the distance to the next one, in plain words.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tier",
+        "full_cost",
+        "names_only_cost",
+        "roots_table_cost",
+        "average_line_cost",
+        "average_description_chars",
+        "summary"
+      ]
+    },
+    "ListingTier": {
+      "description": "Which of Codex's three listing forms applies.",
+      "oneOf": [
+        {
+          "description": "Every description is whole.",
+          "type": "string",
+          "const": "all_described"
+        },
+        {
+          "description": "Every skill is listed; descriptions are cut to about the same length.",
+          "type": "string",
+          "const": "descriptions_shortened"
+        },
+        {
+          "description": "No descriptions; skills past the budget are left out.",
+          "type": "string",
+          "const": "names_only"
+        }
+      ]
+    },
     "ListingEntry": {
       "description": "One skill in one harness listing.",
       "type": "object",
@@ -310,6 +403,22 @@
         "scanned": {
           "description": "False for entries Skill Studio does not scan, such as bundled skills.",
           "type": "boolean"
+        },
+        "observed_description_chars": {
+          "description": "Description characters in the last recorded session, when one was\nfound and the harness records them (Codex).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "invocation_mismatch": {
+          "description": "Set when another agent's invocation setting disagrees with this one,\nsuch as a skill Claude Code keeps manual-only that Codex still lists.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
