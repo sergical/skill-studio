@@ -586,7 +586,8 @@ fn newest_change_ms(dir: &Path) -> u64 {
 /// Given a home whose files were written just now, when the app scans with
 /// a [`ScanMemo`], it keeps nothing until 2 s after the newest change in a
 /// folder, then reuses the kept result for less than 10 minutes, and reads
-/// the folder again at 10 minutes or when the clock is set back. (The
+/// the folder again at 10 minutes or when the clock is set back below a
+/// time it saw. (The
 /// `linked` skill holds a link to a missing file and is read on every
 /// scan.) Fails if either limit moves, or if a kept result outlives them.
 #[test]
@@ -631,12 +632,24 @@ fn a_scan_memo_waits_two_seconds_before_it_keeps_and_reads_again_after_ten_minut
     );
     assert_eq!(reads(&rt), 1);
 
-    let set_back = Arc::new(FakeClock::at(changed + 3_000));
+    // The last store was at `changed + 2_001 + 10 min`. Use the result 9
+    // minutes later, then set the clock back 8 minutes: its age reads as 1
+    // minute, but the memo saw a later time, so it reads again.
+    clock.advance(ms(9 * 60 * 1_000));
+    assert_eq!(reads(&rt), 1);
+    let behind = Arc::new(FakeClock::at(changed + 2_001 + 19 * 60 * 1_000 - 1_000));
+    let rt_behind = memo_runtime_at(&home, &[], counting_fs.clone(), behind, memo.clone());
+    assert_eq!(
+        reads(&rt_behind),
+        1,
+        "a scan whose clock reads 1 s behind another's must still use the memo"
+    );
+    let set_back = Arc::new(FakeClock::at(changed + 2_001 + 11 * 60 * 1_000));
     let rt_set_back = memo_runtime_at(&home, &[], counting_fs.clone(), set_back, memo);
     assert_eq!(
         reads(&rt_set_back),
         2,
-        "a result kept at a later time than the clock must be read again"
+        "a clock set back below a time the memo saw must end every kept result"
     );
 
     std::fs::remove_dir_all(&home).ok();

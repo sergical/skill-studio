@@ -18,10 +18,15 @@
 //! A stamp cannot see everything: a folder swapped for another and back
 //! while its facts were read (A, then B, then A again) leaves the stamp the
 //! same, and some network filesystems report times that do not change. So a
-//! kept result is used for at most [`MAX_AGE`]; after that the folder is
-//! read in full again. A wall clock set back also ends the use of every
-//! result kept at a later time. This bounds any wrong result the stamp
-//! misses.
+//! kept result is used only while the clock reads less than [`MAX_AGE`]
+//! after the time it was kept; after that the folder is read in full again.
+//! A clock set back more than [`SET_BACK_SLACK`] below the latest time the
+//! memo has seen empties the memo. So, measured in clock readings, a result
+//! is used for less than `MAX_AGE + SET_BACK_SLACK` after it was kept: the
+//! latest time the memo saw minus the time it was kept. (A clock that keeps
+//! moving back and forth inside that range can extend the real elapsed
+//! time; only a clock under someone's control does that.) This bounds any
+//! wrong result the stamp misses.
 //!
 //! Only a long-lived host gains from this (the desktop app). The host puts
 //! one memo in [`crate::ports::Ports::scan_memo`]; `None` scans as before.
@@ -46,6 +51,13 @@ const RACY_WINDOW: chrono::Duration = chrono::Duration::seconds(2);
 /// How long a kept result is used before the folder is read again.
 const MAX_AGE: chrono::Duration = chrono::Duration::minutes(10);
 
+/// How far `now` may fall below the latest time the memo saw before it
+/// counts as a clock set back. Two scans on two threads each read the
+/// clock for each folder, so their times interleave a little out of order;
+/// that must not empty the memo. A kept result is so used for at most
+/// [`MAX_AGE`] plus this slack.
+const SET_BACK_SLACK: chrono::Duration = chrono::Duration::seconds(5);
+
 /// Entries one stamp may hold. A larger folder is not kept: the scan reads
 /// it in full each time, as it did before the memo.
 const MAX_STAMP_ENTRIES: usize = 4_096;
@@ -58,7 +70,29 @@ const MAX_FOLDERS: usize = 20_000;
 /// path. See the module docs.
 #[derive(Default)]
 pub struct ScanMemo {
-    folders: Mutex<HashMap<PathBuf, KeptFolder>>,
+    kept: Mutex<Kept>,
+}
+
+#[derive(Default)]
+struct Kept {
+    folders: HashMap<PathBuf, KeptFolder>,
+    /// The latest `now` a lookup or store has seen.
+    latest_now: Option<DateTime<Utc>>,
+}
+
+impl Kept {
+    /// Notes `now`, and empties the memo when `now` is more than
+    /// [`SET_BACK_SLACK`] earlier than a time it saw before (a clock set
+    /// back).
+    fn observe(&mut self, now: DateTime<Utc>) {
+        if self
+            .latest_now
+            .is_some_and(|latest| now < latest - SET_BACK_SLACK)
+        {
+            self.folders.clear();
+        }
+        self.latest_now = self.latest_now.max(Some(now));
+    }
 }
 
 struct KeptFolder {
@@ -75,8 +109,7 @@ impl ScanMemo {
     }
 
     /// The kept result for `dir` read as skill `name`, when its stamp is
-    /// `stamp` and it was kept less than [`MAX_AGE`] before `now`, and not
-    /// after `now` (a clock set back).
+    /// `stamp` and it was kept less than [`MAX_AGE`] before `now`.
     pub(crate) fn get(
         &self,
         dir: &Path,
@@ -84,14 +117,11 @@ impl ScanMemo {
         stamp: &[u8],
         now: DateTime<Utc>,
     ) -> Option<CachedSkillRead> {
-        let folders = self.folders.lock().ok()?;
-        let kept = folders.get(dir)?;
-        let age = now - kept.kept_at;
-        (kept.name == name
-            && kept.stamp == stamp
-            && age >= chrono::Duration::zero()
-            && age < MAX_AGE)
-            .then(|| kept.read.clone())
+        let mut kept = self.kept.lock().ok()?;
+        kept.observe(now);
+        let folder = kept.folders.get(dir)?;
+        (folder.name == name && folder.stamp == stamp && now - folder.kept_at < MAX_AGE)
+            .then(|| folder.read.clone())
     }
 
     pub(crate) fn put(
@@ -102,13 +132,14 @@ impl ScanMemo {
         kept_at: DateTime<Utc>,
         read: CachedSkillRead,
     ) {
-        let Ok(mut folders) = self.folders.lock() else {
+        let Ok(mut kept) = self.kept.lock() else {
             return;
         };
-        if folders.len() >= MAX_FOLDERS && !folders.contains_key(dir) {
-            folders.clear();
+        kept.observe(kept_at);
+        if kept.folders.len() >= MAX_FOLDERS && !kept.folders.contains_key(dir) {
+            kept.folders.clear();
         }
-        folders.insert(
+        kept.folders.insert(
             dir.to_path_buf(),
             KeptFolder {
                 name: name.to_owned(),
