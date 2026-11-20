@@ -5,7 +5,7 @@
 
 import { expect, test } from "@playwright/test";
 import type { BackgroundStatus } from "@skill-studio/lib";
-import { openApp } from "./app-harness";
+import { openApp, setLatency } from "./app-harness";
 
 function status(revision: number, running: boolean, lastError: string | null): BackgroundStatus {
   return {
@@ -105,9 +105,7 @@ test("a failure after a cleared one shows the warning but does not open the erro
 
 test("Try again from the keyboard leaves focus on the Sync button", async ({ page }) => {
   // Every harness answer takes 800 ms, so the retry shows its spinning state as it does on disk.
-  await page.goto("/?latency=800");
-  await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
+  await setLatency(page, 800);
   await page.evaluate(
     (next) => window.__harness?.publishBackgroundStatus(next),
     status(2, false, "index locked"),
