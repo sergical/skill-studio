@@ -4,7 +4,7 @@
 // force-restore, and "Reveal in Finder" for backed-up events.
 // ============================================================================
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   Archive,
@@ -172,10 +172,12 @@ function EventActions({
   event,
   isRestoring,
   onRestoreClick,
+  reasonId,
 }: {
   event: SkillEvent;
   isRestoring: boolean;
   onRestoreClick: () => void;
+  reasonId: string;
 }) {
   const addToast = useAppStore((state) => state.addToast);
 
@@ -197,7 +199,7 @@ function EventActions({
           Restore
         </Button>
       ) : (
-        <span className="text-small text-text-tertiary">
+        <span id={reasonId} className="text-small text-text-tertiary">
           {event.restore_unavailable_reason ?? restoreUnavailableReason(event)}
         </span>
       )}
@@ -229,19 +231,32 @@ function EventRow({ event, onRestored }: { event: SkillEvent; onRestored: () => 
   const subject = event.skill || (harnessLabel ?? kindLabel(event.kind));
   // An agent-only event names the agent as its subject; a skill event for one agent names it here.
   const agent = event.skill && harnessLabel && event.kind !== "split" ? ` · ${harnessLabel}` : "";
+  const id = useId();
+  // A row with no button takes focus itself, so Tab still shows why it cannot be restored. As a
+  // named group, a screen reader says what happened on focus, then why it cannot be restored.
+  const focusable = !canRestoreSkillEvent(event) && !event.backup_path;
 
   return (
     <div
-      // A row with no button takes focus itself, so Tab still shows why it cannot be restored.
-      tabIndex={canRestoreSkillEvent(event) || event.backup_path ? undefined : 0}
+      tabIndex={focusable ? 0 : undefined}
+      role={focusable ? "group" : undefined}
+      aria-labelledby={focusable ? `${id}-subject ${id}-what` : undefined}
+      aria-describedby={focusable ? `${id}-reason` : undefined}
       className="group/row relative flex h-8 items-center gap-3 rounded-sm border-b border-border-subtle px-2 outline-none last:border-b-0 focus-visible:ring-1 focus-visible:ring-text-secondary"
     >
       <div className="flex min-w-0 flex-1 items-center gap-2">
         {iconForKind(event.kind, iconColor)}
-        <span className="min-w-0 shrink truncate text-body text-text-primary" title={subject}>
+        <span
+          id={`${id}-subject`}
+          className="min-w-0 shrink truncate text-body text-text-primary"
+          title={subject}
+        >
           {subject}
         </span>
-        <span className="min-w-0 shrink-[2] truncate text-small text-text-tertiary">
+        <span
+          id={`${id}-what`}
+          className="min-w-0 shrink-[2] truncate text-small text-text-tertiary"
+        >
           {eventLabel(event, harnessLabel)}
           {agent}
         </span>
@@ -254,7 +269,12 @@ function EventRow({ event, onRestored }: { event: SkillEvent; onRestored: () => 
       <span className="shrink-0 text-small text-text-tertiary tabular-nums">
         {formatRelativeTime(event.ts)}
       </span>
-      <EventActions event={event} isRestoring={isRestoring} onRestoreClick={handleRestoreClick} />
+      <EventActions
+        event={event}
+        isRestoring={isRestoring}
+        onRestoreClick={handleRestoreClick}
+        reasonId={`${id}-reason`}
+      />
     </div>
   );
 }

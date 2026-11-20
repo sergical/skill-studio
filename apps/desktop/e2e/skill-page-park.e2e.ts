@@ -36,7 +36,9 @@ test("Park for every agent turns every copy off and Activity lists it with no Re
   const reason = page.getByRole("main").getByText("Unpark the skill to reverse this.");
   const reasonOpacity = () => reason.evaluate((el) => getComputedStyle(el.parentElement!).opacity);
   expect(await reasonOpacity()).toBe("0");
-  await parked.locator("xpath=ancestor::div[@tabindex='0'][1]").focus();
+  const row = page.getByRole("group", { name: `${SKILL} Parked` });
+  await expect(row).toHaveAccessibleDescription("Unpark the skill to reverse this.");
+  await row.focus();
   await expect.poll(reasonOpacity).toBe("1");
 
   await openSkillsPage(page, "Skills", SKILL);
