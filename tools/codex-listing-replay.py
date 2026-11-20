@@ -75,7 +75,7 @@ def main():
         found = [r for r in recorded if (r[0], r[2]) in by_file]
         exact = sum(1 for r in found if by_file[(r[0], r[2])] == r[1])
         missing = [r[0] for r in recorded if (r[0], r[2]) not in by_file]
-        extra = [p[0] for p in predicted if (p[0], p[2]) not in {(r[0], r[2]) for r in recorded}]
+        extra_entries = [p[0] for p in predicted if (p[0], p[2]) not in {(r[0], r[2]) for r in recorded}]
         totals["sessions"] += 1
         totals["exact_sessions"] += names and exact == len(recorded) == len(predicted)
         totals["entries"] += len(recorded)
@@ -84,7 +84,7 @@ def main():
         print(f"{rollout}: {len(recorded)} recorded, {len(predicted)} predicted, "
               f"same names in order: {names}, exact lengths: {exact}, tier: {row['thresholds']['tier']}"
               + (f", not predicted: {missing[:8]}" if missing else "")
-              + (f", not recorded: {extra[:8]}" if extra else ""))
+              + (f", not recorded: {extra_entries[:8]}" if extra_entries else ""))
     print(f"{totals['sessions']} sessions, {totals['exact_sessions']} exact; "
           f"{totals['listed']}/{totals['entries']} recorded entries predicted (same name and file), "
           f"{totals['exact']}/{totals['entries']} exact description lengths")
