@@ -26,7 +26,13 @@ jobs:
         with:
           toolchain: 1.95.0
           components: rustfmt, clippy
+      # Only main saves, so pull requests cannot evict main's cache (the
+      # repository's caches reached 13.6 GB against GitHub's 10 GB limit, and
+      # 8 of 27 test runs found no cache). mutants-changed restores this one.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: linux-test
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-machete,cargo-deny
@@ -68,6 +74,8 @@ jobs:
         with:
           toolchain: 1.95.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test -p skill-studio-host --all-features
 
   # Report-only for now: uploads the survivor list as an artifact and writes
@@ -93,6 +101,9 @@ jobs:
         with:
           toolchain: 1.95.0
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: linux-test
+          save-if: false
       - run: mkdir -p apps/desktop/dist
       - name: Diff the PR against its base, scoped to the two mutated crates
         id: diff
