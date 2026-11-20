@@ -340,6 +340,8 @@ fn core_scan(
         catalog: Arc::new(HarnessCatalog::builtin()),
 
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+
+        scan_memo: None,
     };
     let mut scope = RuntimeScope::fixture(home);
     scope.opencode_config_root = Some(opencode_config_root.map_or_else(

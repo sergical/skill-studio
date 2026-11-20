@@ -6,7 +6,8 @@
 //! Given a 400-skill estate across the harness roots with 20% linked from
 //! the shared root, when the app rescans, the scan reads each `SKILL.md`
 //! once and lists each directory once; fails if either count grows with
-//! links or harnesses.
+//! links or harnesses. With a scan memo, a rescan reads only the
+//! `SKILL.md` files that changed.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -21,8 +22,10 @@ use skill_studio_core::ops::scan;
 use skill_studio_core::ports::{
     DirEntryFacts, ExclusiveGuard, FileFacts, Ports, Runtime, ScopeFs, ScopedPath,
 };
+use skill_studio_core::scan_memo::ScanMemo;
 use skill_studio_core::scope::{ProjectSelection, RuntimeScope};
 use skill_studio_core::testing::golden::{ctx, materialized_ports, unique_temp_dir};
+use skill_studio_core::testing::FakeClock;
 
 use skill_studio_host::{FileLease, RealFs};
 
@@ -335,6 +338,91 @@ fn scan_reads_each_skill_md_once_and_lists_each_directory_once() {
              extra (listed but not expected) = {extra:#?}"
         );
     }
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Given the same 400-skill estate and a [`ScanMemo`], when the app rescans
+/// and nothing changed, the second scan reads no `SKILL.md` and returns the
+/// same skills. When one `SKILL.md` gets new bytes with the same size and
+/// mtime, the next scan reads that one file again (its ctime changed) and
+/// shows the new description. Fails if the memo is not used, or if a write
+/// that keeps size and mtime is hidden.
+#[test]
+fn a_rescan_with_a_scan_memo_reads_only_the_skill_md_that_changed() {
+    let generated = estate(400, 1);
+    let dir = unique_temp_dir("scan-memo");
+    std::fs::create_dir_all(&dir).expect("create scan-memo home");
+    let home = dir.canonicalize().expect("canonicalize home");
+    generated
+        .builder
+        .materialize(&home)
+        .expect("materialize 400-skill estate");
+
+    let counting_fs = Arc::new(CountingFs::wrap(Arc::new(RealFs::new())));
+    // The files were written just now; a clock an hour ahead puts them
+    // outside the memo's racy window.
+    let an_hour_ahead = chrono::Utc::now().timestamp_millis() as u64 + 3_600_000;
+    let ports = Ports {
+        clock: Arc::new(FakeClock::at(an_hour_ahead)),
+        scan_memo: Some(Arc::new(ScanMemo::new())),
+        ..materialized_ports(
+            counting_fs.clone(),
+            Arc::new(FileLease::new(home.join(".leases"))),
+        )
+    };
+    let rt = Runtime::new(&scope_for(&home, &generated.project_dirs), ports).expect("runtime");
+    let skills = |inventory: &skill_studio_core::dto::Inventory| {
+        serde_json::to_value(&inventory.skills).expect("skills to JSON")
+    };
+
+    let first = scan(&rt, &ctx(), &ScanRequest::default()).expect("first scan");
+    let after_first = CountingFs::get(&counting_fs.skill_md_reads);
+    assert_eq!(after_first, generated.stats.skill_count as u64);
+
+    let second = scan(&rt, &ctx(), &ScanRequest::default()).expect("second scan");
+    assert_eq!(
+        CountingFs::get(&counting_fs.skill_md_reads),
+        after_first,
+        "a rescan of an unchanged estate must read no SKILL.md"
+    );
+    assert_eq!(skills(&second), skills(&first));
+
+    let skill_md = std::fs::read_dir(home.join(".claude/skills"))
+        .expect("list Claude skills")
+        .flatten()
+        .map(|entry| entry.path().join("SKILL.md"))
+        .find(|path| path.symlink_metadata().is_ok_and(|m| m.is_file()))
+        .expect("a Claude skill with its own SKILL.md");
+    let before = std::fs::read_to_string(&skill_md).expect("read SKILL.md");
+    let mtime = filetime::FileTime::from_last_modification_time(
+        &skill_md.metadata().expect("SKILL.md metadata"),
+    );
+    let at = before.find("description: ").expect("a description line") + "description: ".len();
+    let (old, new) = if before[at..].starts_with('Z') {
+        ("Z", "Y")
+    } else {
+        (&before[at..=at], "Z")
+    };
+    let after = format!("{}{new}{}", &before[..at], &before[at + old.len()..]);
+    assert_eq!(after.len(), before.len());
+    std::fs::write(&skill_md, &after).expect("rewrite SKILL.md");
+    filetime::set_file_mtime(&skill_md, mtime).expect("restore SKILL.md mtime");
+
+    let third = scan(&rt, &ctx(), &ScanRequest::default()).expect("third scan");
+    assert_eq!(
+        CountingFs::get(&counting_fs.skill_md_reads),
+        after_first + 1,
+        "a rescan must read again only the SKILL.md that changed"
+    );
+    let new_description = after[at..].lines().next().expect("description").to_owned();
+    assert!(
+        third
+            .skills
+            .iter()
+            .any(|skill| skill.description.as_deref() == Some(new_description.as_str())),
+        "the rescan must show the new description {new_description:?}"
+    );
 
     std::fs::remove_dir_all(&dir).ok();
 }

@@ -416,6 +416,7 @@ fn runtime_with_tools(
         tools: Some(Arc::new(tools)),
         catalog: Arc::new(HarnessCatalog::builtin()),
         telemetry: Arc::new(skill_studio_core::ports::NoopTelemetry),
+        scan_memo: None,
     };
     let mut scope = RuntimeScope::fixture(home);
     scope.projects = ProjectSelection::Explicit { paths: projects };

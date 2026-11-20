@@ -705,6 +705,7 @@ mod tests {
                 tools: None,
                 catalog: std::sync::Arc::new(crate::harness::HarnessCatalog::builtin()),
                 telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
+                scan_memo: None,
             },
         )
         .unwrap();
