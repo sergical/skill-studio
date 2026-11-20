@@ -4,10 +4,14 @@ import { act } from "react";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
 
 import { SkillThrow } from "./SkillThrow";
 import { PILE, PILE_COUNTS } from "./skill-pile-data";
 import { fly, frame, poseTransform } from "./skill-pile-kit";
+
+/** The `Element.prototype.animate` spy that each test starts with. */
+let animate: MockInstance<Element["animate"]>;
 
 beforeEach(() => {
   vi.stubGlobal(
@@ -66,7 +70,7 @@ beforeEach(() => {
     toJSON: () => ({}),
   });
   vi.spyOn(Element.prototype, "getAnimations").mockReturnValue([]);
-  vi.spyOn(Element.prototype, "animate").mockImplementation(() => {
+  animate = vi.spyOn(Element.prototype, "animate").mockImplementation(() => {
     const animation = new Animation();
     Object.defineProperty(animation, "finished", { value: Promise.resolve(animation) });
     return Object.assign(animation, { commitStyles() {}, cancel() {} });
@@ -100,7 +104,6 @@ describe("single-copy parking", () => {
     const { container } = render(<SkillThrow />);
     const button = screen.getByRole("button", { name: "Park a copy" });
     const live = container.querySelector('[aria-live="polite"]');
-    const animate = vi.mocked(Element.prototype.animate);
     await user.tab();
     await user.tab();
     expect(document.activeElement).toBe(button);
@@ -128,10 +131,10 @@ describe("single-copy parking", () => {
     const { container } = render(<SkillThrow />);
     await act(async () => {});
     const button = screen.getByRole("button", { name: "Park a copy" });
-    vi.mocked(Element.prototype.animate).mockClear();
+    animate.mockClear();
     button.focus();
     await user.keyboard("{Enter}");
-    expect(Element.prototype.animate).toHaveBeenCalled();
+    expect(animate).toHaveBeenCalled();
     expect(container.querySelector('[aria-live="polite"]')?.textContent).toContain("1 parked.");
   });
 });
@@ -139,7 +142,6 @@ describe("single-copy parking", () => {
 describe("intro", () => {
   it("plays once per session, then opens on the tidy result", async () => {
     setReducedMotion(false);
-    const animate = vi.mocked(Element.prototype.animate);
     const first = render(<SkillThrow />);
     await act(async () => {});
     expect(animate).toHaveBeenCalled();

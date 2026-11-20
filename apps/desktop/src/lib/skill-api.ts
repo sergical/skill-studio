@@ -116,6 +116,8 @@ function callCommand<T>(command: string, args?: InvokeArgs): Promise<T> {
 export function invokeErrorMessage(cause: unknown): string {
   if (cause instanceof Error) return cause.message;
   if (cause == null) return "Unknown error";
+  // `callCommand` turns every rejection into an `Error`, so only a primitive gets here.
+  // oxlint-disable-next-line typescript/no-base-to-string, typescript/restrict-template-expressions -- formats a primitive rejection value
   return `${cause}`;
 }
 

@@ -13,7 +13,8 @@ import { localDateKey } from "./skill-stats";
 import type { UsageWindow } from "./skill-stats";
 
 /** A harness id, or "all" for no harness filter. */
-export type HarnessFilter = string | "all";
+/** A harness id, or `"all"` for every harness. */
+export type HarnessFilter = string;
 /** A `SkillTrigger`, or "all" for no trigger filter. */
 export type TriggerFilter = SkillTrigger | "all";
 

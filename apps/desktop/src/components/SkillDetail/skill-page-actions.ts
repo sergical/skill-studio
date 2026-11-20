@@ -20,6 +20,7 @@ import {
   unforkSkill,
   unparkSkills,
   updatePlugin,
+  invokeErrorMessage,
 } from "../../lib/skill-api";
 import {
   isLiveCopy,
@@ -418,11 +419,16 @@ export function useSkillPageActions(
 
   const copyPath = () => {
     if (!path) return;
-    navigator.clipboard.writeText(path).then(() => {
-      setCopied(true);
-      addToast({ type: "success", title: "Copied path" });
-      setTimeout(() => setCopied(false), 1500);
-    });
+    navigator.clipboard.writeText(path).then(
+      () => {
+        setCopied(true);
+        addToast({ type: "success", title: "Copied path" });
+        setTimeout(() => setCopied(false), 1500);
+      },
+      (err) => {
+        addToast({ type: "error", title: "Couldn't copy path", message: invokeErrorMessage(err) });
+      },
+    );
   };
 
   const togglePark = () =>

@@ -35,9 +35,9 @@ export function TooltipControl({ content, shortcut, children }: TooltipControlPr
               // `Object(line)` boxes a string primitive into a `String` wrapper, so `"text" in`
               // it never throws - it's just false for a plain line and true for a mono line.
               const isMono = "text" in Object(line);
-              // SAFETY: `isMono` just confirmed `line` has a `text` property, which only the
-              // mono-line member of `TooltipLine` does.
-              const text = isMono ? (line as { text: string }).text : String(line);
+              // SAFETY: `isMono` tells the two members of `TooltipLine` apart: only the mono line
+              // has `text`, and the other member is a string.
+              const text = isMono ? (line as { text: string }).text : (line as string);
               return (
                 <span
                   key={text}

@@ -54,6 +54,8 @@ function scrubEnvelopeItem(item: SentryEnvelopeItem): SentryEnvelopeItem {
   const [header, payload] = item;
   if (payload instanceof Uint8Array) return item;
   if (header.type === "replay_recording") {
+    // A replay recording is a string or bytes, and bytes returned above.
+    // oxlint-disable-next-line typescript/no-base-to-string -- the envelope item type is a union of every item kind
     const recording = withoutUrlQueries(String(payload));
     const length = new TextEncoder().encode(recording).length;
     // SAFETY: the header and payload keep the replay_recording shape; only the text and its byte length change.

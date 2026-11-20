@@ -247,10 +247,11 @@ describe("sent data", () => {
     const [, [, [recordingHeader, recordingText]]] = scrubbed;
 
     expect(JSON.stringify(scrubbed)).not.toContain("PRIVATE");
-    expect(String(recordingText)).toContain(`"href":"${PAGE}"`);
-    expect(recordingHeader).toMatchObject({
-      length: new TextEncoder().encode(String(recordingText)).length,
-    });
+    expect(recordingText).toEqual(expect.any(String));
+    // SAFETY: the line above just checked that the recording is a string.
+    const text = recordingText as string;
+    expect(text).toContain(`"href":"${PAGE}"`);
+    expect(recordingHeader).toMatchObject({ length: new TextEncoder().encode(text).length });
   });
 
   it.each([

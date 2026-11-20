@@ -152,7 +152,7 @@ describe("parseSkillSource properties", () => {
   // Segments hold no whitespace or "/": a whitespace-only /tree/ path and a skills.sh URL ending
   // "//" parse to a path the same text does not give back (follow-up, not guarded here).
   const segment = fc.string({
-    unit: fc.constantFrom(..."aZ09._-#?%:@~"),
+    unit: fc.constantFrom(...Array.from("aZ09._-#?%:@~")),
     minLength: 1,
     maxLength: 6,
   });

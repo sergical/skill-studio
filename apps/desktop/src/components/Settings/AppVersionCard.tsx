@@ -93,7 +93,7 @@ export function AppVersionCard() {
     });
     return () => {
       cancelled = true;
-      unlisten.then((fn) => fn());
+      void unlisten.then((fn) => fn());
     };
   }, []);
 
