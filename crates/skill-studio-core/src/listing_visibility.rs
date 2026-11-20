@@ -1977,6 +1977,21 @@ mod tests {
             ),
             None
         );
+        assert_eq!(
+            codex_frontmatter(
+                "---\ndescription: d\nmetadata: {short-description: a, short-description: b}\n---\n",
+                "f"
+            ),
+            None
+        );
+        // Keys repeated in separate list items, and scalar text, are kept.
+        assert_eq!(
+            codex_frontmatter(
+                "---\nname: 0x10\ndescription: TRUE\nextra:\n  - label: a\n    value: x\n  - label: b\n    value: y\n---\n",
+                "f"
+            ),
+            Some(("0x10".into(), "TRUE".into()))
+        );
     }
 
     #[test]
