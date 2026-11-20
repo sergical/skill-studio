@@ -446,8 +446,22 @@ fn a_rescan_with_a_scan_memo_reads_only_the_skill_md_that_changed() {
 /// just now; a clock an hour ahead puts them outside the memo's racy window.
 fn memo_runtime(home: &Path, project_dirs: &[PathBuf], fs: Arc<CountingFs>) -> Runtime {
     let an_hour_ahead = chrono::Utc::now().timestamp_millis() as u64 + 3_600_000;
+    memo_runtime_at(
+        home,
+        project_dirs,
+        fs,
+        Arc::new(FakeClock::at(an_hour_ahead)),
+    )
+}
+
+fn memo_runtime_at(
+    home: &Path,
+    project_dirs: &[PathBuf],
+    fs: Arc<CountingFs>,
+    clock: Arc<FakeClock>,
+) -> Runtime {
     let ports = Ports {
-        clock: Arc::new(FakeClock::at(an_hour_ahead)),
+        clock,
         scan_memo: Some(Arc::new(ScanMemo::new())),
         ..materialized_ports(fs, Arc::new(FileLease::new(home.join(".leases"))))
     };
@@ -546,6 +560,44 @@ fn a_scan_memo_does_not_keep_a_folder_with_an_unreadable_link_target() {
         3,
         "only the folder with the missing link target is read again"
     );
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Given a home whose files were written just now, when the app scans with
+/// a [`ScanMemo`] and the real clock, it keeps nothing until the files are
+/// 2 s old, then reuses the kept result, and after 10 minutes reads the
+/// folder in full again. (The `linked` skill holds a link to a missing file
+/// and is read on every scan.) Fails if a fresh write can be kept, or if a
+/// kept result is used without end.
+#[test]
+fn a_scan_memo_waits_two_seconds_before_it_keeps_and_reads_again_after_ten_minutes() {
+    let home = two_skill_home("scan-memo-time");
+    let counting_fs = Arc::new(CountingFs::wrap(Arc::new(RealFs::new())));
+    let clock = Arc::new(FakeClock::at(chrono::Utc::now().timestamp_millis() as u64));
+    let rt = memo_runtime_at(&home, &[], counting_fs.clone(), clock.clone());
+    let reads = |rt: &Runtime| {
+        let before = CountingFs::get(&counting_fs.skill_md_reads);
+        scan(rt, &ctx(), &ScanRequest::default()).expect("scan");
+        CountingFs::get(&counting_fs.skill_md_reads) - before
+    };
+
+    assert_eq!(reads(&rt), 2);
+    assert_eq!(
+        reads(&rt),
+        2,
+        "a folder written less than 2 s ago must not be kept"
+    );
+    clock.advance(std::time::Duration::from_secs(3));
+    assert_eq!(reads(&rt), 2);
+    assert_eq!(reads(&rt), 1, "a folder older than 2 s must be kept");
+    clock.advance(std::time::Duration::from_mins(11));
+    assert_eq!(
+        reads(&rt),
+        2,
+        "a result kept 11 minutes ago must be read again"
+    );
+    assert_eq!(reads(&rt), 1);
 
     std::fs::remove_dir_all(&home).ok();
 }

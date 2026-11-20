@@ -15,6 +15,12 @@
 //! kept: a write in the same clock tick as the stamp could otherwise hide
 //! (git's "racily clean" rule).
 //!
+//! A stamp cannot see everything: a folder swapped for another and back
+//! while its facts were read (A, then B, then A again) leaves the stamp the
+//! same, and some network filesystems report times that do not change. So a
+//! kept result is used for at most [`MAX_AGE`]; after that the folder is
+//! read in full again. This bounds any wrong result the stamp misses.
+//!
 //! Only a long-lived host gains from this (the desktop app). The host puts
 //! one memo in [`crate::ports::Ports::scan_memo`]; `None` scans as before.
 
@@ -35,6 +41,9 @@ use crate::ports::{
 /// How recent a change must be for [`folder_stamp`] to refuse a stamp.
 const RACY_WINDOW: chrono::Duration = chrono::Duration::seconds(2);
 
+/// How long a kept result is used before the folder is read again.
+const MAX_AGE: chrono::Duration = chrono::Duration::minutes(10);
+
 /// Entries one stamp may hold. A larger folder is not kept: the scan reads
 /// it in full each time, as it did before the memo.
 const MAX_STAMP_ENTRIES: usize = 4_096;
@@ -53,6 +62,7 @@ pub struct ScanMemo {
 struct KeptFolder {
     name: String,
     stamp: Vec<u8>,
+    kept_at: DateTime<Utc>,
     read: CachedSkillRead,
 }
 
@@ -63,14 +73,28 @@ impl ScanMemo {
     }
 
     /// The kept result for `dir` read as skill `name`, when its stamp is
-    /// `stamp`.
-    pub(crate) fn get(&self, dir: &Path, name: &str, stamp: &[u8]) -> Option<CachedSkillRead> {
+    /// `stamp` and it was kept less than [`MAX_AGE`] before `now`.
+    pub(crate) fn get(
+        &self,
+        dir: &Path,
+        name: &str,
+        stamp: &[u8],
+        now: DateTime<Utc>,
+    ) -> Option<CachedSkillRead> {
         let folders = self.folders.lock().ok()?;
         let kept = folders.get(dir)?;
-        (kept.name == name && kept.stamp == stamp).then(|| kept.read.clone())
+        (kept.name == name && kept.stamp == stamp && now - kept.kept_at < MAX_AGE)
+            .then(|| kept.read.clone())
     }
 
-    pub(crate) fn put(&self, dir: &Path, name: &str, stamp: Vec<u8>, read: CachedSkillRead) {
+    pub(crate) fn put(
+        &self,
+        dir: &Path,
+        name: &str,
+        stamp: Vec<u8>,
+        kept_at: DateTime<Utc>,
+        read: CachedSkillRead,
+    ) {
         let Ok(mut folders) = self.folders.lock() else {
             return;
         };
@@ -82,6 +106,7 @@ impl ScanMemo {
             KeptFolder {
                 name: name.to_owned(),
                 stamp,
+                kept_at,
                 read,
             },
         );

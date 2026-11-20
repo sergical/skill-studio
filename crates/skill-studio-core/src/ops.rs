@@ -1815,10 +1815,11 @@ fn read_skill_md(
     let Some(memo) = memo else {
         return read_skill_md_from_disk(fs, ctx, clock, skill_dir, name, timings);
     };
-    let Some(stamp) = crate::scan_memo::folder_stamp(fs, ctx, skill_dir, clock.now())? else {
+    let now = clock.now();
+    let Some(stamp) = crate::scan_memo::folder_stamp(fs, ctx, skill_dir, now)? else {
         return read_skill_md_from_disk(fs, ctx, clock, skill_dir, name, timings);
     };
-    if let Some(kept) = memo.get(skill_dir, name, &stamp) {
+    if let Some(kept) = memo.get(skill_dir, name, &stamp, now) {
         return Ok(SkillMdRead::Found {
             description: kept.description,
             violations: kept.violations,
@@ -1845,6 +1846,7 @@ fn read_skill_md(
             skill_dir,
             name,
             stamp,
+            now,
             CachedSkillRead {
                 description: description.clone(),
                 violations: violations.clone(),
