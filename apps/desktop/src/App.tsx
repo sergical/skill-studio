@@ -14,6 +14,7 @@ import { Sidebar } from "./components/Sidebar/Sidebar";
 import { SkillActivityView } from "./components/Activity/SkillActivityView";
 import { HomeView } from "./components/Home/HomeView";
 import { ListingView } from "./components/Listing/ListingView";
+import { SessionsView } from "./components/Sessions/SessionsView";
 import { SettingsView } from "./components/Settings/SettingsView";
 import { LearnView } from "./components/Learn/LearnView";
 import { SkillsView } from "./components/SkillList/SkillsView";
@@ -238,6 +239,9 @@ function App() {
       break;
     case "listing":
       main = <ListingView snapshot={snapshot} />;
+      break;
+    case "sessions":
+      main = <SessionsView />;
       break;
     case "skill": {
       // Opened from Learn or Settings: neither keeps a list worth reviving, so the

@@ -38,6 +38,7 @@ import {
   skill,
 } from "./skill-fixture";
 import { mockListingReport } from "./mock-listing";
+import { mockSkillSessionsReport } from "./mock-sessions";
 import { mockPackAdd, mockPackChange, mockPackReport } from "./mock-packs";
 
 /** Mirrors the core's `split_target_root` with default `CODEX_HOME` and OpenCode config root. */
@@ -759,6 +760,8 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
             .parse(payload.request);
           return mockListingReport(currentSnapshot, request);
         }
+        case "skill_sessions":
+          return mockSkillSessionsReport(currentSnapshot);
         case "pack_list": {
           const { remote } = z.object({ remote: z.boolean() }).parse(payload.request);
           return mockPackReport(currentSnapshot, remote);

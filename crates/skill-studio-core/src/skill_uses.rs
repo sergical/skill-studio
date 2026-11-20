@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::discovery_sources::DiscoverySources;
 
-mod claude_code;
-mod codex;
+pub(crate) mod claude_code;
+pub(crate) mod codex;
 mod cursor;
 mod grok;
 mod opencode;
@@ -428,7 +428,8 @@ pub fn skill_name_from_skill_md_path(path: &str) -> Option<&str> {
         return None;
     }
     let name = segments[len - 2];
-    if name.is_empty() || name == "." || name == ".." {
+    // A shell variable or glob (`skills/$s/SKILL.md`) names no skill.
+    if name.is_empty() || name == "." || name == ".." || name.contains(['$', '*', '?', '{', '[']) {
         return None;
     }
     match segments[len - 3] {
@@ -723,6 +724,10 @@ mod tests {
             vec!["foo"]
         );
         assert!(skill_names_read_by_shell("wc -l /x/skills/foo/SKILL.md").is_empty());
+        assert!(skill_names_read_by_shell(
+            "for s in a b; do cat ~/.agents/skills/$s/SKILL.md; done"
+        )
+        .is_empty());
         assert!(skill_names_read_by_shell("sed -i '' 's/a/b/' /x/skills/foo/SKILL.md").is_empty());
         assert!(skill_names_read_by_shell("sed 's/a/b/' /x/skills/foo/SKILL.md").is_empty());
         assert_eq!(

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SkillSessionsRequest",
+  "description": "Input for `skill_sessions`.",
+  "type": "object",
+  "properties": {
+    "project_path": {
+      "description": "Only sessions recorded in this project, and its skills. It must be in\nthe runtime scope.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-untrusted": true
+    },
+    "sessions": {
+      "description": "Newest sessions to read per agent, at most 500. Default 100.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint",
+      "minimum": 0
+    }
+  }
+}

@@ -50,6 +50,7 @@ pub mod skill_plugin_update;
 pub mod skill_process;
 pub mod skill_project_folders;
 pub mod skill_refresh;
+pub mod skill_sessions;
 pub mod skill_split;
 pub mod skill_split_update;
 pub mod skill_trust_policy;

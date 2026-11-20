@@ -28,6 +28,8 @@ import type {
   InvocationConflictChoice,
   ListingReport,
   ListingRequest,
+  SkillSessionsReport,
+  SkillSessionsRequest,
   LocalEditsDto,
   PackActionReport,
   PackAddRequest,
@@ -616,6 +618,15 @@ export async function packList(remote: boolean): Promise<PackReport> {
  */
 export async function skillListing(request: ListingRequest): Promise<ListingReport> {
   return callCommand("skill_listing", { request });
+}
+
+/**
+ * For each agent's recent sessions: which skills were listed with a
+ * description, by name only, or not at all, which were used, and which were
+ * possibly missed. Reads only.
+ */
+export async function skillSessions(request: SkillSessionsRequest): Promise<SkillSessionsReport> {
+  return callCommand("skill_sessions", { request });
 }
 
 /**
