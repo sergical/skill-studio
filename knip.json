@@ -11,6 +11,7 @@
         "scripts/verify/ui.mjs",
         "tools/oxlint/anti-slop/shared/*.integration.test.ts"
       ],
+      "oxlint": { "config": [".oxlintrc.json"] },
       "project": ["tools/oxlint/anti-slop/**/*.ts", "*.ts"]
     },
     "apps/desktop": {

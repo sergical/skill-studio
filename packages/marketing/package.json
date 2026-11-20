@@ -9,7 +9,7 @@
     "build": "tsc --noEmit && vite build && vite build --ssr src/prerender/site-prerender.tsx --outDir dist-ssr && node scripts/prerender-docs.mjs",
     "test": "vitest run",
     "remotion:studio": "remotion studio src/remotion/index.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "bun check --no-script",
     "remotion:capture": "node scripts/capture-walkthroughs.mjs",
     "remotion:render": "node scripts/render-walkthroughs.mjs",
     "deploy": "node scripts/check-npm-release.mjs && pnpm run build && wrangler deploy"

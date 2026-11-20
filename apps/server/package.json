@@ -8,7 +8,7 @@
     "dev": "node --env-file=../../.env --import tsx src/server.ts",
     "dev:worker": "wrangler dev",
     "deploy": "wrangler deploy",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "bun check --no-script",
     "test": "vitest run"
   },
   "dependencies": {
