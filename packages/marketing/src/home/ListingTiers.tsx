@@ -47,8 +47,8 @@ export function ListingTiers() {
       <div {...stylex.props(homeSectionStyles.columns)}>
         <div {...stylex.props(styles.intro)}>
           <p {...stylex.props(styles.lead)}>
-            Each agent gives its model a list of skills. Claude Code and Codex limit the size of
-            the list. When your skills do not fit, descriptions are shortened or removed first.
+            Each agent gives its model a list of skills. Claude Code and Codex limit the size of the
+            list. When your skills do not fit, descriptions are shortened or removed first.
           </p>
           <p {...stylex.props(styles.note)}>
             A long list also hurts. In the study{" "}
