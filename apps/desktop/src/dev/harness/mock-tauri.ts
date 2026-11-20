@@ -543,6 +543,9 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
           return currentSnapshot.update_check;
         case "get_background_status":
           return currentBackgroundStatus;
+        // `?fullscreen=1` shows the layout of a window in macOS full screen.
+        case "plugin:window|is_fullscreen":
+          return new URLSearchParams(location.search).has("fullscreen");
         case "get_skill_snapshot":
           return currentSnapshot;
         case "get_installed_skills":

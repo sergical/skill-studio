@@ -63,6 +63,8 @@ export function kindLabel(kind: string): string {
 
 export function restoreUnavailableReason(event: SkillEvent): string {
   if (event.reverted_by) return "Already restored.";
+  if (event.status === "interrupted")
+    return "The app quit during this change, so it has nothing to restore.";
   if (event.status !== "done") return "This event has no saved change to restore.";
   switch (event.kind) {
     case "park":

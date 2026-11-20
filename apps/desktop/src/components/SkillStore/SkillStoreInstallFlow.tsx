@@ -277,9 +277,7 @@ export function SkillStoreInstallFlow({
   return (
     <>
       <div className="p-5">
-        <h4 className="m-0 mb-3 text-caption font-medium tracking-[0.08em] text-text-tertiary uppercase">
-          Scope
-        </h4>
+        <h4 className="m-0 mb-3 text-small font-medium text-text-secondary">Scope</h4>
         <ScopeToggleGroup scope={installScope} onScopeChange={handleInstallScopeChange} />
 
         {installScope === "project" && (

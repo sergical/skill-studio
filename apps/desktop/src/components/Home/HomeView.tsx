@@ -58,9 +58,7 @@ function HomeSkeleton() {
             key={label}
             className="flex flex-1 flex-col gap-1 rounded-md border border-border-subtle bg-bg-elevated px-4 py-3.5"
           >
-            <span className="text-caption tracking-[0.06em] text-text-tertiary uppercase">
-              {label}
-            </span>
+            <span className="text-small text-text-tertiary">{label}</span>
             <span className="text-display leading-[1.1] font-semibold">
               <span className={`inline-block h-[1em] w-7 align-middle ${bar}`} />
             </span>
@@ -124,7 +122,7 @@ function HomeStatTiles({
           onClick={() => toggleFilter("broken")}
         >
           <span
-            className={`flex items-center gap-2 text-caption tracking-[0.06em] uppercase ${filter === "broken" ? "text-accent" : "text-text-tertiary"}`}
+            className={`flex items-center gap-2 text-small ${filter === "broken" ? "text-accent" : "text-text-tertiary"}`}
           >
             Broken
           </span>
@@ -150,7 +148,7 @@ function HomeStatTiles({
           onClick={() => toggleFilter("warn")}
         >
           <span
-            className={`flex items-center gap-2 text-caption tracking-[0.06em] uppercase ${filter === "warn" ? "text-accent" : "text-text-tertiary"}`}
+            className={`flex items-center gap-2 text-small ${filter === "warn" ? "text-accent" : "text-text-tertiary"}`}
           >
             Warnings
           </span>
@@ -174,7 +172,7 @@ function HomeStatTiles({
           onClick={() => toggleFilter("upd")}
         >
           <span
-            className={`flex items-center gap-2 text-caption tracking-[0.06em] uppercase ${filter === "upd" ? "text-accent" : "text-text-tertiary"}`}
+            className={`flex items-center gap-2 text-small ${filter === "upd" ? "text-accent" : "text-text-tertiary"}`}
           >
             Updates
           </span>

@@ -285,8 +285,10 @@ function App() {
           requestRescan={requestRescan}
         />
         <div className="flex min-w-0 flex-1 flex-col pr-2 pb-2">
-          <div data-tauri-drag-region className="h-9 shrink-0" />
-          <main className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border bg-bg-primary">
+          {/* The page panel sits 8px in from the top, right and bottom window edges. The top gap
+              drags the window; so does the page header (PageShell). */}
+          <div data-tauri-drag-region className="h-2 shrink-0" />
+          <main className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border-subtle bg-bg-primary">
             {main}
           </main>
         </div>

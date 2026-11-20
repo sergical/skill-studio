@@ -53,7 +53,7 @@ const MENU_RADIO_ITEM_CLASS =
   "flex h-auto flex-col items-start gap-0.5 rounded-sm px-2.5 py-1.5 text-body text-text-secondary data-highlighted:bg-bg-hover data-highlighted:text-text-primary";
 /** The Scope group's project trigger sits after the ToggleGroup, styled the same as its items. */
 const SEGMENTED_TRIGGER_CLASS =
-  "inline-flex h-(--control-height) items-center gap-1 rounded-r-sm border-y border-r border-border bg-transparent px-3 text-body text-text-tertiary transition-colors duration-150 hover:bg-bg-hover hover:text-text-secondary aria-expanded:bg-bg-tertiary aria-expanded:text-text-primary";
+  "inline-flex h-(--control-height) max-w-48 items-center gap-1 whitespace-nowrap @max-[44rem]:max-w-28 rounded-r-sm border-y border-r border-border bg-transparent px-3 text-body text-text-tertiary transition-colors duration-150 hover:bg-bg-hover hover:text-text-secondary aria-expanded:bg-bg-tertiary aria-expanded:text-text-primary";
 
 interface SkillListFilterBarProps {
   filter: SkillListFilter;
@@ -164,9 +164,11 @@ export function SkillListFilterBar({
   }
 
   return (
-    <div className="flex w-full items-center gap-2">
-      <div className="flex items-center gap-2">
-        <div className="relative flex w-48 items-center text-text-tertiary">
+    // At the narrowest window (900px) the search box shrinks, the project name truncates and the
+    // count is read only by screen readers, so Sort and the view toggles stay on screen.
+    <div className="@container flex w-full items-center gap-2">
+      <div className="flex min-w-0 items-center gap-2">
+        <div className="relative flex w-48 min-w-20 items-center text-text-tertiary">
           <Search size={12} className="pointer-events-none absolute left-2.5" />
           <Input
             ref={searchInputRef}
@@ -179,7 +181,7 @@ export function SkillListFilterBar({
           />
         </div>
 
-        <div className="flex" role="group" aria-label="Scope">
+        <div className="flex shrink-0" role="group" aria-label="Scope">
           <ToggleGroup
             variant="segmented"
             className="h-(--control-height) rounded-r-none"
@@ -198,8 +200,8 @@ export function SkillListFilterBar({
             triggerAriaLabel={`Project: ${projectScopeLabel(filter)}`}
             trigger={
               <>
-                {projectScopeLabel(filter)}
-                <ChevronDown size={12} />
+                <span className="truncate">{projectScopeLabel(filter)}</span>
+                <ChevronDown size={12} className="shrink-0" />
               </>
             }
           >
@@ -263,7 +265,7 @@ export function SkillListFilterBar({
         >
           {harnesses.length > 1 && (
             <>
-              <p className="m-0 px-2.5 pt-1.5 pb-0.5 text-caption font-medium tracking-[0.08em] text-text-tertiary uppercase">
+              <p className="m-0 px-2.5 pt-1.5 pb-0.5 text-caption font-medium text-text-tertiary">
                 Agent
               </p>
               <MenuRadioGroup
@@ -289,7 +291,7 @@ export function SkillListFilterBar({
               <MenuSeparator />
             </>
           )}
-          <p className="m-0 px-2.5 pt-1.5 pb-0.5 text-caption font-medium tracking-[0.08em] text-text-tertiary uppercase">
+          <p className="m-0 px-2.5 pt-1.5 pb-0.5 text-caption font-medium text-text-tertiary">
             Source
           </p>
           <MenuRadioGroup
@@ -314,7 +316,7 @@ export function SkillListFilterBar({
       <div className="ml-auto flex items-center gap-2">
         <span
           role="status"
-          className="whitespace-nowrap text-small tabular-nums text-text-tertiary"
+          className="whitespace-nowrap text-small tabular-nums text-text-tertiary @max-[44rem]:sr-only"
         >
           {resultCount} skill{resultCount !== 1 ? "s" : ""}
         </span>

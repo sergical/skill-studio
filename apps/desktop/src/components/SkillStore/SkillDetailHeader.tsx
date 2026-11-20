@@ -135,9 +135,7 @@ export function SkillDetailHeader({ skill, resolvedTopSource, onClose }: SkillDe
 
       {specProblems.length > 0 && (
         <div className="p-5 pt-0">
-          <h4 className="m-0 mb-3 text-caption font-medium tracking-[0.08em] text-text-tertiary uppercase">
-            Spec violations
-          </h4>
+          <h4 className="m-0 mb-3 text-small font-medium text-text-secondary">Spec violations</h4>
           <ul className="m-0 flex flex-col gap-1.5 pl-4.5">
             {specProblems.map((violation) => (
               <li key={violation} className="text-small text-warning">

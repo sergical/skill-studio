@@ -32,6 +32,7 @@ import {
   sidebarAnchorView,
 } from "../../lib/sidebar-nav";
 import { useAppStore } from "../../store/appStore";
+import { useWindowFullscreen } from "../../hooks/useWindowFullscreen";
 import type { ActiveView } from "../../store/appStore";
 import { TooltipControl } from "../ui/TooltipControl";
 import type { ResolvedTheme, Theme } from "../../lib/theme";
@@ -391,6 +392,7 @@ export function Sidebar({
   backgroundStatus,
   requestRescan,
 }: SidebarProps) {
+  const isFullscreen = useWindowFullscreen();
   // Forces the footer to re-render so "just now" ages into "1m ago" and
   // beyond without waiting for the next snapshot - relativeScanTime() itself
   // stays a pure function of scannedAt and the current clock.
@@ -432,39 +434,46 @@ export function Sidebar({
 
   return (
     <nav className="flex w-60 shrink-0 flex-col overflow-hidden">
-      <div data-tauri-drag-region className="h-9 shrink-0" />
-      {/* 41px = the page panel's 1px top border plus PageShell's 40px header, so this title sits on
-          the same line as the page title. */}
-      <div className="flex h-[41px] shrink-0 items-center justify-between pr-1.5 pl-3.5">
-        <span className="text-small font-semibold text-text-primary">Skill Studio</span>
-        <div className="flex items-center gap-0.5">
-          {/* The sidebar switcher row only fits two icons without crowding, so the command
+      {/* The top row lines up with the page header: 9px down (the window's 8px inset plus the
+          page panel's 1px border) and 44px tall. The window's traffic lights sit at its left
+          (`trafficLightPosition` in tauri.conf.json), so the title starts after them. Full screen
+          hides them, so there the title starts at the nav's left edge. The row's empty space drags
+          the window. */}
+      <div data-tauri-drag-region className="shrink-0 pt-[9px]">
+        <div
+          data-tauri-drag-region
+          className={`flex h-11 items-center justify-between pr-1.5 ${isFullscreen ? "pl-4" : "pl-[88px]"}`}
+        >
+          <span className="text-small font-semibold text-text-primary">Skill Studio</span>
+          <div className="flex items-center gap-0.5">
+            {/* The sidebar switcher row only fits two icons without crowding, so the command
               palette's ⌘K hint rides along on this tooltip instead of a third icon button. */}
-          <TooltipControl
-            content={["Search skills", "Command palette ⌘K"]}
-            shortcut={SHORTCUTS.filterSkills.keys}
-          >
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              className={iconButtonClass}
-              aria-label="Search skills"
-              onClick={goToSearch}
+            <TooltipControl
+              content={["Search skills", "Command palette ⌘K"]}
+              shortcut={SHORTCUTS.filterSkills.keys}
             >
-              <Search size={14} />
-            </Button>
-          </TooltipControl>
-          <TooltipControl content="Add skill" shortcut={SHORTCUTS.addSkill.keys}>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              className={iconButtonClass}
-              aria-label="Add skill"
-              onClick={() => openAddSkillSheet()}
-            >
-              <Plus size={14} />
-            </Button>
-          </TooltipControl>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className={iconButtonClass}
+                aria-label="Search skills"
+                onClick={goToSearch}
+              >
+                <Search size={14} />
+              </Button>
+            </TooltipControl>
+            <TooltipControl content="Add skill" shortcut={SHORTCUTS.addSkill.keys}>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className={iconButtonClass}
+                aria-label="Add skill"
+                onClick={() => openAddSkillSheet()}
+              >
+                <Plus size={14} />
+              </Button>
+            </TooltipControl>
+          </div>
         </div>
       </div>
 

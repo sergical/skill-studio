@@ -110,9 +110,7 @@ export function InstallHarnessSelector({
   const rowsLocked = disabled || (universal && !!lockedReason);
   return (
     <div className="flex flex-col gap-2">
-      <span className="text-caption font-medium tracking-[0.08em] text-text-tertiary uppercase">
-        Destination
-      </span>
+      <span className="text-small font-medium text-text-secondary">Destination</span>
       {universal && lockedReason && (
         <p className="m-0 text-caption text-text-tertiary">{lockedReason}</p>
       )}

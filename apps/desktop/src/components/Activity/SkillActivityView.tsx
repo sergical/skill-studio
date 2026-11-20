@@ -67,7 +67,7 @@ export function SkillActivityView({
     <PageShell
       title="Activity"
       subtitle="From every agent turned on in Settings"
-      toolbar={
+      actions={
         <ActivityFilters
           stats={stats}
           harness={lens.harness}
@@ -104,10 +104,10 @@ export function SkillActivityView({
             />
             <aside
               aria-label="Details"
-              // 11rem covers the window's top and bottom insets, the page header and toolbar rows,
+              // 7rem covers the window's 8px top and bottom insets, the page header row (the filters sit in it),
               // the sticky offset, and the page's bottom padding. Any taller and the grid's bottom
               // edge pushes the aside up past the sticky offset when scrolled to the end.
-              className="flex flex-col gap-5 self-start rounded-md border border-border-subtle bg-bg-secondary p-4 @[52rem]:sticky @[52rem]:top-5 @[52rem]:col-start-2 @[52rem]:row-span-2 @[52rem]:row-start-1 @[52rem]:max-h-[calc(100dvh-11rem)] @[52rem]:overflow-y-auto"
+              className="flex flex-col gap-5 self-start rounded-md border border-border-subtle bg-bg-secondary p-4 @[52rem]:sticky @[52rem]:top-5 @[52rem]:col-start-2 @[52rem]:row-span-2 @[52rem]:row-start-1 @[52rem]:max-h-[calc(100dvh-7rem)] @[52rem]:overflow-y-auto"
             >
               {day ? (
                 <ActivityDayDetails
