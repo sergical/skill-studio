@@ -73,6 +73,8 @@ fn to_facts(meta: &fs::Metadata) -> FileFacts {
         len,
         modified,
         mode: Some(meta.mode()),
+        changed: DateTime::from_timestamp(meta.ctime(), meta.ctime_nsec() as u32),
+        inode: Some(meta.ino()),
     }
 }
 

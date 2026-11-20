@@ -48,6 +48,7 @@ fn scan(request: &ScanRequest) -> Inventory {
         tools: None,
         catalog: Arc::new(HarnessCatalog::builtin()),
         telemetry: Arc::new(skill_studio_core::ports::NoopTelemetry),
+        scan_memo: None,
     };
     let runtime = Runtime::new(&scope_for("scan-source", Path::new("/home")), ports).unwrap();
     ops::scan(&runtime, &ctx(), request).unwrap()

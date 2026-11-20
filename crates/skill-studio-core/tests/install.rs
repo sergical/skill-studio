@@ -156,6 +156,8 @@ fn runtime_in(
         catalog: Arc::new(HarnessCatalog::builtin()),
 
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+
+        scan_memo: None,
     };
     Runtime::new(scope, ports).unwrap()
 }
@@ -657,6 +659,8 @@ fn copy_install_under_a_project_scope_is_classified_as_owned_or_names_the_deploy
         catalog: Arc::new(HarnessCatalog::builtin()),
 
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+
+        scan_memo: None,
     };
     let rt = Runtime::new(&scope, ports).unwrap();
 
@@ -1017,6 +1021,8 @@ fn project_skills_lock_json_classifies_a_skills_sh_install_as_owned_not_manual_o
         catalog: Arc::new(HarnessCatalog::builtin()),
 
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+
+        scan_memo: None,
     };
     let rt = Runtime::new(&scope, ports).unwrap();
 
