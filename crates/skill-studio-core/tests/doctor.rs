@@ -55,6 +55,8 @@ fn runtime_with_projects(fs: Arc<dyn ScopeFs>, projects: Vec<std::path::PathBuf>
         catalog: Arc::new(HarnessCatalog::builtin()),
 
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+
+        scan_memo: None,
     };
     let mut scope = scope_for("doctor", Path::new(HOME));
     scope.projects = skill_studio_core::scope::ProjectSelection::Explicit { paths: projects };

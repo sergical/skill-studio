@@ -34,6 +34,7 @@ fn runtime_for(home: &Path) -> Runtime {
         catalog: Arc::new(skill_studio_core::harness::HarnessCatalog::builtin()),
 
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+        scan_memo: None,
     };
     Runtime::new(&RuntimeScope::fixture(home), ports).unwrap()
 }

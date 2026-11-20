@@ -74,6 +74,8 @@ fn run_in_memory(name: &str, home: &Path) -> serde_json::Value {
         catalog: Arc::new(HarnessCatalog::builtin()),
 
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+
+        scan_memo: None,
     };
     let scope = scope_for(name, home);
     let rt = Runtime::new(&scope, ports).expect("runtime");

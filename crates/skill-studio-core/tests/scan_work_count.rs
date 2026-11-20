@@ -6,7 +6,8 @@
 //! Given a 400-skill estate across the harness roots with 20% linked from
 //! the shared root, when the app rescans, the scan reads each `SKILL.md`
 //! once and lists each directory once; fails if either count grows with
-//! links or harnesses.
+//! links or harnesses. With a scan memo, a rescan reads only the
+//! `SKILL.md` files that changed.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -21,8 +22,10 @@ use skill_studio_core::ops::scan;
 use skill_studio_core::ports::{
     DirEntryFacts, ExclusiveGuard, FileFacts, Ports, Runtime, ScopeFs, ScopedPath,
 };
+use skill_studio_core::scan_memo::ScanMemo;
 use skill_studio_core::scope::{ProjectSelection, RuntimeScope};
 use skill_studio_core::testing::golden::{ctx, materialized_ports, unique_temp_dir};
+use skill_studio_core::testing::FakeClock;
 
 use skill_studio_host::{FileLease, RealFs};
 
@@ -44,6 +47,16 @@ struct CountingFs {
     write_atomic: AtomicU64,
     rename: AtomicU64,
     skill_md_reads: AtomicU64,
+    /// One call to fail, as a call does when the process has too many open
+    /// files.
+    fail: Mutex<Option<FailCall>>,
+}
+
+/// Fails the call to `method` on `path` after `skip` calls to it succeeded.
+struct FailCall {
+    method: &'static str,
+    path: PathBuf,
+    skip: u32,
 }
 
 impl CountingFs {
@@ -65,15 +78,33 @@ impl CountingFs {
     fn get(counter: &AtomicU64) -> u64 {
         counter.load(Ordering::SeqCst)
     }
+
+    fn fail_call(&self, method: &'static str, path: &Path) -> std::io::Result<()> {
+        let mut fail = self.fail.lock().expect("fail lock");
+        let Some(call) = fail.as_mut() else {
+            return Ok(());
+        };
+        if call.method != method || call.path != path {
+            return Ok(());
+        }
+        if call.skip > 0 {
+            call.skip -= 1;
+            return Ok(());
+        }
+        *fail = None;
+        Err(std::io::Error::other("too many open files"))
+    }
 }
 
 impl ScopeFs for CountingFs {
     fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
         Self::count(&self.canonicalize);
+        self.fail_call("canonicalize", path)?;
         self.inner().canonicalize(path)
     }
     fn symlink_metadata(&self, path: &Path) -> std::io::Result<FileFacts> {
         Self::count(&self.symlink_metadata);
+        self.fail_call("symlink_metadata", path)?;
         self.inner().symlink_metadata(path)
     }
     fn read_link(&self, path: &Path) -> std::io::Result<PathBuf> {
@@ -93,6 +124,7 @@ impl ScopeFs for CountingFs {
     }
     fn read_capped(&self, path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
         Self::count(&self.read_capped);
+        self.fail_call("read_capped", path)?;
         if path.ends_with("SKILL.md") {
             Self::count(&self.skill_md_reads);
         }
@@ -337,4 +369,307 @@ fn scan_reads_each_skill_md_once_and_lists_each_directory_once() {
     }
 
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Given the same 400-skill estate and a [`ScanMemo`], when the app rescans
+/// and nothing changed, the second scan reads no `SKILL.md` and returns the
+/// same skills. When one `SKILL.md` gets new bytes with the same size and
+/// mtime, the next scan reads that one file again (its ctime changed) and
+/// shows the new description. Fails if the memo is not used, or if a write
+/// that keeps size and mtime is hidden.
+#[test]
+fn a_rescan_with_a_scan_memo_reads_only_the_skill_md_that_changed() {
+    let generated = estate(400, 1);
+    let dir = unique_temp_dir("scan-memo");
+    std::fs::create_dir_all(&dir).expect("create scan-memo home");
+    let home = dir.canonicalize().expect("canonicalize home");
+    generated
+        .builder
+        .materialize(&home)
+        .expect("materialize 400-skill estate");
+
+    let counting_fs = Arc::new(CountingFs::wrap(Arc::new(RealFs::new())));
+    let rt = memo_runtime(&home, &generated.project_dirs, counting_fs.clone());
+
+    let first = scan(&rt, &ctx(), &ScanRequest::default()).expect("first scan");
+    let after_first = CountingFs::get(&counting_fs.skill_md_reads);
+    assert_eq!(after_first, generated.stats.skill_count as u64);
+
+    let second = scan(&rt, &ctx(), &ScanRequest::default()).expect("second scan");
+    assert_eq!(
+        CountingFs::get(&counting_fs.skill_md_reads),
+        after_first,
+        "a rescan of an unchanged estate must read no SKILL.md"
+    );
+    assert_eq!(skills(&second), skills(&first));
+
+    let mut skill_mds: Vec<PathBuf> = std::fs::read_dir(home.join(".claude/skills"))
+        .expect("list Claude skills")
+        .flatten()
+        .map(|entry| entry.path().join("SKILL.md"))
+        .filter(|path| path.symlink_metadata().is_ok_and(|m| m.is_file()))
+        .collect();
+    skill_mds.sort();
+    let skill_md = skill_mds
+        .first()
+        .expect("a Claude skill with its own SKILL.md");
+    let before = std::fs::read_to_string(skill_md).expect("read SKILL.md");
+    let mtime = filetime::FileTime::from_last_modification_time(
+        &skill_md.metadata().expect("SKILL.md metadata"),
+    );
+    let at = before.find("description: ").expect("a description line") + "description: ".len();
+    let (old, new) = if before[at..].starts_with('Z') {
+        ("Z", "Y")
+    } else {
+        (&before[at..=at], "Z")
+    };
+    let after = format!("{}{new}{}", &before[..at], &before[at + old.len()..]);
+    assert_eq!(after.len(), before.len());
+    std::fs::write(skill_md, &after).expect("rewrite SKILL.md");
+    filetime::set_file_mtime(skill_md, mtime).expect("restore SKILL.md mtime");
+
+    let third = scan(&rt, &ctx(), &ScanRequest::default()).expect("third scan");
+    assert_eq!(
+        CountingFs::get(&counting_fs.skill_md_reads),
+        after_first + 1,
+        "a rescan must read again only the SKILL.md that changed"
+    );
+    // The truth for the changed estate: a scan without a memo.
+    let fresh_ports = Ports {
+        clock: Arc::new(FakeClock::at(
+            chrono::Utc::now().timestamp_millis() as u64 + 3_600_000,
+        )),
+        ..materialized_ports(
+            Arc::new(RealFs::new()),
+            Arc::new(FileLease::new(home.join(".leases"))),
+        )
+    };
+    let fresh_rt =
+        Runtime::new(&scope_for(&home, &generated.project_dirs), fresh_ports).expect("runtime");
+    let fresh = scan(&fresh_rt, &ctx(), &ScanRequest::default()).expect("scan without a memo");
+    assert_ne!(
+        skills(&fresh),
+        skills(&first),
+        "the rewrite must change the skills"
+    );
+    assert_eq!(
+        skills(&third),
+        skills(&fresh),
+        "the rescan must return what a scan without a memo returns"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A runtime over `fs` with a [`ScanMemo`]. The fixture files were written
+/// just now; a clock an hour ahead puts them outside the memo's racy window.
+fn memo_runtime(home: &Path, project_dirs: &[PathBuf], fs: Arc<CountingFs>) -> Runtime {
+    let an_hour_ahead = chrono::Utc::now().timestamp_millis() as u64 + 3_600_000;
+    memo_runtime_at(
+        home,
+        project_dirs,
+        fs,
+        Arc::new(FakeClock::at(an_hour_ahead)),
+        Arc::new(ScanMemo::new()),
+    )
+}
+
+fn memo_runtime_at(
+    home: &Path,
+    project_dirs: &[PathBuf],
+    fs: Arc<CountingFs>,
+    clock: Arc<FakeClock>,
+    memo: Arc<ScanMemo>,
+) -> Runtime {
+    let ports = Ports {
+        clock,
+        scan_memo: Some(memo),
+        ..materialized_ports(fs, Arc::new(FileLease::new(home.join(".leases"))))
+    };
+    Runtime::new(&scope_for(home, project_dirs), ports).expect("runtime")
+}
+
+fn skills(inventory: &skill_studio_core::dto::Inventory) -> serde_json::Value {
+    serde_json::to_value(&inventory.skills).expect("skills to JSON")
+}
+
+/// A small home: one Claude skill with a support file, a `spec.md` and a
+/// link to the support file, and one whose folder holds a link to a file
+/// that does not exist.
+fn two_skill_home(name: &str) -> PathBuf {
+    let dir = unique_temp_dir(name);
+    let skills = dir.join(".claude/skills");
+    for skill in ["notes", "linked"] {
+        std::fs::create_dir_all(skills.join(skill)).expect("create skill folder");
+        std::fs::write(
+            skills.join(skill).join("SKILL.md"),
+            format!("---\nname: {skill}\ndescription: The {skill} skill.\n---\nBody.\n"),
+        )
+        .expect("write SKILL.md");
+    }
+    std::fs::write(skills.join("notes/notes.md"), "Support text.\n").expect("write notes.md");
+    std::fs::write(skills.join("notes/spec.md"), "Spec.\n").expect("write spec.md");
+    std::os::unix::fs::symlink("notes.md", skills.join("notes/alias.md")).expect("link alias.md");
+    std::os::unix::fs::symlink(dir.join("gone.md"), skills.join("linked/gone.md"))
+        .expect("link to a missing file");
+    dir.canonicalize().expect("canonicalize home")
+}
+
+/// Given a skill folder where one filesystem call fails once during a scan
+/// with a [`ScanMemo`] (a file read, the `spec.md` check, a link lookup),
+/// when the app rescans, the rescan reads that folder again and returns the
+/// same skills as a scan in which no call failed. The stamp itself reads
+/// each path first, so `skip` lets that call through and fails the facts
+/// read. Fails if the memo keeps a result from a failed call.
+#[test]
+fn a_scan_memo_does_not_keep_facts_from_a_failed_call() {
+    let home = two_skill_home("scan-memo-failed-call");
+    let notes = home.join(".claude/skills/notes");
+    let clean_rt = memo_runtime(
+        &home,
+        &[],
+        Arc::new(CountingFs::wrap(Arc::new(RealFs::new()))),
+    );
+    let clean = skills(&scan(&clean_rt, &ctx(), &ScanRequest::default()).expect("clean scan"));
+
+    for (method, path, skip) in [
+        ("read_capped", notes.join("notes.md"), 0),
+        ("symlink_metadata", notes.join("spec.md"), 1),
+        ("canonicalize", notes.join("alias.md"), 1),
+    ] {
+        let counting_fs = Arc::new(CountingFs::wrap(Arc::new(RealFs::new())));
+        let rt = memo_runtime(&home, &[], counting_fs.clone());
+        *counting_fs.fail.lock().expect("fail lock") = Some(FailCall {
+            method,
+            path: path.clone(),
+            skip,
+        });
+        let failed = scan(&rt, &ctx(), &ScanRequest::default()).expect("scan with a failed call");
+        assert!(
+            counting_fs.fail.lock().expect("fail lock").is_none(),
+            "{method} on {} was not called {} times",
+            path.display(),
+            skip + 1
+        );
+        assert_ne!(
+            skills(&failed),
+            clean,
+            "a failed {method} must change the facts"
+        );
+        let rescan = scan(&rt, &ctx(), &ScanRequest::default()).expect("rescan");
+        assert_eq!(skills(&rescan), clean, "after a failed {method}");
+    }
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Given a skill folder that holds a link to a missing file, when the app
+/// rescans with a [`ScanMemo`], the rescan reads that `SKILL.md` again (a
+/// link target the stamp cannot read is never kept), while the other skill
+/// comes from the memo. Fails if such a folder is kept.
+#[test]
+fn a_scan_memo_does_not_keep_a_folder_with_an_unreadable_link_target() {
+    let home = two_skill_home("scan-memo-dangling-link");
+    let counting_fs = Arc::new(CountingFs::wrap(Arc::new(RealFs::new())));
+    let rt = memo_runtime(&home, &[], counting_fs.clone());
+
+    scan(&rt, &ctx(), &ScanRequest::default()).expect("first scan");
+    assert_eq!(CountingFs::get(&counting_fs.skill_md_reads), 2);
+    scan(&rt, &ctx(), &ScanRequest::default()).expect("rescan");
+    assert_eq!(
+        CountingFs::get(&counting_fs.skill_md_reads),
+        3,
+        "only the folder with the missing link target is read again"
+    );
+
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// The newest mtime or ctime of any entry under `dir`, in whole
+/// milliseconds rounded up.
+fn newest_change_ms(dir: &Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(dir).expect("metadata");
+    let ns = |secs: i64, nsec: i64| secs as u64 * 1_000_000_000 + nsec as u64;
+    let mut newest = ns(meta.mtime(), meta.mtime_nsec())
+        .max(ns(meta.ctime(), meta.ctime_nsec()))
+        .div_ceil(1_000_000);
+    if meta.is_dir() {
+        for entry in std::fs::read_dir(dir).expect("list").flatten() {
+            newest = newest.max(newest_change_ms(&entry.path()));
+        }
+    }
+    newest
+}
+
+/// Given a home whose files were written just now, when the app scans with
+/// a [`ScanMemo`], it keeps nothing until 2 s after the newest change in a
+/// folder, then reuses the kept result for less than 10 minutes, and reads
+/// the folder again at 10 minutes or when the clock is set back below a
+/// time it saw. (The
+/// `linked` skill holds a link to a missing file and is read on every
+/// scan.) Fails if either limit moves, or if a kept result outlives them.
+#[test]
+fn a_scan_memo_waits_two_seconds_before_it_keeps_and_reads_again_after_ten_minutes() {
+    let home = two_skill_home("scan-memo-time");
+    let counting_fs = Arc::new(CountingFs::wrap(Arc::new(RealFs::new())));
+    let changed = newest_change_ms(&home.join(".claude/skills/notes"));
+    let clock = Arc::new(FakeClock::at(changed + 1_999));
+    let memo = Arc::new(ScanMemo::new());
+    let rt = memo_runtime_at(&home, &[], counting_fs.clone(), clock.clone(), memo.clone());
+    let reads = |rt: &Runtime| {
+        let before = CountingFs::get(&counting_fs.skill_md_reads);
+        scan(rt, &ctx(), &ScanRequest::default()).expect("scan");
+        CountingFs::get(&counting_fs.skill_md_reads) - before
+    };
+    let ms = std::time::Duration::from_millis;
+
+    assert_eq!(reads(&rt), 2);
+    assert_eq!(
+        reads(&rt),
+        2,
+        "a folder changed 1.999 s ago must not be kept"
+    );
+    clock.advance(ms(2));
+    assert_eq!(
+        reads(&rt),
+        2,
+        "this scan keeps the folder changed 2.001 s ago"
+    );
+    assert_eq!(reads(&rt), 1, "a kept folder must not be read again");
+    clock.advance(ms(10 * 60 * 1_000 - 1));
+    assert_eq!(
+        reads(&rt),
+        1,
+        "a result kept 9:59.999 ago must still be used"
+    );
+    clock.advance(ms(1));
+    assert_eq!(
+        reads(&rt),
+        2,
+        "a result kept 10 minutes ago must be read again"
+    );
+    assert_eq!(reads(&rt), 1);
+
+    // The last store was at `changed + 2_001 + 10 min`. Use the result 9
+    // minutes later, then set the clock back 8 minutes: its age reads as 1
+    // minute, but the memo saw a later time, so it reads again.
+    clock.advance(ms(9 * 60 * 1_000));
+    assert_eq!(reads(&rt), 1);
+    let behind = Arc::new(FakeClock::at(changed + 2_001 + 19 * 60 * 1_000 - 1_000));
+    let rt_behind = memo_runtime_at(&home, &[], counting_fs.clone(), behind, memo.clone());
+    assert_eq!(
+        reads(&rt_behind),
+        1,
+        "a scan whose clock reads 1 s behind another's must still use the memo"
+    );
+    let set_back = Arc::new(FakeClock::at(changed + 2_001 + 11 * 60 * 1_000));
+    let rt_set_back = memo_runtime_at(&home, &[], counting_fs.clone(), set_back, memo);
+    assert_eq!(
+        reads(&rt_set_back),
+        2,
+        "a clock set back below a time the memo saw must end every kept result"
+    );
+
+    std::fs::remove_dir_all(&home).ok();
 }

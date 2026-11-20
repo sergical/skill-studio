@@ -983,7 +983,7 @@ struct ScanAccum {
 /// the same canonical path (a per-skill symlink into the universal root)
 /// reuses it instead of reading and walking the folder again.
 #[derive(Clone)]
-struct CachedSkillRead {
+pub(crate) struct CachedSkillRead {
     description: Option<String>,
     violations: Vec<String>,
     truncated: bool,
@@ -1034,6 +1034,7 @@ fn scan_one_target(
                     fs: sc.fs,
                     ctx: sc.ctx,
                     clock: sc.rt.ports.clock.as_ref(),
+                    memo: sc.rt.ports.scan_memo.as_deref(),
                     scope: &sc.rt.scope,
                     home: sc.home,
                     disable_sources: sc.disable_sources,
@@ -1100,6 +1101,7 @@ fn scan_move_aside_dir(
                 fs: sc.fs,
                 ctx: sc.ctx,
                 clock: sc.rt.ports.clock.as_ref(),
+                memo: sc.rt.ports.scan_memo.as_deref(),
                 scope: &sc.rt.scope,
                 home: sc.home,
                 disable_sources: sc.disable_sources,
@@ -1162,6 +1164,7 @@ fn scan_one_plugin_target(
             sc.fs,
             sc.ctx,
             sc.rt.ports.clock.as_ref(),
+            sc.rt.ports.scan_memo.as_deref(),
             &plugin_skill.skill_dir,
             &plugin_skill.name,
             sc.timings,
@@ -1329,6 +1332,7 @@ struct EntryContext<'a> {
     fs: &'a dyn ScopeFs,
     ctx: &'a OpContext,
     clock: &'a dyn Clock,
+    memo: Option<&'a crate::scan_memo::ScanMemo>,
     scope: &'a NormalizedScope,
     home: &'a Path,
     disable_sources: &'a DisableSources,
@@ -1455,7 +1459,15 @@ fn process_entries(
                 Box::new(cached.facts.clone()),
             )
         } else {
-            match read_skill_md(cx.fs, cx.ctx, cx.clock, &skill_dir, &entry.name, cx.timings)? {
+            match read_skill_md(
+                cx.fs,
+                cx.ctx,
+                cx.clock,
+                cx.memo,
+                &skill_dir,
+                &entry.name,
+                cx.timings,
+            )? {
                 SkillMdRead::Found {
                     description,
                     violations,
@@ -1789,7 +1801,64 @@ enum SkillMdRead {
 
 /// Reads and validates `<skill_dir>/SKILL.md`. See [`SkillMdRead`] for what
 /// each outcome means to the caller.
+/// [`read_skill_md_from_disk`], or the result `memo` kept for `skill_dir`
+/// when no entry of the folder changed since (see [`crate::scan_memo`]).
 fn read_skill_md(
+    fs: &dyn ScopeFs,
+    ctx: &OpContext,
+    clock: &dyn Clock,
+    memo: Option<&crate::scan_memo::ScanMemo>,
+    skill_dir: &Path,
+    name: &str,
+    timings: &ScanTimings,
+) -> Result<SkillMdRead, CoreError> {
+    let Some(memo) = memo else {
+        return read_skill_md_from_disk(fs, ctx, clock, skill_dir, name, timings);
+    };
+    let now = clock.now();
+    let Some(stamp) = crate::scan_memo::folder_stamp(fs, ctx, skill_dir, now)? else {
+        return read_skill_md_from_disk(fs, ctx, clock, skill_dir, name, timings);
+    };
+    if let Some(kept) = memo.get(skill_dir, name, &stamp, now) {
+        return Ok(SkillMdRead::Found {
+            description: kept.description,
+            violations: kept.violations,
+            truncated: kept.truncated,
+            facts: Box::new(kept.facts),
+        });
+    }
+    // The facts walk skips what it cannot read. A result read with any
+    // failed call is not kept: the failure may be gone on the next scan
+    // (too many open files, for example) while the stamp stays the same.
+    let watched = crate::scan_memo::FailureWatch::new(fs);
+    let read = read_skill_md_from_disk(&watched, ctx, clock, skill_dir, name, timings)?;
+    if watched.failed() {
+        return Ok(read);
+    }
+    if let SkillMdRead::Found {
+        description,
+        violations,
+        truncated,
+        facts,
+    } = &read
+    {
+        memo.put(
+            skill_dir,
+            name,
+            stamp,
+            now,
+            CachedSkillRead {
+                description: description.clone(),
+                violations: violations.clone(),
+                truncated: *truncated,
+                facts: (**facts).clone(),
+            },
+        );
+    }
+    Ok(read)
+}
+
+fn read_skill_md_from_disk(
     fs: &dyn ScopeFs,
     ctx: &OpContext,
     clock: &dyn Clock,
@@ -7419,6 +7488,8 @@ mod tests {
             catalog: Arc::new(HarnessCatalog::builtin()),
 
             telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
+
+            scan_memo: None,
         };
         let ctx = OpContext::uncancellable(CorrelationId("c4".into()));
 
@@ -7481,6 +7552,8 @@ mod tests {
             catalog: Arc::new(HarnessCatalog::builtin()),
 
             telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
+
+            scan_memo: None,
         };
         let rt = Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap();
         let ctx = OpContext::uncancellable(CorrelationId("c5".into()));
@@ -7551,6 +7624,8 @@ mod tests {
             catalog: Arc::new(HarnessCatalog::builtin()),
 
             telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
+
+            scan_memo: None,
         };
         let rt = Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap();
         let ctx = OpContext::uncancellable(CorrelationId("c6".into()));
@@ -8010,6 +8085,8 @@ mod tests {
                 catalog: Arc::new(HarnessCatalog::builtin()),
 
                 telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
+
+                scan_memo: None,
             };
             Runtime::new(scope, ports).unwrap()
         }
@@ -8042,6 +8119,8 @@ mod tests {
                 catalog: Arc::new(HarnessCatalog::builtin()),
 
                 telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
+
+                scan_memo: None,
             };
             let rt = Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap();
             let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
@@ -8274,6 +8353,7 @@ mod tests {
                     tools: None,
                     catalog: Arc::new(HarnessCatalog::builtin()),
                     telemetry: Arc::new(crate::ports::NoopTelemetry),
+                    scan_memo: None,
                 },
             )
             .unwrap();
@@ -8350,6 +8430,8 @@ mod tests {
                 catalog: Arc::new(HarnessCatalog::builtin()),
 
                 telemetry: std::sync::Arc::new(crate::ports::NoopTelemetry),
+
+                scan_memo: None,
             };
             let rt = Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap();
             let inv = scan(&rt, &ctx(), &ScanRequest::default()).unwrap();
@@ -8406,6 +8488,7 @@ mod tests {
                 tools: None,
                 catalog: Arc::new(HarnessCatalog::builtin()),
                 telemetry,
+                scan_memo: None,
             };
             Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap()
         }
@@ -8586,6 +8669,7 @@ mod tests {
                 tools: None,
                 catalog: Arc::new(HarnessCatalog::builtin()),
                 telemetry: Arc::clone(&telemetry) as Arc<dyn crate::ports::Telemetry>,
+                scan_memo: None,
             };
             let rt = Runtime::new(&RuntimeScope::fixture("/h"), ports).unwrap();
             let ctx = OpContext::uncancellable(CorrelationId("c-noop".into()));

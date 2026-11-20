@@ -45,6 +45,13 @@ pub struct FileFacts {
     pub modified: Option<DateTime<Utc>>,
     /// Unix mode bits, when the platform reports them.
     pub mode: Option<u32>,
+    /// Last status change time (ctime), when the platform reports one. Any
+    /// write sets it to the current time, and user space cannot set it back.
+    #[serde(default)]
+    pub changed: Option<DateTime<Utc>>,
+    /// Inode number, when the platform reports one.
+    #[serde(default)]
+    pub inode: Option<u64>,
 }
 
 /// One entry of a directory listing.
@@ -1329,6 +1336,9 @@ pub struct Ports {
     pub catalog: Arc<HarnessCatalog>,
     /// Op-call telemetry sink.
     pub telemetry: Arc<dyn Telemetry>,
+    /// Skill folder facts kept between scans; `None` reads each folder in
+    /// full on each scan. See [`crate::scan_memo`].
+    pub scan_memo: Option<Arc<crate::scan_memo::ScanMemo>>,
 }
 
 /// Per-call context.
