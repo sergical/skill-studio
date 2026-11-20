@@ -1,11 +1,12 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { openApp, setLatency } from "./app-harness";
 
-// Every harness answer waits 400 ms, so SKILL.md is still loading when the page first paints.
+// After the app starts, every harness answer waits 400 ms, so SKILL.md is still loading when
+// the page first paints.
 test.beforeEach(async ({ page }) => {
   test.slow();
-  await page.goto("/?latency=400");
-  await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
+  await openApp(page);
+  await setLatency(page, 400);
 });
 
 async function openFirstSkill(page: Page) {

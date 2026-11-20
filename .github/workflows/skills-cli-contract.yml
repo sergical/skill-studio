@@ -12,6 +12,12 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # A new commit on a pull request cancels that branch's older run. Main runs
+  # and scheduled or manual runs each get their own group, so none is cancelled.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   skills-cli-contract:
     runs-on: macos-latest

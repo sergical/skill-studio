@@ -68,6 +68,11 @@ export async function openSidebarPage(page: Page, name: string): Promise<void> {
   await expect(page.getByRole("heading", { name, level: 1 })).toBeVisible();
 }
 
+/** Holds every later harness answer `ms` long, so busy states stay on screen. */
+export function setLatency(page: Page, ms: number): Promise<void> {
+  return page.evaluate((delay) => window.__harness?.setLatency(delay), ms);
+}
+
 /** The titles of the native confirms the app showed, oldest first. */
 export function askedTitles(page: Page): Promise<(string | null)[]> {
   return page.evaluate(() => window.__harness?.asked().map((dialog) => dialog.title) ?? []);

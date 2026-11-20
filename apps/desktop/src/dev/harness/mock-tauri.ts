@@ -79,6 +79,8 @@ interface HarnessControl {
   answerNextAsk(answer: boolean): void;
   /** Replaces a SKILL.md on "disk", like an edit made outside the app. */
   writeSkillMd(path: string, content: string): void;
+  /** Holds every later answer `ms` long, like `?latency=<ms>`, without slowing the app's start. */
+  setLatency(ms: number): void;
 }
 
 declare global {
@@ -530,7 +532,7 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
 
   mockWindows("main");
   // `?latency=<ms>` holds every answer that long, so busy states show as they do with real disk work.
-  const latency = Number(new URLSearchParams(location.search).get("latency") ?? 0);
+  let latency = Number(new URLSearchParams(location.search).get("latency") ?? 0);
   mockIPC(
     async (command, rawPayload) => {
       if (latency > 0) await new Promise((resolve) => setTimeout(resolve, latency));
@@ -1286,6 +1288,9 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
     },
     writeSkillMd: (path, content) => {
       harnessSkillContent.set(path, content);
+    },
+    setLatency: (ms) => {
+      latency = ms;
     },
   };
 }
