@@ -30,7 +30,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-11-09
         with:
           toolchain: 1.95.0
+      # Only main saves, so pull requests cannot evict main's cache (the
+      # repository's caches reached 13.6 GB against GitHub's 10 GB limit, and
+      # 8 of 27 test runs found no cache). mutants-changed restores this one.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: linux-test
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-nextest
@@ -74,12 +80,10 @@ jobs:
         with:
           toolchain: 1.95.0
           components: rustfmt, clippy
-      # Only main saves, so pull requests cannot evict main's cache (the
-      # repository's caches reached 13.6 GB against GitHub's 10 GB limit, and
-      # 8 of 27 test runs found no cache). mutants-changed restores this one.
+      # Only main saves; this job keeps its own cache, as clippy's build differs
+      # from the test build.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          shared-key: linux-test
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
