@@ -394,9 +394,11 @@ pub(crate) fn codex_listing_settings(
 /// Name and description the way Codex 0.170.0 reads a `SKILL.md`
 /// (`codex-rs/skills/src/parser.rs`): YAML; on an error, values with a
 /// `: ` in them are quoted line by line and the YAML is read again; any
-/// other error (a duplicate key) rejects the skill. Whitespace runs become
-/// one space. `None` when Codex rejects the file.
-pub(crate) fn codex_frontmatter(contents: &str) -> Option<(Option<String>, String)> {
+/// other error (a duplicate key) rejects the skill. The fields are typed:
+/// `name` and `description` are strings, `metadata` a mapping, and the name
+/// (or `default_name`, the folder name) has at most 64 characters.
+/// Whitespace runs become one space. `None` when Codex rejects the file.
+pub(crate) fn codex_frontmatter(contents: &str, default_name: &str) -> Option<(String, String)> {
     let mut lines = contents.lines();
     if lines.next()?.trim() != "---" {
         return None;
@@ -429,18 +431,29 @@ pub(crate) fn codex_frontmatter(contents: &str) -> Option<(Option<String>, Strin
     let value: serde_json::Value = crate::yaml::from_str(&text)
         .ok()
         .or_else(|| crate::yaml::from_str(&codex_repair_scalars(&body)?).ok())?;
-    let one_line = |v: &serde_json::Value| {
-        v.as_str()
-            .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
+    // `Option<String>` fields: absent or null is fine, another type is an error.
+    let text_field = |key: &str| -> Option<Option<String>> {
+        match value.get(key) {
+            None | Some(serde_json::Value::Null) => Some(None),
+            Some(serde_json::Value::String(s)) => {
+                Some(Some(s.split_whitespace().collect::<Vec<_>>().join(" ")))
+            }
+            Some(_) => None,
+        }
     };
-    let description = value
-        .get("description")
-        .and_then(one_line)
-        .unwrap_or_default();
-    let name = value
-        .get("name")
-        .and_then(one_line)
-        .filter(|n| !n.is_empty());
+    let description = text_field("description")?.unwrap_or_default();
+    let name = text_field("name")?
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| default_name.to_string());
+    if let Some(metadata) = value.get("metadata") {
+        let short = metadata.as_object()?.get("short-description");
+        if short.is_some_and(|v| !v.is_string() && !v.is_null()) {
+            return None;
+        }
+    }
+    if name.chars().count() > 64 {
+        return None;
+    }
     Some((name, description))
 }
 
@@ -573,29 +586,38 @@ pub(crate) fn listed_skills(
                         read(rt, &deployment.path.join("SKILL.md"))
                             .ok()
                             .flatten()
-                            .and_then(|b| codex_frontmatter(&String::from_utf8_lossy(&b))),
+                            .and_then(|b| {
+                                let folder = deployment
+                                    .path
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                                codex_frontmatter(&String::from_utf8_lossy(&b), &folder)
+                            }),
                     )
                 } else {
                     None
                 };
-                let field =
-                    |key: &str| match &deployment.frontmatter {
-                        _ if codex.is_some() => codex.as_ref().and_then(|c| c.as_ref()).and_then(
-                            |(name, description)| match key {
+                let field = |key: &str| match &deployment.frontmatter {
+                    _ if codex.is_some() => {
+                        codex
+                            .as_ref()
+                            .and_then(|c| c.as_ref())
+                            .map(|(name, description)| match key {
                                 "name" => name.clone(),
-                                _ => Some(description.clone()),
-                            },
-                        ),
-                        Some(f) => match key {
-                            "name" => f.name.clone(),
-                            _ => f.description.clone(),
-                        },
-                        // Frontmatter that is not valid YAML (a description
-                        // with `: ` in it): every agent still reads its plain
-                        // lines. Codex 0.170.0 lists such a skill (checked
-                        // against recorded sessions on 2026-11-20).
-                        None => deployment.frontmatter_fields.get(key).cloned(),
-                    };
+                                _ => description.clone(),
+                            })
+                    }
+                    Some(f) => match key {
+                        "name" => f.name.clone(),
+                        _ => f.description.clone(),
+                    },
+                    // Frontmatter that is not valid YAML (a description
+                    // with `: ` in it): every agent still reads its plain
+                    // lines. Codex 0.170.0 lists such a skill (checked
+                    // against recorded sessions on 2026-11-20).
+                    None => deployment.frontmatter_fields.get(key).cloned(),
+                };
                 let name = field("name").unwrap_or_else(|| skill.name.0.clone());
                 let key = if matches!(harness, AgentId::CODEX | AgentId::CLAUDE_CODE) {
                     rt.ports

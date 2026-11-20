@@ -310,3 +310,27 @@ fn codex_listing_adds_system_skills_from_the_newest_session_and_charges_short_pa
         .unwrap()
         .ends_with("rollout-1.jsonl"));
 }
+
+#[test]
+fn codex_session_comparison_reads_only_rollouts_in_this_homes_session_folders() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let other = tempfile::tempdir().unwrap();
+    // Named like a rollout, in a folder named like Codex's, outside this home.
+    let foreign = other.path().join(".codex/sessions/rollout-1.jsonl");
+    std::fs::create_dir_all(foreign.parent().unwrap()).unwrap();
+    std::fs::write(&foreign, "").unwrap();
+    let mut cmd = test_home::command(env!("CARGO_BIN_EXE_skill-studio"), home);
+    cmd.args(["listing", "--fixture", home.to_str().unwrap(), "--json"])
+        .args(["--codex-session", foreign.to_str().unwrap()])
+        .env("HOME", home)
+        .env("CODEX_HOME", home.join(".codex"))
+        .env("SKILL_STUDIO_TELEMETRY", "0");
+    let out = cmd.output().unwrap();
+    let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(envelope["status"], "error", "{envelope}");
+    assert!(envelope["errors"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("in this home"));
+}

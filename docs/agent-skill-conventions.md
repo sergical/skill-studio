@@ -480,7 +480,8 @@ the `### Available skills` block of real sessions:
   only `policy.allow_implicit_invocation: false` in `agents/openai.yaml` hides
   a skill, so a skill that Claude Code keeps manual-only can still be listed
   by Codex. `listing` flags this as `invocation_mismatch`.
-- **Names and order.** Plugin skills are `plugin:name`. The list is in catalog
+- **Names and order.** Plugin skills are `plugin:name`. Names over 64 characters, and a `metadata`
+  that is not a mapping, drop the skill. The list is in catalog
   order: system skills (`$CODEX_HOME/skills/.system`), then repository skills,
   then user skills, each by name, then path. The `description` is used, not
   `metadata.short-description`.
@@ -509,13 +510,18 @@ the `### Available skills` block of real sessions:
   skill in that session is hidden as "plugin not loaded" (`codex exec` does not
   load the `openai-primary-runtime` plugins, while the T3 Code app does).
   `--codex-session <rollout>` compares with one chosen session instead.
-- **Match rate.** Replaying 15 real sessions with `--codex-session` at their
-  model's budget listed 2,771 of 2,771 recorded entries, in the same order and
-  tier, and gave the exact description length for 2,711 (97.8%); every miss is
-  one to four characters. On 16
-  `codex exec` eval sessions (default budget and `max_context_tokens = 10000`)
-  it was 2,848 of 2,848 listed and 2,736 (96.1%) exact; most misses are
-  google-drive skills that changed version after those runs.
+- **Match rate.** Replaying 14 real sessions with `--codex-session` at their
+  model's budget listed 2,586 of 2,586 recorded entries, in the same order and
+  tier, and gave the exact description length for 2,526 (97.7%); every miss is
+  one to four characters. On 16 `codex exec` eval sessions (default budget and
+  `max_context_tokens = 10000`) an earlier build listed 2,848 of 2,848 and gave
+  2,736 (96.1%) exact; most misses are google-drive skills that changed version
+  after those runs. `--codex-session` now reads only rollouts inside this
+  home's `sessions` or `archived_sessions` folder (after resolving links), so
+  eval homes in a temporary folder cannot be replayed with it.
+- **Plugin load state.** A plugin with no skill in the session counts as not
+  loaded only when that listing left nothing out (no omission line, and some
+  description kept); otherwise the plugin stays in the prediction.
 
 Skill Studio estimates name, capped description, punctuation, and Codex's file
 locator in UTF-16 characters, or UTF-8 bytes for Codex, divided by four,

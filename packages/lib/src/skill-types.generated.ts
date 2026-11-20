@@ -455,6 +455,7 @@ export interface ListingEntry {
   /**
    * Set when another agent's invocation setting disagrees with this one,
    * such as a skill Claude Code keeps manual-only that Codex still lists.
+   * Holds the skill name.
    */
   invocation_mismatch: string | null;
 }

@@ -62,6 +62,8 @@ pub struct ListingEntry {
     pub observed_description_chars: Option<u64>,
     /// Set when another agent's invocation setting disagrees with this one,
     /// such as a skill Claude Code keeps manual-only that Codex still lists.
+    /// Holds the skill name.
+    #[schemars(extend("x-untrusted" = true))]
     pub invocation_mismatch: Option<String>,
 }
 
@@ -981,8 +983,19 @@ fn with_limit(limit: CodexLimit, value: u64) -> CodexLimit {
     }
 }
 
+/// The line the extension renderer adds when it leaves skills out.
+fn omission_line(omitted: usize) -> String {
+    format!(
+        "- {omitted} additional {} omitted from this bounded skills list.\n",
+        if omitted == 1 { "skill" } else { "skills" }
+    )
+}
+
 /// Description characters each line keeps, or `None` when it is omitted.
-/// Mirrors `allocate_skill_lines` in Codex 0.170.0 `ext/skills/src/render.rs`.
+/// Mirrors `allocate_skill_lines` and `render_catalog` in Codex 0.170.0
+/// `ext/skills/src/render.rs` for host skills, which Codex renders with the
+/// extension-compatible policy (`extension.rs`); that policy adds the
+/// omission line, the core-compatible one does not.
 pub(crate) fn codex_allocate(lines: &[CodexLine], limit: CodexLimit) -> Vec<Option<usize>> {
     let max = codex_limit_value(limit);
     let full: u64 = lines
@@ -1036,11 +1049,7 @@ pub(crate) fn codex_allocate(lines: &[CodexLine], limit: CodexLimit) -> Vec<Opti
     // drops listed lines from the end until that line fits too.
     let mut omitted = alloc.iter().filter(|a| a.is_none()).count();
     loop {
-        let marker = format!(
-            "- {omitted} additional {} omitted from this bounded skills list.\n",
-            if omitted == 1 { "skill" } else { "skills" }
-        );
-        if used + codex_cost(&marker, limit) <= max {
+        if used + codex_cost(&omission_line(omitted), limit) <= max {
             break;
         }
         let Some(last) = alloc.iter().rposition(Option::is_some) else {
@@ -1131,8 +1140,16 @@ impl CodexRender {
             .sum()
     }
 
+    /// Every line Codex emits, the omission line and the roots table
+    /// included.
     fn cost(&self, limit: CodexLimit) -> u64 {
+        let omitted = self.lines.len() - self.included();
         self.roots_cost
+            + if omitted > 0 {
+                codex_cost(&omission_line(omitted), limit)
+            } else {
+                0
+            }
             + self
                 .lines
                 .iter()
@@ -1262,6 +1279,10 @@ pub(crate) struct CodexRecorded {
     /// The skill roots table, in alias order.
     pub roots: Vec<PathBuf>,
     pub entries: Vec<CodexRecordedEntry>,
+    /// True when the listing left no skill out: no omission line, and some
+    /// description kept. Only then does a missing plugin mean Codex did not
+    /// load it.
+    pub complete: bool,
 }
 
 /// Parses the `<skills_instructions>` text: the roots table and the
@@ -1359,8 +1380,12 @@ fn read_codex_recorded(rt: &Runtime, path: &Path) -> Option<CodexRecorded> {
             break;
         }
     }
-    let (roots, entries) = parse_codex_block(&block?);
+    let block = block?;
+    let (roots, entries) = parse_codex_block(&block);
+    let complete = !block.contains("omitted from this bounded skills list")
+        && entries.iter().any(|e| !e.description.is_empty());
     Some(CodexRecorded {
+        complete,
         session: ObservedSession {
             transcript: path.to_path_buf(),
             at,
@@ -1383,21 +1408,40 @@ fn newest_codex_recorded(rt: &Runtime, scope: &RootScope) -> Option<CodexRecorde
         chrono::DateTime::<chrono::Utc>::MIN_UTC,
         usize::MAX,
     );
-    files.into_iter().take(40).find_map(|path| {
-        let recorded = read_codex_recorded(rt, &path)?;
-        let cwd = recorded.cwd.as_deref()?;
-        let fits = match scope {
-            RootScope::Global => true,
-            RootScope::Project(p) => Path::new(cwd) == p.0,
-        };
-        (fits && !crate::skill_sessions::temporary_dir(rt, cwd)).then_some(recorded)
-    })
+    // Skipped sessions (temporary folders, other projects) do not count
+    // toward the 40 sessions read for a listing.
+    files
+        .into_iter()
+        .filter_map(|path| read_codex_recorded(rt, &path))
+        .filter(|recorded| {
+            recorded.cwd.as_deref().is_some_and(|cwd| {
+                let fits = match scope {
+                    RootScope::Global => true,
+                    RootScope::Project(p) => Path::new(cwd) == p.0,
+                };
+                fits && !crate::skill_sessions::temporary_dir(rt, cwd)
+            })
+        })
+        .take(1)
+        .next()
 }
 
 /// The description a `SKILL.md` gives, read the way Codex reads it.
+/// Reads only files inside the home folder: the path comes from a session log.
 fn codex_description(rt: &Runtime, skill_md: &Path) -> Option<String> {
+    let file = rt.ports.fs.canonicalize(skill_md).ok()?;
+    let home = rt.ports.fs.canonicalize(&rt.scope.home.lexical).ok()?;
+    if !file.starts_with(home) {
+        return None;
+    }
     let bytes = rt.ports.fs.read_capped(skill_md, 256 * 1024).ok()?;
-    crate::listing_cost::codex_frontmatter(&String::from_utf8_lossy(&bytes)).map(|(_, d)| d)
+    let folder = skill_md
+        .parent()?
+        .file_name()?
+        .to_string_lossy()
+        .into_owned();
+    crate::listing_cost::codex_frontmatter(&String::from_utf8_lossy(&bytes), &folder)
+        .map(|(_, d)| d)
 }
 
 fn codex_listing(
@@ -1411,21 +1455,24 @@ fn codex_listing(
     let budget = codex_budget(rt, &settings, req.codex_max_context_tokens);
     let recorded = match &req.codex_transcript {
         Some(path) => {
-            let rollout = path
-                .file_name()
-                .is_some_and(|n| n.to_string_lossy().starts_with("rollout-"))
-                && path.extension().is_some_and(|e| e == "jsonl")
-                && path.ancestors().any(|a| {
-                    a.file_name()
-                        .is_some_and(|n| n == "sessions" || n == "archived_sessions")
-                        && a.parent().and_then(Path::file_name).is_some_and(|p| {
-                            p == ".codex" || Some(p) == rt.scope.codex_home.file_name()
-                        })
-                });
+            // Only a rollout inside this home's Codex session folders, after
+            // resolving links and `..`.
+            let file = rt.ports.fs.canonicalize(path).ok();
+            let rollout = file.as_ref().is_some_and(|file| {
+                file.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with("rollout-"))
+                    && file.extension().is_some_and(|e| e == "jsonl")
+                    && ["sessions", "archived_sessions"].iter().any(|dir| {
+                        rt.ports
+                            .fs
+                            .canonicalize(&rt.scope.codex_home.join(dir))
+                            .is_ok_and(|root| file.starts_with(root))
+                    })
+            });
             if !rollout {
                 return Err(CoreError::new(
                     ErrorCode::InvalidRequest,
-                    "The rollout must be a Codex session file (.codex/sessions/**/rollout-*.jsonl)",
+                    "The rollout must be a Codex session file in this home (sessions/**/rollout-*.jsonl)",
                 )
                 .at(path));
             }
@@ -1461,7 +1508,7 @@ fn codex_listing(
             .and_then(|_| plugin_version_base(skill.path.parent()?))
             .and_then(|version| version.parent().map(Path::to_path_buf));
         if let (Some(dir), Some(recorded)) = (&plugin_dir, &recorded) {
-            if !recorded.entries.iter().any(|e| e.skill_md.starts_with(dir)) {
+            if recorded.complete && !recorded.entries.iter().any(|e| e.skill_md.starts_with(dir)) {
                 let mut entry = hidden_entry(&skill, name);
                 entry.hidden_reason = Some("plugin not loaded in the newest Codex session".into());
                 hidden.push(entry);
@@ -1516,13 +1563,13 @@ fn codex_listing(
         // folder) are not global entries. A session started in the home
         // folder has none.
         let home_agents = rt.scope.global_root_path(Path::new(".agents"));
+        let session_repo =
+            recorded.cwd.as_deref().map(PathBuf::from).filter(|cwd| {
+                !home_agents.starts_with(cwd) && !rt.scope.codex_home.starts_with(cwd)
+            });
         // A comparison with one chosen session keeps its repository skills.
         let repo = match scope {
-            RootScope::Global if req.codex_transcript.is_none() => {
-                recorded.cwd.as_deref().map(PathBuf::from).filter(|cwd| {
-                    !home_agents.starts_with(cwd) && !rt.scope.codex_home.starts_with(cwd)
-                })
-            }
+            RootScope::Global if req.codex_transcript.is_none() => session_repo.clone(),
             _ => None,
         };
         // Plugins with a scanned skill: the scanned version is the one
@@ -1559,6 +1606,11 @@ fn codex_listing(
                 name: entry.name.clone(),
                 rank: if entry.skill_md.starts_with(&system_root) {
                     0
+                } else if session_repo
+                    .as_ref()
+                    .is_some_and(|r| entry.skill_md.starts_with(r))
+                {
+                    2
                 } else {
                     3
                 },
@@ -1610,13 +1662,24 @@ fn codex_listing(
         entries.push(entry);
     }
     if let Some(recorded) = &recorded {
-        let observed: BTreeMap<&str, u64> = recorded
+        // Same-name skills in different files stay apart: match by file.
+        let real = |p: &Path| {
+            rt.ports
+                .fs
+                .canonicalize(p)
+                .unwrap_or_else(|_| p.to_path_buf())
+        };
+        let observed: BTreeMap<PathBuf, u64> = recorded
             .entries
             .iter()
-            .map(|e| (e.name.as_str(), e.description.chars().count() as u64))
+            .map(|e| (real(&e.skill_md), e.description.chars().count() as u64))
             .collect();
         for entry in entries.iter_mut().chain(hidden.iter_mut()) {
-            let chars = observed.get(entry.name.as_str()).copied();
+            let chars = entry
+                .path
+                .as_ref()
+                .and_then(|p| observed.get(&real(&p.join("SKILL.md"))))
+                .copied();
             entry.observed_description_chars = chars;
             entry.observed = Some(match chars {
                 None => ListingState::Hidden,
@@ -1878,17 +1941,29 @@ mod tests {
 
     #[test]
     fn codex_quotes_a_value_with_a_colon_but_rejects_a_repeated_key() {
-        let repaired = crate::listing_cost::codex_frontmatter(
+        use crate::listing_cost::codex_frontmatter;
+        let repaired = codex_frontmatter(
             "---\nname: a\ndescription: Build for AWS:  ECS\n---\nbody",
+            "f",
         );
-        assert_eq!(
-            repaired,
-            Some((Some("a".into()), "Build for AWS: ECS".into()))
-        );
-        let repeated = crate::listing_cost::codex_frontmatter(
+        assert_eq!(repaired, Some(("a".into(), "Build for AWS: ECS".into())));
+        let repeated = codex_frontmatter(
             "---\nname: a\ndescription: d\nmetadata:\n  x: 1\nmetadata:\n  y: 2\n---\n",
+            "f",
         );
         assert_eq!(repeated, None);
+        // Codex's typed fields: a name over 64 characters, or metadata that
+        // is not a mapping, rejects the skill; no name falls back to the folder.
+        let long = format!("---\nname: {}\ndescription: d\n---\n", "n".repeat(65));
+        assert_eq!(codex_frontmatter(&long, "f"), None);
+        assert_eq!(
+            codex_frontmatter("---\ndescription: d\nmetadata: text\n---\n", "f"),
+            None
+        );
+        assert_eq!(
+            codex_frontmatter("---\ndescription: d\n---\n", "folder"),
+            Some(("folder".into(), "d".into()))
+        );
     }
 
     #[test]

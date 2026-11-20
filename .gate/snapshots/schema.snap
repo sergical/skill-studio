@@ -4642,11 +4642,12 @@
             ]
           },
           "invocation_mismatch": {
-            "description": "Set when another agent's invocation setting disagrees with this one,\nsuch as a skill Claude Code keeps manual-only that Codex still lists.",
+            "description": "Set when another agent's invocation setting disagrees with this one,\nsuch as a skill Claude Code keeps manual-only that Codex still lists.\nHolds the skill name.",
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "x-untrusted": true
           },
           "name": {
             "description": "Name as the harness lists it. Claude Code prefixes plugin skills.",
