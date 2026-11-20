@@ -28,8 +28,8 @@ function internalVocabularyDiagnostics(source: string): number {
 
 	try {
 		const result = spawnSync(
-			resolve("node_modules/.bin/oxlint"),
-			["--config", configPath, "--format", "json", fixturePath],
+			resolve("node_modules/.bin/bun"),
+			["lint", "--no-script", "--config", configPath, "--format", "json", fixturePath],
 			{ encoding: "utf8", timeout: 10_000 },
 		);
 		if (result.error !== undefined) throw result.error;

@@ -62,14 +62,20 @@ let ts = await compile(schema, "WireTypes", {
 // interface is dropped from the checked-in output.
 ts = ts.replace(/export interface WireTypes \{[\s\S]*?\n\}\n\n?/, "");
 
-// json-schema-to-typescript's own formatting doesn't match oxfmt's, so run
-// the result through oxfmt (in a scratch file - oxfmt only formats files on
+// json-schema-to-typescript's own formatting doesn't match the repo's, so run
+// the result through `bun fmt` (in a scratch file - it only formats files on
 // disk) before writing or diffing it, or every fresh generation would fail
-// `npm run format:check`.
+// `pnpm run format:check`.
 const scratchDir = mkdtempSync(path.join(tmpdir(), "skill-types-generate-"));
 const scratchPath = path.join(scratchDir, "skill-types.generated.ts");
 writeFileSync(scratchPath, banner + ts);
-execFileSync("npx", ["oxfmt", "--write", scratchPath], { cwd: workspaceRoot });
+execFileSync(
+  path.join(workspaceRoot, "node_modules/.bin/bun"),
+  ["fmt", "--no-script", scratchPath],
+  {
+    cwd: workspaceRoot,
+  },
+);
 const finalContent = readFileSync(scratchPath, "utf8");
 rmSync(scratchDir, { recursive: true, force: true });
 
