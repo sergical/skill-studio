@@ -9,6 +9,8 @@ permissions:
   contents: read
 
 jobs:
+  # `test` and `clippy` run side by side; in one job they ran in sequence
+  # (clippy 36 s p50 / 388 s p95, then tests 136 s / 368 s).
   test:
     runs-on: ubuntu-latest
     steps:
@@ -16,6 +18,46 @@ jobs:
         with:
           persist-credentials: false
       # The desktop crate links against GTK and WebKitGTK through Tauri.
+      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
+      # Pinned to the toolchain developers run locally. Bump this and the
+      # local toolchain together.
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-11-09
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-nextest
+      # tauri-build refuses to compile when frontendDist is missing; the Rust
+      # tests do not read the bundle, so an empty folder is enough.
+      - run: mkdir -p apps/desktop/dist
+      # nextest runs every test binary at once; cargo test runs them one after
+      # another. Same 2249 tests, and the workspace has no doctests. One build
+      # shape (--all-features) for every step, as `pnpm run check` uses.
+      - run: cargo nextest run --workspace --all-features --no-fail-fast
+      - name: Repeat isolated CLI and MCP home tests
+        run: |
+          for attempt in $(seq 1 10); do
+            cargo test --workspace --all-features home_flag_writes_nothing_outside_the_given_directory -- --exact
+            cargo test --workspace --all-features skill_studio_home_env_var_never_touches_the_real_data_root -- --exact
+          done
+      # The generated TypeScript wire types come from the `schema` Rust binary,
+      # so the drift check lives here, next to the toolchain that builds it.
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter skill-studio run types:check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Clippy runs the GTK and WebKitGTK build scripts, which need these.
       - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
       # Pinned to the toolchain developers run locally. `clippy -D warnings`
       # with `pedantic = warn` turns every lint a newer release adds into a
@@ -30,33 +72,17 @@ jobs:
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-machete,cargo-deny
-      # tauri-build refuses to compile when frontendDist is missing; the Rust
-      # tests do not read the bundle, so an empty folder is enough.
       - run: mkdir -p apps/desktop/dist
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
-      - name: Repeat isolated CLI and MCP home tests
-        run: |
-          for attempt in $(seq 1 10); do
-            cargo test --workspace --all-features home_flag_writes_nothing_outside_the_given_directory -- --exact
-            cargo test --workspace --all-features skill_studio_home_env_var_never_touches_the_real_data_root -- --exact
-          done
+      # --all-features also lints the code behind the `testing` features, as
+      # `pnpm run lint:rust` does locally.
+      - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
       # Unused dependencies (plan.md section 7): fails the build on any
       # Cargo.toml entry nothing in the workspace actually imports.
       - run: cargo machete
       # Advisory/license/source policy (plan.md section 7), driven by the
       # root deny.toml.
       - run: cargo deny check
-      # The generated TypeScript wire types come from the `schema` Rust binary,
-      # so the drift check lives here, next to the toolchain that builds it.
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter skill-studio run types:check
 
   host-macos:
     runs-on: macos-latest
