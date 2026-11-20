@@ -2,6 +2,17 @@ name: Skills CLI contract
 
 on:
   pull_request:
+    # Selection only narrows PR feedback: every main push runs the full
+    # workflow. These paths cannot change the Rust build or its tests; any
+    # other path, including one nobody listed, runs it. Not docs/ or *.md:
+    # the crates include_str! CHANGELOG.md and docs/flows.md.
+    paths-ignore:
+      - "packages/marketing/**"
+      - "packages/ui/**"
+      - "apps/server/**"
+      - "apps/desktop/src/**"
+      - "apps/desktop/e2e/**"
+      - "tools/oxlint/**"
   # Main runs save the Rust cache that pull requests restore.
   push:
     branches: [main]

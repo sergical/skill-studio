@@ -20,12 +20,18 @@ it.each([
   expect(document.documentElement.dataset.theme).toBe(expected);
 });
 it("uses the OS when storage is blocked", () => {
-  vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+  // Restored here, not by afterEach: in Vitest and in bun test alike, vi.restoreAllMocks() left
+  // this prototype spy in place, so a stamp test that ran after it read blocked storage.
+  const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
     throw new Error("blocked");
   });
-  vi.stubGlobal("matchMedia", () => ({ matches: false }));
-  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
-  expect(script).toBeTruthy();
-  window.eval(script ?? "");
-  expect(document.documentElement.dataset.theme).toBe("light");
+  try {
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+    expect(script).toBeTruthy();
+    window.eval(script ?? "");
+    expect(document.documentElement.dataset.theme).toBe("light");
+  } finally {
+    getItem.mockRestore();
+  }
 });
