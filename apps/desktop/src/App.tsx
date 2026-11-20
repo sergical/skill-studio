@@ -91,7 +91,7 @@ function App() {
     if (didLoadStartupProjects.current) return;
     didLoadStartupProjects.current = true;
 
-    (async () => {
+    void (async () => {
       try {
         setTrackedProjects(await loadStartupTrackedProjects());
       } catch (err) {

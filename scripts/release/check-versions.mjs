@@ -69,7 +69,7 @@ export function platformPins(json) {
   );
 }
 
-export function problems(root = repoRoot(), tag = undefined) {
+export function problems(root = repoRoot(), tag) {
   const all = manifests(root);
   const cargo = all.find((m) => m.file === "Cargo.toml")?.versions[0];
   if (!cargo) return ["Cargo.toml has no [workspace.package] version"];

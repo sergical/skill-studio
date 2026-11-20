@@ -651,7 +651,10 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
         case "get_editor_choices":
           return editorChoices();
         case "set_preferred_editor":
-          editorPreference = payload.appName == null ? null : String(payload.appName);
+          editorPreference = z
+            .string()
+            .nullable()
+            .parse(payload.appName ?? null);
           return undefined;
         case "get_telemetry_enabled":
           return telemetryEnabled;
@@ -694,7 +697,12 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
         case "apply_skill_frontmatter_repair":
           return undefined;
         case "fix_skill":
-          return { skill: String(payload.skill ?? ""), applied: [], unrepaired: [], conflicts: [] };
+          return {
+            skill: z.string().parse(payload.skill ?? ""),
+            applied: [],
+            unrepaired: [],
+            conflicts: [],
+          };
         case "open_conflict_paths":
           return undefined;
 
@@ -743,7 +751,7 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
           return { has_more: false, skills: [] };
         case "get_skill_details":
           return {
-            id: String(payload.skillId ?? ""),
+            id: z.string().parse(payload.skillId ?? ""),
             slug: "",
             source: "",
             hash: "",
