@@ -2,6 +2,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { Toaster } from "sonner";
 import { afterEach, expect, it } from "vitest";
 import { AppVersionCard } from "./AppVersionCard";
 
@@ -48,13 +49,20 @@ it("shows a failed update check and lets the user retry", async () => {
   expect(checks).toBe(2);
 });
 
-it("shows a failed update listener in the card, instead of dropping the failure", async () => {
+it("a failed update listener says so and keeps the update status, so Restart to update stays", async () => {
   mockIPC((command) => {
     if (command === "app_version") return { version: "1.0", commit: "dev", notes: null };
-    if (command === "get_update_status") return new Promise(() => {});
+    if (command === "get_update_status") return { status: "ready-to-install", version: "2.0" };
     if (command === "plugin:event|listen") throw new Error("Listener unavailable");
     return null;
   });
-  render(<AppVersionCard />);
-  expect(await screen.findByText("Listener unavailable")).toBeTruthy();
+  render(
+    <>
+      <AppVersionCard />
+      <Toaster />
+    </>,
+  );
+  expect(await screen.findByText("Couldn't follow update progress")).toBeTruthy();
+  expect(screen.getByText("Listener unavailable")).toBeTruthy();
+  expect(await screen.findByRole("button", { name: /Restart/ })).toBeTruthy();
 });
