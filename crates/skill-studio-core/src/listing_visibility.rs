@@ -1408,8 +1408,8 @@ fn newest_codex_recorded(rt: &Runtime, scope: &RootScope) -> Option<CodexRecorde
         chrono::DateTime::<chrono::Utc>::MIN_UTC,
         usize::MAX,
     );
-    // Skipped sessions (temporary folders, other projects) do not count
-    // toward the 40 sessions read for a listing.
+    // Skips sessions in temporary folders and, for a project, other
+    // projects' sessions, before picking the newest.
     files
         .into_iter()
         .filter_map(|path| read_codex_recorded(rt, &path))
@@ -1963,6 +1963,19 @@ mod tests {
         assert_eq!(
             codex_frontmatter("---\ndescription: d\n---\n", "folder"),
             Some(("folder".into(), "d".into()))
+        );
+        // serde_yaml reads numbers and booleans as text, and refuses a
+        // repeated key inside metadata too.
+        assert_eq!(
+            codex_frontmatter("---\nname: 123\ndescription: true\n---\n", "f"),
+            Some(("123".into(), "true".into()))
+        );
+        assert_eq!(
+            codex_frontmatter(
+                "---\nname: a\ndescription: d\nmetadata:\n  short-description: x\n  short-description: y\n---\n",
+                "f"
+            ),
+            None
         );
     }
 

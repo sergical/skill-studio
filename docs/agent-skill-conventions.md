@@ -510,10 +510,10 @@ the `### Available skills` block of real sessions:
   skill in that session is hidden as "plugin not loaded" (`codex exec` does not
   load the `openai-primary-runtime` plugins, while the T3 Code app does).
   `--codex-session <rollout>` compares with one chosen session instead.
-- **Match rate.** Replaying 14 real sessions with `--codex-session` at their
-  model's budget listed 2,586 of 2,586 recorded entries, in the same order and
-  tier, and gave the exact description length for 2,526 (97.7%); every miss is
-  one to four characters. On 16 `codex exec` eval sessions (default budget and
+- **Match rate.** Replaying the 15 newest real sessions with `--codex-session` at
+  their model's budget listed 2,771 of 2,771 recorded entries, in the same
+  order and tier, and gave the exact description length for 2,751 (99.3%); 11
+  sessions matched exactly, and every miss is one to four characters. On 16 `codex exec` eval sessions (default budget and
   `max_context_tokens = 10000`) an earlier build listed 2,848 of 2,848 and gave
   2,736 (96.1%) exact; most misses are google-drive skills that changed version
   after those runs. `--codex-session` now reads only rollouts inside this

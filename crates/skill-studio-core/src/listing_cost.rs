@@ -416,45 +416,80 @@ pub(crate) fn codex_frontmatter(contents: &str, default_name: &str) -> Option<(S
         return None;
     }
     let text = body.join("\n");
-    // serde_yaml, which Codex uses, refuses a repeated top-level key.
-    let mut keys = BTreeSet::new();
-    for line in &body {
-        if let Some((key, _)) = line.split_once(':') {
-            if !key.is_empty()
-                && !key.starts_with([' ', '\t', '#', '-'])
-                && !keys.insert(key.trim())
-            {
-                return None;
-            }
-        }
+    if has_repeated_key(&body) {
+        return None;
     }
     let value: serde_json::Value = crate::yaml::from_str(&text)
         .ok()
         .or_else(|| crate::yaml::from_str(&codex_repair_scalars(&body)?).ok())?;
-    // `Option<String>` fields: absent or null is fine, another type is an error.
-    let text_field = |key: &str| -> Option<Option<String>> {
-        match value.get(key) {
-            None | Some(serde_json::Value::Null) => Some(None),
-            Some(serde_json::Value::String(s)) => {
-                Some(Some(s.split_whitespace().collect::<Vec<_>>().join(" ")))
-            }
-            Some(_) => None,
-        }
+    // `Option<String>` fields: absent or null is none; serde_yaml reads a
+    // number or a boolean as its text; a list or a mapping is an error.
+    let scalar = |v: Option<&serde_json::Value>| -> Option<Option<String>> {
+        let text = match v {
+            None | Some(serde_json::Value::Null) => return Some(None),
+            Some(serde_json::Value::String(s)) => s.clone(),
+            Some(serde_json::Value::Number(n)) => n.to_string(),
+            Some(serde_json::Value::Bool(b)) => b.to_string(),
+            Some(_) => return None,
+        };
+        Some(Some(text.split_whitespace().collect::<Vec<_>>().join(" ")))
     };
+    let text_field = |key: &str| scalar(value.get(key));
     let description = text_field("description")?.unwrap_or_default();
     let name = text_field("name")?
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| default_name.to_string());
     if let Some(metadata) = value.get("metadata") {
-        let short = metadata.as_object()?.get("short-description");
-        if short.is_some_and(|v| !v.is_string() && !v.is_null()) {
-            return None;
-        }
+        scalar(metadata.as_object()?.get("short-description"))?;
     }
     if name.chars().count() > 64 {
         return None;
     }
     Some((name, description))
+}
+
+/// True when one mapping repeats a key, which `serde_yaml` refuses at any
+/// depth. Lines inside a `|` or `>` block and list items are not keys.
+fn has_repeated_key(lines: &[&str]) -> bool {
+    let mut levels: Vec<(usize, BTreeSet<String>)> = Vec::new();
+    let mut block: Option<usize> = None;
+    for line in lines {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = line.len() - trimmed.len();
+        if let Some(b) = block {
+            if indent > b {
+                continue;
+            }
+            block = None;
+        }
+        if trimmed.starts_with('-') {
+            continue;
+        }
+        let Some((key, value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        if !value.is_empty() && !value.starts_with([' ', '\t']) {
+            continue;
+        }
+        while levels.last().is_some_and(|(i, _)| *i > indent) {
+            levels.pop();
+        }
+        match levels.last_mut() {
+            Some((i, keys)) if *i == indent => {
+                if !keys.insert(key.trim().to_string()) {
+                    return true;
+                }
+            }
+            _ => levels.push((indent, BTreeSet::from([key.trim().to_string()]))),
+        }
+        if matches!(value.trim_start().chars().next(), Some('|' | '>')) {
+            block = Some(indent);
+        }
+    }
+    false
 }
 
 /// `repair_frontmatter_scalar_fields`: quotes each plain `key: value` whose
