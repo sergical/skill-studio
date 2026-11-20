@@ -415,11 +415,13 @@ pub fn run() {
             skills::skill_pack::pack_add,
             skills::skill_pack::pack_update,
             skills::skill_pack::pack_remove,
+            skills::skill_pack::pack_export,
             // Park (disable globally) / per-harness disable / invocation policy
             skills::skill_local_edits::skill_local_edits,
             skills::skill_park::park_skill,
             skills::skill_park::unpark_skill,
             skills::skill_park::park_check,
+            skills::skill_listing::skill_listing,
             skills::skill_park::discard_skill_copy,
             skills::skill_park::unlist_parked_dotagents,
             skills::skill_park::park_skills,

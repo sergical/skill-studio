@@ -38,7 +38,10 @@
           ],
           "plugin": null,
           "frontmatter": null,
-          "frontmatter_fields": {},
+          "frontmatter_fields": {
+            "description": "Use this: when the frontmatter is broken",
+            "name": "badfm"
+          },
           "has_spec": false,
           "folder_bytes": 80,
           "file_count": 1,

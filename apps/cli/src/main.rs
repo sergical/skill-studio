@@ -486,6 +486,31 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Show which skills each agent lists for the model with a description,
+    /// with a name only, or not at all. This writes nothing.
+    Listing {
+        #[command(flatten)]
+        scope: ScopeArgs,
+        #[command(flatten)]
+        view: ViewArgs,
+        /// Also show this project's sessions. It must be in the scope.
+        #[arg(long = "for-project")]
+        for_project: Option<PathBuf>,
+        /// Predict Claude Code at this `skillListingBudgetFraction`, for example 0.02.
+        #[arg(long = "claude-fraction")]
+        claude_fraction: Option<f64>,
+        /// Predict Claude Code with this context window, in tokens.
+        #[arg(long = "claude-context")]
+        claude_context: Option<u64>,
+        /// Predict Codex at this `skills.max_context_tokens`.
+        #[arg(long = "codex-max-tokens")]
+        codex_max_tokens: Option<u64>,
+        /// Compare Claude Code with this session transcript (.jsonl) instead of the newest one.
+        #[arg(long = "claude-session")]
+        claude_session: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Check skill state and model listing budgets. This writes nothing.
     Doctor {
         #[command(flatten)]
@@ -762,6 +787,23 @@ enum PackCommand {
         #[command(flatten)]
         args: PackWriteArgs,
     },
+    /// Copy installed skills into a new folder laid out as a pack:
+    /// skills/<name>/ for each and a README with the install lines. Push the
+    /// folder to git and anyone can install it with npx skills add. Writes
+    /// nothing else and never overwrites a file.
+    Export {
+        /// New or empty folder to create the pack in.
+        dir: PathBuf,
+        /// Skill to put in the pack. Repeat for more than one.
+        #[arg(long = "skill", value_name = "SKILL", required = true)]
+        skills: Vec<String>,
+        /// Where the pack will live, as owner/repo or a git URL, for the
+        /// README's install lines. Default: <owner>/<repo>.
+        #[arg(long)]
+        source: Option<String>,
+        #[command(flatten)]
+        args: PackWriteArgs,
+    },
 }
 
 #[derive(clap::Args)]
@@ -1033,6 +1075,25 @@ fn main() -> ExitCode {
             run_diagnose_conflict(&scope, &view.into(), json, time)
         }
         Command::Extras { scope, view, json } => run_extras(&scope, &view.into(), json, time),
+        Command::Listing {
+            scope,
+            view,
+            for_project,
+            claude_fraction,
+            claude_context,
+            codex_max_tokens,
+            claude_session,
+            json,
+        } => {
+            let request = skill_studio_core::listing_visibility::ListingRequest {
+                project_path: for_project.map(|p| std::fs::canonicalize(&p).unwrap_or(p)),
+                claude_budget_fraction: claude_fraction,
+                claude_context_window_tokens: claude_context,
+                codex_max_context_tokens: codex_max_tokens,
+                claude_transcript: claude_session,
+            };
+            run_listing(&scope, &request, &view.into(), json, time)
+        }
         Command::Invocation {
             scope,
             mismatches: true,
@@ -2870,6 +2931,27 @@ fn run_extras(scope: &ScopeArgs, view: &ViewRequest, json: bool, time: bool) -> 
     finish_view(&envelope, view, json, time, output::print_extras_table)
 }
 
+fn run_listing(
+    scope: &ScopeArgs,
+    request: &skill_studio_core::listing_visibility::ListingRequest,
+    view: &ViewRequest,
+    json: bool,
+    time: bool,
+) -> ExitCode {
+    let rt = match build_runtime::<skill_studio_core::listing_visibility::ListingReport>(
+        scope,
+        Operation::Listing,
+        json,
+    ) {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let result = skill_studio_core::listing_visibility::listing(&rt, &ctx, request);
+    let envelope = ResultEnvelope::from_result(Operation::Listing, &rt.scope, &ctx, result);
+    finish_view(&envelope, view, json, time, output::print_listing_table)
+}
+
 fn run_invocation(
     scope: &ScopeArgs,
     skill: Option<String>,
@@ -2936,6 +3018,12 @@ fn run_pack(action: PackCommand, time: bool) -> ExitCode {
     let (source, args) = match action {
         PackCommand::List { args } => (None, args),
         PackCommand::Show { source, args } => (Some(source), args),
+        PackCommand::Export {
+            dir,
+            skills,
+            source,
+            args,
+        } => return run_pack_export(dir, skills, source, &args, time),
         write => return run_pack_action(write, time),
     };
     let operation = if source.is_some() {
@@ -3003,7 +3091,9 @@ fn run_pack_action(action: PackCommand, time: bool) -> ExitCode {
         PackCommand::Update { args, .. } => (Operation::PackUpdate, args),
         PackCommand::Remove { args, .. } => (Operation::PackRemove, args),
         PackCommand::SwitchSource { args, .. } => (Operation::PackSwitchSource, args),
-        PackCommand::List { .. } | PackCommand::Show { .. } => unreachable!("read commands"),
+        PackCommand::List { .. } | PackCommand::Show { .. } | PackCommand::Export { .. } => {
+            unreachable!("handled by run_pack")
+        }
     };
     let rt = match build_runtime_write_with_project::<PackActionReport>(
         &args.scope,
@@ -3081,10 +3171,52 @@ fn run_pack_action(action: PackCommand, time: bool) -> ExitCode {
                 dry_run,
             },
         ),
-        PackCommand::List { .. } | PackCommand::Show { .. } => unreachable!("read commands"),
+        PackCommand::List { .. } | PackCommand::Show { .. } | PackCommand::Export { .. } => {
+            unreachable!("handled by run_pack")
+        }
     };
     let envelope = ResultEnvelope::from_result(operation, &rt.scope, &ctx, result);
     finish(&envelope, json, time, output::print_pack_action)
+}
+
+fn run_pack_export(
+    dir: PathBuf,
+    skills: Vec<String>,
+    source: Option<String>,
+    args: &PackWriteArgs,
+    time: bool,
+) -> ExitCode {
+    use skill_studio_core::pack_export::{PackExportReport, PackExportRequest};
+    let rt = match build_runtime_write_with_project::<PackExportReport>(
+        &args.scope,
+        Operation::PackExport,
+        args.json,
+        args.project_path.as_deref(),
+    ) {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+    // The core takes an absolute folder; a relative one is the user's
+    // current folder.
+    let dir = if dir.is_absolute() {
+        dir
+    } else {
+        std::env::current_dir().map_or(dir.clone(), |cwd| cwd.join(&dir))
+    };
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let result = ops::pack_export(
+        &rt,
+        &ctx,
+        &PackExportRequest {
+            dir,
+            skills,
+            source,
+            project_path: args.project_path.clone(),
+            dry_run: args.dry_run,
+        },
+    );
+    let envelope = ResultEnvelope::from_result(Operation::PackExport, &rt.scope, &ctx, result);
+    finish(&envelope, args.json, time, output::print_pack_export)
 }
 
 fn run_recovery(action: RecoveryCommand, time: bool) -> ExitCode {

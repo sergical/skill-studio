@@ -143,6 +143,8 @@ pub enum Operation {
     Library,
     /// Names and paths of non-skill agent configuration.
     Extras,
+    /// Per-skill model listing state for each harness.
+    Listing,
     /// Check or set skill invocation across harnesses.
     Invocation,
     /// Set or clear a review date.
@@ -161,6 +163,8 @@ pub enum Operation {
     PackRemove,
     /// Move the skills of one pack to another source.
     PackSwitchSource,
+    /// Copy installed skills into a new folder laid out as a pack.
+    PackExport,
     /// List the recovery plans that did not finish or were dropped.
     RecoveryList,
     /// Give up one interrupted recovery plan.
@@ -243,6 +247,9 @@ impl Outcome for Diagnosis {
 
 impl Outcome for crate::extras::ExtrasReport {
     const LISTS: &'static [&'static str] = &["/entries"];
+}
+impl Outcome for crate::listing_visibility::ListingReport {
+    const LISTS: &'static [&'static str] = &["/listings"];
 }
 impl Outcome for Capabilities {}
 impl Outcome for HarnessReport {}
@@ -5859,6 +5866,7 @@ pub use crate::ops_update::{update, update_all, update_all_unbounded, update_spl
 /// Pack read operations shared by CLI and MCP.
 pub use crate::pack::{pack_list, pack_show};
 pub use crate::pack_action::{pack_add, pack_remove, pack_switch_source, pack_update};
+pub use crate::pack_export::pack_export;
 
 /// Moves one real copy's directory into the parked root, in the slot for
 /// where it came from ([`crate::park_layout`]).
@@ -8539,6 +8547,7 @@ mod tests {
                     Operation::SkillUsage => "skill_usage",
                     Operation::Library => "library",
                     Operation::Extras => "extras",
+                    Operation::Listing => "listing",
                     Operation::Invocation => "invocation",
                     Operation::Review => "review",
                     Operation::ReviewDue => "review_due",
@@ -8548,6 +8557,7 @@ mod tests {
                     Operation::PackUpdate => "pack_update",
                     Operation::PackRemove => "pack_remove",
                     Operation::PackSwitchSource => "pack_switch_source",
+                    Operation::PackExport => "pack_export",
                     Operation::RecoveryList => "recovery_list",
                     Operation::RecoveryDrop => "recovery_drop",
                 };

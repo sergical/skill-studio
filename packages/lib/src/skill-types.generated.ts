@@ -8,6 +8,17 @@
 // ============================================================================
 
 /**
+ * Absolute path of a tracked project directory.
+ *
+ * Invariant: the path is canonical inside a [`crate::scope::NormalizedScope`].
+ * Wire values are the lexical path the caller gave.
+ */
+export type ProjectRef = string;
+/**
+ * What one harness shows the model for one skill.
+ */
+export type ListingState = "described" | "truncated" | "name_only" | "omitted" | "hidden";
+/**
  * Lexical skill name: the directory name that holds `SKILL.md`.
  *
  * Invariant: two deployments with the same `SkillName` are the same skill,
@@ -141,13 +152,6 @@ export type RootScope =
       project: ProjectRef;
     };
 /**
- * Absolute path of a tracked project directory.
- *
- * Invariant: the path is canonical inside a [`crate::scope::NormalizedScope`].
- * Wire values are the lexical path the caller gave.
- */
-export type ProjectRef = string;
-/**
  * Kebab-case harness identifier, for example `claude-code` or `opencode`.
  *
  * Legacy spellings are normalized at input boundaries.
@@ -226,6 +230,196 @@ export interface ExtraEntry {
    * `found` or `unreadable`. Parser errors are never exposed.
    */
   status: string;
+}
+/**
+ * Every harness listing for the global scope and the requested project.
+ */
+export interface ListingReport {
+  /**
+   * Rows in scope, then harness, order.
+   */
+  listings: HarnessListing[];
+}
+/**
+ * One harness listing in one scope.
+ */
+export interface HarnessListing {
+  /**
+   * Harness id.
+   */
+  harness: string;
+  /**
+   * Project sessions include global skills.
+   */
+  scope:
+    | {
+        scope: "global";
+      }
+    | {
+        scope: "project";
+        project: ProjectRef;
+      };
+  /**
+   * Budget, or null when the harness has no known limit.
+   */
+  budget: number | null;
+  /**
+   * `characters` or `tokens` (UTF-8 bytes divided by four).
+   */
+  budget_unit: string;
+  /**
+   * The whole listing with every description, in `budget_unit`.
+   */
+  full_size: number;
+  /**
+   * How the budget was resolved.
+   */
+  budget_source: string;
+  /**
+   * Context window in tokens, when known.
+   */
+  context_window_tokens: number | null;
+  /**
+   * Where the context window came from.
+   */
+  context_source: string;
+  /**
+   * True when no model or context size was found.
+   */
+  uses_default_context_window: boolean;
+  /**
+   * What Skill Studio infers instead of reading.
+   */
+  notes: string[];
+  /**
+   * The setting that controls the budget.
+   */
+  setting: ListingSetting | null;
+  /**
+   * The session that supplied `observed` states.
+   */
+  observed_session: ObservedSession | null;
+  /**
+   * Entries in listing order; hidden entries last.
+   */
+  entries: ListingEntry[];
+}
+/**
+ * The setting that controls the budget, and how to change it.
+ */
+export interface ListingSetting {
+  /**
+   * Setting key.
+   */
+  key: string;
+  /**
+   * Current value, when set.
+   */
+  current: string | null;
+  /**
+   * File to edit.
+   */
+  file: string;
+  /**
+   * chezmoi source file when chezmoi manages `file`: edit this one, or
+   * chezmoi reverts the change.
+   */
+  chezmoi_source: string | null;
+  /**
+   * The text to put in `file` for the requested budget.
+   */
+  snippet: string;
+}
+/**
+ * The session the observed states come from.
+ */
+export interface ObservedSession {
+  /**
+   * Transcript file.
+   */
+  transcript: string;
+  /**
+   * Time of the listing, as recorded.
+   */
+  at: string | null;
+  /**
+   * Model id that answered in that session.
+   */
+  model: string | null;
+  /**
+   * Entries in that listing.
+   */
+  listed: number;
+  /**
+   * Entries with a description.
+   */
+  described: number;
+}
+/**
+ * One skill in one harness listing.
+ */
+export interface ListingEntry {
+  /**
+   * Name as the harness lists it. Claude Code prefixes plugin skills.
+   */
+  name: string;
+  /**
+   * Deployment folder. Null for entries known only from a session.
+   */
+  path: string | null;
+  /**
+   * Predicted state.
+   */
+  state: "described" | "truncated" | "name_only" | "omitted" | "hidden";
+  /**
+   * Why a hidden skill is hidden.
+   */
+  hidden_reason: string | null;
+  /**
+   * Description characters the model sees.
+   */
+  shown_description_chars: number;
+  /**
+   * Description characters before any cut.
+   */
+  full_description_chars: number;
+  /**
+   * Claude Code's usage score: uses times a 7-day half-life decay, at least 10%.
+   */
+  usage_score: number | null;
+  /**
+   * State in the last recorded session, when one was found.
+   */
+  observed: ListingState | null;
+  /**
+   * False for entries Skill Studio does not scan, such as bundled skills.
+   */
+  scanned: boolean;
+}
+/**
+ * Input for `listing`.
+ */
+export interface ListingRequest {
+  /**
+   * Also report this project. It must be in the runtime scope.
+   */
+  project_path: string | null;
+  /**
+   * Predict Claude Code at this `skillListingBudgetFraction` (0 to 1).
+   */
+  claude_budget_fraction: number | null;
+  /**
+   * Predict Claude Code with this context window in tokens.
+   */
+  claude_context_window_tokens: number | null;
+  /**
+   * Predict Codex at this `skills.max_context_tokens` (capped at 10000).
+   */
+  codex_max_context_tokens: number | null;
+  /**
+   * Compare Claude Code with this session transcript instead of the newest one.
+   */
+  claude_transcript: string | null;
 }
 /**
  * Empty input. The runtime scope selects the home and projects.
@@ -1603,6 +1797,80 @@ export interface PackStep {
          */
         reason: string;
       };
+}
+/**
+ * Input for `pack_export`.
+ */
+export interface PackExportRequest {
+  /**
+   * Absolute folder to create the pack in. It must not exist yet, or be
+   * an empty folder.
+   */
+  dir: string;
+  /**
+   * Installed skills to put in the pack.
+   */
+  skills: string[];
+  /**
+   * Where the pack will live, as `owner/repo` or a git URL, for the
+   * README's install lines. Absent: the lines say `<owner>/<repo>`.
+   */
+  source: string | null;
+  /**
+   * Take each skill's copy from this project, as the other pack ops
+   * take `project_path`. Absent: the home.
+   */
+  project_path: string | null;
+  /**
+   * Return the plan and write nothing.
+   */
+  dry_run: boolean;
+}
+/**
+ * Result of `pack_export`.
+ */
+export interface PackExportReport {
+  /**
+   * The call wrote nothing.
+   */
+  dry_run: boolean;
+  /**
+   * The pack folder.
+   */
+  dir: string;
+  /**
+   * One entry per skill, in request order.
+   */
+  skills: PackExportSkill[];
+  /**
+   * Every file written, or to write on a dry run, relative to `dir`.
+   */
+  files: string[];
+  /**
+   * The command that installs every skill of the pack once it is pushed.
+   */
+  install_command: string;
+  /**
+   * One line for a person or agent.
+   */
+  summary: string;
+}
+/**
+ * One skill in the pack.
+ */
+export interface PackExportSkill {
+  /**
+   * Skill name, and its folder under `skills/`.
+   */
+  skill: string;
+  /**
+   * The installed copy its files come from.
+   */
+  from: string;
+  /**
+   * How many files it holds.
+   */
+  files: number;
 }
 /**
  * One recorded skill use from a harness's own session history.

@@ -476,6 +476,46 @@ pub trait ScopeFs: Send + Sync {
     /// in-memory fake, or a test wrapper that must see each write. A
     /// wrapper over a real filesystem forwards this to its inner one.
     fn fsops_bind_root(&self, root: &Path) -> std::io::Result<Option<Box<dyn ScopeFs + '_>>>;
+    /// Opens the folder at `path`, an absolute path with no link in it, one
+    /// folder at a time from `/`, and refuses a link at any step: the
+    /// handle holds the folder the path names, never one a link points to.
+    /// Fails with `NotADirectory` when a step is a link or not a folder.
+    /// `None`: this port cannot hold folders open (an in-memory fake).
+    fn fsops_open_dir(&self, path: &Path) -> std::io::Result<Option<Box<dyn DirHandle>>> {
+        let _ = path;
+        Ok(None)
+    }
+}
+
+/// One folder held open ([`ScopeFs::fsops_open_dir`]). Every call resolves
+/// names against the handle, never against a path, so a folder renamed or
+/// swapped for a link after the open cannot redirect a read or a write. A
+/// name is one path component.
+pub trait DirHandle {
+    /// Device and inode of the folder.
+    fn identity(&self) -> std::io::Result<(u64, u64)>;
+    /// The folder's entries, each kind as it is: a link is a link.
+    fn entries(&self) -> std::io::Result<Vec<DirEntryFacts>>;
+    /// Opens the entry `name`, which must be a folder now: a link or a file
+    /// fails with `NotADirectory`, so a kind read from [`Self::entries`]
+    /// cannot go stale between the listing and the open.
+    fn open_dir(&self, name: &str) -> std::io::Result<Box<dyn DirHandle>>;
+    /// Reads the entry `name`, which must be a regular file now: a link, a
+    /// folder or a device fails with `InvalidInput`. A file over
+    /// `max_bytes` fails with `InvalidData`. Returns the bytes and the
+    /// permission bits.
+    fn read_file(&self, name: &str, max_bytes: u64) -> std::io::Result<(Vec<u8>, u32)>;
+    /// The kind of the entry `name`, without following a link.
+    fn kind(&self, name: &str) -> std::io::Result<FileKind>;
+    /// The target of the link `name`, as written in the link. An entry that
+    /// is not a link fails with `InvalidInput`.
+    fn read_link(&self, name: &str) -> std::io::Result<PathBuf>;
+    /// Creates the folder `name` and opens it.
+    fn create_dir(&self, name: &str) -> std::io::Result<Box<dyn DirHandle>>;
+    /// Creates the file `name`, failing when anything is there, even a
+    /// link, and writes `bytes` with exactly the `mode` permission bits. Any
+    /// failure but `AlreadyExists` may leave a created, partial file.
+    fn write_new_file(&self, name: &str, bytes: &[u8], mode: u32) -> std::io::Result<()>;
 }
 
 /// Finds the projects a scope covers under [`ProjectSelection::Discover`].

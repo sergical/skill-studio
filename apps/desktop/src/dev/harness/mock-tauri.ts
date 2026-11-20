@@ -37,6 +37,7 @@ import {
   harnessSkillContent,
   skill,
 } from "./skill-fixture";
+import { mockListingReport } from "./mock-listing";
 import { mockPackAdd, mockPackChange, mockPackReport } from "./mock-packs";
 
 /** Mirrors the core's `split_target_root` with default `CODEX_HOME` and OpenCode config root. */
@@ -746,6 +747,15 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
         case "get_install_counts":
           return [];
 
+        case "skill_listing": {
+          const request = z
+            .object({
+              claude_budget_fraction: z.number().nullish(),
+              codex_max_context_tokens: z.number().nullish(),
+            })
+            .parse(payload.request);
+          return mockListingReport(currentSnapshot, request);
+        }
         case "pack_list": {
           const { remote } = z.object({ remote: z.boolean() }).parse(payload.request);
           return mockPackReport(currentSnapshot, remote);
@@ -768,6 +778,50 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
           );
           if (!request.dry_run) await publish(next);
           return report;
+        }
+        case "pack_export": {
+          // Mirrors the core's report shape and texts (pack_export.rs); it
+          // writes nothing, as the harness has no disk.
+          const request = z
+            .object({
+              dir: z.string(),
+              skills: z.array(z.string()),
+              source: z.string().nullish(),
+              project_path: z.string().nullish(),
+              dry_run: z.boolean(),
+            })
+            .parse(payload.request);
+          // The core takes each copy from the request's project, else the home.
+          const project = request.project_path ?? null;
+          const missing = request.skills.find((name) =>
+            currentSnapshot.skills.some(
+              (skill) =>
+                skill.name === name &&
+                !skill.deployments.some((d) =>
+                  project === null ? d.scope === "global" : d.project_path === project,
+                ),
+            ),
+          );
+          if (missing) throw new Error(`${missing} has no copy in this scope`);
+          const unknown = request.skills.find(
+            (name) => !currentSnapshot.skills.some((skill) => skill.name === name),
+          );
+          if (unknown) throw new Error(`no installed skill is named ${unknown}`);
+          const source = request.source ?? "'<owner>/<repo>'";
+          const verb = request.dry_run ? "Would write" : "Wrote";
+          const count = request.skills.length;
+          return {
+            dry_run: request.dry_run,
+            dir: request.dir,
+            skills: request.skills.map((name) => ({
+              skill: name,
+              from: `${HARNESS_HOME}/.agents/skills/${name}`,
+              files: 1,
+            })),
+            files: [...request.skills.map((name) => `skills/${name}/SKILL.md`), "README.md"],
+            install_command: `npx skills add ${source}${request.skills.map((name) => ` --skill ${name}`).join("")}`,
+            summary: `${verb} ${count} skill${count === 1 ? "" : "s"} and a README to ${request.dir}.`,
+          };
         }
         case "pack_update":
         case "pack_remove": {
@@ -1186,6 +1240,8 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
           askedDialogs.push({ title: title ?? null, message, answer });
           return answer ? ok : cancel;
         }
+        case "plugin:dialog|save":
+          return `${HARNESS_HOME}/my-skills`;
         case "plugin:dialog|open": {
           const parsedFilters = z
             .object({ filters: z.array(z.object({ extensions: z.array(z.string()) })).optional() })

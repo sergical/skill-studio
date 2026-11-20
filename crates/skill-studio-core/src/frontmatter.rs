@@ -164,7 +164,9 @@ pub fn parse_frontmatter(content: &str) -> FrontmatterParseResult {
 
 /// Every top-level frontmatter key, stringified, for a caller that wants to
 /// show agent-specific extensions the typed [`SkillFrontmatter`] doesn't
-/// model. Malformed or missing frontmatter yields an empty map.
+/// model. Missing or unclosed frontmatter yields an empty map. YAML that
+/// does not parse (for example a plain value with `: ` in it) falls back to
+/// one `key: value` per unindented line, the way Claude Code still reads it.
 pub fn frontmatter_fields(content: &str) -> BTreeMap<String, String> {
     let mut lines = content.lines();
     if lines.next().map(str::trim) != Some("---") {
@@ -184,7 +186,7 @@ pub fn frontmatter_fields(content: &str) -> BTreeMap<String, String> {
         return BTreeMap::new();
     }
     let Ok(yaml::Value::Map(map)) = yaml::from_str(&yaml_block) else {
-        return BTreeMap::new();
+        return plain_fields(&yaml_block);
     };
     map.into_iter()
         .filter_map(|(k, v)| {
@@ -199,6 +201,28 @@ pub fn frontmatter_fields(content: &str) -> BTreeMap<String, String> {
                     .to_string(),
             };
             Some((key, value))
+        })
+        .collect()
+}
+
+/// Line-based reading of frontmatter that is not valid YAML: each
+/// unindented `key: value` line with a one-line value. Later keys win.
+fn plain_fields(block: &str) -> BTreeMap<String, String> {
+    block
+        .lines()
+        .filter(|line| !line.starts_with([' ', '\t', '#', '-']))
+        .filter_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            let value = value.trim();
+            if key.trim().is_empty() || value.is_empty() || value.starts_with(['|', '>']) {
+                return None;
+            }
+            let value = value
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+                .unwrap_or(value);
+            Some((key.trim().to_string(), value.to_string()))
         })
         .collect()
 }
@@ -425,6 +449,17 @@ mod tests {
         assert_eq!(
             fields.get("description").map(String::as_str),
             Some("Writes tests.")
+        );
+    }
+
+    #[test]
+    fn frontmatter_fields_reads_plain_lines_when_a_description_holds_a_colon() {
+        let content = "---\nname: pack\ndescription: Make videos. Triggers on: video, reel\n---\n";
+        let fields = frontmatter_fields(content);
+        assert_eq!(fields.get("name").map(String::as_str), Some("pack"));
+        assert_eq!(
+            fields.get("description").map(String::as_str),
+            Some("Make videos. Triggers on: video, reel")
         );
     }
 

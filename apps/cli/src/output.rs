@@ -806,6 +806,12 @@ pub fn write_schemas(out: Option<PathBuf>) -> ExitCode {
         ("extras_report", || {
             schemars::schema_for!(skill_studio_core::extras::ExtrasReport)
         }),
+        ("listing_request", || {
+            schemars::schema_for!(skill_studio_core::listing_visibility::ListingRequest)
+        }),
+        ("listing_report", || {
+            schemars::schema_for!(skill_studio_core::listing_visibility::ListingReport)
+        }),
         ("pack_list_request", || {
             schemars::schema_for!(skill_studio_core::pack::PackListRequest)
         }),
@@ -829,6 +835,12 @@ pub fn write_schemas(out: Option<PathBuf>) -> ExitCode {
         }),
         ("pack_action_report", || {
             schemars::schema_for!(skill_studio_core::pack_action::PackActionReport)
+        }),
+        ("pack_export_request", || {
+            schemars::schema_for!(skill_studio_core::pack_export::PackExportRequest)
+        }),
+        ("pack_export_report", || {
+            schemars::schema_for!(skill_studio_core::pack_export::PackExportReport)
         }),
         ("recovery_report", || {
             schemars::schema_for!(skill_studio_core::ops_recovery::RecoveryReport)
@@ -991,6 +1003,63 @@ pub fn print_extras_table(envelope: &ResultEnvelope<skill_studio_core::extras::E
     }
 }
 
+pub fn print_listing_table(
+    envelope: &ResultEnvelope<skill_studio_core::listing_visibility::ListingReport>,
+) {
+    use skill_studio_core::listing_visibility::ListingState;
+    print_errors(envelope);
+    let Some(report) = &envelope.data else { return };
+    for row in &report.listings {
+        let scope = match &row.scope {
+            skill_studio_core::identity::RootScope::Global => "global".to_string(),
+            skill_studio_core::identity::RootScope::Project(p) => {
+                format!("project {}", p.0.display())
+            }
+        };
+        let count = |state: ListingState| row.entries.iter().filter(|e| e.state == state).count();
+        let budget = row.budget.map_or_else(
+            || "no known limit".to_string(),
+            |b| format!("{b} {}", row.budget_unit),
+        );
+        println!(
+            "{} {scope}: budget {budget}, full listing {} {}. Described {}, truncated {}, name only {}, omitted {}, hidden {}.",
+            row.harness,
+            row.full_size,
+            row.budget_unit,
+            count(ListingState::Described),
+            count(ListingState::Truncated),
+            count(ListingState::NameOnly),
+            count(ListingState::Omitted),
+            count(ListingState::Hidden),
+        );
+        if row.budget.is_none() {
+            continue;
+        }
+        for entry in &row.entries {
+            let observed = entry
+                .observed
+                .map(|o| format!("  (last session: {})", state_label(o)))
+                .unwrap_or_default();
+            println!(
+                "  {:<10} {}{observed}",
+                state_label(entry.state),
+                entry.name
+            );
+        }
+    }
+}
+
+fn state_label(state: skill_studio_core::listing_visibility::ListingState) -> &'static str {
+    use skill_studio_core::listing_visibility::ListingState;
+    match state {
+        ListingState::Described => "described",
+        ListingState::Truncated => "truncated",
+        ListingState::NameOnly => "name only",
+        ListingState::Omitted => "omitted",
+        ListingState::Hidden => "hidden",
+    }
+}
+
 pub fn print_invocation_table(
     envelope: &ResultEnvelope<skill_studio_core::ops_invocation::InvocationReport>,
 ) {
@@ -1045,6 +1114,25 @@ pub fn print_pack_action(
         println!("{}  {}  {scope}  {state}", step.source, step.skill);
     }
     println!("{}", report.summary);
+}
+
+pub fn print_pack_export(
+    envelope: &ResultEnvelope<skill_studio_core::pack_export::PackExportReport>,
+) {
+    print_errors(envelope);
+    let Some(report) = &envelope.data else {
+        return;
+    };
+    for skill in &report.skills {
+        println!(
+            "{}  {} files  from {}",
+            skill.skill,
+            skill.files,
+            skill.from.display()
+        );
+    }
+    println!("{}", report.summary);
+    println!("Install it, once pushed: {}", report.install_command);
 }
 
 pub fn print_packs(envelope: &ResultEnvelope<skill_studio_core::pack::PackReport>) {

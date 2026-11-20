@@ -36,6 +36,8 @@ use skill_studio_lib::skills::skill_refresh::{DiscoverySourceSetting, SkillSnaps
 #[allow(dead_code)]
 struct WireTypes {
     extras_report: skill_studio_core::extras::ExtrasReport,
+    listing_report: skill_studio_core::listing_visibility::ListingReport,
+    listing_request: skill_studio_core::listing_visibility::ListingRequest,
     extras_request: skill_studio_core::extras::ExtrasRequest,
     review_request: skill_studio_core::review::ReviewRequest,
     review_outcome: skill_studio_core::review::ReviewOutcome,
@@ -69,6 +71,8 @@ struct WireTypes {
     pack_update_request: skill_studio_core::pack_action::PackUpdateRequest,
     pack_remove_request: skill_studio_core::pack_action::PackRemoveRequest,
     pack_action_report: skill_studio_core::pack_action::PackActionReport,
+    pack_export_request: skill_studio_core::pack_export::PackExportRequest,
+    pack_export_report: skill_studio_core::pack_export::PackExportReport,
     skill_invocation: SkillInvocation,
     skill_trigger: SkillTrigger,
     lifecycle_target: LifecycleTarget,

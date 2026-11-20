@@ -26,9 +26,13 @@ import type {
   FrontmatterRepairKind,
   FrontmatterRepairPreview,
   InvocationConflictChoice,
+  ListingReport,
+  ListingRequest,
   LocalEditsDto,
   PackActionReport,
   PackAddRequest,
+  PackExportReport,
+  PackExportRequest,
   PackRemoveRequest,
   PackReport,
   PackUpdateRequest,
@@ -607,6 +611,14 @@ export async function packList(remote: boolean): Promise<PackReport> {
 }
 
 /**
+ * Which skills each agent lists for the model with a description, with a name
+ * only, or not at all. Overrides predict the listing at another budget. Reads only.
+ */
+export async function skillListing(request: ListingRequest): Promise<ListingReport> {
+  return callCommand("skill_listing", { request });
+}
+
+/**
  * Plan (`dry_run`) or run `npx skills add` for skills of one git pack, through
  * the same core operation as `skill-studio pack add`.
  */
@@ -628,6 +640,15 @@ export async function packUpdate(request: PackUpdateRequest): Promise<PackAction
  */
 export async function packRemove(request: PackRemoveRequest): Promise<PackActionReport> {
   return callCommand("pack_remove", { request });
+}
+
+/**
+ * Plan (`dry_run`) or write a new pack folder from installed skills:
+ * `skills/<name>/` for each and a README with the install lines. The folder
+ * must be new or empty; nothing else is written.
+ */
+export async function packExport(request: PackExportRequest): Promise<PackExportReport> {
+  return callCommand("pack_export", { request });
 }
 
 /**
