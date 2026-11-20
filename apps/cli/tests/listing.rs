@@ -261,6 +261,11 @@ fn codex_listing_adds_system_skills_from_the_newest_session_and_charges_short_pa
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path();
     skill(home, ".agents/skills", "a", &"d".repeat(40));
+    // Enough skills that short paths beat absolute ones even when the
+    // temporary home path is short (Linux `/tmp/...`).
+    for i in 0..30 {
+        skill(home, ".agents/skills", &format!("z{i:02}"), "Filler");
+    }
     // Codex system skills are not scanned; the session names them.
     skill(home, ".codex/skills/.system", "sys", "System skill");
     write(home, ".codex/config.toml", "model = \"m\"\n");
@@ -299,7 +304,8 @@ fn codex_listing_adds_system_skills_from_the_newest_session_and_charges_short_pa
         .iter()
         .map(|e| e["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["sys", "a"], "system skills first: {codex}");
+    assert_eq!(names[..2], ["sys", "a"], "system skills first: {codex}");
+    assert_eq!(names.len(), 32, "{codex}");
     assert_eq!(entries[0]["scanned"], false);
     assert_eq!(entries[1]["observed_description_chars"], 40);
     assert_eq!(codex["thresholds"]["tier"], "all_described", "{codex}");
