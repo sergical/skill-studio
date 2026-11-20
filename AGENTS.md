@@ -453,29 +453,35 @@ The shared guard proposed in #531 was not built; #531 was also closed. Before yo
 
 ## How a PR lands
 
-1. Push. The pre-push hook runs `pnpm run check:fast` (about 1 minute). When
+1. Commit. The pre-commit hook checks the format and lint of what the commit
+   will contain (under 1 s). It changes nothing; a failure names its fix
+   (`pnpm run format`, `cargo fmt`).
+2. Push. The pre-push hook runs `pnpm run check:fast` (about 1 minute). When
    Rust changed, it runs `pnpm run check` and the contract snapshots instead
    (about 6 minutes). When a workflow changed, it also runs zizmor. Fix what
    fails. Do not use `--no-verify`.
-2. Open the PR with `.github/PULL_REQUEST_TEMPLATE.md`, then run
+3. Open the PR with `.github/PULL_REQUEST_TEMPLATE.md`, then run
    `gh pr merge --auto --squash`.
-3. Get a review from a model of another provider and post it with
+4. Get a review from a model of another provider and post it with
    `scripts/gate/gate review-status` (see `scripts/gate/README.md`). Each push
    needs a new review.
-4. GitHub merges when the required checks pass. Watch the PR only to fix a
+5. GitHub merges when the required checks pass. Watch the PR only to fix a
    failing check.
-5. `gate/risk` adds the `risk:owner` label and stays pending for: a release, a
+6. `gate/risk` adds the `risk:owner` label and stays pending for: a release, a
    version change, deploy or secret files, a new dependency, a change to
    `package.json` scripts, workflows, `.githooks/`, `.gate/` or `deny.toml`, and
    policy files. The rules
    are in `.gate/config.toml`. The owner merges these PRs. The workflow posts a
    `Needed from you and why` comment on the PR: the decision, why a person must
-   make it, and the files and rule that matched. End your reply with that
-   section: link the PR, copy the comment, and add your pick and why. Then
-   stop. Do not wait for the merge, use `--admin` without the owner's go-ahead
-   in the chat, or remove the label.
-6. Review rounds follow the `diff-review` skill. Findings still open at the
-   end go in your `Needed from you and why` section.
+   make it, and the files and rule that matched. Start your reply with
+   `Needs you: #<number> <the one decision>`. End it with that section: link
+   the PR, copy the comment, and add your pick and why. Then stop. Do not wait
+   for the merge, use `--admin` without the owner's go-ahead in the chat, or
+   remove the label.
+7. Review rounds follow the `diff-review` skill. If the review still fails
+   after 2 rounds of fixes, stop and start your reply with `Needs you:` and
+   the disagreement. Findings still open at the end go in your
+   `Needed from you and why` section.
 
 ## Reference docs
 
