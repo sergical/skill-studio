@@ -83,31 +83,34 @@ function flattenUses(stats: SkillInvocationStats[]): FlatUse[] {
   return flat;
 }
 
-const fromDayCache = new WeakMap<
+const inRangeCache = new WeakMap<
   SkillInvocationStats[],
-  { firstDay: string; stats: SkillInvocationStats[] }
+  { key: string; stats: SkillInvocationStats[] }
 >();
 
 /**
- * `stats` with only the hourly buckets on or after local day `firstDay`, the Activity
- * calendar's first day. The 30-day history starts 720 hours before the scan, inside the day
- * before that one; the page drops that part here, once, so the calendar, its totals, the filter
- * menus and every day it can open cover the same days. Cached per array, so the result keeps
- * the same identity (and `flattenUses` keeps its cache) while the snapshot and day stay the same.
+ * `stats` with only the hourly buckets on the Activity calendar's local days, `range.start` to
+ * `range.end`. The 30-day history starts 720 hours before the scan, inside the day before the
+ * first cell, and a transcript can carry a time after the scan; the page drops both here, once,
+ * so the calendar, its totals, the filter menus and every day it can open cover the same days.
+ * Cached per array, so the result keeps the same identity (and `flattenUses` keeps its cache)
+ * while the snapshot and the days stay the same.
  */
-export function statsFromDay(
+export function statsInRange(
   stats: SkillInvocationStats[],
-  firstDay: string,
+  range: { start: string; end: string },
 ): SkillInvocationStats[] {
-  const cached = fromDayCache.get(stats);
-  if (cached?.firstDay === firstDay) return cached.stats;
+  const key = `${range.start}|${range.end}`;
+  const cached = inRangeCache.get(stats);
+  if (cached?.key === key) return cached.stats;
   const clipped = stats.map((stat) => ({
     ...stat,
-    by_hour: stat.by_hour.filter(
-      (bucket) => localDateKey(new Date(bucket.hour * 3_600_000)) >= firstDay,
-    ),
+    by_hour: stat.by_hour.filter((bucket) => {
+      const day = localDateKey(new Date(bucket.hour * 3_600_000));
+      return day >= range.start && day <= range.end;
+    }),
   }));
-  fromDayCache.set(stats, { firstDay, stats: clipped });
+  inRangeCache.set(stats, { key, stats: clipped });
   return clipped;
 }
 

@@ -5,7 +5,7 @@ import { FirstScanState, type FirstScanStateProps } from "../SkillList/FirstScan
 // usage window's overview until a day is picked, then that day's details.
 // ============================================================================
 
-import { heatmapDateRangeLocal, statsFromDay } from "@skill-studio/lib";
+import { heatmapDateRangeLocal, statsInRange } from "@skill-studio/lib";
 import type { SkillInvocationStats, SkillSnapshot } from "@skill-studio/lib";
 import { ActivityBySkill } from "./ActivityBySkill";
 import { ActivityDayDetails } from "./ActivityDayDetails";
@@ -49,10 +49,11 @@ export function SkillActivityView({
   // The snapshot's scan time, not the render time, so a stale snapshot doesn't make the window
   // and the heatmap disagree about "now".
   const now = activityNow(snapshot?.scanned_at);
-  // Every section reads the calendar's 30 days only, not the start of the day before them.
-  const stats = statsFromDay(snapshot?.invocations ?? NO_STATS, heatmapDateRangeLocal(now).start);
+  // Every section reads the calendar's 30 days only: not the start of the day before them, and
+  // not a use dated after the scan.
+  const stats = statsInRange(snapshot?.invocations ?? NO_STATS, heatmapDateRangeLocal(now));
   const lens = useActivityLens(stats, now);
-  const hasAnyInvocations = snapshot ? snapshot.invocations.some((s) => s.last_30_days > 0) : false;
+  const hasAnyInvocations = stats.some((s) => s.by_hour.length > 0);
 
   if (!snapshot) {
     return (

@@ -12,7 +12,7 @@ import {
   historyByTrigger,
   shiftDay,
   skillRows,
-  statsFromDay,
+  statsInRange,
   usualDay,
   windowSummary,
 } from "./skill-activity";
@@ -203,19 +203,21 @@ describe("dayTotals", () => {
   });
 });
 
-describe("statsFromDay", () => {
-  it("drops buckets before the calendar's first day, so menu counts and day totals match it", () => {
-    const firstDay = localDateKey(new Date((BASE_HOUR + 24) * 3_600_000));
+describe("statsInRange", () => {
+  it("keeps only the calendar's days, so menu counts and day totals match it", () => {
+    const start = localDateKey(new Date((BASE_HOUR + 24) * 3_600_000));
+    const end = localDateKey(new Date((BASE_HOUR + 48) * 3_600_000));
     const stats: SkillInvocationStats[] = [
       fixtureStats("write-tests", [
         hourBucket(BASE_HOUR, { harness: "codex", trigger: "user", count: 5 }),
         hourBucket(BASE_HOUR + 24, { harness: "codex", trigger: "user", count: 2 }),
+        hourBucket(BASE_HOUR + 72, { harness: "codex", trigger: "user", count: 3 }),
       ]),
     ];
-    const shown = statsFromDay(stats, firstDay);
+    const shown = statsInRange(stats, { start, end });
     expect(historyByHarness(shown, "all")).toEqual({ codex: 2 });
     expect(historyByTrigger(shown, "all")).toEqual({ user: 2 });
-    expect(dayTotals(shown, ALL_ACTIVITY)).toEqual({ [firstDay]: 2 });
-    expect(statsFromDay(stats, firstDay)).toBe(shown);
+    expect(dayTotals(shown, ALL_ACTIVITY)).toEqual({ [start]: 2 });
+    expect(statsInRange(stats, { start, end })).toBe(shown);
   });
 });

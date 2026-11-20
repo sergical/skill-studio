@@ -146,9 +146,14 @@ impl UsageFilter {
         if self.since.is_none() && days > HISTORY_DAYS {
             return Err(too_old());
         }
-        let start = self
-            .since
-            .unwrap_or_else(|| end - chrono::Duration::days(i64::from(days)));
+        // `until` can be any date the parser takes, down to chrono's minimum, so the
+        // subtraction is checked; a start before that minimum is before the history too.
+        let start = match self.since {
+            Some(since) => since,
+            None => end
+                .checked_sub_signed(chrono::Duration::days(i64::from(days)))
+                .ok_or_else(too_old)?,
+        };
         if start < history {
             return Err(too_old());
         }
@@ -851,6 +856,11 @@ mod tests {
         let error = old_until.check_window(7, now).unwrap_err();
         assert!(error.contains("2026-10-15T00:00:00Z or later"), "{error}");
         assert!(UsageFilter::default().check_window(u32::MAX, now).is_err());
+        let earliest = UsageFilter {
+            until: Some(DateTime::<Utc>::MIN_UTC),
+            ..UsageFilter::default()
+        };
+        assert!(earliest.check_window(1, now).is_err());
         // At noon the history starts at noon 30 days back; midnight that day is before it.
         let noon = parse_usage_time("2026-11-14T12:00:00Z").unwrap();
         let first_morning = UsageFilter {
