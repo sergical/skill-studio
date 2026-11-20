@@ -117,10 +117,20 @@ test("Try again from the keyboard leaves focus on the Sync button", async ({ pag
   await page.keyboard.press("Enter");
   const popover = page.getByRole("dialog", { name: "Sync error" });
   await popover.getByRole("button", { name: "Try again" }).focus();
+  const revisionBefore = await page.evaluate(() => window.__harness!.snapshot().revision);
   await page.keyboard.press("Enter");
 
   await expect(popover).toBeHidden();
-  await expect(page.getByRole("button", { name: "Syncing installed skills" })).toBeFocused();
+  await expect
+    .poll(() => page.evaluate(() => window.__harness!.snapshot().revision))
+    .toBeGreaterThan(revisionBefore);
+  // The retry can end before this check on a slow runner, and the button's name changes with
+  // its state. The revision check above proves the retry ran; match the button in every state.
+  await expect(
+    page.getByRole("button", {
+      name: /^(Syncing installed skills|Sync installed skills|Sync failed, show error)$/,
+    }),
+  ).toBeFocused();
 });
 
 test("a long error scrolls with the keyboard", async ({ page }) => {
