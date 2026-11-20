@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "typecheck": "tsc --noEmit && tsc --noEmit -p e2e",
-    "test": "bun test --isolate=modules --randomize --parallel --path-ignore-patterns='**/*.browser.test.tsx'",
+    "test": "bun test --react-compiler --isolate=modules --randomize --parallel --path-ignore-patterns='**/*.browser.test.tsx'",
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "types:generate": "node scripts/generate-types.mjs",
     "types:check": "node scripts/generate-types.mjs --check",
