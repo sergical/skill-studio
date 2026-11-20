@@ -11,6 +11,7 @@ Example: tools/codex-listing-replay.py target/debug/skill-studio ~/.codex/sessio
 """
 
 import json
+import os
 import subprocess
 import sys
 
@@ -25,13 +26,23 @@ def recorded_lines(path):
         for block in payload.get("content", []):
             text = block.get("text", "")
             if "### Available skills" in text:
-                body = text.split("### Available skills", 1)[1].split("</skills_instructions>", 1)[0]
+                head_text, body = text.split("### Available skills", 1)
+                body = body.split("</skills_instructions>", 1)[0]
+                roots = {}
+                for root in head_text.splitlines():
+                    if root.startswith("- `") and "` = `" in root:
+                        alias, path = root[3:].split("` = `", 1)
+                        roots[alias] = path.rstrip("`")
                 out = []
                 for entry in body.splitlines():
                     if entry.startswith("- ") and " (file: " in entry:
-                        head = entry[2:].rsplit(" (file: ", 1)[0]
+                        head, locator = entry[2:].rsplit(" (file: ", 1)
+                        locator = locator.rstrip(")")
+                        alias, _, rest = locator.partition("/")
+                        path = os.path.join(roots[alias], rest) if alias in roots else locator
                         name, sep, description = head.partition(": ")
-                        out.append((name if sep else name.rstrip(":"), len(description)))
+                        out.append((name if sep else name.rstrip(":"), len(description),
+                                    os.path.realpath(path)))
                 return out
     return None
 
@@ -54,19 +65,28 @@ def main():
             print(f"{rollout}: {envelope['errors']}")
             continue
         row = next(r for r in envelope["data"]["listings"] if r["harness"] == "codex")
-        predicted = [(e["name"], e["shown_description_chars"])
+        # Name, description length and the resolved SKILL.md path: two
+        # copies of one skill must not stand in for each other.
+        predicted = [(e["name"], e["shown_description_chars"],
+                      os.path.realpath(os.path.join(e["path"] or "", "SKILL.md")))
                      for e in row["entries"] if e["state"] not in ("hidden", "omitted")]
-        names = [n for n, _ in predicted] == [n for n, _ in recorded]
-        exact = sum(1 for p, r in zip(predicted, recorded) if p == r)
+        names = [p[0] for p in predicted] == [r[0] for r in recorded]
+        by_file = {(p[0], p[2]): p[1] for p in predicted}
+        found = [r for r in recorded if (r[0], r[2]) in by_file]
+        exact = sum(1 for r in found if by_file[(r[0], r[2])] == r[1])
+        missing = [r[0] for r in recorded if (r[0], r[2]) not in by_file]
+        extra = [p[0] for p in predicted if (p[0], p[2]) not in {(r[0], r[2]) for r in recorded}]
         totals["sessions"] += 1
         totals["exact_sessions"] += names and exact == len(recorded) == len(predicted)
         totals["entries"] += len(recorded)
-        totals["listed"] += sum(1 for p, r in zip(predicted, recorded) if p[0] == r[0])
+        totals["listed"] += len(found)
         totals["exact"] += exact
         print(f"{rollout}: {len(recorded)} recorded, {len(predicted)} predicted, "
-              f"same names in order: {names}, exact lengths: {exact}, tier: {row['thresholds']['tier']}")
+              f"same names in order: {names}, exact lengths: {exact}, tier: {row['thresholds']['tier']}"
+              + (f", not predicted: {missing[:8]}" if missing else "")
+              + (f", not recorded: {extra[:8]}" if extra else ""))
     print(f"{totals['sessions']} sessions, {totals['exact_sessions']} exact; "
-          f"{totals['listed']}/{totals['entries']} entries in place, "
+          f"{totals['listed']}/{totals['entries']} recorded entries predicted (same name and file), "
           f"{totals['exact']}/{totals['entries']} exact description lengths")
 
 

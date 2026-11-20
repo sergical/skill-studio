@@ -916,23 +916,26 @@ pub(crate) fn codex_model_window(rt: &Runtime, model: &str) -> Option<(u64, Path
 
 /// `session_window` is the context window of the model a recorded session
 /// ran with; it wins over the configured model, because an app can start
-/// Codex with another model.
+/// Codex with another model, but not over an explicit
+/// `model_context_window`.
 pub(crate) fn codex_budget(
     rt: &Runtime,
     settings: &CodexListingSettings,
     max_tokens_override: Option<u64>,
     session_window: Option<(u64, String)>,
 ) -> CodexBudget {
-    let window = session_window
-        .map(|(v, source)| (v, format!("2% of the {source}")))
-        .or_else(|| {
-            settings.context_window.as_ref().map(|(v, path)| {
-                (
-                    *v,
-                    format!("{} (2% of model_context_window)", path.display()),
-                )
-            })
+    // An explicit `model_context_window` setting wins: Codex applies it to
+    // the model info before it sizes the listing.
+    let window = settings
+        .context_window
+        .as_ref()
+        .map(|(v, path)| {
+            (
+                *v,
+                format!("{} (2% of model_context_window)", path.display()),
+            )
         })
+        .or_else(|| session_window.map(|(v, source)| (v, format!("2% of the {source}"))))
         .or_else(|| {
             let model = settings.model.as_deref()?;
             codex_model_window(rt, model)

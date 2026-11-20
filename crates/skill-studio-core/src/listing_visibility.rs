@@ -1565,8 +1565,15 @@ fn codex_listing(
             .as_ref()
             .and_then(|_| plugin_version_base(skill.path.parent()?))
             .and_then(|version| version.parent().map(Path::to_path_buf));
+        // The compared session listing a plugin's skill is positive
+        // evidence that outweighs any other session.
+        let listed_now = |dir: &PathBuf| {
+            recorded
+                .as_ref()
+                .is_some_and(|r| r.entries.iter().any(|e| e.skill_md.starts_with(dir)))
+        };
         if let (Some(dir), Some(evidence)) = (&plugin_dir, &load_evidence) {
-            if !evidence.entries.iter().any(|e| e.skill_md.starts_with(dir)) {
+            if !listed_now(dir) && !evidence.entries.iter().any(|e| e.skill_md.starts_with(dir)) {
                 let mut entry = hidden_entry(&skill, name);
                 entry.hidden_reason =
                     Some("plugin not loaded in the newest complete Codex session".into());
