@@ -22,9 +22,12 @@ const desktopDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const workspaceRoot = path.dirname(path.dirname(desktopDir));
 const outputPath = path.join(workspaceRoot, "packages/lib/src/skill-types.generated.ts");
 
+// The test profile, so CI and `pnpm run check` reuse the crates that `cargo test` / nextest just
+// built. The dev profile has other debug settings and built the workspace a second time (32 s
+// in CI). The test profile also writes to target/debug.
 execFileSync(
   "cargo",
-  ["build", "--quiet", "--workspace", "--all-features", "--example", "schema"],
+  ["build", "--quiet", "--profile", "test", "--workspace", "--all-features", "--example", "schema"],
   { cwd: workspaceRoot, stdio: ["ignore", "ignore", "inherit"] },
 );
 const schemaJson = execFileSync(
