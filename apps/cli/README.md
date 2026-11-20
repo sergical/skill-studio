@@ -178,7 +178,11 @@ skill-studio listing --claude-fraction 0.02
 ```
 
 `--codex-max-tokens N` does the same for Codex. `--claude-session <file.jsonl>`
-compares with one recorded Claude Code session instead of the newest. The
+compares with one recorded Claude Code session instead of the newest, and
+`--codex-session <rollout-*.jsonl>` with one Codex session. For Codex the
+output also gives the tier, the full and names-only costs, how far the budget
+is from the next tier, and skills that Claude Code keeps manual-only but Codex
+lists. The
 command writes no agent settings; it prints the setting text and the file to
 put it in.
 

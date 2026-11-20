@@ -57,6 +57,14 @@ pub struct ListingEntry {
     pub observed: Option<ListingState>,
     /// False for entries Skill Studio does not scan, such as bundled skills.
     pub scanned: bool,
+    /// Description characters in the last recorded session, when one was
+    /// found and the harness records them (Codex).
+    pub observed_description_chars: Option<u64>,
+    /// Set when another agent's invocation setting disagrees with this one,
+    /// such as a skill Claude Code keeps manual-only that Codex still lists.
+    /// Holds the skill name.
+    #[schemars(extend("x-untrusted" = true))]
+    pub invocation_mismatch: Option<String>,
 }
 
 /// The setting that controls the budget, and how to change it.
@@ -126,8 +134,72 @@ pub struct HarnessListing {
     pub setting: Option<ListingSetting>,
     /// The session that supplied `observed` states.
     pub observed_session: Option<ObservedSession>,
+    /// The costs that decide which tier the listing is in, when the
+    /// harness has tiers (Codex).
+    pub thresholds: Option<ListingThresholds>,
     /// Entries in listing order; hidden entries last.
     pub entries: Vec<ListingEntry>,
+}
+
+/// Which of Codex's three listing forms applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ListingTier {
+    /// Every description is whole.
+    AllDescribed,
+    /// Every skill is listed; descriptions are cut to about the same length.
+    DescriptionsShortened,
+    /// No descriptions; skills past the budget are left out.
+    NamesOnly,
+}
+
+/// The listing costs, in the listing's `budget_unit`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ListingThresholds {
+    /// The tier the budget puts the listing in.
+    pub tier: ListingTier,
+    /// Cost with every description whole.
+    pub full_cost: u64,
+    /// Cost with names and paths only.
+    pub names_only_cost: u64,
+    /// Cost of the skill roots table that short paths need; included in
+    /// both costs above.
+    pub roots_table_cost: u64,
+    /// Average cost of one more name-and-path line.
+    pub average_line_cost: u64,
+    /// Average description characters each listed skill keeps.
+    pub average_description_chars: u64,
+    /// The highest budget the setting accepts.
+    pub cap: Option<u64>,
+    /// The tier and the distance to the next one, in plain words.
+    pub summary: String,
+}
+
+/// The tier and how far the budget is from the next tier, in plain words.
+fn thresholds_summary(t: &ListingThresholds, budget: u64, unit: &str, omitted: usize) -> String {
+    let cap = t
+        .cap
+        .map(|c| format!(" The setting is capped at {c} {unit}."))
+        .unwrap_or_default();
+    match t.tier {
+        ListingTier::AllDescribed => format!(
+            "Every description is whole. {} {unit} are left before Codex starts to shorten descriptions.{cap}",
+            budget - t.full_cost
+        ),
+        ListingTier::DescriptionsShortened => {
+            let left = budget - t.names_only_cost;
+            format!(
+                "Every skill is listed, and descriptions are cut to about {} characters. {} more {unit} would keep every description whole. {left} {unit} are left before Codex drops all descriptions, about {} more skills.{cap}",
+                t.average_description_chars,
+                t.full_cost - budget,
+                left / t.average_line_cost.max(1)
+            )
+        }
+        ListingTier::NamesOnly => format!(
+            "No descriptions, and {omitted} skills are left out. {} more {unit} would list every skill with a shortened description.{cap}",
+            t.names_only_cost - budget
+        ),
+    }
 }
 
 /// Input for `listing`.
@@ -145,6 +217,12 @@ pub struct ListingRequest {
     /// Compare Claude Code with this session transcript instead of the newest one.
     #[schemars(extend("x-untrusted" = true))]
     pub claude_transcript: Option<PathBuf>,
+    /// Compare Codex with this session rollout (`.codex/sessions/**/rollout-*.jsonl`)
+    /// instead of the newest one. Its listing also decides which plugins
+    /// Codex loaded and the alias order.
+    #[serde(default)]
+    #[schemars(extend("x-untrusted" = true))]
+    pub codex_transcript: Option<PathBuf>,
 }
 
 /// Every harness listing for the global scope and the requested project.
@@ -234,6 +312,8 @@ fn hidden_entry(skill: &ListedSkill, name: String) -> ListingEntry {
         usage_score: None,
         observed: None,
         scanned: true,
+        observed_description_chars: None,
+        invocation_mismatch: None,
     }
 }
 
@@ -260,6 +340,8 @@ fn unlimited_listing(
                 usage_score: None,
                 observed: None,
                 scanned: true,
+                observed_description_chars: None,
+                invocation_mismatch: None,
             }
         })
         .collect();
@@ -282,6 +364,7 @@ fn unlimited_listing(
         notes: Vec::new(),
         setting: None,
         observed_session: None,
+        thresholds: None,
         entries,
     })
 }
@@ -427,6 +510,7 @@ fn newest_transcripts(rt: &Runtime, scope: &RootScope) -> Vec<PathBuf> {
             .read_dir(&projects)
             .unwrap_or_default()
             .into_iter()
+            .filter(|e| !crate::skill_sessions::temporary_claude_project(rt, &e.name))
             .map(|e| projects.join(e.name))
             .collect(),
     };
@@ -691,6 +775,8 @@ fn claude_listing(
                         usage_score: None,
                         observed: None,
                         scanned: false,
+                        observed_description_chars: None,
+                        invocation_mismatch: None,
                     });
                     continue;
                 }
@@ -743,6 +829,8 @@ fn claude_listing(
                 usage_score: Some(score),
                 observed: None,
                 scanned: true,
+                observed_description_chars: None,
+                invocation_mismatch: None,
             });
         } else if let Some(facts) = unscanned.get(name) {
             let name_width = claude_width(&format!("- {name}"));
@@ -766,6 +854,8 @@ fn claude_listing(
                 usage_score: Some(score),
                 observed: None,
                 scanned: false,
+                observed_description_chars: None,
+                invocation_mismatch: None,
             });
         }
     }
@@ -838,6 +928,7 @@ fn claude_listing(
         notes,
         setting: Some(setting),
         observed_session: recorded.map(|r| r.session.clone()),
+        thresholds: None,
         entries,
     })
 }
@@ -852,6 +943,7 @@ pub(crate) struct CodexLine {
     pub name: String,
     /// Description after the 1024-character cap.
     pub description: Vec<char>,
+    /// Absolute `SKILL.md` path, or `rN/...` once aliased.
     pub locator: String,
 }
 
@@ -867,20 +959,38 @@ impl CodexLine {
 
     /// Cost with the trailing newline: `(bytes + 3) / 4` tokens, or chars.
     fn cost(&self, chars: usize, limit: CodexLimit) -> u64 {
-        let line = self.render(chars);
-        match limit {
-            CodexLimit::Tokens(_) => (line.len() as u64 + 1).div_ceil(4),
-            CodexLimit::Chars(_) => line.chars().count() as u64 + 1,
-        }
+        codex_cost(&format!("{}\n", self.render(chars)), limit)
+    }
+}
+
+fn codex_cost(text: &str, limit: CodexLimit) -> u64 {
+    match limit {
+        CodexLimit::Tokens(_) => (text.len() as u64).div_ceil(4),
+        CodexLimit::Chars(_) => text.chars().count() as u64,
+    }
+}
+
+fn codex_limit_value(limit: CodexLimit) -> u64 {
+    match limit {
+        CodexLimit::Tokens(v) | CodexLimit::Chars(v) => v,
+    }
+}
+
+fn with_limit(limit: CodexLimit, value: u64) -> CodexLimit {
+    match limit {
+        CodexLimit::Tokens(_) => CodexLimit::Tokens(value),
+        CodexLimit::Chars(_) => CodexLimit::Chars(value),
     }
 }
 
 /// Description characters each line keeps, or `None` when it is omitted.
-/// Mirrors `allocate_skill_lines` in Codex 0.170.0 `ext/skills/src/render.rs`.
+/// Mirrors `allocate_skill_lines` in Codex 0.170.0
+/// `ext/skills/src/render.rs`. Host skills render with the core-compatible
+/// policy: system, repository, then user skills by name, `description`
+/// rather than `short-description`, and no omission line. Real sessions
+/// show all three, including at budgets that leave skills out.
 pub(crate) fn codex_allocate(lines: &[CodexLine], limit: CodexLimit) -> Vec<Option<usize>> {
-    let max = match limit {
-        CodexLimit::Tokens(v) | CodexLimit::Chars(v) => v,
-    };
+    let max = codex_limit_value(limit);
     let full: u64 = lines
         .iter()
         .map(|l| l.cost(l.description.len(), limit))
@@ -930,6 +1040,422 @@ pub(crate) fn codex_allocate(lines: &[CodexLine], limit: CodexLimit) -> Vec<Opti
         .collect()
 }
 
+/// `### Skills` intro when entries carry absolute paths.
+const CODEX_INTRO_ABSOLUTE: &str = "A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that can be used. Each entry includes a name, description, and source locator. `file` locators are on the host filesystem, `executor package` locators are owned by their execution environment, `cloud package` locators are opaque package identifiers, and `custom resource` locators use their provider's access mechanism.";
+/// `### Skills` intro when entries carry `rN/...` short paths.
+const CODEX_INTRO_ALIASES: &str = "A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and a short path that can be expanded into an absolute path using the skill roots table.";
+
+/// `render_available_skills_body` without skill lines.
+fn codex_body(intro: &str, root_lines: &[String]) -> String {
+    let mut lines = vec!["## Skills".to_string(), intro.to_string()];
+    if !root_lines.is_empty() {
+        lines.push("### Skill roots".into());
+        lines.extend(root_lines.iter().cloned());
+    }
+    lines.push("### Available skills".into());
+    format!("\n{}\n", lines.join("\n"))
+}
+
+/// `plugins/cache/<marketplace>` above a plugin skill root.
+fn plugin_marketplace_base(path: &Path) -> Option<PathBuf> {
+    let mut candidate = path;
+    while let Some(parent) = candidate.parent() {
+        if parent.file_name()? == "cache" && parent.parent()?.file_name()? == "plugins" {
+            return Some(candidate.to_path_buf());
+        }
+        candidate = parent;
+    }
+    None
+}
+
+/// `plugins/cache/<marketplace>/<plugin>/<version>` above a plugin skill root.
+fn plugin_version_base(path: &Path) -> Option<PathBuf> {
+    let base = plugin_marketplace_base(path)?;
+    let mut rest = path.strip_prefix(&base).ok()?.components();
+    let plugin = rest.next()?;
+    let version = rest.next()?;
+    Some(base.join(plugin).join(version))
+}
+
+/// The alias roots, mirroring `shared_host_alias_roots`: a plugin version
+/// with one skill shares its marketplace folder as the root.
+fn codex_alias_roots(skill_roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut per_version: BTreeMap<PathBuf, usize> = BTreeMap::new();
+    for root in skill_roots {
+        if let Some(version) = plugin_version_base(root) {
+            *per_version.entry(version).or_default() += 1;
+        }
+    }
+    skill_roots
+        .iter()
+        .map(|root| match plugin_version_base(root) {
+            Some(version) if per_version.get(&version).copied().unwrap_or(0) <= 1 => {
+                plugin_marketplace_base(root).unwrap_or_else(|| root.clone())
+            }
+            _ => root.clone(),
+        })
+        .collect()
+}
+
+/// One rendering of the listing: absolute paths, or short paths plus the
+/// roots table.
+struct CodexRender {
+    lines: Vec<CodexLine>,
+    roots_cost: u64,
+    alloc: Vec<Option<usize>>,
+}
+
+impl CodexRender {
+    fn included(&self) -> usize {
+        self.alloc.iter().filter(|a| a.is_some()).count()
+    }
+
+    fn cut_chars(&self) -> usize {
+        self.lines
+            .iter()
+            .zip(&self.alloc)
+            .map(|(l, a)| l.description.len() - a.unwrap_or(0))
+            .sum()
+    }
+
+    /// Every line Codex emits, the roots table included.
+    fn cost(&self, limit: CodexLimit) -> u64 {
+        self.roots_cost
+            + self
+                .lines
+                .iter()
+                .zip(&self.alloc)
+                .filter_map(|(l, a)| a.map(|a| l.cost(a, limit)))
+                .sum::<u64>()
+    }
+
+    /// `aliased_render_is_better`: more skills, then fewer cut characters,
+    /// then a lower cost.
+    fn better_than(&self, other: &Self, limit: CodexLimit) -> bool {
+        (
+            self.included(),
+            std::cmp::Reverse(self.cut_chars()),
+            std::cmp::Reverse(self.cost(limit)),
+        ) > (
+            other.included(),
+            std::cmp::Reverse(other.cut_chars()),
+            std::cmp::Reverse(other.cost(limit)),
+        )
+    }
+}
+
+/// One skill in the order Codex lists it.
+struct CodexSkill {
+    name: String,
+    description: String,
+    skill_md: PathBuf,
+    /// The discovery root the skill was found in.
+    root: PathBuf,
+    /// System skills, then repository skills, then user skills.
+    rank: u8,
+    entry: ListingEntry,
+}
+
+/// Renders `skills` both ways and keeps the better one, as Codex does.
+/// `known_roots` gives the alias order a recorded session used.
+fn codex_render(skills: &[CodexSkill], limit: CodexLimit, known_roots: &[PathBuf]) -> CodexRender {
+    let base_lines: Vec<CodexLine> = skills
+        .iter()
+        .map(|s| {
+            let chars: Vec<char> = s.description.chars().collect();
+            CodexLine {
+                name: s.name.clone(),
+                description: if chars.len() > 1024 {
+                    chars[..1021].iter().copied().chain("...".chars()).collect()
+                } else {
+                    chars
+                },
+                locator: s.skill_md.to_string_lossy().into_owned(),
+            }
+        })
+        .collect();
+    let absolute = CodexRender {
+        alloc: codex_allocate(&base_lines, limit),
+        lines: base_lines.clone(),
+        roots_cost: 0,
+    };
+    // Alias plan: recorded order first, then roots in listing order.
+    let roots = codex_alias_roots(&skills.iter().map(|s| s.root.clone()).collect::<Vec<_>>());
+    let mut plan: Vec<PathBuf> = known_roots.to_vec();
+    for root in &roots {
+        if !plan.contains(root) {
+            plan.push(root.clone());
+        }
+    }
+    let mut used = BTreeSet::new();
+    let lines: Vec<CodexLine> = base_lines
+        .into_iter()
+        .map(|mut line| {
+            let best = plan
+                .iter()
+                .enumerate()
+                .filter(|(_, root)| {
+                    line.locator
+                        .strip_prefix(root.to_string_lossy().trim_end_matches('/'))
+                        .is_some_and(|rest| rest.starts_with('/'))
+                })
+                .max_by_key(|(_, root)| root.as_os_str().len());
+            if let Some((index, root)) = best {
+                let rest =
+                    line.locator[root.to_string_lossy().trim_end_matches('/').len()..].to_string();
+                line.locator = format!("r{index}{rest}");
+                used.insert(index);
+            }
+            line
+        })
+        .collect();
+    let root_lines: Vec<String> = used
+        .iter()
+        .map(|i| format!("- `r{i}` = `{}`", plan[*i].display()))
+        .collect();
+    let roots_cost = codex_cost(&codex_body(CODEX_INTRO_ALIASES, &root_lines), limit)
+        .saturating_sub(codex_cost(&codex_body(CODEX_INTRO_ABSOLUTE, &[]), limit));
+    let max = codex_limit_value(limit);
+    if root_lines.is_empty() || roots_cost >= max {
+        return absolute;
+    }
+    let aliased = CodexRender {
+        alloc: codex_allocate(&lines, with_limit(limit, max - roots_cost)),
+        lines,
+        roots_cost,
+    };
+    if aliased.better_than(&absolute, limit) {
+        aliased
+    } else {
+        absolute
+    }
+}
+
+/// One entry of a listing a Codex session recorded.
+#[derive(Debug, Clone)]
+pub(crate) struct CodexRecordedEntry {
+    pub name: String,
+    pub description: String,
+    /// The `SKILL.md` path, with the alias expanded.
+    pub skill_md: PathBuf,
+    /// The alias root the path used, when it used one.
+    pub root: Option<PathBuf>,
+}
+
+/// The listing one Codex session recorded.
+pub(crate) struct CodexRecorded {
+    pub session: ObservedSession,
+    /// Working folder of the session.
+    pub cwd: Option<String>,
+    /// `model_context_window` the session ran with.
+    pub context_window: Option<u64>,
+    /// The skill roots table, in alias order.
+    pub roots: Vec<PathBuf>,
+    pub entries: Vec<CodexRecordedEntry>,
+    /// True when the listing left no skill out: no omission line, and some
+    /// description kept. Only then does a missing plugin mean Codex did not
+    /// load it.
+    pub complete: bool,
+}
+
+/// Parses the `<skills_instructions>` text: the roots table and the
+/// `### Available skills` entries.
+pub(crate) fn parse_codex_block(block: &str) -> (Vec<(String, PathBuf)>, Vec<CodexRecordedEntry>) {
+    let mut roots: Vec<(String, PathBuf)> = Vec::new();
+    let mut entries = Vec::new();
+    let mut in_skills = false;
+    for line in block.lines() {
+        if line.starts_with("### Available skills") {
+            in_skills = true;
+            continue;
+        }
+        if line.starts_with("</skills_instructions>") {
+            break;
+        }
+        let Some(rest) = line.strip_prefix("- ") else {
+            continue;
+        };
+        if !in_skills {
+            // - `r0` = `/path`
+            if let Some((alias, path)) = rest
+                .strip_prefix('`')
+                .and_then(|r| r.split_once("` = `"))
+                .and_then(|(a, p)| Some((a, p.strip_suffix('`')?)))
+            {
+                roots.push((alias.to_string(), PathBuf::from(path)));
+            }
+            continue;
+        }
+        let Some((head, locator)) = rest.rsplit_once(" (file: ") else {
+            continue;
+        };
+        let locator = locator.strip_suffix(')').unwrap_or(locator);
+        let (name, description) = head
+            .split_once(": ")
+            .unwrap_or((head.trim_end_matches(':'), ""));
+        let (skill_md, root) = match locator.split_once('/') {
+            Some((alias, suffix)) if roots.iter().any(|(a, _)| a == alias) => {
+                let root = roots
+                    .iter()
+                    .find(|(a, _)| a == alias)
+                    .map(|(_, p)| p.clone());
+                (root.clone().unwrap_or_default().join(suffix), root)
+            }
+            _ => (PathBuf::from(locator), None),
+        };
+        entries.push(CodexRecordedEntry {
+            name: name.to_string(),
+            description: description.to_string(),
+            skill_md,
+            root,
+        });
+    }
+    (roots, entries)
+}
+
+fn read_codex_recorded(rt: &Runtime, path: &Path) -> Option<CodexRecorded> {
+    let (bytes, _) = rt.ports.fs.read_prefix(path, 4 * 1024 * 1024).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    let mut cwd = None;
+    let mut at = None;
+    let mut model = None;
+    let mut window = None;
+    let mut block = None;
+    for line in text.lines() {
+        let wanted = (cwd.is_none() && line.contains("\"session_meta\""))
+            || (model.is_none() && line.contains("\"turn_context\""))
+            || (block.is_none() && line.contains("<skills_instructions>"))
+            || (window.is_none() && line.contains("\"model_context_window\""));
+        if !wanted {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let payload = &row["payload"];
+        // `task_started` (and some `turn_context` lines) carry the window.
+        if window.is_none() {
+            window = payload["model_context_window"].as_u64();
+        }
+        match row["type"].as_str() {
+            Some("session_meta") => {
+                cwd = payload["cwd"].as_str().map(str::to_string);
+                at = payload["timestamp"].as_str().map(str::to_string);
+            }
+            Some("turn_context") => model = payload["model"].as_str().map(str::to_string),
+            Some("response_item")
+                if payload["type"] == "message" && payload["role"] == "developer" =>
+            {
+                block = payload["content"].as_array().and_then(|blocks| {
+                    blocks.iter().find_map(|b| {
+                        let text = b["text"].as_str()?;
+                        Some(text[text.find("<skills_instructions>")?..].to_string())
+                    })
+                });
+            }
+            _ => {}
+        }
+        if cwd.is_some() && model.is_some() && block.is_some() && window.is_some() {
+            break;
+        }
+    }
+    let block = block?;
+    let (roots, entries) = parse_codex_block(&block);
+    // Only the names-only tier leaves skills out, and it keeps no description.
+    let complete = entries.iter().any(|e| !e.description.is_empty());
+    Some(CodexRecorded {
+        context_window: window,
+        complete,
+        session: ObservedSession {
+            transcript: path.to_path_buf(),
+            at,
+            model,
+            listed: entries.len(),
+            described: entries.iter().filter(|e| !e.description.is_empty()).count(),
+        },
+        cwd,
+        roots: roots.into_iter().map(|(_, p)| p).collect(),
+        entries,
+    })
+}
+
+/// The newest listing a Codex session recorded for `scope`, skipping
+/// sessions in temporary folders. A project scope needs a session in that
+/// project.
+fn newest_codex_recorded(rt: &Runtime, scope: &RootScope) -> Option<CodexRecorded> {
+    let files = crate::skill_sessions::newest(
+        crate::skill_sessions::codex_rollouts(rt),
+        chrono::DateTime::<chrono::Utc>::MIN_UTC,
+        usize::MAX,
+    );
+    let home_agents = rt.scope.global_root_path(Path::new(".agents"));
+    // Skips sessions in temporary folders and, for a project, other
+    // projects' sessions. For the global listing, a session whose folder
+    // adds repository skills compares less well, so the newest session
+    // without any is preferred, within the 20 newest that fit.
+    let fitting: Vec<CodexRecorded> = files
+        .into_iter()
+        .filter_map(|path| read_codex_recorded(rt, &path))
+        .filter(|recorded| {
+            recorded.cwd.as_deref().is_some_and(|cwd| {
+                let fits = match scope {
+                    RootScope::Global => true,
+                    RootScope::Project(p) => Path::new(cwd) == p.0,
+                };
+                fits && !crate::skill_sessions::temporary_dir(rt, cwd)
+            })
+        })
+        .take(20)
+        .collect();
+    let has_repo_skills = |r: &CodexRecorded| {
+        r.cwd.as_deref().map(PathBuf::from).is_some_and(|cwd| {
+            !home_agents.starts_with(&cwd)
+                && !rt.scope.codex_home.starts_with(&cwd)
+                && r.entries.iter().any(|e| e.skill_md.starts_with(&cwd))
+        })
+    };
+    let pick = match scope {
+        RootScope::Global => fitting
+            .iter()
+            .position(|r| !has_repo_skills(r))
+            .unwrap_or(0),
+        RootScope::Project(_) => 0,
+    };
+    fitting.into_iter().nth(pick)
+}
+
+/// The newest complete listing in any session (eval runs included): which
+/// plugins this Codex install loads does not depend on the folder.
+fn newest_complete_codex_recorded(rt: &Runtime) -> Option<CodexRecorded> {
+    crate::skill_sessions::newest(
+        crate::skill_sessions::codex_rollouts(rt),
+        chrono::DateTime::<chrono::Utc>::MIN_UTC,
+        usize::MAX,
+    )
+    .into_iter()
+    .take(50)
+    .filter_map(|path| read_codex_recorded(rt, &path))
+    .find(|recorded| recorded.complete)
+}
+
+/// The description a `SKILL.md` gives, read the way Codex reads it.
+/// Reads only files inside the home folder: the path comes from a session log.
+fn codex_description(rt: &Runtime, skill_md: &Path) -> Option<String> {
+    let file = rt.ports.fs.canonicalize(skill_md).ok()?;
+    let home = rt.ports.fs.canonicalize(&rt.scope.home.lexical).ok()?;
+    if !file.starts_with(home) {
+        return None;
+    }
+    let bytes = rt.ports.fs.read_capped(skill_md, 256 * 1024).ok()?;
+    let folder = skill_md
+        .parent()?
+        .file_name()?
+        .to_string_lossy()
+        .into_owned();
+    crate::listing_cost::codex_frontmatter(&String::from_utf8_lossy(&bytes), &folder)
+        .map(|(_, d)| d)
+}
+
 fn codex_listing(
     rt: &Runtime,
     inventory: &crate::dto::Inventory,
@@ -938,70 +1464,373 @@ fn codex_listing(
     req: &ListingRequest,
 ) -> Result<HarnessListing, CoreError> {
     let settings = codex_listing_settings(rt, scope)?;
-    let budget = codex_budget(rt, &settings, req.codex_max_context_tokens);
-    let mut hidden = Vec::new();
-    let mut listed = Vec::new();
-    for skill in listed_skills(rt, inventory, facts, scope, None)?.into_values() {
-        if skill.hidden.is_some() {
-            hidden.push(hidden_entry(&skill, skill.name.clone()));
-        } else {
-            listed.push(skill);
-        }
-    }
-    // Core-compatible order: repo skills before user skills, then name, then path.
-    listed.sort_by(|a, b| {
-        (!a.project_root, &a.name, &a.path).cmp(&(!b.project_root, &b.name, &b.path))
-    });
-    let lines: Vec<CodexLine> = listed
-        .iter()
-        .map(|skill| {
-            let chars: Vec<char> = skill.description.chars().collect();
-            let description = if chars.len() > 1024 {
-                chars[..1021].iter().copied().chain("...".chars()).collect()
-            } else {
-                chars
-            };
-            CodexLine {
-                name: skill.name.clone(),
-                description,
-                locator: skill.path.join("SKILL.md").to_string_lossy().into_owned(),
+    let recorded = match &req.codex_transcript {
+        Some(path) => {
+            // Only a rollout inside this home's Codex session folders, after
+            // resolving links and `..`.
+            let file = rt.ports.fs.canonicalize(path).ok();
+            let rollout = file.as_ref().is_some_and(|file| {
+                file.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with("rollout-"))
+                    && file.extension().is_some_and(|e| e == "jsonl")
+                    && ["sessions", "archived_sessions"].iter().any(|dir| {
+                        rt.ports
+                            .fs
+                            .canonicalize(&rt.scope.codex_home.join(dir))
+                            .is_ok_and(|root| file.starts_with(root))
+                    })
+            });
+            if !rollout {
+                return Err(CoreError::new(
+                    ErrorCode::InvalidRequest,
+                    "The rollout must be a Codex session file in this home (sessions/**/rollout-*.jsonl)",
+                )
+                .at(path));
             }
-        })
-        .collect();
-    let alloc = codex_allocate(&lines, budget.limit);
-    let mut entries: Vec<ListingEntry> = listed
-        .iter()
-        .zip(&lines)
-        .zip(&alloc)
-        .map(|((skill, line), alloc)| {
-            let full = skill.description.chars().count() as u64;
-            let state = match alloc {
-                None => ListingState::Omitted,
-                Some(0) if !line.description.is_empty() => ListingState::NameOnly,
-                Some(n) if (*n as u64) < full => ListingState::Truncated,
-                Some(_) => ListingState::Described,
-            };
-            ListingEntry {
-                name: skill.name.clone(),
+            Some(read_codex_recorded(rt, path).ok_or_else(|| {
+                CoreError::new(
+                    ErrorCode::InvalidRequest,
+                    "No skill listing in this rollout",
+                )
+                .at(path)
+            })?)
+        }
+        None => newest_codex_recorded(rt, scope),
+    };
+    let budget = codex_budget(
+        rt,
+        &settings,
+        req.codex_max_context_tokens,
+        // The session's model window from Codex's model cache (500000 for
+        // gpt-6.1-sol gives the 10000 tokens real sessions show); the
+        // smaller `model_context_window` a session logs is the usable part.
+        recorded.as_ref().and_then(|r| {
+            let transcript = r.session.transcript.display();
+            r.session
+                .model
+                .as_deref()
+                .and_then(|m| {
+                    crate::listing_cost::codex_model_window(rt, m).map(|(v, _)| {
+                        (
+                            v,
+                            format!("{m} context window of the newest session ({transcript})"),
+                        )
+                    })
+                })
+                .or_else(|| {
+                    r.context_window
+                        .map(|v| (v, format!("model_context_window logged in {transcript}")))
+                })
+        }),
+    );
+    // Compared after resolving links: a home can link `.codex/skills`.
+    let system_root = rt
+        .ports
+        .fs
+        .canonicalize(&rt.scope.codex_home.join("skills/.system"))
+        .unwrap_or_else(|_| rt.scope.codex_home.join("skills/.system"));
+    // Which plugins Codex loaded: a listing that left nothing out shows
+    // them all. A listing that left skills out is not evidence, so the
+    // newest complete one is used instead.
+    let load_evidence = match &recorded {
+        Some(r) if r.complete => None,
+        _ => newest_complete_codex_recorded(rt),
+    };
+    let load_evidence = load_evidence
+        .as_ref()
+        .or(recorded.as_ref().filter(|r| r.complete));
+    let mut hidden = Vec::new();
+    let mut skills: Vec<CodexSkill> = Vec::new();
+    for skill in listed_skills(rt, inventory, facts, scope, None)?.into_values() {
+        // Codex names a plugin skill `plugin:name`.
+        let name = match &skill.plugin {
+            Some(plugin) => format!("{plugin}:{}", skill.name),
+            None => skill.name.clone(),
+        };
+        if skill.hidden.is_some() {
+            let mut entry = hidden_entry(&skill, name);
+            if skill.hidden == Some("manual-only") {
+                entry.hidden_reason = Some(
+                    "manual-only: agents/openai.yaml sets allow_implicit_invocation: false".into(),
+                );
+            }
+            hidden.push(entry);
+            continue;
+        }
+        // Which installed plugins Codex loads depends on its marketplaces
+        // and the app that starts it. A plugin with no skill in the newest
+        // session's listing was not loaded there.
+        let plugin_dir = skill
+            .plugin
+            .as_ref()
+            .and_then(|_| plugin_version_base(skill.path.parent()?))
+            .and_then(|version| version.parent().map(Path::to_path_buf));
+        // The compared session listing a plugin's skill is positive
+        // evidence that outweighs any other session.
+        let listed_now = |dir: &PathBuf| {
+            recorded
+                .as_ref()
+                .is_some_and(|r| r.entries.iter().any(|e| e.skill_md.starts_with(dir)))
+        };
+        if let (Some(dir), Some(evidence)) = (&plugin_dir, &load_evidence) {
+            if !listed_now(dir) && !evidence.entries.iter().any(|e| e.skill_md.starts_with(dir)) {
+                let mut entry = hidden_entry(&skill, name);
+                entry.hidden_reason =
+                    Some("plugin not loaded in the newest complete Codex session".into());
+                hidden.push(entry);
+                continue;
+            }
+        }
+        let chars = skill.description.chars().count() as u64;
+        // Codex prints paths with links resolved (a linked `~/.agents`
+        // shows its target).
+        let folder = rt
+            .ports
+            .fs
+            .canonicalize(&skill.path)
+            .unwrap_or_else(|_| skill.path.clone());
+        skills.push(CodexSkill {
+            rank: if skill.project_root { 2 } else { 3 },
+            root: folder.parent().map(Path::to_path_buf).unwrap_or_default(),
+            skill_md: folder.join("SKILL.md"),
+            entry: ListingEntry {
+                name: name.clone(),
                 path: Some(skill.path.clone()),
-                state,
+                state: ListingState::Described,
                 hidden_reason: None,
-                shown_description_chars: alloc.unwrap_or(0) as u64,
-                full_description_chars: full,
+                shown_description_chars: chars,
+                full_description_chars: chars,
                 usage_score: None,
                 observed: None,
                 scanned: true,
+                observed_description_chars: None,
+                invocation_mismatch: skill.claude_manual.then(|| {
+                    format!(
+                        "Manual-only in Claude Code (disable-model-invocation), but Codex lists it: Codex reads only policy.allow_implicit_invocation in agents/openai.yaml. Run `skill-studio invocation {} --manual` to set both.",
+                        skill.name
+                    )
+                }),
+            },
+            name,
+            description: skill.description,
+        });
+    }
+    // Entries Skill Studio does not scan (Codex system skills, skills in
+    // nested folders) come from the newest recorded session, with the
+    // description read from their SKILL.md.
+    let mut unscanned = 0usize;
+    if let Some(recorded) = &recorded {
+        let known: BTreeSet<PathBuf> = skills
+            .iter()
+            .flat_map(|s| {
+                let real = rt.ports.fs.canonicalize(&s.skill_md).ok();
+                std::iter::once(s.skill_md.clone()).chain(real)
+            })
+            .chain(
+                hidden
+                    .iter()
+                    .filter_map(|h| h.path.as_ref().map(|p| p.join("SKILL.md"))),
+            )
+            .collect();
+        // Repository skills of the recorded session (under its working
+        // folder) are not global entries. A session started in the home
+        // folder has none.
+        let home_agents = rt.scope.global_root_path(Path::new(".agents"));
+        let session_repo =
+            recorded.cwd.as_deref().map(PathBuf::from).filter(|cwd| {
+                !home_agents.starts_with(cwd) && !rt.scope.codex_home.starts_with(cwd)
+            });
+        // A comparison with one chosen session keeps its repository skills.
+        let repo = match scope {
+            RootScope::Global if req.codex_transcript.is_none() => session_repo.clone(),
+            _ => None,
+        };
+        // Plugins with a scanned skill: the scanned version is the one
+        // installed now; a recorded older version is not listed again.
+        let scanned_plugins: BTreeSet<PathBuf> = skills
+            .iter()
+            .filter_map(|s| plugin_version_base(s.skill_md.parent()?.parent()?))
+            .filter_map(|v| v.parent().map(Path::to_path_buf))
+            .collect();
+        // A listing that left skills out does not show them all; the newest
+        // complete listing adds the rest, without its own repository skills.
+        let evidence_repo = load_evidence
+            .and_then(|e| e.cwd.as_deref())
+            .map(PathBuf::from)
+            .filter(|cwd| !home_agents.starts_with(cwd) && !rt.scope.codex_home.starts_with(cwd));
+        let extra = load_evidence
+            .filter(|_| !recorded.complete)
+            .map(|e| e.entries.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .filter(|e| {
+                !evidence_repo
+                    .as_ref()
+                    .is_some_and(|r| e.skill_md.starts_with(r))
+            });
+        let mut seen = BTreeSet::new();
+        for entry in recorded.entries.iter().chain(extra) {
+            if !seen.insert(entry.skill_md.clone()) {
+                continue;
             }
-        })
-        .collect();
-    let (max, unit) = match budget.limit {
+            if entry
+                .skill_md
+                .parent()
+                .and_then(Path::parent)
+                .and_then(plugin_version_base)
+                .and_then(|v| v.parent().map(Path::to_path_buf))
+                .is_some_and(|dir| scanned_plugins.contains(&dir))
+            {
+                continue;
+            }
+            let real = rt.ports.fs.canonicalize(&entry.skill_md).ok();
+            if known.contains(&entry.skill_md) || real.as_ref().is_some_and(|r| known.contains(r)) {
+                continue;
+            }
+            // A repository skill of the recorded session is not a global entry.
+            if repo.as_ref().is_some_and(|r| entry.skill_md.starts_with(r)) {
+                continue;
+            }
+            let description =
+                codex_description(rt, &entry.skill_md).unwrap_or_else(|| entry.description.clone());
+            let chars = description.chars().count() as u64;
+            unscanned += 1;
+            skills.push(CodexSkill {
+                name: entry.name.clone(),
+                rank: if rt
+                    .ports
+                    .fs
+                    .canonicalize(&entry.skill_md)
+                    .unwrap_or_else(|_| entry.skill_md.clone())
+                    .starts_with(&system_root)
+                {
+                    0
+                } else if session_repo
+                    .as_ref()
+                    .is_some_and(|r| entry.skill_md.starts_with(r))
+                {
+                    2
+                } else {
+                    3
+                },
+                root: entry.root.clone().unwrap_or_else(|| {
+                    entry
+                        .skill_md
+                        .parent()
+                        .and_then(Path::parent)
+                        .map(Path::to_path_buf)
+                        .unwrap_or_default()
+                }),
+                skill_md: entry.skill_md.clone(),
+                entry: ListingEntry {
+                    name: entry.name.clone(),
+                    path: entry.skill_md.parent().map(Path::to_path_buf),
+                    state: ListingState::Described,
+                    hidden_reason: None,
+                    shown_description_chars: chars,
+                    full_description_chars: chars,
+                    usage_score: None,
+                    observed: None,
+                    scanned: false,
+                    observed_description_chars: None,
+                    invocation_mismatch: None,
+                },
+                description,
+            });
+        }
+    }
+    // Catalog order: system, then repository, then user skills; by name,
+    // then path.
+    skills.sort_by(|a, b| (a.rank, &a.name, &a.skill_md).cmp(&(b.rank, &b.name, &b.skill_md)));
+    let known_roots = recorded
+        .as_ref()
+        .map(|r| r.roots.clone())
+        .unwrap_or_default();
+    let render = codex_render(&skills, budget.limit, &known_roots);
+    let mut entries: Vec<ListingEntry> = Vec::new();
+    for ((skill, line), alloc) in skills.iter().zip(&render.lines).zip(&render.alloc) {
+        let mut entry = skill.entry.clone();
+        let full = line.description.len();
+        entry.state = match alloc {
+            None => ListingState::Omitted,
+            Some(0) => ListingState::NameOnly,
+            Some(n) if *n < full => ListingState::Truncated,
+            Some(_) => ListingState::Described,
+        };
+        entry.shown_description_chars = alloc.unwrap_or(0) as u64;
+        entries.push(entry);
+    }
+    if let Some(recorded) = &recorded {
+        // Same-name skills in different files stay apart: match by file.
+        let real = |p: &Path| {
+            rt.ports
+                .fs
+                .canonicalize(p)
+                .unwrap_or_else(|_| p.to_path_buf())
+        };
+        let observed: BTreeMap<PathBuf, u64> = recorded
+            .entries
+            .iter()
+            .map(|e| (real(&e.skill_md), e.description.chars().count() as u64))
+            .collect();
+        for entry in entries.iter_mut().chain(hidden.iter_mut()) {
+            let chars = entry
+                .path
+                .as_ref()
+                .and_then(|p| observed.get(&real(&p.join("SKILL.md"))))
+                .copied();
+            entry.observed_description_chars = chars;
+            entry.observed = Some(match chars {
+                None => ListingState::Hidden,
+                Some(0) => ListingState::NameOnly,
+                Some(n) if n < entry.full_description_chars.min(1024) => ListingState::Truncated,
+                Some(_) => ListingState::Described,
+            });
+        }
+    }
+    let limit = budget.limit;
+    let (max, unit) = match limit {
         CodexLimit::Tokens(v) => (v, "tokens"),
         CodexLimit::Chars(v) => (v, "characters"),
     };
-    let full_size = lines
-        .iter()
-        .map(|l| l.cost(l.description.len(), budget.limit))
-        .sum();
+    let full_size: u64 = render.roots_cost
+        + render
+            .lines
+            .iter()
+            .map(|l| l.cost(l.description.len(), limit))
+            .sum::<u64>();
+    let names_only: u64 =
+        render.roots_cost + render.lines.iter().map(|l| l.cost(0, limit)).sum::<u64>();
+    let listed = render.included().max(1) as u64;
+    let mut thresholds = ListingThresholds {
+        tier: if full_size <= max {
+            ListingTier::AllDescribed
+        } else if names_only <= max {
+            ListingTier::DescriptionsShortened
+        } else {
+            ListingTier::NamesOnly
+        },
+        full_cost: full_size,
+        names_only_cost: names_only,
+        roots_table_cost: render.roots_cost,
+        average_line_cost: (names_only - render.roots_cost)
+            .div_ceil(render.lines.len().max(1) as u64),
+        average_description_chars: render
+            .alloc
+            .iter()
+            .flatten()
+            .map(|a| *a as u64)
+            .sum::<u64>()
+            / listed,
+        cap: Some(10_000),
+        summary: String::new(),
+    };
+    thresholds.summary = thresholds_summary(
+        &thresholds,
+        max,
+        unit,
+        render.lines.len() - render.included(),
+    );
     let requested = req
         .codex_max_context_tokens
         .or(settings.max_context_tokens.as_ref().map(|(v, _)| *v));
@@ -1023,6 +1852,19 @@ fn codex_listing(
             requested.unwrap_or(max).min(10_000)
         ),
     };
+    let mut notes = vec![
+        "Codex lists every skill with its description when they all fit. When they do not, it keeps every skill and cuts all descriptions to about the same length. When even names and paths do not fit, it drops every description and leaves out the skills at the end of the list.".to_string(),
+        "Paths are short (r0/name/SKILL.md) when the skill roots table makes the listing cheaper; the table is charged too.".to_string(),
+        "skills.max_context_tokens is capped at 10000 tokens. Codex ignores disable-model-invocation; only policy.allow_implicit_invocation: false in agents/openai.yaml hides a skill.".to_string(),
+    ];
+    if unscanned > 0 {
+        notes.push(format!(
+            "{unscanned} entries that Skill Studio does not scan (Codex system skills, skills in nested folders) come from the newest recorded session; their descriptions are read from their SKILL.md."
+        ));
+    }
+    if recorded.is_none() {
+        notes.push("No recorded Codex session was found, so Codex system skills are not counted and the alias order is inferred.".into());
+    }
     entries.extend(hidden);
     Ok(HarnessListing {
         harness: facts.id.clone(),
@@ -1038,12 +1880,10 @@ fn codex_listing(
             "model_context_window or ~/.codex/models_cache.json".into()
         },
         uses_default_context_window: budget.default_context,
-        notes: vec![
-            "Codex shortens every description by the same amount first, then lists names only, then drops entries from the end of the list.".into(),
-            "The order (project skills, then user skills, by name) is the core-compatible order; extension listings keep catalog order instead.".into(),
-        ],
+        notes,
         setting: Some(setting),
-        observed_session: None,
+        observed_session: recorded.map(|r| r.session),
+        thresholds: Some(thresholds),
         entries,
     })
 }
@@ -1154,6 +1994,7 @@ mod tests {
             path: PathBuf::from("/a"),
             project_root: false,
             hidden: None,
+            claude_manual: false,
         };
         assert_eq!(claude_description(&skill, 5), ("abcd\u{2026}".into(), true));
         assert_eq!(
@@ -1184,6 +2025,100 @@ mod tests {
         let name_cost = lines[0].cost(0, CodexLimit::Chars(0));
         let alloc = codex_allocate(&lines, CodexLimit::Chars(name_cost * 2));
         assert_eq!(alloc, vec![Some(0), Some(0), None]);
+    }
+
+    #[test]
+    fn codex_quotes_a_value_with_a_colon_but_rejects_a_repeated_key() {
+        use crate::listing_cost::codex_frontmatter;
+        let repaired = codex_frontmatter(
+            "---\nname: a\ndescription: Build for AWS:  ECS\n---\nbody",
+            "f",
+        );
+        assert_eq!(repaired, Some(("a".into(), "Build for AWS: ECS".into())));
+        let repeated = codex_frontmatter(
+            "---\nname: a\ndescription: d\nmetadata:\n  x: 1\nmetadata:\n  y: 2\n---\n",
+            "f",
+        );
+        assert_eq!(repeated, None);
+        // Codex's typed fields: a name over 64 characters, or metadata that
+        // is not a mapping, rejects the skill; no name falls back to the folder.
+        let long = format!("---\nname: {}\ndescription: d\n---\n", "n".repeat(65));
+        assert_eq!(codex_frontmatter(&long, "f"), None);
+        assert_eq!(
+            codex_frontmatter("---\ndescription: d\nmetadata: text\n---\n", "f"),
+            None
+        );
+        assert_eq!(
+            codex_frontmatter("---\ndescription: d\n---\n", "folder"),
+            Some(("folder".into(), "d".into()))
+        );
+        // serde_yaml reads numbers and booleans as text, and refuses a
+        // repeated key inside metadata too.
+        assert_eq!(
+            codex_frontmatter("---\nname: 123\ndescription: true\n---\n", "f"),
+            Some(("123".into(), "true".into()))
+        );
+        assert_eq!(
+            codex_frontmatter(
+                "---\nname: a\ndescription: d\nmetadata:\n  short-description: x\n  short-description: y\n---\n",
+                "f"
+            ),
+            None
+        );
+        assert_eq!(
+            codex_frontmatter(
+                "---\ndescription: d\nmetadata: {short-description: a, short-description: b}\n---\n",
+                "f"
+            ),
+            None
+        );
+        // Keys repeated in separate list items, and scalar text, are kept.
+        assert_eq!(
+            codex_frontmatter(
+                "---\nname: 0x10\ndescription: TRUE\nextra:\n  - label: a\n    value: x\n  - label: b\n    value: y\n---\n",
+                "f"
+            ),
+            Some(("0x10".into(), "TRUE".into()))
+        );
+    }
+
+    #[test]
+    fn codex_shares_the_marketplace_root_for_a_plugin_with_one_skill() {
+        let cache = PathBuf::from("/h/.codex/plugins/cache/m");
+        let one = cache.join("p/1.0/skills");
+        let many = cache.join("q/2.0/skills");
+        let roots = codex_alias_roots(&[
+            one,
+            many.clone(),
+            many.clone(),
+            PathBuf::from("/h/.agents/skills"),
+        ]);
+        assert_eq!(
+            roots,
+            vec![
+                cache,
+                many.clone(),
+                many,
+                PathBuf::from("/h/.agents/skills")
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_block_parser_expands_short_paths_with_the_roots_table() {
+        let (roots, entries) = parse_codex_block(
+            "### Skill roots\n- `r0` = `/h/.agents/skills`\n### Available skills\n- a: Does a (file: r0/a/SKILL.md)\n- p:b: (file: /abs/b/SKILL.md)\n</skills_instructions>",
+        );
+        assert_eq!(roots.len(), 1);
+        assert_eq!(
+            entries[0].skill_md,
+            PathBuf::from("/h/.agents/skills/a/SKILL.md")
+        );
+        assert_eq!(entries[0].description, "Does a");
+        assert_eq!(
+            (entries[1].name.as_str(), entries[1].description.as_str()),
+            ("p:b", "")
+        );
     }
 
     #[test]

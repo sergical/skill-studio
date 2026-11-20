@@ -509,6 +509,9 @@ enum Command {
         /// Compare Claude Code with this session transcript (.jsonl) instead of the newest one.
         #[arg(long = "claude-session")]
         claude_session: Option<PathBuf>,
+        /// Compare Codex with this session rollout (rollout-*.jsonl) instead of the newest one.
+        #[arg(long = "codex-session")]
+        codex_session: Option<PathBuf>,
         #[arg(long)]
         json: bool,
     },
@@ -1114,6 +1117,7 @@ fn main() -> ExitCode {
             claude_context,
             codex_max_tokens,
             claude_session,
+            codex_session,
             json,
         } => {
             let request = skill_studio_core::listing_visibility::ListingRequest {
@@ -1122,6 +1126,7 @@ fn main() -> ExitCode {
                 claude_context_window_tokens: claude_context,
                 codex_max_context_tokens: codex_max_tokens,
                 claude_transcript: claude_session,
+                codex_transcript: codex_session,
             };
             run_listing(&scope, &request, &view.into(), json, time)
         }
