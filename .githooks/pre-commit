@@ -1,0 +1,54 @@
+#!/bin/sh
+# Checks what a commit will contain (git's index, not the working tree) and changes nothing.
+# `pnpm install` turns it on for this worktree. A file that fails names its fix.
+set -e
+bun=node_modules/.bin/bun
+
+# Every path list is read with -z, so git does not quote paths with spaces or non-ASCII
+# characters. xargs -r (GNU; macOS accepts and ignores it) skips the command for an empty
+# list, and each inner script also returns early when it gets no path.
+staged() { git diff --cached --name-only --diff-filter=ACMRT -z -- "$@"; }
+
+# bun's --staged mode skips a staged file whose working copy is gone, which would let that
+# blob through unchecked, so such a commit is refused.
+# shellcheck disable=SC2016 # the inner sh expands $path itself
+staged | xargs -0 -r sh -c '
+  for path; do
+    if [ ! -e "$path" ]; then
+      echo "pre-commit: $path is staged but missing from the working tree; restore it or unstage it" >&2
+      exit 255
+    fi
+  done
+' sh
+
+# Every staged file that is not Rust goes to bun fmt, and its JS/TS to bun lint. Both read the
+# staged content. Neither writes, so a path-limited `git commit -- <path>` cannot leave stale
+# content in the index.
+if staged | tr '\0' '\n' | grep -qv '\.rs$'; then
+  if [ ! -x "$bun" ]; then
+    echo "pre-commit: $bun not found; run pnpm install" >&2
+    exit 1
+  fi
+  if ! "$bun" fmt --check --staged --no-script; then
+    echo "pre-commit: run pnpm run format, then stage the result" >&2
+    exit 1
+  fi
+  # --no-error-on-unmatched-pattern: a commit with no staged file to lint must not fail.
+  "$bun" lint --staged --no-script --type-aware --max-warnings=0 --no-error-on-unmatched-pattern
+fi
+
+# Each staged Rust file's content goes through rustfmt on stdin, so rustfmt sees what will be
+# committed and does not follow `mod` declarations into other files. rustfmt --check exits 0
+# on stdin even when it prints a diff, so the hook compares the output with the input.
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+# shellcheck disable=SC2016 # the inner sh expands $0 and $1 itself
+staged '*.rs' | xargs -0 -r -n 1 sh -c '
+  [ -n "$1" ] || exit 0
+  git show ":0:$1" > "$0/staged.rs"
+  if ! rustfmt --edition 2021 --emit stdout < "$0/staged.rs" > "$0/formatted.rs" 2> "$0/err" ||
+    ! cmp -s "$0/staged.rs" "$0/formatted.rs"; then
+    echo "pre-commit: $1 is not rustfmt-formatted; run cargo fmt, then stage the result" >&2
+    exit 255
+  fi
+' "$tmp"
