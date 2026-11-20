@@ -362,6 +362,24 @@ class GateTests(GitRepoFixture, unittest.TestCase):
                 self.commit()
                 self.assertEqual(self.risk()['tier'], 'stop')
 
+    def test_a_lockfile_importer_that_points_outside_the_registry_or_repo_stops(self):
+        self.cfg['lock_files'] = ['pnpm-lock.yaml']
+        def lock(version, importer='.'):
+            return (f'importers:\n  {importer}:\n    dependencies:\n      left-pad:\n'
+                    f'        specifier: 1.3.0\n        version: {version}\n')
+        self.write('pnpm-lock.yaml', lock('1.2.0'))
+        self.commit()
+        self.base = self.git('rev-parse', 'HEAD')
+        for version, importer, tier in [('1.3.0', '.', 'ship'), ('1.3.0(react@18.2.0)', '.', 'ship'),
+                                        ('link:packages/lib', '.', 'ship'), ('link:../../packages/lib', 'apps/desktop', 'ship'),
+                                        ('link:../outside', '.', 'stop'), ('link:../../../outside', 'apps/desktop', 'stop'),
+                                        ('link:/tmp/outside', '.', 'stop'), ('file:../outside', '.', 'stop'),
+                                        ('evil@1.3.0', '.', 'stop'), ('https://example.invalid/a.tgz', '.', 'stop')]:
+            with self.subTest(version=version, importer=importer):
+                self.write('pnpm-lock.yaml', lock(version, importer))
+                self.commit()
+                self.assertEqual(self.risk()['tier'], tier)
+
     def test_every_stop_rule_in_the_repo_config_has_owner_text(self):
         import tomllib
         cfg = tomllib.loads((Path(__file__).resolve().parents[2] / '.gate/config.toml').read_text())

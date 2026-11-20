@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import posixpath
 import re
 import subprocess
 import sys
@@ -88,7 +89,7 @@ def classify(cfg, base, head='HEAD', raise_to=None, reason=None, author=''):
                 hits.append({'rule': 'dependencies', 'tier': 'stop', 'files': [path]})
     for path in files:
         if matches(path, cfg.get('lock_files', [])) and lock_adds_outside_code(
-                subprocess.check_output(['git', 'diff', base, head, '--', path])):
+                subprocess.check_output(['git', 'diff', base, head, '--', path]), path, read_at(head, path)):
             hits.append({'rule': 'dependencies', 'tier': 'stop', 'files': [path]})
     tier = max((h['tier'] for h in hits), key=TIERS.index, default='ship')
     if raise_to:
@@ -231,11 +232,37 @@ def needs_you(cfg, hits):
     return list(grouped.values())
 
 
-def lock_adds_outside_code(diff):
+def links_outside_repo(path, text):
+    """Lockfile lines whose `link:` target is outside the repository, or that
+    sit outside `importers:`, where the folder they are relative to is unknown.
+    An importer is a two-space key under `importers:`; its links are relative
+    to its folder."""
+    outside, importer = set(), None
+    for line in text.split('\n'):
+        if line and not line.startswith(' '):
+            importer = '' if line == 'importers:' else None
+        elif importer is not None and re.fullmatch(r"  [^ ].*:", line):
+            importer = line.strip()[:-1].strip("'")
+        match = re.search(r'(?<![\w.-])link:(\S*)', line)
+        if match:
+            target = posixpath.normpath(posixpath.join(posixpath.dirname(path), importer or '', match.group(1)))
+            if importer is None or posixpath.isabs(match.group(1)) or target == '..' or target.startswith('../'):
+                outside.add(line[1:] if line.startswith('+') else line)
+    return outside
+
+
+def lock_adds_outside_code(diff, path='', head_text=''):
     """True when an added lockfile line could point a package anywhere but the
     registry. A registry entry is `resolution: {integrity: sha512-...}`. Without
     double quotes, backslashes, anchors, tags and explicit keys, YAML cannot
-    spell a key except as written, so any other resolution shows."""
+    spell a key except as written, so any other resolution shows.
+
+    A version or dependency value is a plain version, optionally followed by
+    peer versions in parentheses. Anything else, such as `link:`, `file:`, a
+    URL or another package's name, installs other code under the same name,
+    even when the manifest and `specifier:` stay the same. A `link:` to a
+    workspace folder inside the repository is allowed."""
+    outside = links_outside_repo(path, head_text)
     # Git ends lines at LF only. Read bytes so a carriage return cannot start a
     # line that git did not mark as added.
     for line in diff.decode('utf-8', 'replace').split('\n'):
@@ -245,6 +272,17 @@ def lock_adds_outside_code(diff):
         if re.search(r'[^\t\x20-\x7e]|["\\&!%]|\*\w|^\s*\?|patchedDependencies|pnpmfileChecksum', text):
             return True
         if 'resolution' in text and not re.fullmatch(r'\s*resolution: \{integrity: sha512-[A-Za-z0-9+/=]+\}', text):
+            return True
+        entry = re.fullmatch(r"\s*('[^']*'|[^\s:'][^:]*): +(\S.*)", text)
+        if not entry or entry.group(1) in ('specifier', 'resolution', 'deprecated') or entry.group(2)[0] in '{[':
+            continue
+        value = entry.group(2)
+        while re.search(r'\([^()]*\)', value):
+            value = re.sub(r'\([^()]*\)', '', value)
+        if value.startswith('link:'):
+            if text in outside:
+                return True
+        elif re.match(r'[A-Za-z][\w+.-]*:', value) or '@' in value:
             return True
     return False
 
