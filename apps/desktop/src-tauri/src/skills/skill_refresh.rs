@@ -2354,6 +2354,15 @@ impl skill_studio_core::ports::LeaseProvider for CallerHoldsLease {
     }
 }
 
+/// The one [`ScanMemo`](skill_studio_core::scan_memo::ScanMemo) of this
+/// app process. Each scan reads, hashes and tokenizes only the skill
+/// folders that changed since the scan before.
+fn desktop_scan_memo() -> std::sync::Arc<skill_studio_core::scan_memo::ScanMemo> {
+    static MEMO: std::sync::LazyLock<std::sync::Arc<skill_studio_core::scan_memo::ScanMemo>> =
+        std::sync::LazyLock::new(Default::default);
+    MEMO.clone()
+}
+
 pub(crate) fn core_scan_installed_skills(
     home: &Path,
     project_paths: &[PathBuf],
@@ -2391,6 +2400,7 @@ pub(crate) fn core_scan_installed_skills(
 
     let catalog = std::sync::Arc::new(skill_studio_core::harness::HarnessCatalog::builtin());
     let mut ports = skill_studio_host::default_ports(lease_root, catalog);
+    ports.scan_memo = Some(desktop_scan_memo());
     if std::env::var_os("SKILL_STUDIO_FIXTURE").is_some() {
         ports.history = std::sync::Arc::new(skill_studio_host::GuardedNoHistoryOpener::new(
             home.join(".history"),

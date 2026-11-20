@@ -288,6 +288,7 @@ fn runtime_in(scope: &RuntimeScope, home: &Path, cli: Arc<FakeSkillsCli>) -> Run
         tools: None,
         catalog: Arc::new(HarnessCatalog::builtin()),
         telemetry: Arc::new(skill_studio_core::ports::NoopTelemetry),
+        scan_memo: None,
     };
     Runtime::new(scope, ports).unwrap()
 }
@@ -317,6 +318,7 @@ fn runtime_with_tools(
         tools: tools.map(|t| Arc::new(t) as Arc<dyn skill_studio_core::ports::ToolLookup>),
         catalog: Arc::new(HarnessCatalog::builtin()),
         telemetry: Arc::new(skill_studio_core::ports::NoopTelemetry),
+        scan_memo: None,
     };
     Runtime::new(&RuntimeScope::fixture(home), ports).unwrap()
 }

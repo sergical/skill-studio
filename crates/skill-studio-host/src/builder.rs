@@ -35,6 +35,7 @@ pub fn default_ports(lease_root: PathBuf, catalog: Arc<HarnessCatalog>) -> Ports
         tools: None,
         catalog,
         telemetry: Arc::new(skill_studio_core::ports::NoopTelemetry),
+        scan_memo: None,
     }
 }
 

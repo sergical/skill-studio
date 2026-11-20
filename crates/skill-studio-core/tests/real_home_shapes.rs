@@ -60,6 +60,8 @@ fn in_memory_runtime(
         catalog: Arc::new(HarnessCatalog::builtin()),
 
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+
+        scan_memo: None,
     };
     let mut scope = RuntimeScope::fixture(Path::new(HOME));
     if !projects.is_empty() {

@@ -60,6 +60,8 @@ fn runtime_with(home: &Path, fs: Arc<dyn skill_studio_core::ports::ScopeFs>) -> 
         catalog: Arc::new(HarnessCatalog::builtin()),
 
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+
+        scan_memo: None,
     };
     Runtime::new(&scope, ports).unwrap()
 }

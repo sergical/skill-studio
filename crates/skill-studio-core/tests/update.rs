@@ -201,6 +201,8 @@ fn runtime_with_history(
         catalog: Arc::new(HarnessCatalog::builtin()),
 
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+
+        scan_memo: None,
     };
     Runtime::new(&scope, ports).unwrap()
 }
@@ -1136,6 +1138,7 @@ fn project_dotagents_update_edits_the_project_root_agents_toml_runs_project_inst
         tools: None,
         catalog: Arc::new(HarnessCatalog::builtin()),
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+        scan_memo: None,
     };
     let rt = Runtime::new(&scope, ports).unwrap();
 
@@ -2569,6 +2572,7 @@ fn update_all_runs_one_dotagents_install_in_each_scope() {
         tools: None,
         catalog: Arc::new(HarnessCatalog::builtin()),
         telemetry: std::sync::Arc::new(skill_studio_core::ports::NoopTelemetry),
+        scan_memo: None,
     };
     let rt = Runtime::new(&scope, ports).unwrap();
 
