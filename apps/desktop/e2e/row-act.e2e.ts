@@ -1,15 +1,15 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { openApp, setLatency } from "./app-harness";
 
 /** A skill row, not a group header: only skill rows carry `aria-selected`. */
 const SKILL_ROW = '[role="row"][aria-selected]';
 
-// Every harness answer waits 400 ms, so a running act is on screen long enough to measure; the
-// waits add up, so each test gets the slow timeout.
+// After the app starts, every harness answer waits 400 ms, so a running act is on screen long
+// enough to measure; the waits add up, so each test gets the slow timeout.
 test.beforeEach(async ({ page }) => {
   test.slow();
-  await page.goto("/?latency=400");
-  await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
+  await openApp(page);
+  await setLatency(page, 400);
 });
 
 async function openSkillsPage(page: Page) {
@@ -135,8 +135,7 @@ test("a selection-bar Park leaves a row that is still updating to its Update, an
   page,
 }) => {
   // The Update must still run when Park is clicked; a slow answer keeps that true on a loaded machine.
-  await page.goto("/?latency=2000");
-  await page.getByRole("button", { name: "Continue" }).click();
+  await setLatency(page, 2000);
   await openSkillsPage(page);
   const grid = page.getByRole("grid", { name: "Skills" });
   const updating = rowNamed(

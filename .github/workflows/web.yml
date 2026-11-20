@@ -39,6 +39,10 @@ jobs:
   e2e:
     name: e2e (${{ matrix.project }} ${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
+    # Browsers and their system libraries come baked into this image; installing
+    # them took 101-547 s per job (apt). Its version must match @playwright/test.
+    container:
+      image: mcr.microsoft.com/playwright:v1.65.0-noble@sha256:9beb546099e11f52d62e505537914870e01a67e0e6b00ae41da4775324e73dbe
     strategy:
       fail-fast: false
       matrix:
@@ -57,8 +61,6 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # The warm-up in e2e/warm-up.ts always opens Chromium.
-      - run: pnpm --filter skill-studio exec playwright install --with-deps chromium "$PROJECT"
       - if: matrix.project == 'chromium' && matrix.shard == 1
         run: pnpm --filter skill-studio run test:browser
       - run: pnpm --filter skill-studio exec playwright test --project="$PROJECT" --shard="$SHARD/3"
