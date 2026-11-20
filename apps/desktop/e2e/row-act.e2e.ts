@@ -34,6 +34,36 @@ async function top(row: Locator): Promise<number> {
   return Math.round((await row.boundingBox())!.y);
 }
 
+interface BusyBox {
+  width: number;
+  top: number;
+}
+
+/** Records the button's width and its row's top in the page, in the same task that sets
+ * `aria-busy="true"` on the button. Two separate reads after the act starts can miss it: on a
+ * loaded runner the act can end between them. Call it before the click; await the result after. */
+async function measureWhenBusy(button: Locator, row: Locator): Promise<() => Promise<BusyBox>> {
+  const rowElement = await row.elementHandle();
+  const pending = await button.evaluateHandle(
+    // Wrapped in an object: evaluateHandle would wait for a returned promise, before the click.
+    (element, rowEl) => ({
+      box: new Promise<BusyBox>((resolve) => {
+        const observer = new MutationObserver(() => {
+          if (element.getAttribute("aria-busy") !== "true") return;
+          observer.disconnect();
+          resolve({
+            width: element.getBoundingClientRect().width,
+            top: Math.round(rowEl!.getBoundingClientRect().y),
+          });
+        });
+        observer.observe(element, { attributes: true, attributeFilter: ["aria-busy"] });
+      }),
+    }),
+    rowElement,
+  );
+  return () => pending.evaluate((handle) => handle.box);
+}
+
 test("Update on a Skills row spins in place, then the row stays in its slot and says Updated", async ({
   page,
 }) => {
@@ -47,12 +77,11 @@ test("Update on a Skills row spins in place, then the row stays in its slot and 
   const running = target.getByRole("button", { name: "Update", exact: true });
   const before = await top(target);
   const width = (await running.boundingBox())!.width;
+  const busy = await measureWhenBusy(running, target);
 
   await running.click();
 
-  await expect(running).toHaveAttribute("aria-busy", "true");
-  expect((await running.boundingBox())!.width).toBe(width);
-  expect(await top(target)).toBe(before);
+  expect(await busy()).toEqual({ width, top: before });
 
   await expect(target.getByText("Updated", { exact: true })).toBeVisible();
   expect(await top(target)).toBe(before);
