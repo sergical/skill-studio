@@ -284,21 +284,33 @@ export function projectRows(
   return ranked(counts).map(([project, count]) => ({ project, count }));
 }
 
-/** History totals per harness under a trigger filter - the harness menu's counts. */
-export function historyByHarness(stats: SkillInvocationStats[], trigger: TriggerFilter) {
+/**
+ * Totals per harness under a trigger filter over the calendar's days, from local day `firstDay`
+ * on - the harness menu's counts. The 30-day history starts 720 hours before now, inside the day
+ * before the calendar's first day; uses in that part are left out, as the calendar leaves them out.
+ */
+export function historyByHarness(
+  stats: SkillInvocationStats[],
+  trigger: TriggerFilter,
+  firstDay: string,
+) {
   const out: Counts<string> = {};
   for (const u of flattenUses(stats)) {
-    if (trigger !== "all" && u.trigger !== trigger) continue;
+    if (u.dayKey < firstDay || (trigger !== "all" && u.trigger !== trigger)) continue;
     bump(out, u.harness, u.count);
   }
   return out;
 }
 
-/** History totals per trigger under a harness filter - the trigger menu's counts. */
-export function historyByTrigger(stats: SkillInvocationStats[], harness: HarnessFilter) {
+/** Totals per trigger under a harness filter from local day `firstDay` on - the trigger menu's counts. */
+export function historyByTrigger(
+  stats: SkillInvocationStats[],
+  harness: HarnessFilter,
+  firstDay: string,
+) {
   const out: Counts<SkillTrigger> = {};
   for (const u of flattenUses(stats)) {
-    if (harness !== "all" && u.harness !== harness) continue;
+    if (u.dayKey < firstDay || (harness !== "all" && u.harness !== harness)) continue;
     bump(out, u.trigger, u.count);
   }
   return out;

@@ -121,33 +121,34 @@ pub struct UsageFilter {
 impl UsageFilter {
     /// Rejects a window that holds no time (`since` at or after `until`, or
     /// after `now` when there is no `until`), which would report every skill
-    /// as unused. Also rejects a window that reaches before the last
-    /// [`HISTORY_DAYS`] days, which would report uses that are not counted.
-    /// `since` may start on the first day of the history.
+    /// as unused. Also rejects a window that starts before the last
+    /// [`HISTORY_DAYS`] days, by `days`, by `since` or by an old `until`,
+    /// which would report uses that are not counted. The window may start on
+    /// the first day of the history.
     pub fn check_window(&self, days: u32, now: DateTime<Utc>) -> Result<(), String> {
-        if self.since.is_none() && days > HISTORY_DAYS {
+        let end = self.until.unwrap_or(now);
+        if let Some(since) = self.since.filter(|since| *since >= end) {
             return Err(format!(
-                "Skill Studio counts only the last {HISTORY_DAYS} days of history: \
-                 use {HISTORY_DAYS} days or fewer"
+                "the usage window is empty: since {} is not before {}",
+                since.to_rfc3339(),
+                end.to_rfc3339()
             ));
         }
+        let start = self
+            .since
+            .unwrap_or_else(|| end - chrono::Duration::days(i64::from(days)));
         let first_day = history_start(now)
             .date_naive()
             .and_time(chrono::NaiveTime::MIN)
             .and_utc();
-        match self.since {
-            Some(since) if since >= self.until.unwrap_or(now) => Err(format!(
-                "the usage window is empty: since {} is not before {}",
-                since.to_rfc3339(),
-                self.until.unwrap_or(now).to_rfc3339()
-            )),
-            Some(since) if since < first_day => Err(format!(
+        if start < first_day {
+            return Err(format!(
                 "Skill Studio counts only the last {HISTORY_DAYS} days of history: \
-                 since must be {} or later",
+                 the window must start on {} or later",
                 first_day.date_naive()
-            )),
-            _ => Ok(()),
+            ));
         }
+        Ok(())
     }
 }
 
@@ -814,13 +815,14 @@ mod tests {
         assert!(window(at("2026-10-20"), at("2026-11-01"))
             .check_window(30, now)
             .is_ok());
-        assert!(window(None, at("2026-10-20")).check_window(30, now).is_ok());
+        assert!(window(None, at("2026-11-10")).check_window(7, now).is_ok());
     }
 
-    /// Flow: ask for more than the 30-day history, by `days` or by `since`.
-    /// Expectation: 31 days and a `since` before 2026-10-15 (30 days before
-    /// 2026-11-14) are refused with the history named; 30 days and a `since`
-    /// on 2026-10-15 pass.
+    /// Flow: ask for more than the 30-day history, by `days`, by `since`, or
+    /// by an `until` so old that `days` before it reach past the history.
+    /// Expectation: 31 days, a `since` before 2026-10-15 (30 days before
+    /// 2026-11-14), and 7 days before 2026-10-20 are refused with the first
+    /// day named; 30 days and a `since` on 2026-10-15 pass.
     /// Failure means a report counts a window whose older part has no
     /// history, and shows every skill used only then as unused.
     #[test]
@@ -836,6 +838,12 @@ mod tests {
         let error = since("2026-10-14").check_window(30, now).unwrap_err();
         assert!(error.contains("2026-10-15 or later"), "{error}");
         assert!(since("2026-10-15").check_window(30, now).is_ok());
+        let old_until = UsageFilter {
+            until: Some(parse_usage_time("2026-10-20").unwrap()),
+            ..UsageFilter::default()
+        };
+        let error = old_until.check_window(7, now).unwrap_err();
+        assert!(error.contains("2026-10-15 or later"), "{error}");
     }
     /// Flow: parse the window bounds a user types.
     /// Expectation: a bare date is the start of that day in UTC, an RFC 3339

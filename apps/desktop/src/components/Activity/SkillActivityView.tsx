@@ -71,6 +71,7 @@ export function SkillActivityView({
           setTrigger={lens.setTrigger}
           clearFilter={lens.clearFilter}
           enabledHarnesses={lens.enabledHarnesses}
+          dates={lens.dates}
         />
       }
     >
