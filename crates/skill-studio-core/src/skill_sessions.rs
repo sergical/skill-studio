@@ -62,7 +62,9 @@ pub struct SkillSessionsRequest {
 }
 
 /// How one session showed one skill to the model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionListingState {
     /// Name and full description.
@@ -1201,14 +1203,23 @@ pub fn build_agent(
             if summary.used.iter().any(|u| u.skill == name) {
                 continue;
             }
+            // Each count at most once per scanned skill per session, each
+            // on its own: a later use of another plugin's copy can still be
+            // the one that was name only.
             let key = scanned(&name);
-            if used_keys.insert(key.clone()) {
-                let row = rollup.entry(key.clone()).or_insert_with(|| blank(&key));
+            let row = rollup.entry(key.clone()).or_insert_with(|| blank(&key));
+            if used_keys.insert((key.clone(), None)) {
                 row.used += 1;
-                match state {
-                    SessionListingState::NameOnly => row.used_name_only += 1,
-                    SessionListingState::NotListed => row.used_not_listed += 1,
-                    _ => {}
+            }
+            if matches!(
+                state,
+                SessionListingState::NameOnly | SessionListingState::NotListed
+            ) && used_keys.insert((key, Some(state)))
+            {
+                if state == SessionListingState::NameOnly {
+                    row.used_name_only += 1;
+                } else {
+                    row.used_not_listed += 1;
                 }
             }
             summary.used.push(SessionSkillUse {
@@ -1428,6 +1439,43 @@ mod tests {
         assert_eq!(s.entries[0].skill, "q:foo");
         let foo = built.skills.iter().find(|r| r.name == "foo").unwrap();
         assert_eq!((foo.described, foo.used, foo.used_not_listed), (1, 1, 1));
+    }
+
+    #[test]
+    fn a_name_only_use_counts_whichever_order_two_plugin_copies_are_used_in() {
+        let corpus = [CorpusSkill {
+            name: "foo".into(),
+            path: None,
+            description: "Foo".into(),
+            reachable: true,
+        }];
+        let use_of = |skill: &str| SkillInvocation {
+            skill: skill.into(),
+            harness: AgentId::CODEX.into(),
+            trigger: SkillTrigger::Agent,
+            at: DateTime::<Utc>::UNIX_EPOCH,
+            project_path: None,
+            session: None,
+            use_session: None,
+        };
+        for order in [["p:foo", "q:foo"], ["q:foo", "p:foo"]] {
+            let mut session = listed(&["p:foo"]);
+            if let Some(listing) = &mut session.listing {
+                listing.push(("q:foo".into(), RecordedEntry::NameOnly));
+            }
+            session.uses = order.iter().map(|s| use_of(s)).collect();
+            let built = build_agent(
+                &AgentId::parse(AgentId::CODEX).unwrap(),
+                "Codex",
+                SessionRecords::ListingAndUses,
+                None,
+                &corpus,
+                &[session],
+            );
+            let foo = built.skills.iter().find(|r| r.name == "foo").unwrap();
+            assert_eq!((foo.used, foo.used_name_only), (1, 1), "{order:?}");
+            assert!(foo.flags.contains(&SkillSessionFlag::UsedWhileNameOnly));
+        }
     }
 
     fn listed(names: &[&str]) -> ParsedSession {
