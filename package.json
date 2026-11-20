@@ -22,7 +22,7 @@
     "format:check": "oxfmt --check .",
     "fmt:rust": "cd apps/desktop/src-tauri && cargo fmt",
     "test": "pnpm run test:anti-slop && pnpm --filter skill-studio run test && pnpm --filter @skill-studio/lib run test && pnpm --filter @skill-studio/server run test && pnpm --filter @skill-studio/marketing run test",
-    "test:anti-slop": "bun test --isolate=modules --randomize --parallel --timeout 20000 tools/oxlint/anti-slop",
+    "test:anti-slop": "bun test --isolate=modules --randomize --timeout 20000 tools/oxlint/anti-slop",
     "knip": "knip",
     "version:set": "node scripts/release/set-version.mjs",
     "versions:check": "node scripts/release/check-versions.mjs",

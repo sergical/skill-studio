@@ -9,7 +9,7 @@
     "./agent-setup": "./src/agent-setup.ts"
   },
   "scripts": {
-    "test": "bun test --isolate=modules --randomize --parallel"
+    "test": "bun test --isolate=modules --randomize"
   },
   "dependencies": {
     "diff": "^9.0.0"
