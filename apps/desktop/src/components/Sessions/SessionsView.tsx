@@ -114,7 +114,14 @@ function AgentSummary({ agent }: { agent: AgentSessions }) {
       <p className="m-0">{agent.note}</p>
       {agent.doc && (
         <p className="m-0">
-          How this agent finds skills: <span className="break-all">{agent.doc}</span>
+          <a
+            href={agent.doc}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-accent underline-offset-2 hover:underline"
+          >
+            How {deploymentLabelFromAgentId(agent.harness)} finds skills
+          </a>
         </p>
       )}
     </div>

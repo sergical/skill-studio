@@ -78,6 +78,12 @@ function StateText({ state }: { state: ListingState | null | undefined }) {
   return <span className={`text-caption ${STATE_CLASS[state]}`}>{STATE_LABEL[state]}</span>;
 }
 
+const TIER_LABEL = {
+  all_described: "Every description fits",
+  descriptions_shortened: "Descriptions are shortened",
+  names_only: "Names only, some skills left out",
+} satisfies Record<NonNullable<HarnessListing["thresholds"]>["tier"], string>;
+
 function Summary({ row }: { row: HarnessListing }) {
   const count = (state: ListingState) => row.entries.filter((e) => e.state === state).length;
   const listed = row.entries.length - count("hidden");
@@ -93,7 +99,9 @@ function Summary({ row }: { row: HarnessListing }) {
       <p className="m-0">
         {row.budget === null
           ? "This agent has no known listing limit."
-          : `Budget ${row.budget.toLocaleString()} ${row.budget_unit}; the full listing is ${row.full_size.toLocaleString()}. ${row.budget_source}.`}
+          : row.thresholds
+            ? `Budget ${row.budget.toLocaleString()} ${row.budget_unit}. ${row.budget_source}.`
+            : `Budget ${row.budget.toLocaleString()} ${row.budget_unit}; the full listing is ${row.full_size.toLocaleString()}. ${row.budget_source}.`}
       </p>
       {row.context_window_tokens !== null && (
         <p className="m-0">
@@ -103,11 +111,18 @@ function Summary({ row }: { row: HarnessListing }) {
         </p>
       )}
       {row.thresholds && (
-        <p className="m-0">
-          Full listing {row.thresholds.full_cost.toLocaleString()} {row.budget_unit}; names and
-          paths only {row.thresholds.names_only_cost.toLocaleString()} (skill roots table{" "}
-          {row.thresholds.roots_table_cost.toLocaleString()}). {row.thresholds.summary}
-        </p>
+        <section
+          aria-label="Listing tier"
+          className="mt-1 flex max-w-[68ch] flex-col gap-1 rounded-md border border-border-subtle p-3"
+        >
+          <p className="m-0 text-body text-text-primary">{TIER_LABEL[row.thresholds.tier]}</p>
+          <p className="m-0 tabular-nums">
+            Full listing {row.thresholds.full_cost.toLocaleString()} {row.budget_unit}. Names and
+            paths only {row.thresholds.names_only_cost.toLocaleString()}, of which the skill roots
+            table is {row.thresholds.roots_table_cost.toLocaleString()}.
+          </p>
+          <p className="m-0">{row.thresholds.summary}</p>
+        </section>
       )}
       {row.observed_session && (
         <p className="m-0">
@@ -191,7 +206,7 @@ function EntryRow({ entry, tried }: { entry: ListingEntry; tried: ListingEntry |
         )}
       </span>
       <StateText state={entry.state} />
-      <StateText state={tried?.state} />
+      {tried ? <StateText state={tried.state} /> : <span />}
       <StateText state={entry.observed} />
       <span className="text-right text-caption tabular-nums text-text-tertiary">
         {entry.usage_score ? entry.usage_score.toFixed(1) : ""}
