@@ -9,11 +9,12 @@
 //! agents. A harness switched off in the `discovery` section of
 //! `~/.agents/skill-studio.json` is not read.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant, SystemTime};
 
 use skill_studio_core::discovery_sources::DiscoverySources;
 use skill_studio_core::error::CoreError;
@@ -174,6 +175,58 @@ const PI_NESTED_ROOT_WALK_SKIP_NAMES: &[&str] = &["node_modules", "target", "Lib
 /// check but never mistaken for a nested project root.
 fn nested_pi_project_roots(home: &Path, root: &Path) -> Vec<PathBuf> {
     nested_pi_project_roots_with_budget(home, root, PI_NESTED_ROOT_WALK_BUDGET)
+}
+
+/// How long one pi folder's walk result is used before that folder is
+/// walked again. The walk reads up to [`PI_NESTED_ROOT_WALK_BUDGET`]
+/// directories for each pi folder; on one home (48 pi folders) that was
+/// about 375 ms of CPU on each snapshot rebuild (measured 2026-11-19). A
+/// folder removed from disk drops out at once (the caller checks that each
+/// path exists and holds a skill folder marker); a new nested root, or a
+/// nested root that lost its `.pi/skills` but kept another marker, shows up
+/// or drops out on the first discovery after this time.
+const PI_NESTED_ROOT_WALK_REUSE: Duration = Duration::from_mins(10);
+
+/// Walk results kept in one process before the map is emptied.
+const MAX_KEPT_PI_WALKS: usize = 10_000;
+
+/// Walk results kept by home and pi folder: when each walk ran, and what it
+/// found.
+type KeptPiWalks = Mutex<HashMap<(PathBuf, PathBuf), (Instant, Vec<PathBuf>)>>;
+
+/// [`nested_pi_project_roots`], walked again for a pi folder only when its
+/// kept result is [`PI_NESTED_ROOT_WALK_REUSE`] old. Two threads that miss
+/// at the same time may both walk; the later result is kept.
+fn kept_nested_pi_project_roots(home: &Path, root: &Path) -> Vec<PathBuf> {
+    static KEPT: LazyLock<KeptPiWalks> = LazyLock::new(Default::default);
+    nested_pi_project_roots_kept_in(&KEPT, home, root, Instant::now(), PI_NESTED_ROOT_WALK_REUSE)
+}
+
+/// [`kept_nested_pi_project_roots`] with its map, clock and reuse time
+/// passed in, so a test controls them.
+fn nested_pi_project_roots_kept_in(
+    kept: &KeptPiWalks,
+    home: &Path,
+    root: &Path,
+    now: Instant,
+    reuse: Duration,
+) -> Vec<PathBuf> {
+    let key = (home.to_path_buf(), root.to_path_buf());
+    if let Ok(kept) = kept.lock() {
+        if let Some((walked_at, found)) = kept.get(&key) {
+            if now.saturating_duration_since(*walked_at) < reuse {
+                return found.clone();
+            }
+        }
+    }
+    let found = nested_pi_project_roots(home, root);
+    if let Ok(mut kept) = kept.lock() {
+        if kept.len() >= MAX_KEPT_PI_WALKS && !kept.contains_key(&key) {
+            kept.clear();
+        }
+        kept.insert(key, (now, found.clone()));
+    }
+    found
 }
 
 /// [`nested_pi_project_roots`] with an explicit directory budget, so a test
@@ -685,7 +738,7 @@ fn discover_with_roots(
         // root to walk.
         if *harness == AgentId::PI {
             for p in &discovered {
-                paths.extend(nested_pi_project_roots(home, p));
+                paths.extend(kept_nested_pi_project_roots(home, p));
             }
         }
         paths.extend(discovered);
@@ -1319,6 +1372,41 @@ mod tests {
         assert!(
             found.contains(&project.join("packages/x")),
             "a normal nested folder must still be discovered: found {found:?}"
+        );
+    }
+
+    /// Given a pi folder walked once, when a nested `.pi/skills` folder is
+    /// made under it, discovery uses the kept walk result until the reuse
+    /// time passes, then walks again and finds the new folder. Fails if the
+    /// folder is walked on each call, or if a kept result is used for longer.
+    #[test]
+    fn pi_nested_walk_is_kept_for_its_reuse_time_or_names_the_extra_walk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let project = home.join("proj");
+        fs::create_dir_all(project.join("a/.pi/skills")).unwrap();
+        let kept = KeptPiWalks::default();
+        let reuse = Duration::from_mins(10);
+        let start = Instant::now();
+        let walk = |at: Duration| {
+            nested_pi_project_roots_kept_in(&kept, home, &project, start + at, reuse)
+        };
+
+        let sorted = |mut roots: Vec<PathBuf>| {
+            roots.sort();
+            roots
+        };
+        assert_eq!(walk(Duration::ZERO), vec![project.join("a")]);
+        fs::create_dir_all(project.join("b/.pi/skills")).unwrap();
+        assert_eq!(
+            walk(reuse.saturating_sub(Duration::from_millis(1))),
+            vec![project.join("a")],
+            "a walk result younger than the reuse time must be used"
+        );
+        assert_eq!(
+            sorted(walk(reuse)),
+            vec![project.join("a"), project.join("b")],
+            "a walk result as old as the reuse time must be walked again"
         );
     }
 
