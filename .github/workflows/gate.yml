@@ -2,10 +2,13 @@ name: Merge gate checks
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+  # Main runs seed the Rust cache that pull requests restore.
+  push:
+    branches: [main]
 permissions:
   contents: read
 concurrency:
-  group: gate-checks-${{ github.event.pull_request.number }}
+  group: gate-checks-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 jobs:
   unit:
@@ -26,4 +29,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-11-09
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: scripts/gate/gate snapshots --prepare
