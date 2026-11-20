@@ -182,7 +182,7 @@ def adds_only(sql):
         if on_new and on_new['t'] in created:
             continue
         column = re.fullmatch(rf'ALTER TABLE {TABLE} ADD COLUMN (?:IF NOT EXISTS )?"\w+" {COLUMN_TYPE}(?: DEFAULT (?P<v>{CONSTANT}))?(?P<required> NOT NULL)?', s, re.I)
-        if column and (column['v'] or not column['required']):
+        if column and ((column['v'] and column['v'].lower() != 'null') or not column['required']):
             continue
         return False
     return True
@@ -251,17 +251,46 @@ def links_outside_repo(path, text):
     return outside
 
 
+# The shapes pnpm writes. A key is single-quoted or a plain name; a plain
+# version may carry peer versions in parentheses.
+LOCK_KEY = r"(?:'[^'\t]*'|[A-Za-z0-9_/.^~-][^\s:]*)"
+PEER = r"\([\w@/.+=-]+\)"
+
+
+def plain_version(value):
+    """A version, with peer versions in parentheses that may nest:
+    `1.0.0(@types/react-dom@19.3.0(@types/react@19.3.0))`."""
+    while re.search(PEER, value):
+        value = re.sub(PEER, '', value)
+    return re.fullmatch(r'\d[\w.+-]*', value) is not None
+
+
+def version_range(value):
+    """A semver range such as `^18 || ^19` or `'>=3.2.0'`, as peer and
+    override entries hold. A range resolves from the registry; it cannot name
+    a path, a URL or another package, which need `:`, `/` or `@`."""
+    if len(value) > 1 and value[0] == value[-1] == "'":
+        value = value[1:-1]
+    return re.fullmatch(r'[\w.^~<>=|* +-]+', value) is not None
+
+
+# Keys whose value does not choose the code that installs: pnpm checks a
+# specifier against the manifest, and the rest describe a package.
+FREE_VALUE_KEYS = {'specifier', 'deprecated', 'lockfileVersion', 'hasBin', 'optional', 'requiresBuild',
+                   'cpu', 'os', 'libc', 'engines', 'bundledDependencies'}
+
+
 def lock_adds_outside_code(diff, path='', head_text=''):
     """True when an added lockfile line could point a package anywhere but the
-    registry. A registry entry is `resolution: {integrity: sha512-...}`. Without
-    double quotes, backslashes, anchors, tags and explicit keys, YAML cannot
-    spell a key except as written, so any other resolution shows.
+    registry, or at another package than its name.
 
-    A version or dependency value is a plain version, optionally followed by
-    peer versions in parentheses. Anything else, such as `link:`, `file:`, a
-    URL or another package's name, installs other code under the same name,
-    even when the manifest and `specifier:` stay the same. A `link:` to a
-    workspace folder inside the repository is allowed."""
+    YAML can spell one value many ways (quotes, tabs, block scalars, flow
+    maps, values on the next line), and pnpm reads them all. So an added line
+    passes only in a shape pnpm writes: a key that opens a map or has `{}`,
+    a list item, `---`, `resolution: {integrity: sha512-...}`, true or false,
+    a plain version, a version range, a `link:` to a folder inside the
+    repository, or a key in FREE_VALUE_KEYS.
+    Anything else stops."""
     outside = links_outside_repo(path, head_text)
     # Git ends lines at LF only. Read bytes so a carriage return cannot start a
     # line that git did not mark as added.
@@ -273,17 +302,17 @@ def lock_adds_outside_code(diff, path='', head_text=''):
             return True
         if 'resolution' in text and not re.fullmatch(r'\s*resolution: \{integrity: sha512-[A-Za-z0-9+/=]+\}', text):
             return True
-        entry = re.fullmatch(r"\s*('[^']*'|[^\s:'][^:]*): +(\S.*)", text)
-        if not entry or entry.group(1) in ('specifier', 'resolution', 'deprecated') or entry.group(2)[0] in '{[':
+        if not text.strip() or text == '---' or re.fullmatch(rf' *{LOCK_KEY}:( \{{\}})?', text) or re.fullmatch(rf' *- {LOCK_KEY}', text):
             continue
-        value = entry.group(2)
-        while re.search(r'\([^()]*\)', value):
-            value = re.sub(r'\([^()]*\)', '', value)
-        if value.startswith('link:'):
-            if text in outside:
-                return True
-        elif re.match(r'[A-Za-z][\w+.-]*:', value) or '@' in value:
+        entry = re.fullmatch(rf' *({LOCK_KEY}): (\S.*)', text)
+        if not entry:
             return True
+        key, value = entry.group(1).strip("'"), entry.group(2)
+        if key in FREE_VALUE_KEYS | {'resolution'} or value in ('true', 'false') or plain_version(value) or version_range(value):
+            continue
+        if re.fullmatch(r"link:[^\s'\"]+", value) and text not in outside:
+            continue
+        return True
     return False
 
 

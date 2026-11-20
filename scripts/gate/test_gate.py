@@ -236,6 +236,9 @@ class GateTests(GitRepoFixture, unittest.TestCase):
             'ALTER TABLE "old" RENAME COLUMN "id" TO "key";',
             'ALTER TABLE "old" ALTER COLUMN "id" TYPE text;',
             'ALTER TABLE "old" ADD COLUMN "name" text NOT NULL;',
+            # PostgreSQL rejects NOT NULL with a null default on a table that has rows.
+            'ALTER TABLE "old" ADD COLUMN "n" integer DEFAULT null NOT NULL;',
+            'ALTER TABLE "old" ADD COLUMN "n" integer DEFAULT NULL NOT NULL;',
             'ALTER TABLE "old" ADD COLUMN "at" timestamp DEFAULT now();',
             'ALTER TABLE "old" ADD COLUMN "name" text, DROP COLUMN "id";',
             'ALTER TABLE "old" ADD COLUMN "new_id" uuid REFERENCES "public"."old"("id");',
@@ -379,6 +382,16 @@ class GateTests(GitRepoFixture, unittest.TestCase):
                 self.write('pnpm-lock.yaml', lock(version, importer))
                 self.commit()
                 self.assertEqual(self.risk()['tier'], tier)
+        # YAML can spell the same value many ways; pnpm accepts each of these.
+        for entry in ["      left-pad:\n        specifier: 1.3.0\n        version: 'link:../outside'\n",
+                      '      left-pad:\n        specifier: 1.3.0\n        version:\tlink:../outside\n',
+                      '      left-pad:\n        specifier: 1.3.0\n        version: >-\n          link:../outside\n',
+                      '      left-pad:\n        specifier: 1.3.0\n        version:\n          link:../outside\n',
+                      "      left-pad: {specifier: 1.3.0, version: 'link:../outside'}\n"]:
+            with self.subTest(entry=entry):
+                self.write('pnpm-lock.yaml', 'importers:\n  .:\n    dependencies:\n' + entry)
+                self.commit()
+                self.assertEqual(self.risk()['tier'], 'stop')
 
     def test_every_stop_rule_in_the_repo_config_has_owner_text(self):
         import tomllib
