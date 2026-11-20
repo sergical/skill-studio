@@ -228,6 +228,40 @@ describe("SkillPage editor entry points", () => {
     await openedEditor();
     expect(screen.queryByText(/breaks the YAML frontmatter/)).toBeNull();
   });
+  it("Copy path that the clipboard refuses says it could not copy, instead of doing nothing", async () => {
+    const user = userEvent.setup();
+    const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: () => Promise.reject(new Error("Clipboard access denied")) },
+    });
+    try {
+      mockIPC((command) => {
+        if (command === "read_installed_skill_md") return CLEAN_SKILL_MD;
+        throw new Error(`unexpected command ${command}`);
+      });
+      render(
+        <>
+          <SkillPage
+            skill={fixtureSkill(fixtureDeployment())}
+            onBack={() => {}}
+            onRemoveComplete={() => {}}
+            from={{ kind: "home" }}
+          />
+          <Toaster />
+        </>,
+      );
+      await user.click(await screen.findByRole("button", { name: "More actions" }));
+      await user.click(await screen.findByRole("menuitem", { name: "Copy path" }));
+
+      expect(await screen.findByText("Couldn't copy path")).toBeTruthy();
+      expect(screen.getByText("Clipboard access denied")).toBeTruthy();
+    } finally {
+      if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
   it("saving over a SKILL.md that changed on disk keeps the draft open, rereads the file and says it changed, instead of overwriting it", async () => {
     const user = userEvent.setup();
     let disk = CLEAN_SKILL_MD;

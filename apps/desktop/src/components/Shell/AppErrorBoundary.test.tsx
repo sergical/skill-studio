@@ -17,7 +17,10 @@ function BrokenView(): never {
 it("a render error offers Reload and names the error, or the user's only way out is quitting the app", async () => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   const reload = vi.fn();
-  vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, reload });
+  // Object.create keeps the real Location as the prototype; a spread would drop its getters.
+  vi.spyOn(window, "location", "get").mockReturnValue(
+    Object.create(window.location, { reload: { value: reload } }),
+  );
   render(
     <AppErrorBoundary>
       <BrokenView />

@@ -41,7 +41,8 @@ export function useSkillFrontmatterRepair(
     if (!deployment || key === null || kinds.length === 0) return;
     let ignore = false;
     const target = lifecycleTargetForDeployment(deployment);
-    Promise.all(
+    // Each preview catches its own failure, so the whole set never rejects.
+    void Promise.all(
       kinds.map((kind) =>
         previewSkillFrontmatterRepair(target, kind)
           .then((preview) => (preview.deployment_id === deployment.id ? preview : null))
