@@ -7295,6 +7295,14 @@
             "minimum": 0,
             "type": "integer"
           },
+          "name_only_skills": {
+            "description": "The entries listed by name only, by name. Every other entry had a\ndescription; a skill missing from both was not listed.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "x-untrusted": true
+          },
           "project_path": {
             "description": "Working folder.",
             "type": [
@@ -7331,6 +7339,7 @@
           "listed",
           "described",
           "name_only",
+          "name_only_skills",
           "used",
           "missed"
         ],

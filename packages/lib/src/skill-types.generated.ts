@@ -562,6 +562,11 @@ export interface SessionSummary {
    */
   name_only: number;
   /**
+   * The entries listed by name only, by name. Every other entry had a
+   * description; a skill missing from both was not listed.
+   */
+  name_only_skills: string[];
+  /**
    * Skills used, one row per skill.
    */
   used: SessionSkillUse[];

@@ -202,6 +202,11 @@ function SessionRow({ session }: { session: SessionSummary }) {
           ? `. Listed ${session.listed}: ${session.described} described, ${session.name_only} name only.`
           : ". No listing recorded."}
       </span>
+      {session.name_only_skills.length > 0 && (
+        <span className="text-caption text-text-tertiary">
+          Name only: {session.name_only_skills.join(", ")}
+        </span>
+      )}
       {session.used.length > 0 && (
         <span className="text-caption text-text-secondary">
           Used: {session.used.map((u) => `${u.skill} (${LISTED_LABEL[u.listed_as]})`).join(", ")}

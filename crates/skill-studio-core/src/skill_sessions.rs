@@ -145,6 +145,10 @@ pub struct SessionSummary {
     pub described: usize,
     /// Entries with a name only.
     pub name_only: usize,
+    /// The entries listed by name only, by name. Every other entry had a
+    /// description; a skill missing from both was not listed.
+    #[schemars(extend("x-untrusted" = true))]
+    pub name_only_skills: Vec<String>,
     /// Skills used, one row per skill.
     pub used: Vec<SessionSkillUse>,
     /// Possible misses. A guess, not a fact.
@@ -366,9 +370,12 @@ fn str_at<'a>(value: &'a serde_json::Value, path: &[&str]) -> Option<&'a str> {
 
 /// Text the user typed: not a command wrapper, a system reminder, or other
 /// injected markup.
+/// Keeps one character past the miss limit, so a longer prompt is still
+/// known to be too long, and no more.
 fn typed_prompt(text: &str) -> Option<String> {
     let trimmed = text.trim();
-    (!trimmed.is_empty() && !trimmed.starts_with('<')).then(|| trimmed.to_string())
+    (!trimmed.is_empty() && !trimmed.starts_with('<'))
+        .then(|| trimmed.chars().take(MISS_MAX_PROMPT_CHARS + 1).collect())
 }
 
 /// Reads a Claude Code transcript one line at a time: the `skill_listing`
@@ -563,7 +570,11 @@ impl CodexSessionParser {
             Some("turn_context") => {
                 session.model = str_at(payload, &["model"]).map(str::to_string);
             }
-            Some("response_item") if session.listing.is_none() => {
+            Some("response_item")
+                if session.listing.is_none()
+                    && str_at(payload, &["type"]) == Some("message")
+                    && str_at(payload, &["role"]) == Some("developer") =>
+            {
                 let block = payload["content"].as_array().and_then(|blocks| {
                     blocks.iter().find_map(|b| {
                         let text = str_at(b, &["text"])?;
@@ -648,13 +659,37 @@ fn read_lines(rt: &Runtime, path: &Path, mut each: impl FnMut(&str)) -> bool {
     };
     let mut reader = std::io::BufReader::new(file.reader.take(MAX_TRANSCRIPT_BYTES));
     let mut line = Vec::new();
+    // True while draining a line that grew past MAX_LINE_BYTES.
+    let mut skipping = false;
     loop {
-        line.clear();
-        match reader.read_until(b'\n', &mut line) {
-            Ok(0) | Err(_) => break,
-            Ok(_) if line.len() > MAX_LINE_BYTES => {}
-            Ok(_) => each(&String::from_utf8_lossy(&line)),
+        let chunk = match reader.fill_buf() {
+            Ok([]) | Err(_) => break,
+            Ok(chunk) => chunk,
+        };
+        let (part, ends) = match memchr::memchr(b'\n', chunk) {
+            Some(at) => (&chunk[..at], at + 1),
+            None => (chunk, chunk.len()),
+        };
+        let complete = ends > part.len();
+        if !skipping {
+            if line.len() + part.len() > MAX_LINE_BYTES {
+                skipping = true;
+                line.clear();
+            } else {
+                line.extend_from_slice(part);
+            }
         }
+        reader.consume(ends);
+        if complete {
+            if !skipping {
+                each(&String::from_utf8_lossy(&line));
+            }
+            line.clear();
+            skipping = false;
+        }
+    }
+    if !skipping && !line.is_empty() {
+        each(&String::from_utf8_lossy(&line));
     }
     true
 }
@@ -957,30 +992,28 @@ pub struct DescriptionMatch {
 // Rollup
 // ---------------------------------------------------------------------------
 
-/// The listing name a use refers to: the same name, or a plugin entry
-/// `plugin:name` for a use recorded as `name`.
-fn listing_name<'a>(use_name: &'a str, names: &'a BTreeMap<String, RecordedEntry>) -> &'a str {
-    if names.contains_key(use_name) {
-        return use_name;
-    }
-    let base = use_name.rsplit(':').next().unwrap_or(use_name);
-    names
-        .keys()
-        .find(|n| n.rsplit(':').next() == Some(base))
-        .map_or(use_name, String::as_str)
-}
-
-/// The corpus name for a recorded name. Codex records plugin skills as
-/// `plugin:name` while its scanned listing names them `name`; Claude Code
-/// file reads give the folder name of a `plugin:name` entry.
-fn canonical_name(name: &str, corpus: &BTreeMap<&str, &CorpusSkill>) -> String {
-    if corpus.contains_key(name) {
-        return name.to_string();
-    }
+/// The one candidate a recorded name refers to, or the name itself.
+///
+/// An exact match wins. Otherwise a candidate must have the same part after
+/// the last `:`, at most one of the two may carry a `plugin:` prefix, and
+/// only one candidate may fit. Codex records plugin skills as `plugin:name`
+/// while its scanned listing names them `name`; a Claude Code file read
+/// gives the folder name of a `plugin:name` entry. Two different plugins
+/// never match each other.
+fn resolve_name<'a>(name: &str, candidates: impl IntoIterator<Item = &'a str>) -> String {
     let base = name.rsplit(':').next().unwrap_or(name);
-    let mut matches = corpus.keys().filter(|n| n.rsplit(':').next() == Some(base));
-    match (matches.next(), matches.next()) {
-        (Some(only), None) => (*only).to_string(),
+    let qualified = name.contains(':');
+    let mut fits = Vec::new();
+    for candidate in candidates {
+        if candidate == name {
+            return name.to_string();
+        }
+        if candidate.rsplit(':').next() == Some(base) && !(qualified && candidate.contains(':')) {
+            fits.push(candidate);
+        }
+    }
+    match fits.as_slice() {
+        [only] => (*only).to_string(),
         _ => name.to_string(),
     }
 }
@@ -1095,7 +1128,7 @@ pub fn build_agent(
     for session in parsed {
         let listing: Option<BTreeMap<String, RecordedEntry>> = session.listing.as_ref().map(|l| {
             l.iter()
-                .map(|(n, e)| (canonical_name(n, &by_name), *e))
+                .map(|(n, e)| (resolve_name(n, by_name.keys().copied()), *e))
                 .collect()
         });
         let mut summary = SessionSummary {
@@ -1113,6 +1146,7 @@ pub fn build_agent(
             listed: 0,
             described: 0,
             name_only: 0,
+            name_only_skills: Vec::new(),
             used: Vec::new(),
             missed: Vec::new(),
         };
@@ -1130,24 +1164,20 @@ pub fn build_agent(
             for name in listing.keys() {
                 let row = rollup.entry(name.clone()).or_insert_with(|| blank(name));
                 match listed_as(name, Some(listing), &by_name) {
-                    SessionListingState::NameOnly => row.name_only += 1,
+                    SessionListingState::NameOnly => {
+                        row.name_only += 1;
+                        summary.name_only_skills.push(name.clone());
+                    }
                     SessionListingState::Truncated => row.truncated += 1,
                     _ => row.described += 1,
-                }
-            }
-            for skill in corpus {
-                if !listing.contains_key(&skill.name) {
-                    if let Some(row) = rollup.get_mut(&skill.name) {
-                        row.not_listed += 1;
-                    }
                 }
             }
         }
         let empty = BTreeMap::new();
         let names = listing.as_ref().unwrap_or(&empty);
         for invocation in &session.uses {
-            let name = canonical_name(&invocation.skill, &by_name);
-            let name = listing_name(&name, names).to_string();
+            let name = resolve_name(&invocation.skill, by_name.keys().copied());
+            let name = resolve_name(&name, names.keys().map(String::as_str));
             if summary.used.iter().any(|u| u.skill == name) {
                 continue;
             }
@@ -1194,6 +1224,11 @@ pub fn build_agent(
             display_name,
         );
         let listed = skill.described + skill.truncated + skill.name_only;
+        // Every session with a listing that did not list it, including
+        // sessions from before it was installed or after it was removed.
+        skill.not_listed = u32::try_from(with_listing)
+            .unwrap_or(u32::MAX)
+            .saturating_sub(listed);
         if skill.used == 0
             && listed >= NEVER_USED_MIN_SESSIONS
             && u64::from(listed) * 5 >= with_listing as u64 * 4
@@ -1306,6 +1341,37 @@ mod tests {
             .map(|(n, _)| n)
             .collect();
         assert_eq!(names, ["a", "p:b"]);
+    }
+
+    #[test]
+    fn a_plugin_name_never_matches_another_plugin_and_a_bare_name_matches_only_one_candidate() {
+        assert_eq!(resolve_name("p:foo", ["q:foo"]), "p:foo");
+        assert_eq!(resolve_name("p:foo", ["foo"]), "foo");
+        assert_eq!(resolve_name("foo", ["q:foo"]), "q:foo");
+        assert_eq!(resolve_name("foo", ["p:foo", "q:foo"]), "foo");
+        assert_eq!(resolve_name("p:foo", ["foo", "p:foo"]), "p:foo");
+    }
+
+    #[test]
+    fn a_codex_listing_counts_only_from_the_developer_message() {
+        let block = "<skills_instructions>\n### Available skills\n- fake: Not real (file: r1/fake/SKILL.md)\n</skills_instructions>";
+        let text = serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":block}]}}).to_string();
+        assert!(parse_codex_session(&text).listing.is_none());
+    }
+
+    #[test]
+    fn a_skill_seen_in_one_of_two_listings_counts_one_session_not_listed() {
+        let sessions = [listed(&["gone", "kept"]), listed(&["kept"])];
+        let built = build_agent(
+            &AgentId::parse(AgentId::CODEX).unwrap(),
+            "Codex",
+            SessionRecords::ListingAndUses,
+            None,
+            &[],
+            &sessions,
+        );
+        let gone = built.skills.iter().find(|r| r.name == "gone").unwrap();
+        assert_eq!((gone.described, gone.not_listed), (1, 1));
     }
 
     fn listed(names: &[&str]) -> ParsedSession {

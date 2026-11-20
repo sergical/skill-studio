@@ -288,6 +288,14 @@
           "format": "uint",
           "minimum": 0
         },
+        "name_only_skills": {
+          "description": "The entries listed by name only, by name. Every other entry had a\ndescription; a skill missing from both was not listed.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-untrusted": true
+        },
         "used": {
           "description": "Skills used, one row per skill.",
           "type": "array",
@@ -310,6 +318,7 @@
         "listed",
         "described",
         "name_only",
+        "name_only_skills",
         "used",
         "missed"
       ]

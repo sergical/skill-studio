@@ -43,6 +43,7 @@ export function mockSkillSessionsReport(snapshot: SkillSnapshot): SkillSessionsR
     listed: 3,
     described: 2,
     name_only: 1,
+    name_only_skills: [used],
     used:
       index === 1
         ? [{ skill: used, listed_as: "name_only" as const, trigger: "agent" as const }]
