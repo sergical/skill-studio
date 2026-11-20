@@ -5,7 +5,8 @@ import { FirstScanState, type FirstScanStateProps } from "../SkillList/FirstScan
 // usage window's overview until a day is picked, then that day's details.
 // ============================================================================
 
-import type { SkillSnapshot } from "@skill-studio/lib";
+import { heatmapDateRangeLocal, statsFromDay } from "@skill-studio/lib";
+import type { SkillInvocationStats, SkillSnapshot } from "@skill-studio/lib";
 import { ActivityBySkill } from "./ActivityBySkill";
 import { ActivityDayDetails } from "./ActivityDayDetails";
 import { ActivityFilters, useActivityLens } from "./ActivityFilters";
@@ -21,6 +22,8 @@ interface SkillActivityViewProps extends FirstScanStateProps {
   snapshot: SkillSnapshot | undefined;
   onSelectSkill: (name: string) => void;
 }
+
+const NO_STATS: SkillInvocationStats[] = [];
 
 function activityNow(scannedAt: string | undefined) {
   return scannedAt ? new Date(scannedAt) : new Date();
@@ -43,10 +46,11 @@ export function SkillActivityView({
   const setDay = useAppStore((state) => state.setActivityDay);
   useActivityEscape(() => setDay(null));
 
-  const stats = snapshot?.invocations ?? [];
   // The snapshot's scan time, not the render time, so a stale snapshot doesn't make the window
   // and the heatmap disagree about "now".
   const now = activityNow(snapshot?.scanned_at);
+  // Every section reads the calendar's 30 days only, not the start of the day before them.
+  const stats = statsFromDay(snapshot?.invocations ?? NO_STATS, heatmapDateRangeLocal(now).start);
   const lens = useActivityLens(stats, now);
   const hasAnyInvocations = snapshot ? snapshot.invocations.some((s) => s.last_30_days > 0) : false;
 
@@ -71,7 +75,6 @@ export function SkillActivityView({
           setTrigger={lens.setTrigger}
           clearFilter={lens.clearFilter}
           enabledHarnesses={lens.enabledHarnesses}
-          dates={lens.dates}
         />
       }
     >

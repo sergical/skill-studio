@@ -85,9 +85,7 @@ export function useActivityLens(stats: SkillInvocationStats[], now: Date) {
 
   const dates = heatmapDateRangeLocal(now).dates;
   const days = dayTotals(stats, filter);
-  // Only the days the calendar shows: `days` can also hold the day before, where the 720-hour
-  // history starts.
-  const historyTotal = dates.reduce((total, key) => total + (days[key] ?? 0), 0);
+  const historyTotal = Object.values(days).reduce((a, b) => a + b, 0);
 
   return {
     harness,
@@ -113,18 +111,17 @@ export function ActivityFilters({
   setTrigger,
   clearFilter,
   enabledHarnesses,
-  dates,
 }: Pick<
   ActivityLens,
-  "harness" | "setHarness" | "trigger" | "setTrigger" | "clearFilter" | "enabledHarnesses" | "dates"
+  "harness" | "setHarness" | "trigger" | "setTrigger" | "clearFilter" | "enabledHarnesses"
 > & {
   stats: SkillInvocationStats[];
 }) {
   const harnesses = enabledHarnesses
     ? USAGE_READER_HARNESSES.filter((id) => enabledHarnesses.has(id))
     : [];
-  const harnessCounts = historyByHarness(stats, trigger, dates[0]);
-  const triggerCounts = historyByTrigger(stats, harness, dates[0]);
+  const harnessCounts = historyByHarness(stats, trigger);
+  const triggerCounts = historyByTrigger(stats, harness);
   const harnessTotal = Object.values(harnessCounts).reduce((a: number, b) => a + (b ?? 0), 0);
   const triggerTotal = Object.values(triggerCounts).reduce((a: number, b) => a + (b ?? 0), 0);
   const showClear = harness !== "all" || trigger !== "all";

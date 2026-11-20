@@ -83,6 +83,34 @@ function flattenUses(stats: SkillInvocationStats[]): FlatUse[] {
   return flat;
 }
 
+const fromDayCache = new WeakMap<
+  SkillInvocationStats[],
+  { firstDay: string; stats: SkillInvocationStats[] }
+>();
+
+/**
+ * `stats` with only the hourly buckets on or after local day `firstDay`, the Activity
+ * calendar's first day. The 30-day history starts 720 hours before the scan, inside the day
+ * before that one; the page drops that part here, once, so the calendar, its totals, the filter
+ * menus and every day it can open cover the same days. Cached per array, so the result keeps
+ * the same identity (and `flattenUses` keeps its cache) while the snapshot and day stay the same.
+ */
+export function statsFromDay(
+  stats: SkillInvocationStats[],
+  firstDay: string,
+): SkillInvocationStats[] {
+  const cached = fromDayCache.get(stats);
+  if (cached?.firstDay === firstDay) return cached.stats;
+  const clipped = stats.map((stat) => ({
+    ...stat,
+    by_hour: stat.by_hour.filter(
+      (bucket) => localDateKey(new Date(bucket.hour * 3_600_000)) >= firstDay,
+    ),
+  }));
+  fromDayCache.set(stats, { firstDay, stats: clipped });
+  return clipped;
+}
+
 function matchesFilter(u: FlatUse, filter: ActivityFilter): boolean {
   return (
     (filter.harness === "all" || u.harness === filter.harness) &&
@@ -284,33 +312,21 @@ export function projectRows(
   return ranked(counts).map(([project, count]) => ({ project, count }));
 }
 
-/**
- * Totals per harness under a trigger filter over the calendar's days, from local day `firstDay`
- * on - the harness menu's counts. The 30-day history starts 720 hours before now, inside the day
- * before the calendar's first day; uses in that part are left out, as the calendar leaves them out.
- */
-export function historyByHarness(
-  stats: SkillInvocationStats[],
-  trigger: TriggerFilter,
-  firstDay: string,
-) {
+/** History totals per harness under a trigger filter - the harness menu's counts. */
+export function historyByHarness(stats: SkillInvocationStats[], trigger: TriggerFilter) {
   const out: Counts<string> = {};
   for (const u of flattenUses(stats)) {
-    if (u.dayKey < firstDay || (trigger !== "all" && u.trigger !== trigger)) continue;
+    if (trigger !== "all" && u.trigger !== trigger) continue;
     bump(out, u.harness, u.count);
   }
   return out;
 }
 
-/** Totals per trigger under a harness filter from local day `firstDay` on - the trigger menu's counts. */
-export function historyByTrigger(
-  stats: SkillInvocationStats[],
-  harness: HarnessFilter,
-  firstDay: string,
-) {
+/** History totals per trigger under a harness filter - the trigger menu's counts. */
+export function historyByTrigger(stats: SkillInvocationStats[], harness: HarnessFilter) {
   const out: Counts<SkillTrigger> = {};
   for (const u of flattenUses(stats)) {
-    if (u.dayKey < firstDay || (harness !== "all" && u.harness !== harness)) continue;
+    if (harness !== "all" && u.harness !== harness) continue;
     bump(out, u.trigger, u.count);
   }
   return out;

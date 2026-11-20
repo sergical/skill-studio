@@ -121,10 +121,10 @@ pub struct UsageFilter {
 impl UsageFilter {
     /// Rejects a window that holds no time (`since` at or after `until`, or
     /// after `now` when there is no `until`), which would report every skill
-    /// as unused. Also rejects a window that starts before the last
-    /// [`HISTORY_DAYS`] days, by `days`, by `since` or by an old `until`,
-    /// which would report uses that are not counted. The window may start on
-    /// the first day of the history.
+    /// as unused. Also rejects a window that starts before the history
+    /// ([`HISTORY_DAYS`] days before `now`, to the second), by `days`, by
+    /// `since` or by an old `until`, which would report uses that are not
+    /// counted.
     pub fn check_window(&self, days: u32, now: DateTime<Utc>) -> Result<(), String> {
         let end = self.until.unwrap_or(now);
         if let Some(since) = self.since.filter(|since| *since >= end) {
@@ -134,19 +134,23 @@ impl UsageFilter {
                 end.to_rfc3339()
             ));
         }
+        let history = history_start(now);
+        let too_old = || {
+            format!(
+                "Skill Studio counts only the last {HISTORY_DAYS} days of history: \
+                 the window must start at {} or later",
+                history.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            )
+        };
+        // Checked first, so `days` stays small enough to subtract from a date.
+        if self.since.is_none() && days > HISTORY_DAYS {
+            return Err(too_old());
+        }
         let start = self
             .since
             .unwrap_or_else(|| end - chrono::Duration::days(i64::from(days)));
-        let first_day = history_start(now)
-            .date_naive()
-            .and_time(chrono::NaiveTime::MIN)
-            .and_utc();
-        if start < first_day {
-            return Err(format!(
-                "Skill Studio counts only the last {HISTORY_DAYS} days of history: \
-                 the window must start on {} or later",
-                first_day.date_naive()
-            ));
+        if start < history {
+            return Err(too_old());
         }
         Ok(())
     }
@@ -820,9 +824,11 @@ mod tests {
 
     /// Flow: ask for more than the 30-day history, by `days`, by `since`, or
     /// by an `until` so old that `days` before it reach past the history.
-    /// Expectation: 31 days, a `since` before 2026-10-15 (30 days before
-    /// 2026-11-14), and 7 days before 2026-10-20 are refused with the first
-    /// day named; 30 days and a `since` on 2026-10-15 pass.
+    /// Expectation: 31 days (and `u32::MAX` days, without a panic), a `since`
+    /// before 2026-10-15 (30 days before 2026-11-14), 7 days before
+    /// 2026-10-20, and a window before the history's start hour on its first
+    /// day are refused with the start named; 30 days and a `since` exactly at
+    /// the start pass.
     /// Failure means a report counts a window whose older part has no
     /// history, and shows every skill used only then as unused.
     #[test]
@@ -836,14 +842,23 @@ mod tests {
         assert!(error.contains("last 30 days"), "{error}");
         assert!(UsageFilter::default().check_window(30, now).is_ok());
         let error = since("2026-10-14").check_window(30, now).unwrap_err();
-        assert!(error.contains("2026-10-15 or later"), "{error}");
+        assert!(error.contains("2026-10-15T00:00:00Z or later"), "{error}");
         assert!(since("2026-10-15").check_window(30, now).is_ok());
         let old_until = UsageFilter {
             until: Some(parse_usage_time("2026-10-20").unwrap()),
             ..UsageFilter::default()
         };
         let error = old_until.check_window(7, now).unwrap_err();
-        assert!(error.contains("2026-10-15 or later"), "{error}");
+        assert!(error.contains("2026-10-15T00:00:00Z or later"), "{error}");
+        assert!(UsageFilter::default().check_window(u32::MAX, now).is_err());
+        // At noon the history starts at noon 30 days back; midnight that day is before it.
+        let noon = parse_usage_time("2026-11-14T12:00:00Z").unwrap();
+        let first_morning = UsageFilter {
+            since: Some(parse_usage_time("2026-10-15").unwrap()),
+            until: Some(parse_usage_time("2026-10-15T11:00:00Z").unwrap()),
+            ..UsageFilter::default()
+        };
+        assert!(first_morning.check_window(30, noon).is_err());
     }
     /// Flow: parse the window bounds a user types.
     /// Expectation: a bare date is the start of that day in UTC, an RFC 3339
