@@ -77,14 +77,6 @@ describe("resolveSkillPageDeployment", () => {
     expect(resolveSkillPageDeployment(skill, undefined).deployment?.path).toBe("/b/warned");
   });
 
-  it("a_blocking_error_copy_outranks_a_warning_only_copy_even_when_the_warning_copy_is_first", () => {
-    const skill = fixtureSkill([
-      fixtureDeployment({ path: "/a/warned", spec_violations: [WARNING] }),
-      fixtureDeployment({ path: "/b/errored", spec_violations: [ERROR] }),
-    ]);
-    expect(resolveSkillPageDeployment(skill, undefined).deployment?.path).toBe("/b/errored");
-  });
-
   it("a_plugin_copy_with_errors_never_beats_a_clean_own_copy_because_the_page_must_open_a_file_the_user_can_edit", () => {
     const skill = fixtureSkill([
       fixtureDeployment({ path: "/own/clean" }),

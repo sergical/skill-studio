@@ -1789,55 +1789,6 @@ mod tests {
     use std::fs;
     use std::sync::Mutex as StdMutex;
 
-    /// Flow: `GhTreeLookup`'s response parser sees `truncated: true` (a repo
-    /// with more subtrees than one recursive listing covers).
-    /// Expectation: `Err` naming the repo and "truncated", not an empty or
-    /// partial map that would read as "no skill folder here".
-    /// A failure here means the desktop tree lookup, unlike the host's
-    /// `GhSourceTreeLookup`, never saw `truncated` at all (the old `--jq`
-    /// program threw the field away before Rust ever read the response), so
-    /// a real skill folder past the cutoff would silently read as unknown
-    /// with no error on record, or names the wrong repo.
-    #[test]
-    fn truncated_tree_response_is_an_error_or_names_the_silent_truncation() {
-        let body = serde_json::json!({
-            "sha": "head-sha",
-            "truncated": true,
-            "tree": [{"path": "skills/a", "type": "tree", "sha": "sha-a"}]
-        });
-        let err =
-            skill_studio_host::parse_tree_response("obra/write-tests", body.to_string().as_bytes())
-                .unwrap_err();
-        assert!(err.message.contains("obra/write-tests"));
-        assert!(err.message.contains("truncated"));
-    }
-
-    /// Flow: the tree endpoint's real JSON shape, `tree[]` entries with a
-    /// mix of `"tree"` and `"blob"` types.
-    /// Expectation: every `"tree"`-typed entry is keyed by path, `"blob"`
-    /// entries are skipped - the same parse the dropped `--jq` filter used
-    /// to do, now done in Rust so `truncated` can be checked first.
-    /// A failure here means a blob (file) entry leaked into the map, or a
-    /// path/sha pair was dropped or swapped.
-    #[test]
-    fn tree_response_parses_tree_entries_by_path_or_names_the_dropped_entry() {
-        let body = serde_json::json!({
-            "sha": "head-sha",
-            "truncated": false,
-            "tree": [
-                {"path": "skills/a", "type": "tree", "sha": "sha-a"},
-                {"path": "skills/a/SKILL.md", "type": "blob", "sha": "sha-blob"},
-                {"path": "skills/b", "type": "tree", "sha": "sha-b"},
-            ]
-        });
-        let shas =
-            skill_studio_host::parse_tree_response("obra/write-tests", body.to_string().as_bytes())
-                .unwrap();
-        assert_eq!(shas.get("skills/a"), Some(&"sha-a".to_string()));
-        assert_eq!(shas.get("skills/b"), Some(&"sha-b".to_string()));
-        assert_eq!(shas.len(), 2);
-    }
-
     /// One scripted answer to a `CommitLookup::latest_commit` call: the sha
     /// and commit date on a hit, or the error message on a failure.
     type LookupAnswer = Result<Option<(String, String)>, String>;

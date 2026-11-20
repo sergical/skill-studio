@@ -29,7 +29,7 @@ interface ProxyResult {
 /** The exact skills.sh URL for `path` (e.g. `"/skills/search"`) and a
  * verbatim `search` string (e.g. `"?q=foo&limit=10"`, or `""`) - exported so
  * tests can check the URL a stubbed `fetch` was called with. */
-export function upstreamUrl(path: string, search: string): string {
+function upstreamUrl(path: string, search: string): string {
   return `${UPSTREAM_BASE}${path}${search}`;
 }
 

@@ -10,11 +10,7 @@ import {
 } from "../../dev/harness/scanned-deployment";
 import { skill } from "../../dev/harness/skill-fixture";
 import { buildScopeGroups } from "./skill-location-status";
-import {
-  turnOffActionFor,
-  turnOffConfirmText,
-  turnOffSuccessMessage,
-} from "./skill-agent-off-model";
+import { turnOffActionFor, turnOffSuccessMessage } from "./skill-agent-off-model";
 
 const UNIVERSAL = "/home/.agents/skills/find-bugs";
 
@@ -41,12 +37,6 @@ function actionsByAgent(installed: ReturnType<typeof skill>) {
 }
 
 describe("turn off for one agent: confirm text", () => {
-  it("confirm_text_names_the_skill_and_agent_in_the_spec_wording_or_the_user_does_not_learn_every_agent_gets_a_copy", () => {
-    expect(turnOffConfirmText("find-bugs", "Codex")).toBe(
-      "find-bugs is shared by every agent. To turn it off for Codex only, Skill Studio gives each agent its own copy, then parks the Codex copy. You will see one copy per agent from now on. After you turn the Codex copy back on, it is a manual copy and Skill Studio will not update it.",
-    );
-  });
-
   it("success_message_points_to_activity_for_the_undo_or_the_user_cannot_find_how_to_go_back", () => {
     expect(turnOffSuccessMessage("Codex")).toContain("Undo it from Activity");
   });

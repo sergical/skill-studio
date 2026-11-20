@@ -2,6 +2,7 @@
 // Skill Studio - skill-list-filter tests
 // ============================================================================
 
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { applySkillListFilter, defaultSkillListFilter } from "./skill-list-filter";
 import type { Deployment, InstalledSkill, SkillInvocationStats } from "./skill-types";
@@ -263,5 +264,54 @@ describe("applySkillListFilter", () => {
       invocations,
     );
     expect(unusedResult.map((s) => s.name)).toEqual(["unused"]);
+  });
+});
+
+describe("applySkillListFilter query properties", () => {
+  const word = fc.string({ unit: fc.constantFrom(..."abcXYZ09"), minLength: 1, maxLength: 4 });
+  const words = fc.array(word, { minLength: 1, maxLength: 4 });
+  const wordBreak = fc.constantFrom("-", " ", "_", "/", ".", "--", " - ");
+  /** `parts` joined with a word break picked per gap. */
+  const joined = (parts: string[]) =>
+    fc
+      .array(wordBreak, { minLength: parts.length - 1, maxLength: parts.length - 1 })
+      .map((breaks) => parts.reduce((text, part, i) => `${text}${breaks[i - 1] ?? ""}${part}`));
+  const query = (skills: InstalledSkill[], q: string) =>
+    applySkillListFilter(skills, { ...defaultSkillListFilter(), query: q }).map((s) => s.name);
+
+  it("matches the same skills whichever word break the name and query use, or a hyphenated name hides from a spaced query", () => {
+    fc.assert(
+      fc.property(
+        words.chain((parts) => fc.tuple(fc.constant(parts), joined(parts))),
+        words.chain((parts) => fc.tuple(fc.constant(parts), joined(parts))),
+        ([nameParts, name], [queryParts, typed]) => {
+          const asTyped = query(
+            [fixtureSkill({ name, description: null, source: "owner/repo" })],
+            typed,
+          );
+          const hyphenated = query(
+            [fixtureSkill({ name: nameParts.join("-"), description: null, source: "owner/repo" })],
+            queryParts.join(" ").toUpperCase(),
+          );
+          expect(asTyped.length).toBe(hyphenated.length);
+        },
+      ),
+    );
+  });
+
+  it("keeps a subset of the input in input order", () => {
+    fc.assert(
+      fc.property(
+        fc.uniqueArray(word, { minLength: 0, maxLength: 8 }),
+        fc.string({ maxLength: 4 }),
+        (names, q) => {
+          const result = query(
+            names.map((name) => fixtureSkill({ name })),
+            q,
+          );
+          expect(result).toEqual(names.filter((name) => result.includes(name)));
+        },
+      ),
+    );
   });
 });

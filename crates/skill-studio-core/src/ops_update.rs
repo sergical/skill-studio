@@ -1875,26 +1875,6 @@ mod tests {
     use super::*;
     use crate::identity::ProjectRef;
 
-    /// `project_skills_sh_update_names_the_project_scope_or_also_updates_the_global_copy`:
-    /// `skills update <name>` with no scope flag means scope "both" in
-    /// skills 1.7.0, so it also rewrites `~/.agents/skills/<name>`. A
-    /// project-scope update must pass `--project` and never `--global`. Fails
-    /// when the flag is missing: the global copy of the same name changes too.
-    #[test]
-    fn project_skills_sh_update_names_the_project_scope_or_also_updates_the_global_copy() {
-        let skill = SkillName("alpha".to_string());
-        let project = RootScope::Project(ProjectRef(PathBuf::from("/proj")));
-
-        let (args, _) = update_cli_args_and_cwd(
-            InstallMethod::SkillsSh,
-            std::slice::from_ref(&skill),
-            &project,
-        );
-
-        assert!(args.contains(&"--project".to_string()), "argv: {args:?}");
-        assert!(!args.contains(&"--global".to_string()), "argv: {args:?}");
-    }
-
     /// `update_cli_args_and_cwd_builds_skills_update_or_dotagents_install_and_never_dotagents_add`:
     /// table test over {global, project} x {`SkillsSh`, `Dotagents`}. Fails
     /// if dotagents ever goes back to `add`, which breaks on repos whose

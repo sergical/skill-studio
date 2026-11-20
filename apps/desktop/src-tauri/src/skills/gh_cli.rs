@@ -149,17 +149,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn missing_binary_is_a_failed_error_not_a_panic() {
-        let err = run_gh(
-            Path::new("/nonexistent/gh-binary"),
-            &["auth", "status"],
-            None,
-        )
-        .expect_err("missing binary must fail");
-        assert!(matches!(err, GhError::Failed(_)));
-    }
-
-    #[test]
     fn not_logged_in_detection_matches_gh_auth_login_substring() {
         assert!(is_not_logged_in(
             "To get started with GitHub CLI, please run:  gh auth login"

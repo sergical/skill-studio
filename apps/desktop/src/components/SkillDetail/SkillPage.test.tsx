@@ -8,6 +8,7 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { Toaster, toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Deployment, FrontmatterRepairPreview, InstalledSkill } from "@skill-studio/lib";
 import { CommandPalette } from "../CommandPalette/CommandPalette";
@@ -151,6 +152,7 @@ describe("SkillPage editor entry points", () => {
   });
 
   afterEach(() => {
+    toast.dismiss();
     cleanup();
     clearMocks();
   });
@@ -226,6 +228,84 @@ describe("SkillPage editor entry points", () => {
     await openedEditor();
     expect(screen.queryByText(/breaks the YAML frontmatter/)).toBeNull();
   });
+  it("saving over a SKILL.md that changed on disk keeps the draft open, rereads the file and says it changed, instead of overwriting it", async () => {
+    const user = userEvent.setup();
+    let disk = CLEAN_SKILL_MD;
+    let reads = 0;
+    const writes: unknown[] = [];
+    mockIPC((command, args) => {
+      if (command === "read_installed_skill_md") {
+        reads += 1;
+        return disk;
+      }
+      if (command === "write_installed_skill_md_if_unchanged") {
+        writes.push(args);
+        // The backend's compare-and-swap refusal (skill_md_write.rs).
+        throw "SKILL.md changed on disk since it was loaded. Reload the file and run the audit again.";
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+    render(
+      <>
+        <SkillPage
+          skill={fixtureSkill(fixtureDeployment())}
+          onBack={() => {}}
+          onRemoveComplete={() => {}}
+          from={{ kind: "home" }}
+        />
+        <Toaster />
+      </>,
+    );
+    await user.click(await enabledEditButton());
+    const editor = await openedEditor();
+    await user.type(editor, " draft");
+    disk = "assistant update";
+    const readsBeforeSave = reads;
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByText("SKILL.md changed on disk")).toBeTruthy();
+    expect(writes).toEqual([
+      {
+        path: "/home/.agents/skills/find-bugs/SKILL.md",
+        expectedContent: CLEAN_SKILL_MD,
+        content: `${CLEAN_SKILL_MD} draft`,
+      },
+    ]);
+    await waitFor(() => expect(reads).toBe(readsBeforeSave + 1));
+    expect((await openedEditor()).value).toBe(`${CLEAN_SKILL_MD} draft`);
+  });
+
+  it.each([
+    ["a plugin-managed", true],
+    ["an own", false],
+  ])(
+    "%s copy whose SKILL.md lacks a description offers Edit SKILL.md only when its file can be edited in place",
+    async (_label, isPlugin) => {
+      mockIPC((command) => {
+        if (command === "read_installed_skill_md") return CLEAN_SKILL_MD;
+        throw new Error(`unexpected command ${command}`);
+      });
+      const copy = fixtureDeployment({
+        spec_violations: ["missing required frontmatter field: description"],
+        ...(isPlugin && {
+          path: "/home/.claude/plugins/cache/m/p/skills/find-bugs",
+          plugin: { name: "p", version: null, harness: "Claude Code", marketplace: "m", id: "p@m" },
+        }),
+      });
+      render(
+        <SkillPage
+          skill={fixtureSkill(copy)}
+          onBack={() => {}}
+          onRemoveComplete={() => {}}
+          from={{ kind: "home" }}
+        />,
+      );
+      expect(await screen.findByText(/no description/)).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Edit SKILL.md" }) === null).toBe(isPlugin);
+    },
+  );
+
   it("dirty editor Back Discard closes the editor before navigation resumes instead of leaving stale edits open", async () => {
     const user = userEvent.setup();
     useAppStore.getState().openSkill("find-bugs");

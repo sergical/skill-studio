@@ -1,15 +1,16 @@
 // ============================================================================
 // Skill Studio - scanned-deployment
 // Builds `Deployment` rows in the shapes the scanner produces, for tests and
-// the dev harness. `candidateIdentity` mirrors `id_for_candidate` in
-// src-tauri/src/skills/skill_deployment.rs: the id, destination, and backing
+// the dev harness. `candidateIdentity` mirrors the scanner's classification
+// in crates/skill-studio-core/src/ops.rs (`process_entries`, `deployment_id`):
+// the id, destination, and backing
 // all follow from where the entry sits and how it reaches the Universal
 // folder. `scannerMismatches` names every field that disagrees with it.
 // ============================================================================
 
 import type { Deployment } from "@skill-studio/lib";
 
-/** What `skill_deployment.rs`'s `harness_slot` returns for each root label. */
+/** What core `ops.rs`'s `harness_slot` returns for each root label. */
 const SLOT_FOR_ROOT_LABEL = new Map([
   ["Claude Code", "claude-code"],
   ["Codex", "codex"],
@@ -61,7 +62,7 @@ function deploymentId(
   return `dep:v1/${scope}/${slot}/${destination}/${name}/${project}/${encodeIdPath(lexicalEntry)}`;
 }
 
-/** `id_for_candidate`, line for line. */
+/** The core scanner's id, destination and backing rules. */
 function candidateIdentity(candidate: DeploymentCandidate): CandidateIdentity {
   const { name, agent, scope, path, project_path } = candidate;
   if (agent === "shared" || agent === "universal" || scope === "parked") {

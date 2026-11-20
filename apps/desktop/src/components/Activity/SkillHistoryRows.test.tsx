@@ -6,32 +6,6 @@ import { afterEach, expect, it } from "vitest";
 import type { SkillEvent } from "@skill-studio/lib";
 import { SkillHistorySection } from "./SkillHistorySection";
 
-const kinds = [
-  ["install", "Installed"],
-  ["remove", "Removed"],
-  ["update", "Updated"],
-  ["park", "Parked"],
-  ["unpark", "Unparked"],
-  ["harness_disable", "Turned off"],
-  ["harness_enable", "Turned on"],
-  ["move_aside_disable", "Moved aside"],
-  ["move_aside_restore", "Moved back"],
-  ["invocation_change", "Invocation changed"],
-  ["fork", "Forked"],
-  ["unlink_harness", "Agent link removed"],
-  ["relink_harness", "Agent link restored"],
-  ["explode_shared_dir", "Whole-folder link converted"],
-  ["materialize_then_disable", "Agent copy turned off"],
-  ["reconcile_remove_stale_link", "Stale link removed"],
-  ["repair_remove_link", "Broken link removed"],
-  ["repair_relink_link", "Link repaired"],
-  ["make_independent_copy", "Independent copy created"],
-  ["repair_skill_frontmatter", "Frontmatter repaired"],
-  ["restore", "Restored"],
-  ["quarantine_prune", "Quarantine pruned"],
-  ["split", "Split into agent copies"],
-  ["recovery_plan_dropped", "Recovery plan dropped"],
-] as const;
 function event(kind: string): SkillEvent {
   return {
     id: kind,
@@ -53,10 +27,10 @@ afterEach(() => {
   clearMocks();
 });
 
-it("Activity names every action in the past tense with an action icon or exposes raw event names", async () => {
+it("Reveal in Finder on an Activity row opens that event's backup folder", async () => {
   const revealed: unknown[] = [];
   mockIPC((command, args) => {
-    if (command === "list_skill_events") return kinds.map(([kind]) => event(kind));
+    if (command === "list_skill_events") return [event("install")];
     if (command === "open_skill_path") {
       revealed.push(args);
       return;
@@ -66,12 +40,7 @@ it("Activity names every action in the past tense with an action icon or exposes
   const user = userEvent.setup();
   render(<SkillHistorySection />);
   await screen.findByText("skill-install");
-  for (const [, label] of kinds) {
-    const row = screen.getByText(label).parentElement;
-    expect(row?.querySelectorAll("svg").length, label).toBe(1);
-    expect(row?.querySelector(".lucide-history"), label).toBeNull();
-  }
-  await user.click(screen.getAllByRole("button", { name: "Reveal in Finder" })[0]);
+  await user.click(screen.getByRole("button", { name: "Reveal in Finder" }));
   expect(revealed).toEqual([{ path: "/fixture/backup", mode: "reveal" }]);
 });
 

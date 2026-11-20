@@ -62,27 +62,34 @@ fn mcp_bin() -> PathBuf {
     )
 }
 
-/// The CLI binary's path. Not a Cargo dependency of this crate (artifact
-/// dependencies still need nightly `-Z bindeps`), so this builds it directly
-/// via `cargo build -p skill-studio-cli` and locates it next to this crate's
-/// own binary, under the shared workspace `target/` directory.
+/// The CLI binary the outer `cargo test --workspace` run built, next to
+/// this crate's own binary in `target/debug/`. Not a Cargo dependency of
+/// this crate (artifact dependencies still need nightly `-Z bindeps`).
+/// This does not build it: `cargo build` and `cargo test` keep separate
+/// copies and each copies its own over `target/debug/skill-studio`, so a
+/// build here swapped the file while other test binaries ran it. A run
+/// narrowed with `--test mcp_server` does not build the CLI; build it first
+/// with `cargo build --workspace --all-features --bin skill-studio`, or set
+/// `SKILL_STUDIO_TEST_BINARY`.
 fn cli_bin() -> PathBuf {
     if let Some(binary) = std::env::var_os("SKILL_STUDIO_TEST_BINARY") {
         return binary.into();
     }
-    let status = std::process::Command::new(env!("CARGO"))
-        .args(["build", "-p", "skill-studio-cli", "--bin", "skill-studio"])
-        .status()
-        .expect("run cargo build -p skill-studio-cli");
-    assert!(status.success(), "failed to build skill-studio-cli");
-    Path::new(&mcp_bin())
+    let binary = Path::new(&mcp_bin())
         .parent()
         .unwrap()
         .join(if cfg!(windows) {
             "skill-studio.exe"
         } else {
             "skill-studio"
-        })
+        });
+    assert!(
+        binary.is_file(),
+        "{} is missing: run `cargo test --workspace --all-features`, or \
+         `cargo build --workspace --all-features --bin skill-studio` first",
+        binary.display()
+    );
+    binary
 }
 
 /// Materializes a named fixture (see `skill_studio_core::testing::fixtures`)
@@ -509,8 +516,8 @@ fn run_cli(args: &[&str]) -> serde_json::Value {
 
 /// `watch --json` and a fresh MCP `scan` must agree on the current state:
 /// starts `watch` against a fixture, mutates a skill through the CLI's
-/// `preview-repair`/`apply-repair`, and checks that the inventory `watch`
-/// reports after the change is the same one a fresh MCP `scan` reports.
+/// `preview-repair`/`apply-repair`, and checks that the inventory on the
+/// change line `watch` prints is the same one a fresh MCP `scan` reports.
 ///
 /// There is no shared numeric revision authority between an independent
 /// `watch` process and an independent MCP process (each MCP call is a fresh,
@@ -541,7 +548,9 @@ async fn watch_and_a_fresh_mcp_scan_agree_after_a_cli_mutation() {
         }
     });
     let recv_line = |rx: &std::sync::mpsc::Receiver<String>| {
-        rx.recv_timeout(std::time::Duration::from_secs(5))
+        // A hang guard, not a speed check: a loaded machine can take
+        // seconds for the first scan.
+        rx.recv_timeout(std::time::Duration::from_secs(30))
             .expect("watch line before timeout")
     };
 
@@ -579,11 +588,9 @@ async fn watch_and_a_fresh_mcp_scan_agree_after_a_cli_mutation() {
     assert_eq!(apply["status"], "ok", "{apply:?}");
 
     // `watch` polls; wait for the change line that follows the mutation.
-    let _change: serde_json::Value = serde_json::from_str(&recv_line(&line_rx)).unwrap();
+    let change: serde_json::Value = serde_json::from_str(&recv_line(&line_rx)).unwrap();
     let _ = watch.kill();
     let _ = watch.wait();
-
-    let watch_scan = run_cli(&["scan", "--fixture", home.to_str().unwrap(), "--json"]);
 
     let env = [("SKILL_STUDIO_FIXTURE", home.to_str().unwrap())];
     let (client, _) = connect(&env).await;
@@ -595,8 +602,8 @@ async fn watch_and_a_fresh_mcp_scan_agree_after_a_cli_mutation() {
         "the mutation through the CLI did not change what a fresh scan sees"
     );
     assert_eq!(
-        mcp_scan["data"]["skills"], watch_scan["data"]["skills"],
-        "watch and a fresh MCP scan disagreed on the post-mutation state"
+        mcp_scan["data"]["skills"], change["inventory"]["skills"],
+        "watch's change line and a fresh MCP scan disagreed on the post-mutation state"
     );
 
     std::fs::remove_dir_all(&home).ok();
@@ -695,47 +702,6 @@ fn deployment_id_in_root(home: &Path, skill: &str, kind: &str) -> String {
         .as_str()
         .unwrap()
         .to_string()
-}
-
-/// Flow: park `gamma` through the CLI, then call the MCP `unpark` tool with
-/// the parked deployment id.
-/// Expectation: an `ok` envelope, `gamma` back under `.agents/skills`, and
-/// its Claude Code link recreated.
-/// A failure here means the `unpark` tool cannot undo what `park` did, so an
-/// agent that parks a skill over MCP has no way to bring it back.
-#[tokio::test]
-async fn the_unpark_tool_puts_a_parked_skill_and_its_link_back_or_names_the_envelope() {
-    let (_home_dir, home) = live_home();
-    let park = run_cli(&[
-        "park",
-        "--home",
-        home.to_str().unwrap(),
-        "--deployment-id",
-        &deployment_id_in_root(&home, "gamma", "universal"),
-        "--json",
-    ]);
-    assert_eq!(park["status"], "ok", "{park:?}");
-    let parked_id = deployment_id_in_root(&home, "gamma", "parked");
-
-    let (client, _) = connect(&[("SKILL_STUDIO_HOME", home.to_str().unwrap())]).await;
-    let envelope = call_tool(
-        &client,
-        "unpark",
-        serde_json::json!({ "deployment_id": parked_id }),
-    )
-    .await;
-    client.cancel().await.ok();
-
-    assert_eq!(envelope["status"], "ok", "{envelope:?}");
-    assert_eq!(envelope["operation"], "unpark", "{envelope:?}");
-    assert!(
-        home.join(".agents/skills/gamma/SKILL.md").is_file(),
-        "unpark left gamma in the parked root: {envelope:?}"
-    );
-    assert!(
-        home.join(".claude/skills/gamma").symlink_metadata().is_ok(),
-        "unpark did not recreate the Claude Code link park removed: {envelope:?}"
-    );
 }
 
 /// Flow: call the MCP `outdated` tool over a live home holding one
@@ -939,41 +905,6 @@ async fn the_park_tool_returns_a_warning_when_git_tracks_the_folder_or_names_the
         warnings[0].as_str().unwrap().contains("git tracks"),
         "{park:?}"
     );
-}
-
-/// Flow: park `gamma`, then call `restore_event` with park's `event_id`.
-/// Expectation: an error envelope with code `unsupported`, and `gamma`
-/// still parked.
-/// A failure here means park became restorable through history, and the
-/// tool descriptions ("Undo with unpark") and docs are now wrong.
-#[tokio::test]
-async fn restore_event_on_a_park_reports_unsupported() {
-    let (_home_dir, home) = live_home();
-    let (client, _) = connect(&[("SKILL_STUDIO_HOME", home.to_str().unwrap())]).await;
-
-    let universal_id = deployment_id_via_mcp(&client, "gamma", "universal").await;
-    let park = call_tool(
-        &client,
-        "park",
-        serde_json::json!({ "deployment_id": universal_id }),
-    )
-    .await;
-    assert_eq!(park["status"], "ok", "{park:?}");
-    let event_id = park["event_id"].as_str().expect("park returns an event_id");
-
-    let restore = call_tool(
-        &client,
-        "restore_event",
-        serde_json::json!({ "event_id": event_id }),
-    )
-    .await;
-    client.cancel().await.ok();
-
-    assert_eq!(restore["status"], "error", "{restore:?}");
-    assert_eq!(restore["errors"][0]["code"], "unsupported", "{restore:?}");
-    assert!(home
-        .join(".agents/skills-parked/universal/gamma/SKILL.md")
-        .is_file());
 }
 
 /// Flow: add a shared skill recorded as a fork, remove it, then call

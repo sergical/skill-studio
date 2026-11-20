@@ -126,11 +126,6 @@ export function deploymentLinkKind(
   return "own";
 }
 
-/** The path a link chip's tooltip/relation text should show: the symlink target, or the canonical path reached through a linked root. */
-export function deploymentLinkTarget(deployment: Deployment): string | null | undefined {
-  return deployment.symlink_target ?? deployment.resolved_path;
-}
-
 /** Where a skill really lives, and who links to or copies it - see `SkillLocationCell`. */
 export interface LocationSummary {
   /** The deployment under the shared root, when the skill has one; the global one when the skill
@@ -197,87 +192,6 @@ export function driftingCopies(summary: LocationSummary): Deployment[] {
   return comparableCopies(summary).filter(
     (copy) => copy !== reference && copy.content_hash !== reference.content_hash,
   );
-}
-
-/** A shared-root deployment plus every harness that reads it through a whole-root link, for the Locations card's shared group. */
-export interface DeploymentGroup {
-  shared: Deployment;
-  linked: Deployment[];
-}
-
-/** `groupDeploymentsForDisplay`'s result: every shared group, plus every deployment left standing on its own. */
-export interface GroupedDeployments {
-  groups: DeploymentGroup[];
-  standalone: Deployment[];
-}
-
-/** Normalises a path for comparison by dropping a trailing slash, if any. */
-function withoutTrailingSlash(path: string): string {
-  return path.endsWith("/") ? path.slice(0, -1) : path;
-}
-
-/** The Universal folder a `linked-to-shared` deployment's link resolves to, normalised for comparison. */
-function linkedSharedTarget(deployment: Deployment): string {
-  return withoutTrailingSlash(deploymentLinkTarget(deployment) ?? deployment.path);
-}
-
-/** A `shared-root` deployment's own folder, normalised for comparison with `linkedSharedTarget`. */
-function sharedRootTarget(shared: Deployment): string {
-  return withoutTrailingSlash(shared.resolved_path ?? shared.path);
-}
-
-/**
- * Groups `deployments` (already in display order) by their concrete shared
- * folder, for `SkillLocationsCard`. Every `shared-root` deployment starts its
- * own group, in input order, and the only members are harnesses that read
- * that folder through a whole-root link (`shared_via_whole_dir_link`) -
- * everything else, per-skill symlinks included, stays a standalone row.
- *
- * A skill can have more than one shared root - e.g. a global
- * `~/.agents/skills/foo` and a project's own `<project>/.agents/skills/foo` -
- * so a member is keyed on which concrete folder it resolves to, not folded
- * under whichever shared root happens to sort first. Failing a path match it
- * falls back to the shared root with the same scope/project only when exactly
- * one such root exists: with two or more candidates there's no way to tell
- * which one it means, and a wrong nesting would tell the user a copy lives
- * somewhere it doesn't.
- */
-export function groupDeploymentsForDisplay(deployments: Deployment[]): GroupedDeployments {
-  const sharedRoots = deployments.filter((d) => deploymentLinkKind(d) === "shared-root");
-  const groups: DeploymentGroup[] = sharedRoots.map((shared) => ({ shared, linked: [] }));
-  const standalone: Deployment[] = [];
-
-  for (const deployment of deployments) {
-    // Only a harness whose whole skills root points at the Universal folder
-    // belongs inside the group: it has no folder of its own, it just reads
-    // this one. A per-skill symlink is a location in its own right - it can
-    // be removed, repointed, or left dangling without touching the shared
-    // folder - so it stays a row of its own.
-    if (!deployment.shared_via_whole_dir_link) {
-      if (deploymentLinkKind(deployment) !== "shared-root") standalone.push(deployment);
-      continue;
-    }
-
-    const target = linkedSharedTarget(deployment);
-    const byPath = groups.find((g) => sharedRootTarget(g.shared) === target);
-    if (byPath) {
-      byPath.linked.push(deployment);
-      continue;
-    }
-
-    const byScope = groups.filter(
-      (g) =>
-        g.shared.scope === deployment.scope && g.shared.project_path === deployment.project_path,
-    );
-    if (byScope.length === 1) {
-      byScope[0].linked.push(deployment);
-      continue;
-    }
-
-    standalone.push(deployment);
-  }
-
-  return { groups, standalone };
 }
 
 /** `pickCompareDefaults`'s picks, either of which is unset when `candidates` is empty. */

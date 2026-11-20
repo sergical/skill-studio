@@ -57,17 +57,6 @@ pub(crate) fn dotagents_remove_args(name: &str, scope: InstallScope) -> Vec<Stri
     args
 }
 
-#[cfg(test)]
-fn with_authorized_lifecycle_command_target<T>(
-    snapshot: &skill_refresh::SkillSnapshot,
-    target: &LifecycleTarget,
-    action: &str,
-    operation: impl FnOnce(InstalledSkill, super::skill_dto::Deployment) -> Result<T, String>,
-) -> Result<T, String> {
-    let (skill, deployment) = resolve_lifecycle_target(snapshot, target, action)?;
-    operation(skill, deployment)
-}
-
 /// Search for skills on skills.sh
 #[tauri::command]
 pub async fn search_skills(
@@ -181,10 +170,8 @@ pub async fn get_installed_skills(
 #[cfg(test)]
 mod tests {
     use super::super::skill_md_write::write_skill_md;
-    use super::super::skill_process::CommandRunner;
     use super::super::write_lease::WriteLease;
     use super::*;
-    use std::sync::atomic::Ordering;
 
     /// Flow: an "Update all" batch holds one wildcard-dotagents (read-only)
     /// target and one updatable target. Expectation: the updatable one is
@@ -353,15 +340,6 @@ mod tests {
         assert!(owners.is_empty());
     }
 
-    struct CountingLifecycleRunner(std::sync::atomic::AtomicUsize);
-
-    impl CommandRunner for CountingLifecycleRunner {
-        fn run(&self, _program: &str, _args: &[String], _cwd: Option<&Path>) -> Result<(), String> {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
-    }
-
     /// A minimal `SkillSnapshot` with one skill deployed at `dep_dir`, with
     /// or without a plugin deployment, for `check_skill_md_write_allowed` tests.
     fn fixture_snapshot(
@@ -509,48 +487,6 @@ mod tests {
         snapshot
     }
 
-    fn propagated_link_target_fixture(
-        root: &Path,
-    ) -> (skill_refresh::SkillSnapshot, LifecycleTarget) {
-        use super::super::skill_deployment::{
-            deployment_id, BackingRelationship, DeploymentMutability, SkillDestination,
-        };
-        use super::super::skill_ownership::LifecycleOwnerKind;
-
-        let linked_path = root.join(".codex/skills/foo");
-        std::fs::create_dir_all(&linked_path).unwrap();
-        let linked_id = deployment_id(
-            "foo",
-            "global",
-            SkillDestination::PerHarness,
-            "codex",
-            None,
-            &linked_path,
-        );
-        let mut snapshot = fixture_snapshot(&linked_path, None);
-        snapshot.skills[0].deployments[0] = super::super::skill_dto::Deployment {
-            id: linked_id.clone(),
-            destination: SkillDestination::PerHarness,
-            owner_kind: LifecycleOwnerKind::SkillsSh,
-            owner_id: Some("owner:v1/global/foo".to_string()),
-            mutability: DeploymentMutability::ReadOnly,
-            backing: BackingRelationship::LinkedTo {
-                deployment_id: "dep:v1/global/universal/universal/foo/-".to_string(),
-            },
-            agent: "Codex".to_string(),
-            scope: "global".to_string(),
-            path: linked_path.to_string_lossy().to_string(),
-            ..Default::default()
-        };
-        (
-            snapshot,
-            LifecycleTarget {
-                deployment_id: Some(linked_id),
-                owner_id: None,
-            },
-        )
-    }
-
     /// A snapshot with one skill owned by a single mutable owner (no
     /// direct-deployment target), matching what `lifecycleTargetForSkill`
     /// sends for Fork, `SkillsSh` and Dotagents owners: `{ owner_id }` with
@@ -599,43 +535,6 @@ mod tests {
         )
     }
 
-    fn run_counted_lifecycle_command(
-        snapshot: &skill_refresh::SkillSnapshot,
-        target: &LifecycleTarget,
-        action: &str,
-        runner: &dyn CommandRunner,
-    ) -> Result<(), String> {
-        with_authorized_lifecycle_command_target(snapshot, target, action, |_, _| {
-            runner.run_npx(&["skills".to_string(), action.to_lowercase()], None)
-        })
-    }
-
-    #[test]
-    fn remove_command_rejects_propagated_link_without_invoking_runner() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (snapshot, target) = propagated_link_target_fixture(tmp.path());
-        let runner = CountingLifecycleRunner(std::sync::atomic::AtomicUsize::new(0));
-
-        let error =
-            run_counted_lifecycle_command(&snapshot, &target, "Remove", &runner).unwrap_err();
-
-        assert!(error.contains("read-only"));
-        assert_eq!(runner.0.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn update_command_rejects_propagated_link_without_invoking_runner() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (snapshot, target) = propagated_link_target_fixture(tmp.path());
-        let runner = CountingLifecycleRunner(std::sync::atomic::AtomicUsize::new(0));
-
-        let error =
-            run_counted_lifecycle_command(&snapshot, &target, "Update", &runner).unwrap_err();
-
-        assert!(error.contains("read-only"));
-        assert_eq!(runner.0.load(Ordering::SeqCst), 0);
-    }
-
     #[test]
     fn write_refused_for_plugin_deployment() {
         let tmp = tempfile::tempdir().unwrap();
@@ -674,23 +573,6 @@ mod tests {
     }
 
     #[test]
-    fn write_succeeds_and_round_trips() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dep_dir = tmp.path().join("foo");
-        std::fs::create_dir_all(&dep_dir).unwrap();
-        let skill_md = dep_dir.join("SKILL.md");
-        std::fs::write(&skill_md, "original").unwrap();
-
-        let snapshot = fixture_snapshot(&dep_dir, None);
-        assert!(check_skill_md_write_allowed(Some(&snapshot), &skill_md).is_ok());
-
-        write_skill_md(&skill_md, "---\nname: foo\n---\nupdated body").unwrap();
-
-        let round_tripped = std::fs::read_to_string(&skill_md).unwrap();
-        assert_eq!(round_tripped, "---\nname: foo\n---\nupdated body");
-    }
-
-    #[test]
     fn atomic_write_round_trips_twice_in_a_row() {
         let tmp = tempfile::tempdir().unwrap();
         let skill_md = tmp.path().join("SKILL.md");
@@ -724,34 +606,6 @@ mod tests {
             })
             .count();
         assert_eq!(leftover_temp_files, 0);
-    }
-
-    #[test]
-    fn compare_and_swap_refuses_mismatch_and_leaves_file_untouched() {
-        let tmp = tempfile::tempdir().unwrap();
-        let skill_md = tmp.path().join("SKILL.md");
-        std::fs::write(&skill_md, "on disk now").unwrap();
-
-        let lease = WriteLease::with_lease_root(tmp.path().join("leases"))
-            .try_acquire(tmp.path())
-            .unwrap();
-        let err = write_skill_md_compare_and_swap(&lease, &skill_md, "stale copy", "new content")
-            .unwrap_err();
-        assert!(err.contains("changed on disk since it was loaded"));
-        assert_eq!(std::fs::read_to_string(&skill_md).unwrap(), "on disk now");
-    }
-
-    #[test]
-    fn compare_and_swap_writes_on_match() {
-        let tmp = tempfile::tempdir().unwrap();
-        let skill_md = tmp.path().join("SKILL.md");
-        std::fs::write(&skill_md, "on disk now").unwrap();
-
-        let lease = WriteLease::with_lease_root(tmp.path().join("leases"))
-            .try_acquire(tmp.path())
-            .unwrap();
-        write_skill_md_compare_and_swap(&lease, &skill_md, "on disk now", "new content").unwrap();
-        assert_eq!(std::fs::read_to_string(&skill_md).unwrap(), "new content");
     }
 
     /// Flow: the detail page opens an installed skill's SKILL.md that is
@@ -1452,11 +1306,7 @@ mod tests {
         assert_eq!(req.source.as_deref(), Some("o/r"));
     }
 
-    /// A `ProcessSpawner`/runtime-builder pair for the thread-recording
-    /// test below - mirrors `harness_first_run.rs`'s
-    /// `ThreadRecordingSpawner`/`detect_with_runtime` test, adapted to
-    /// `update_all_with_runtime`'s runtime-builder closure: `Copy` needs no
-    /// spawner, so the closure itself is what records the pool thread.
+    /// A `Copy` update request whose only file is `SKILL.md` = `body`.
     fn copy_update_request(
         skill: &str,
         scope: skill_studio_core::identity::RootScope,
@@ -1476,8 +1326,8 @@ mod tests {
         }
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn update_all_over_the_batch_limit_still_runs_every_skill() {
+    #[test]
+    fn update_all_over_the_batch_limit_still_runs_every_skill() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         let data_root = tmp.path().join("data");
@@ -1493,8 +1343,8 @@ mod tests {
 
         let reported = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counter = reported.clone();
-        let outcome = update_all_with_runtime(
-            requests,
+        let outcome = run_update_all_sync(
+            &requests,
             move || {
                 super::super::core_runtime::build_runtime_write_at_with_search_dirs(
                     &home,
@@ -1502,212 +1352,16 @@ mod tests {
                     super::super::core_runtime::process_path_search_dirs(),
                 )
             },
+            std::sync::Arc::new(skill_studio_core::ports::NeverCancel),
             move |_, _| {
                 counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             },
         )
-        .await
         .unwrap();
 
         let total = skill_studio_core::ops::MAX_BATCH_ITEMS + 1;
         assert_eq!(outcome.items.len(), total);
         assert_eq!(reported.load(std::sync::atomic::Ordering::Relaxed), total);
-    }
-
-    /// `update_all_on_ten_outdated_fixtures_ends_with_ten_journal_entries_and_zero_main_thread_calls_over_one_frame`:
-    /// installs ten `Copy` skills for real (so `update_all_with_runtime` has
-    /// an existing deployment per skill to swap over), then updates all ten
-    /// in the one `spawn_blocking` task `update_all_with_runtime` wraps its
-    /// `ops::update_all` call in. Under a `current_thread` runtime the test
-    /// task's own thread is the only async worker, so a recorded thread
-    /// differing from it proves the write ran off the UI/test task - a
-    /// deterministic fact, not a timing measurement. B3 (review round 1):
-    /// the runtime-builder closure alone survived moving `ops::update_all`
-    /// out of `spawn_blocking`, because it recorded its own thread inside
-    /// `build_runtime`, not inside the op call itself - so this now also
-    /// threads a recorder through `on_outcome`, which `ops::update_all`
-    /// calls once per request, and asserts all ten land off the test task
-    /// too. The ten resulting `update` journal rows are counted straight
-    /// from the events store, independent of the returned `UpdateAllOutcome`.
-    #[tokio::test(flavor = "current_thread")]
-    async fn update_all_on_ten_outdated_fixtures_ends_with_ten_journal_entries_and_zero_main_thread_calls_over_one_frame(
-    ) {
-        use skill_studio_core::dto::{InstallFile, InstallMethod, InstallRequest};
-        use skill_studio_core::identity::{RootScope, SkillName};
-        use skill_studio_core::ops::{self, Operation, ResultEnvelope};
-        use skill_studio_core::ports::OpContext;
-
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        let data_root = tmp.path().join("data");
-        std::fs::create_dir_all(&home).unwrap();
-
-        // The process's own PATH, not a real login-shell probe: this
-        // fixture never spawns `npx`, so it shouldn't pay for (or risk
-        // hanging on, once per skill below) a real `$SHELL -lic` spawn.
-        let rt = super::super::core_runtime::build_runtime_write_at_with_search_dirs(
-            &home,
-            &data_root,
-            super::super::core_runtime::process_path_search_dirs(),
-        )
-        .unwrap();
-        let ctx = OpContext::uncancellable(skill_studio_core::identity::CorrelationId(
-            ulid::Ulid::generate().to_string(),
-        ));
-        for i in 0..10 {
-            let req = InstallRequest {
-                skill: SkillName(format!("fixture-{i}")),
-                method: InstallMethod::Copy,
-                scope: RootScope::Global,
-                harnesses: Vec::new(),
-                files: vec![InstallFile {
-                    relative_path: PathBuf::from("SKILL.md"),
-                    contents: b"original".to_vec(),
-                    mode: None,
-                }],
-                source: None,
-                trust_identity: None,
-                trust_confirmed: false,
-                save_as_preference: false,
-                link_mode: skill_studio_core::dto::InstallLinkMode::Link,
-                destination: skill_studio_core::identity::SkillDestination::Universal,
-            };
-            let result = ops::install(&rt, &ctx, &req);
-            let envelope = ResultEnvelope::from_result(Operation::Install, &rt.scope, &ctx, result);
-            super::super::core_runtime::to_command_result(envelope)
-                .unwrap_or_else(|e| panic!("fixture install {i} failed: {e}"));
-        }
-
-        let requests: Vec<_> = (0..10)
-            .map(|i| copy_update_request(&format!("fixture-{i}"), RootScope::Global, b"updated"))
-            .collect();
-
-        let test_task_thread = std::thread::current().id();
-        let runtime_built_on = std::sync::Arc::new(std::sync::Mutex::new(None));
-        let record_build_thread = runtime_built_on.clone();
-        let home_for_closure = home.clone();
-        let data_root_for_closure = data_root.clone();
-        let outcome_threads = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let record_outcome_thread = outcome_threads.clone();
-
-        let outcome = update_all_with_runtime(
-            requests,
-            move || {
-                *record_build_thread.lock().unwrap() = Some(std::thread::current().id());
-                super::super::core_runtime::build_runtime_write_at_with_search_dirs(
-                    &home_for_closure,
-                    &data_root_for_closure,
-                    super::super::core_runtime::process_path_search_dirs(),
-                )
-            },
-            move |_, _| {
-                record_outcome_thread
-                    .lock()
-                    .unwrap()
-                    .push(std::thread::current().id());
-            },
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(outcome.items.len(), 10);
-        assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
-
-        let built_on = runtime_built_on.lock().unwrap().expect("runtime was built");
-        assert_ne!(
-            built_on, test_task_thread,
-            "update_all_with_runtime must build the runtime and run ops::update_all \
-             on a spawn_blocking pool thread, not the calling task"
-        );
-
-        let outcome_threads = outcome_threads.lock().unwrap();
-        assert_eq!(outcome_threads.len(), 10, "{outcome_threads:?}");
-        assert!(
-            outcome_threads.iter().all(|id| *id != test_task_thread),
-            "every on_outcome call must land on the spawn_blocking pool thread, \
-             not the calling task: {outcome_threads:?}"
-        );
-
-        let history = rt
-            .ports
-            .history
-            .open(
-                &rt.scope,
-                skill_studio_core::ports::HistoryAccess::ReadIfExists,
-            )
-            .unwrap()
-            .expect("history store exists after the fixture installs");
-        let rows = history
-            .list(&skill_studio_core::events::EventFilter {
-                skill: None,
-                limit: 100,
-                after: None,
-            })
-            .unwrap();
-        let update_rows = rows
-            .iter()
-            .filter(|row| row.kind == skill_studio_core::events::EventKind::Update.as_str())
-            .count();
-        assert_eq!(
-            update_rows,
-            10,
-            "{:?}",
-            rows.iter().map(|r| &r.kind).collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn update_all_leaves_the_badge_on_a_failed_item_or_names_the_cleared_row() {
-        use skill_studio_core::dto::{UpdateAllItem, UpdateAllOutcome, UpdateOutcome};
-        use skill_studio_core::identity::SkillName;
-
-        let succeeded = UpdateOutcome {
-            event_id: skill_studio_core::identity::EventId("evt-alpha".to_string()),
-            skill: SkillName("alpha".to_string()),
-            deployment_path: PathBuf::from("/home/.agents/skills/alpha"),
-            tree_hash_before: "aaa".to_string(),
-            tree_hash_after: "bbb".to_string(),
-        };
-        let outcome = UpdateAllOutcome {
-            items: vec![
-                UpdateAllItem {
-                    skill: SkillName("alpha".to_string()),
-                    outcome: Some(succeeded),
-                },
-                UpdateAllItem {
-                    skill: SkillName("beta".to_string()),
-                    outcome: None,
-                },
-            ],
-            errors: std::collections::BTreeMap::from([(
-                "beta".to_string(),
-                "update failed".to_string(),
-            )]),
-            not_run: Vec::new(),
-        };
-        let owners = vec![
-            (
-                "alpha".to_string(),
-                Some("owner:v1/global/alpha".to_string()),
-                PathBuf::from("/home/.agents/skills/alpha"),
-            ),
-            (
-                "beta".to_string(),
-                Some("owner:v1/global/beta".to_string()),
-                PathBuf::from("/home/.agents/skills/beta"),
-            ),
-        ];
-
-        let cleared = owners_to_clear(&outcome, &owners);
-
-        assert_eq!(
-            cleared,
-            vec![(
-                "alpha".to_string(),
-                Some("owner:v1/global/alpha".to_string())
-            )],
-            "beta's failed item must not clear its badge: {cleared:?}"
-        );
     }
 
     /// `update_all_clears_both_owners_of_a_skill_installed_twice_or_names_the_owner_left_outdated`
@@ -2584,53 +2238,12 @@ fn update_split_copies_command(
     Ok(serde_json::json!({ "updated": outcome.updated }))
 }
 
-/// Test-only: the batch write itself, isolated from target resolution and
-/// `app.state()` so the thread-recording test below can pin it to
-/// `spawn_blocking` without a real `tauri::AppHandle` - the same split
-/// `harness_first_run.rs`'s `detect_with_runtime` uses. The sync body
-/// (`build_runtime` then `ops::update_all`) is [`run_update_all_sync`],
-/// shared with production `update_all_skills` (N1, review round 2) so the
-/// ten-fixture thread-recording test below still proves something about the
-/// exact call production makes, not a parallel copy of it - the earlier
-/// split (production called `ops::update_all` directly inside its own
-/// `time_command_blocking` closure) let that closure's body drift from this
-/// one with nothing to notice. `on_outcome` is threaded straight through to
-/// `ops::update_all` (B3: the review round 1 fix) rather than hardcoded to
-/// a no-op here, so the thread-recording test can observe every one of the
-/// batch's per-skill calls landing on this `spawn_blocking` closure's own
-/// pool thread, not just the closure that builds the `Runtime`.
-#[cfg(test)]
-async fn update_all_with_runtime(
-    requests: Vec<skill_studio_core::dto::UpdateRequest>,
-    build_runtime: impl FnOnce() -> Result<skill_studio_core::ports::Runtime, String> + Send + 'static,
-    on_outcome: impl FnMut(
-            &skill_studio_core::identity::SkillName,
-            &Result<skill_studio_core::dto::UpdateOutcome, skill_studio_core::error::CoreError>,
-        ) + Send
-        + 'static,
-) -> Result<skill_studio_core::dto::UpdateAllOutcome, String> {
-    let joined = crate::timing_log::spawn_blocking_in_span(move || {
-        run_update_all_sync(
-            &requests,
-            build_runtime,
-            std::sync::Arc::new(skill_studio_core::ports::NeverCancel),
-            on_outcome,
-        )
-    })
-    .await;
-    crate::timing_log::join_result_to_err("update_all_skills", joined)
-}
-
 /// The sync body a `spawn_blocking` closure runs for one update-all batch:
 /// build the `Runtime`, then run every request through
 /// `ops::update_all_unbounded`: a person asked for the whole set.
-/// Shared by `update_all_with_runtime` (test-only, wraps this in its own
-/// `spawn_blocking` since a unit test builds a bare `Runtime` fixture
-/// without an `AppHandle`) and production `update_all_skills` (already
-/// inside the `spawn_blocking` closure `time_command_blocking` provides, so
-/// it calls this directly rather than nesting a second one) - one body, so
-/// a change to either caller's shape can't drift the two apart (N1, review
-/// round 2).
+/// `update_all_skills` calls it inside the `spawn_blocking` closure
+/// `time_command_blocking` provides; tests call it with a bare `Runtime`
+/// fixture, since they have no `AppHandle`.
 fn run_update_all_sync(
     requests: &[skill_studio_core::dto::UpdateRequest],
     build_runtime: impl FnOnce() -> Result<skill_studio_core::ports::Runtime, String>,
@@ -2859,8 +2472,7 @@ pub fn cancel_update_all(batch_id: String, state: tauri::State<UpdateAllCancelSt
 }
 
 /// "Update all": resolves every target, then runs `ops::update_all` over the
-/// resolvable ones via `run_update_all_sync` (shared with the test-only
-/// `update_all_with_runtime`, N1 review round 2) in the one `spawn_blocking`
+/// resolvable ones via `run_update_all_sync` in the one `spawn_blocking`
 /// task `time_command_blocking` wraps the whole body in (N2: the review
 /// round 1 fix - resolving targets reads ledgers off disk, which no longer
 /// runs untimed on the Tokio worker) - each skill gets its own

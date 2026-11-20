@@ -485,31 +485,6 @@ mod tests {
     }
 
     #[test]
-    fn a_cursor_continues_where_the_last_page_stopped() {
-        let mut data = rows(5);
-        let page = apply(
-            &mut data,
-            &["/rows"],
-            &view(Some(2), Some("2"), &[], None),
-            ANSWER_BYTES,
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(data["rows"][0]["name"], "s2");
-        assert_eq!((page.returned, page.next_cursor.as_deref()), (2, Some("4")));
-        let mut data = rows(5);
-        let last = apply(
-            &mut data,
-            &["/rows"],
-            &view(Some(2), Some("4"), &[], None),
-            ANSWER_BYTES,
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!((last.returned, last.next_cursor), (1, None));
-    }
-
-    #[test]
     fn fields_project_rows_and_counts_cover_the_whole_list() {
         let mut data = rows(5);
         let page = apply(

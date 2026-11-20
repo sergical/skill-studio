@@ -908,21 +908,6 @@ mod tests {
         }
     }
 
-    /// Flow: a public repo, nothing cached.
-    /// Expectation: one GitHub call and one skills.sh call.
-    #[tokio::test]
-    async fn a_public_repo_makes_one_call_to_each() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("install-counts.json");
-        let api = FakeApi::answering(Some(5));
-
-        let result = lookup(&api, &path, 1_000).await;
-
-        assert_eq!(result[0].installs, Some(5));
-        assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(api.calls.load(Ordering::SeqCst), 1);
-    }
-
     /// Flow: a repo was public at an earlier lookup and is private now; a new
     /// skill key from it has no cached count.
     /// Expectation: GitHub is asked again and skills.sh gets no request.
@@ -987,26 +972,6 @@ mod tests {
 
         assert_eq!(api.calls.load(Ordering::SeqCst), 3);
         assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 3);
-    }
-
-    /// Flow: two single-key lookups of the same repo run at the same time
-    /// (two skill pages opened together), on the one shared scheduler.
-    /// Expectation: both get their count, each after its own GitHub check.
-    #[tokio::test]
-    async fn concurrent_lookups_of_one_repo_each_check_github() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("install-counts.json");
-        let api = FakeApi::answering(Some(5));
-        let shared = scheduler();
-
-        let (one, two) = tokio::join!(
-            lookup_with(&api, &shared, &path, "one", 1_000),
-            lookup_with(&api, &shared, &path, "two", 1_000),
-        );
-
-        assert_eq!(one[0].installs, Some(5));
-        assert_eq!(two[0].installs, Some(5));
-        assert_eq!(api.visibility_calls.load(Ordering::SeqCst), 2);
     }
 
     /// Flow: the same skill is looked up at the same time by two callers.

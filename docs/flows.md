@@ -1,6 +1,8 @@
 # Flows
 
-A new user-facing flow must add a row to this table and a flow-level test.
+A new user-facing flow must add a row to this table and one flow-level test at
+the lowest seam that proves its file effects. CLI and MCP parity comes from
+the flow_parity.rs table, not from new tests per adapter.
 The CLI and MCP columns name shared core calls. Gap rows are known missing
 adapters or desktop integrations, not claims of feature parity. The flow_parity
 integration test requires named CLI and MCP tests for each supported
@@ -78,28 +80,8 @@ the failed item, and lists the items not tried.
 
 ## Timing
 
-Run the timing check on demand. It builds a temp home with 378 skills and prints a table. It asserts only correctness, never a duration, and CI does not run it.
-
-```
-cargo test -p skill-studio-core --all-features --test timing -- --ignored --nocapture
-```
-
-Measured on the author's machine on 2026-10-07 (debug build, local disk, median of 5 runs, scan first run is one run):
-
-| Job                                | Median ms | Max ms |
-| ---------------------------------- | --------: | -----: |
-| Scan, first run on a new runtime   |     160.6 |  160.6 |
-| Scan, repeat on one runtime        |     118.9 |  120.7 |
-| Park one shared skill              |      82.7 |   87.2 |
-| Unpark it                          |      81.3 |   95.6 |
-| Remove one fork-owned shared skill |      88.9 |   92.6 |
-
-Skipped, with the reason:
-
-- Snapshot build: it lives in the desktop crate, not in core.
-- Park for every agent on a dotagents skill: it runs `dotagents remove` through the process spawner.
-- Remove of a manual skill: core refuses it, so a fork-owned skill is timed instead.
-- Install, update, uninstall: they run npx or the network.
+`pnpm run perf:baseline` times the read jobs and `tools/perf-writes.py` the write jobs. See
+`docs/perf/README.md`.
 
 Doctor link warnings, retained-entry ages, and pending history checks are covered by `crates/skill-studio-core/tests/doctor.rs`, `apps/cli/tests/doctor_scope.rs`, and the MCP stdio doctor test. Complete-tree regressions in `doctor_readonly.rs`, CLI, and MCP include lease files. Retention checks continue when history is unavailable, inspect linked metadata without reading its target, and stream directory entries and journal plans. See `docs/perf/doctor-invariants.md` for the read-only policy.
 

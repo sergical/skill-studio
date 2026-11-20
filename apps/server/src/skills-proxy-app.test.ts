@@ -14,25 +14,12 @@ import { HTTPException } from "hono/http-exception";
 import {
   createSkillsProxyApp,
   proxyGet,
-  upstreamUrl,
   type RateLimiter,
   type ResponseCache,
 } from "./skills-proxy-app";
 
 afterEach(() => {
   vi.unstubAllGlobals();
-});
-
-describe("upstreamUrl", () => {
-  it("appends the path and search string verbatim to the skills.sh base", () => {
-    expect(upstreamUrl("/skills/search", "?q=foo&limit=10")).toBe(
-      "https://skills.sh/api/v1/skills/search?q=foo&limit=10",
-    );
-  });
-
-  it("tolerates an empty search string", () => {
-    expect(upstreamUrl("/skills", "")).toBe("https://skills.sh/api/v1/skills");
-  });
 });
 
 describe("proxyGet", () => {
@@ -257,20 +244,21 @@ describe("edge cache middleware", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
-  it("passes the rate limit check before ever consulting the cache", async () => {
-    const fetchMock = vi.fn();
-    const limiter = fakeLimiter(0);
+  it("refuses a request over the limit even when its response is cached, so the cache cannot bypass the limiter", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ data: ["one"] }), { status: 200 }));
+    const limiter = fakeLimiter(1);
     const cache = fakeCache();
+    const app = createSkillsProxyApp({ apiKey: "sk-secret", fetch: fetchMock, limiter, cache });
 
-    const response = await createSkillsProxyApp({
-      apiKey: "sk-secret",
-      fetch: fetchMock,
-      limiter,
-      cache,
-    }).request("http://localhost/api/v1/skills");
+    const first = await app.request("http://localhost/api/v1/skills?view=all-time&page=0");
+    expect(first.status).toBe(200);
+    expect(cache.size).toBe(1);
 
-    expect(response.status).toBe(429);
-    expect(cache.size).toBe(0);
+    const second = await app.request("http://localhost/api/v1/skills?view=all-time&page=0");
+    expect(second.status).toBe(429);
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("relays an upstream 404 without caching it", async () => {

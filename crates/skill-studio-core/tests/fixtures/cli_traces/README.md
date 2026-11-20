@@ -25,4 +25,3 @@ permission bits, raw agent link targets, and complete before/after lock data.
 
 The replay tests compare exact command arguments and core bookkeeping around
 these effects. They do not fetch from the network or test today's upstream CLI.
-Other files in this folder predate these two recordings.

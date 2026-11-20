@@ -1495,29 +1495,6 @@ pub fn claude_code_skills_root(home: &Path, config_dir_override: Option<&Path>) 
     claude_code_config_dir(home, config_dir_override).join("skills")
 }
 
-/// Lists the skill folder names directly under Claude Code's skills root,
-/// honouring `CLAUDE_CONFIG_DIR` and skipping the reserved `synced` entry
-/// and anything that is not a directory or symlink (files, dotfiles), the
-/// same rule [`crate::ports::is_skill_shaped_entry`] applies for every other
-/// root reader. A missing root reads as no skills rather than an error,
-/// matching the rest of the harness readers.
-pub fn claude_code_skill_entries(
-    fs: &dyn ScopeFs,
-    home: &Path,
-    config_dir_override: Option<&Path>,
-) -> Vec<String> {
-    let root = claude_code_skills_root(home, config_dir_override);
-    let Ok(entries) = fs.read_dir(&root) else {
-        return Vec::new();
-    };
-    entries
-        .into_iter()
-        .filter(crate::ports::is_skill_shaped_entry)
-        .filter(|e| e.name != CLAUDE_RESERVED_SKILLS_ENTRY)
-        .map(|e| e.name)
-        .collect()
-}
-
 /// How `~/.claude/skills/<name>` is deployed, per the desktop's
 /// `ClaudeLinkState` (`skill_harness_disable.rs:292`): a whole-folder link to
 /// the universal root, a per-skill link, or nothing.
@@ -2023,61 +2000,6 @@ mod tests {
                 .any(|n| n.contains("per-skill link") || n.contains("whole-dir link")),
             "resolved facts must not still be reported as Unknown: {:?}",
             report.runtime_notes
-        );
-    }
-
-    #[test]
-    fn claude_code_roots_resolve_claude_config_dir_and_skip_the_synced_folder_or_names_the_leaking_path(
-    ) {
-        // No override: reads under the default `~/.claude/skills`, and
-        // `synced` (a reserved folder, never a skill) is skipped.
-        let fs = crate::testing::FixtureBuilder::new()
-            .dir("/home/.claude/skills/foo")
-            .dir("/home/.claude/skills/synced")
-            .build_fs();
-        let default_entries = claude_code_skill_entries(&fs, Path::new("/home"), None);
-        assert_eq!(
-            default_entries,
-            vec!["foo".to_string()],
-            "the reserved `synced` folder leaked into the skill list: {default_entries:?}"
-        );
-
-        // `CLAUDE_CONFIG_DIR` override: reads from the override, not the
-        // default home path, and still skips `synced` there.
-        let fs = crate::testing::FixtureBuilder::new()
-            .dir("/home/.claude/skills/should-not-be-read")
-            .dir("/custom/config/skills/bar")
-            .dir("/custom/config/skills/synced")
-            .build_fs();
-        let override_entries =
-            claude_code_skill_entries(&fs, Path::new("/home"), Some(Path::new("/custom/config")));
-        assert_eq!(
-            override_entries,
-            vec!["bar".to_string()],
-            "CLAUDE_CONFIG_DIR override was not honoured, or `synced` leaked: {override_entries:?}"
-        );
-    }
-
-    #[test]
-    fn claude_code_skill_entries_skip_files_and_dot_entries_or_names_the_non_skill_entry() {
-        let fs = crate::testing::FixtureBuilder::new()
-            .dir("/home/.claude/skills/real-skill")
-            .dir("/home/.agents/skills/linked-skill")
-            .alias(
-                "/home/.claude/skills/linked-skill",
-                "/home/.agents/skills/linked-skill",
-            )
-            .file("/home/.claude/skills/notes.txt", b"not a skill")
-            .dir("/home/.claude/skills/.skill-studio-disabled")
-            .dir("/home/.claude/skills/synced")
-            .build_fs();
-        let mut entries = claude_code_skill_entries(&fs, Path::new("/home"), None);
-        entries.sort();
-        assert_eq!(
-            entries,
-            vec!["linked-skill".to_string(), "real-skill".to_string()],
-            "a file, a dot-prefixed entry, or the reserved `synced` folder leaked \
-             into the skill list: {entries:?}"
         );
     }
 

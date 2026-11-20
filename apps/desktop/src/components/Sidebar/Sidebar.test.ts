@@ -2,7 +2,7 @@
 // Skill Studio - Sidebar tests
 // ============================================================================
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BackgroundTaskStatus } from "@skill-studio/lib";
 import {
   backgroundRefreshError,
@@ -11,18 +11,33 @@ import {
   rescanTooltip,
 } from "../../lib/sidebar-nav";
 
+const NOW = Date.parse("2026-01-01T12:00:00.000Z");
+
+/** `NOW` minus `ms`, read by a clock pinned at `NOW`, so a slow runner cannot cross a boundary. */
+function scannedAgo(ms: number): string {
+  return new Date(NOW - ms).toISOString();
+}
+
+beforeEach(() => {
+  vi.useFakeTimers({ now: NOW });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("relativeScanTime", () => {
   it("reads 'Never' when there is no timestamp", () => {
     expect(relativeScanTime(undefined)).toBe("Never");
   });
 
   it("reads 'Just now' just under the one-minute boundary", () => {
-    const scannedAt = new Date(Date.now() - 59_000).toISOString();
+    const scannedAt = scannedAgo(59_999);
     expect(relativeScanTime(scannedAt)).toBe("Just now");
   });
 
   it("reads '1m ago' at the one-minute boundary", () => {
-    const scannedAt = new Date(Date.now() - 60_000).toISOString();
+    const scannedAt = scannedAgo(60_000);
     expect(relativeScanTime(scannedAt)).toBe("1m ago");
   });
 });
@@ -33,7 +48,7 @@ describe("rescanTooltip", () => {
   });
 
   it("shows 'Last sync: Just now' for recent scans", () => {
-    const scannedAt = new Date(Date.now() - 10_000).toISOString();
+    const scannedAt = scannedAgo(10_000);
     expect(rescanTooltip(scannedAt)).toBe("Refresh skills from disk\nLast sync: Just now");
   });
 });

@@ -202,30 +202,6 @@ mod tests {
     use super::*;
     use crate::testing::FixtureBuilder;
 
-    #[test]
-    fn github_repo_from_source_handles_plain_slug() {
-        assert_eq!(
-            github_repo_from_source("getsentry/agent-browser"),
-            Some("getsentry/agent-browser".to_string())
-        );
-    }
-
-    #[test]
-    fn github_repo_from_source_handles_git_url() {
-        assert_eq!(
-            github_repo_from_source("git:https://github.com/getsentry/agent-browser.git"),
-            Some("getsentry/agent-browser".to_string())
-        );
-    }
-
-    #[test]
-    fn github_repo_from_source_rejects_non_github_host() {
-        assert_eq!(
-            github_repo_from_source("git:https://gitlab.com/getsentry/agent-browser.git"),
-            None
-        );
-    }
-
     /// Flow: a home with no `agents.toml`/`agents.lock` at all (the common
     /// case - most machines have no dotagents skills).
     /// Expectation: `read_dotagents_ledger` returns an empty `Vec`.
@@ -314,5 +290,9 @@ resolved_commit = "3333333333333333333333333333333333cccc"
         let skills = read_dotagents_ledger(&fs, Path::new("/home/.agents")).unwrap();
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].declared_ref, None);
+        assert!(
+            !skills[0].has_manifest_row,
+            "no agents.toml row, so the skill is owned by a wildcard entry (WildcardDotagents)"
+        );
     }
 }

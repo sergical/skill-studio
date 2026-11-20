@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   forkEditedAndUpdate,
   forkableDeployment,
-  lifecycleTargetForDeployment,
   lifecycleTargetForHarnessRoot,
   lifecycleTargetForPark,
   lifecycleTargetForSkill,
@@ -62,12 +61,6 @@ function globalRemovalTarget(skill: Pick<InstalledSkill, "name" | "deployments" 
 }
 
 describe("lifecycleTargetForSkill", () => {
-  it("targets the selected deployment instead of its aggregate name", () => {
-    expect(lifecycleTargetForDeployment(deployment("selected", "owner:x"))).toEqual({
-      deployment_id: "selected",
-    });
-  });
-
   it("does not mix same-name global and project owners", () => {
     const skill = {
       name: "x",

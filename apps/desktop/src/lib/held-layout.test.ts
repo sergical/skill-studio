@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { holdLayout } from "./held-layout";
 
@@ -60,13 +61,37 @@ describe("holdLayout", () => {
     expect(holdLayout(next, next, key, key, new Set())).toBe(next);
   });
 
-  it("is stable when laid out again over its own result", () => {
+  it("keeps every row once, holds each held row in its old group, and is stable when laid out again", () => {
     // The hook feeds each result back as `prev`; a second pass must not move anything.
-    const prev = { attention: [item("a"), item("b"), item("c")], healthy: [item("d")] };
-    const next = { attention: [item("c"), item("a")], healthy: [item("d"), item("b")] };
-    const held = new Set(["b"]);
-    const once = holdLayout(prev, next, key, key, held);
-    expect(names(holdLayout(once, next, key, key, held))).toEqual(names(once));
+    const NAMES = ["a", "b", "c", "d", "e", "f"];
+    const layout = fc.shuffledSubarray(NAMES).chain((order) =>
+      fc
+        .array(fc.constantFrom<Group>("attention", "healthy"), {
+          minLength: order.length,
+          maxLength: order.length,
+        })
+        .map((groups) => ({
+          attention: order.filter((_, i) => groups[i] === "attention").map((n) => item(n)),
+          healthy: order.filter((_, i) => groups[i] === "healthy").map((n) => item(n, 1)),
+        })),
+    );
+    fc.assert(
+      fc.property(layout, layout, fc.subarray(NAMES), (prev, next, heldNames) => {
+        const held = new Set(heldNames);
+        const once = holdLayout(prev, next, key, key, held);
+        expect(names(holdLayout(once, next, key, key, held))).toEqual(names(once));
+
+        const shown = [...once.attention, ...once.healthy].map(key);
+        const heldBefore = [...prev.attention, ...prev.healthy].map(key).filter((n) => held.has(n));
+        const expected = new Set([...next.attention, ...next.healthy].map(key).concat(heldBefore));
+        expect([...shown].sort()).toEqual([...expected].sort());
+        for (const group of ["attention", "healthy"] as const) {
+          for (const row of prev[group].filter((r) => held.has(key(r)))) {
+            expect(once[group].map(key), `${row.name} left ${group}`).toContain(row.name);
+          }
+        }
+      }),
+    );
   });
 
   it("leaves a held skill that was not on screen where the new data puts it", () => {

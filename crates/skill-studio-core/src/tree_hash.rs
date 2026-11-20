@@ -233,7 +233,7 @@ fn hash_object(kind: &[u8], content: &[u8]) -> [u8; 20] {
 // The git-parity, lock-file, and mtime tests named in the ticket
 // (`tree_hash_matches_the_skills_cli_lock_file_...`,
 // `tree_hash_matches_a_git_tree_sha_computed_by_git_...`,
-// `tree_hash_ignores_file_order_and_mtimes_...`) live in
+// `tree_hash_equals_git_write_tree_for_any_tree`) live in
 // `tests/tree_hash_git_parity.rs` instead of here: they need
 // `skill-studio-host`'s real `RealFs`, and this crate's own unit tests run
 // inside the same compilation as `skill-studio-host`'s dependency on this

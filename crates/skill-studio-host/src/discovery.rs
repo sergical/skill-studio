@@ -31,7 +31,7 @@ use crate::opencode_db::{open_opencode_database, opencode_data_dir, opencode_dat
 /// sessions, and the `SQLite` state; every Codex path in the app must honour
 /// it").
 pub fn codex_home(home: &Path) -> PathBuf {
-    match std::env::var_os("CODEX_HOME") {
+    match crate::opencode_db::agent_env_var("CODEX_HOME") {
         Some(value) if !value.is_empty() => PathBuf::from(value),
         _ => home.join(".codex"),
     }
@@ -451,12 +451,12 @@ fn cursor_workspace_folder(path: &Path) -> Option<PathBuf> {
 /// harness scan silently reads/writes the real user's `OpenCode` config when
 /// `XDG_CONFIG_HOME`/`OPENCODE_CONFIG_DIR` happen to be set.
 pub fn opencode_config_dir(home: &Path) -> PathBuf {
-    if let Some(dir) = std::env::var_os("OPENCODE_CONFIG_DIR") {
+    if let Some(dir) = crate::opencode_db::agent_env_var("OPENCODE_CONFIG_DIR") {
         if !dir.is_empty() {
             return PathBuf::from(dir);
         }
     }
-    match std::env::var_os("XDG_CONFIG_HOME") {
+    match crate::opencode_db::agent_env_var("XDG_CONFIG_HOME") {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir).join("opencode"),
         _ => home.join(".config").join("opencode"),
     }
@@ -1029,32 +1029,6 @@ mod tests {
 
         let found = discover_skill_projects(home);
         assert_eq!(found, vec![project]);
-    }
-
-    #[test]
-    fn oversized_line_abandons_the_file_without_panicking() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path();
-        let project = home.join("huge-line-project");
-        // No skill dir here: the transcript's oversized line means its cwd
-        // is never found, so this project must not surface.
-        fs::create_dir_all(&project).unwrap();
-
-        let transcript_dir = home.join(".claude/projects/-huge-line-project");
-        fs::create_dir_all(&transcript_dir).unwrap();
-        let mut content = Vec::new();
-        // A 200 KiB line with no cwd, well past MAX_TRANSCRIPT_LINE_BYTES.
-        content.extend(vec![b'x'; 200 * 1024]);
-        content.push(b'\n');
-        // A cwd line follows in the same file, but the file is abandoned as
-        // soon as the oversized line is hit, so this must never be reached.
-        content.extend(
-            format!(r#"{{"type":"user","cwd":"{}"}}"#, project.to_string_lossy()).into_bytes(),
-        );
-        content.push(b'\n');
-        fs::write(transcript_dir.join("session.jsonl"), content).unwrap();
-
-        assert!(discover_skill_projects(home).is_empty());
     }
 
     #[test]

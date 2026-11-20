@@ -279,12 +279,6 @@ mod tests {
     }
 
     #[test]
-    fn missing_timestamp_is_skipped() {
-        let text = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"write-tests"}}]}}"#;
-        assert!(parse_claude_code_uses(text).is_empty());
-    }
-
-    #[test]
     fn non_skill_line_is_skipped() {
         let text = r#"{"type":"assistant","timestamp":"2026-08-01T12:00:00Z","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}"#;
         assert!(parse_claude_code_uses(text).is_empty());

@@ -85,6 +85,11 @@ cargo mutants -p skill-studio-core --all-features --file crates/skill-studio-cor
 cat mutants.out/missed.txt
 ```
 
+A surviving mutant is a question, not a task. Add a test only when the
+mutant changes what a user sees or what lands on disk, and the test checks
+that outcome. Otherwise add an exclude to `.cargo/mutants.toml` with the
+reason.
+
 ### Worktrees and Disk Use
 
 A shared `target/` grew to 156 GB in one night of parallel worktree builds
@@ -409,9 +414,11 @@ Enabled in `apps/desktop/tsconfig.json`:
 - End to end: `pnpm --filter skill-studio run test:e2e` runs the whole app on
   the dev harness (`src/dev/harness`) in WebKit (the Tauri engine on macOS)
   and Chromium, with real key presses and clicks. Specs live in
-  `apps/desktop/e2e/*.e2e.ts`. A change to keyboard shortcuts, focus, menus,
-  dialogs, or any behavior that crosses components adds or updates a spec
-  there, and the spec must fail without the change. Component tests that set
+  `apps/desktop/e2e/*.e2e.ts`. A change to keyboard shortcuts, focus, menus
+  or dialogs, or a fix for a bug that shows only across components, adds or
+  updates a spec there, and the spec must fail without the change. Specs find
+  controls by role and accessible name and check the outcome (the list, the
+  switch state, the page), not copy or CSS. Component tests that set
   the store directly do not prove these flows: a window key handler in
   another component broke ⌘K while they all passed.
 - Real CLI runs: the e2e harness and the Rust tests mock `npx skills`. To
@@ -470,8 +477,8 @@ The shared guard proposed in #531 was not built; #531 was also closed. Before yo
 ## Reference docs
 
 - `docs/agent-skill-conventions.md` — agentskills.io spec rules, per-agent discovery paths, invocation control (explicit vs model-invocable), the agent settings that hide a skill (read only; Park is the only off), and the local data sources Skill Studio reads. Check it before researching agent behavior again.
-- `docs/flows.md` — every user-facing flow with its UI entry, command, and flow-level test. A new flow adds a row and a test.
-- `docs/state-machines.md` — every explicit state machine (states, legal moves, guard test) and the ones still implicit. A new status field or phase enum adds a row and a table test.
+- `docs/flows.md` — every user-facing flow with its UI entry, command, and flow-level test. A new flow adds a row and one test at the lowest seam that proves its file effects; CLI and MCP parity comes from the `flow_parity.rs` table.
+- `docs/state-machines.md` — every explicit state machine (states, legal moves, guard test) and the ones still implicit. A new status field or phase enum with illegal moves adds a row and one table test of its transition function. State derived from other state adds no test.
 
 ## Skills.sh Integration
 

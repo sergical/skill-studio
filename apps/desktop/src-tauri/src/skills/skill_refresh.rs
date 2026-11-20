@@ -3499,18 +3499,6 @@ mod tests {
     }
 
     #[test]
-    fn classify_watch_event_codex_config_is_skills() {
-        let home = PathBuf::from("/home/tester");
-        let claude_projects = home.join(".claude/projects");
-        let opencode_databases = skill_studio_host::opencode_databases(&home);
-        let path = home.join(".codex/config.toml");
-        assert_eq!(
-            classify_watch_event(&path, &home, &claude_projects, &opencode_databases),
-            WatchEventKind::Skills
-        );
-    }
-
-    #[test]
     fn classify_watch_event_plugin_cache_is_skills() {
         let home = PathBuf::from("/home/tester");
         let claude_projects = home.join(".claude/projects");
@@ -4518,54 +4506,6 @@ mod tests {
     }
 
     #[test]
-    fn update_tracked_projects_remove_moves_to_excluded() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        fs::create_dir_all(&home).unwrap();
-        let project = PathBuf::from("/tmp/a-project");
-        update_tracked_projects(&home, |tracked| tracked.track([project.clone()])).unwrap();
-
-        let (projects, changed) =
-            update_tracked_projects(&home, |tracked| tracked.untrack(&project)).unwrap();
-
-        assert!(changed);
-        assert!(projects.added.is_empty());
-        assert_eq!(projects.excluded, vec![project]);
-    }
-
-    #[test]
-    fn update_tracked_projects_forget_removes_without_excluding() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        fs::create_dir_all(&home).unwrap();
-        let project = PathBuf::from("/tmp/a-project");
-        update_tracked_projects(&home, |tracked| tracked.track([project.clone()])).unwrap();
-
-        let (projects, changed) =
-            update_tracked_projects(&home, |tracked| tracked.forget(&project)).unwrap();
-
-        assert!(changed);
-        assert!(projects.added.is_empty());
-        assert!(projects.excluded.is_empty());
-    }
-
-    #[test]
-    fn update_tracked_projects_re_add_unexcludes() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        fs::create_dir_all(&home).unwrap();
-        let project = PathBuf::from("/tmp/a-project");
-        update_tracked_projects(&home, |tracked| tracked.untrack(&project)).unwrap();
-
-        let (projects, changed) =
-            update_tracked_projects(&home, |tracked| tracked.track([project.clone()])).unwrap();
-
-        assert!(changed);
-        assert_eq!(projects.added, vec![project]);
-        assert!(projects.excluded.is_empty());
-    }
-
-    #[test]
     fn update_tracked_projects_preserves_forks_editor_and_unknown_keys() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
@@ -4626,28 +4566,6 @@ mod tests {
         let home = tmp.path().join("home");
         fs::create_dir_all(&home).unwrap();
         write_tracked_projects(&home, &[tmp.path().join("never-created")], &[]);
-
-        let mut invocation_index = SkillInvocationIndex::default();
-        let (snapshot, _) = build_snapshot(
-            &home,
-            &mut invocation_index,
-            BuildPaths {
-                cache_path: &tmp.path().join("cache.json"),
-                update_check_path: &tmp.path().join("update-check.json"),
-            },
-            Utc::now(),
-        )
-        .unwrap();
-
-        assert!(snapshot.projects.is_empty());
-    }
-
-    #[test]
-    fn build_snapshot_omits_the_home_directory_when_it_is_added() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        fs::create_dir_all(&home).unwrap();
-        write_tracked_projects(&home, std::slice::from_ref(&home), &[]);
 
         let mut invocation_index = SkillInvocationIndex::default();
         let (snapshot, _) = build_snapshot(

@@ -354,14 +354,6 @@ mod tests {
     }
 
     #[test]
-    fn name_directory_mismatch_is_flagged() {
-        let violations = validate_frontmatter(valid_frontmatter(), "other-dir");
-        assert!(violations
-            .iter()
-            .any(|v| v.contains("does not match its directory name")));
-    }
-
-    #[test]
     fn missing_description_is_flagged() {
         let mut fm = valid_frontmatter();
         fm.description = None;

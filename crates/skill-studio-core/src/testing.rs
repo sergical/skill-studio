@@ -887,6 +887,8 @@ pub struct FailingFs {
     /// parent it wants unreadable rather than counting calls.
     fail_symlink_metadata_for: Mutex<Option<PathBuf>>,
     fail_read_link_for: Mutex<Option<PathBuf>>,
+    /// Every path `read_dir` was called on, in call order.
+    read_dir_calls: Mutex<Vec<PathBuf>>,
 }
 
 impl FailingFs {
@@ -915,7 +917,16 @@ impl FailingFs {
             fail_read_when_present: Mutex::new(None),
             fail_symlink_metadata_for: Mutex::new(None),
             fail_read_link_for: Mutex::new(None),
+            read_dir_calls: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Every path `read_dir` was called on so far, in call order.
+    pub fn read_dir_calls(&self) -> Vec<PathBuf> {
+        self.read_dir_calls
+            .lock()
+            .expect("read_dir_calls lock")
+            .clone()
     }
 
     /// The next `write_atomic` call returns an error instead of reaching
@@ -1130,6 +1141,10 @@ impl ScopeFs for FailingFs {
         self.inner.ancestor_holds(start, name)
     }
     fn read_dir(&self, path: &Path) -> std::io::Result<Vec<DirEntryFacts>> {
+        self.read_dir_calls
+            .lock()
+            .expect("read_dir_calls lock")
+            .push(path.to_path_buf());
         let mut target = self
             .fail_read_dir_for
             .lock()
@@ -2258,5 +2273,39 @@ mod tests {
             .expect("fsync a dir reached through the alias");
         fs.fsops_fsync_file(Path::new("/root/link/renamed/file.txt"))
             .expect("fsync a file reached through the alias");
+    }
+}
+
+/// The core's deployment and owner id builders, exposed so the desktop can
+/// prove its own builders produce the same bytes (`apps/desktop/src-tauri/
+/// tests/wire_id_properties.rs`). Both sides document "byte for byte" parity;
+/// these forwarders let a property test check it instead of trusting the doc.
+pub mod wire_ids {
+    use std::path::Path;
+
+    use crate::identity::{DeploymentId, OwnerId, SkillDestination};
+
+    /// Forwards to the builder `ops` uses for every scanned deployment.
+    pub fn deployment_id(
+        name: &str,
+        scope_label: &str,
+        destination: SkillDestination,
+        slot: &str,
+        project_path: Option<&str>,
+        lexical_entry: &Path,
+    ) -> DeploymentId {
+        crate::ops::deployment_id(
+            name,
+            scope_label,
+            destination,
+            slot,
+            project_path,
+            lexical_entry,
+        )
+    }
+
+    /// Forwards to the builder `ops` uses for skills.sh owners.
+    pub fn owner_id(scope_label: &str, project_path: Option<&str>, skill_name: &str) -> OwnerId {
+        crate::ops::owner_id(scope_label, project_path, skill_name)
     }
 }

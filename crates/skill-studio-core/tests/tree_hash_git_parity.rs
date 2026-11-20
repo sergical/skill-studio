@@ -14,8 +14,13 @@
 //! that git sequence, never copying this module's output back into the
 //! fixtures.
 
+use std::collections::BTreeMap;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use proptest::prelude::*;
 
 use skill_studio_core::lock_file::SkillLockFile;
 use skill_studio_core::tree_hash::tree_hash;
@@ -70,61 +75,112 @@ fn tree_hash_matches_a_git_tree_sha_computed_by_git_for_the_same_folder_or_names
     );
 }
 
-/// Writes `name` under `dir` with `bytes`, then backdates its mtime by
-/// `days_old` days, so two builds of the same tree can carry deliberately
-/// different mtimes.
-fn write_aged(dir: &Path, name: &str, bytes: &[u8], days_old: u64) {
-    let path = dir.join(name);
-    fs::write(&path, bytes).expect("write fixture file");
-    let stamp = std::time::SystemTime::now() - std::time::Duration::from_secs(days_old * 86_400);
-    let file_time = filetime::FileTime::from_system_time(stamp);
-    filetime::set_file_mtime(&path, file_time).expect("backdate mtime");
+/// A generated folder tree. Names are chosen to hit git's sort rule
+/// (`foo` < `foo-bar` < `foo.txt` < `foo/` < `foo0`), and the tree mixes
+/// plain files, executable files, links and empty folders (git drops
+/// folders with no files).
+#[derive(Debug, Clone)]
+enum Node {
+    File {
+        bytes: Vec<u8>,
+        executable: bool,
+        days_old: u64,
+    },
+    Link(String),
+    Dir(BTreeMap<String, Node>),
 }
 
-#[test]
-fn tree_hash_ignores_file_order_and_mtimes_and_changes_only_when_content_or_names_change_or_names_the_false_positive_or_negative(
-) {
-    let fs_adapter = RealFs::new();
+fn node() -> impl Strategy<Value = Node> {
+    let name = prop::sample::select(vec![
+        "foo", "foo-bar", "foo.txt", "foo0", "a", "b b", "SKILL.md",
+    ]);
+    let leaf = prop_oneof![
+        (
+            prop::collection::vec(any::<u8>(), 0..64),
+            any::<bool>(),
+            0u64..400
+        )
+            .prop_map(|(bytes, executable, days_old)| Node::File {
+                bytes,
+                executable,
+                days_old
+            }),
+        prop::sample::select(vec!["foo", "../outside", "a/b b", "missing"])
+            .prop_map(|target| Node::Link(target.to_string())),
+    ];
+    leaf.prop_recursive(3, 24, 5, move |inner| {
+        prop::collection::btree_map(name.clone().prop_map(str::to_string), inner, 0..5)
+            .prop_map(Node::Dir)
+    })
+}
 
-    // Same three files, written in reverse order and given different
-    // mtimes: the hash must not move, since git trees are sorted by name
-    // and carry no mtime.
-    let forward_dir = tempfile::tempdir().expect("tempdir");
-    write_aged(forward_dir.path(), "a.txt", b"alpha", 10);
-    write_aged(forward_dir.path(), "b.txt", b"beta", 5);
-    write_aged(forward_dir.path(), "c.txt", b"gamma", 1);
-    let forward_hash = tree_hash(&fs_adapter, forward_dir.path()).unwrap();
+/// Writes `tree` under `dir`, entries in reverse name order, each file with
+/// its own backdated mtime: git trees are sorted by name and carry no mtime.
+fn write_tree(dir: &Path, tree: &BTreeMap<String, Node>) {
+    for (name, node) in tree.iter().rev() {
+        let path = dir.join(name);
+        match node {
+            Node::File {
+                bytes,
+                executable,
+                days_old,
+            } => {
+                fs::write(&path, bytes).expect("write fixture file");
+                let mode = if *executable { 0o755 } else { 0o644 };
+                fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+                let stamp = std::time::SystemTime::now()
+                    - std::time::Duration::from_secs(days_old * 86_400);
+                filetime::set_file_mtime(&path, filetime::FileTime::from_system_time(stamp))
+                    .expect("backdate mtime");
+            }
+            Node::Link(target) => std::os::unix::fs::symlink(target, &path).unwrap(),
+            Node::Dir(children) => {
+                fs::create_dir(&path).unwrap();
+                write_tree(&path, children);
+            }
+        }
+    }
+}
 
-    let reverse_dir = tempfile::tempdir().expect("tempdir");
-    write_aged(reverse_dir.path(), "c.txt", b"gamma", 1);
-    write_aged(reverse_dir.path(), "b.txt", b"beta", 5);
-    write_aged(reverse_dir.path(), "a.txt", b"alpha", 10);
-    let reverse_hash = tree_hash(&fs_adapter, reverse_dir.path()).unwrap();
-    assert_eq!(
-        forward_hash, reverse_hash,
-        "false negative: write order and mtime alone changed the hash"
-    );
+/// `git add -A && git write-tree` in `dir`, isolated from the user's and
+/// the system's git config.
+fn git_write_tree(dir: &Path) -> String {
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .args(["-c", "core.autocrlf=false", "-c", "core.filemode=true"])
+            .args(["-c", "core.symlinks=true", "-c", "init.defaultBranch=main"])
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("HOME", dir)
+            .output()
+            .expect("run git");
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+    git(&["init", "-q", "--template="]);
+    git(&["add", "-A"]);
+    git(&["write-tree"])
+}
 
-    // Changing one file's content must change the hash.
-    let edited_dir = tempfile::tempdir().expect("tempdir");
-    write_aged(edited_dir.path(), "a.txt", b"ALPHA-EDITED", 10);
-    write_aged(edited_dir.path(), "b.txt", b"beta", 5);
-    write_aged(edited_dir.path(), "c.txt", b"gamma", 1);
-    let edited_hash = tree_hash(&fs_adapter, edited_dir.path()).unwrap();
-    assert_ne!(
-        forward_hash, edited_hash,
-        "false positive: editing a.txt's content left the hash unchanged"
-    );
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
 
-    // Renaming a file (same bytes, different name) must change the hash
-    // too, since the name is part of the tree entry.
-    let renamed_dir = tempfile::tempdir().expect("tempdir");
-    write_aged(renamed_dir.path(), "a-renamed.txt", b"alpha", 10);
-    write_aged(renamed_dir.path(), "b.txt", b"beta", 5);
-    write_aged(renamed_dir.path(), "c.txt", b"gamma", 1);
-    let renamed_hash = tree_hash(&fs_adapter, renamed_dir.path()).unwrap();
-    assert_ne!(
-        forward_hash, renamed_hash,
-        "false positive: renaming a.txt left the hash unchanged"
-    );
+    /// For any generated tree, `tree_hash` equals the SHA git itself writes
+    /// for it. Order, mtimes and the `.git` folder git init creates must not
+    /// move the hash; any content, name, mode or link change moves git's SHA
+    /// and so must move this one.
+    #[test]
+    fn tree_hash_equals_git_write_tree_for_any_tree(tree in prop::collection::btree_map(
+        prop::sample::select(vec!["foo", "foo-bar", "foo.txt", "foo0", "SKILL.md"]).prop_map(str::to_string),
+        node(),
+        1..6,
+    )) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_tree(dir.path(), &tree);
+        let ours = tree_hash(&RealFs::new(), dir.path()).unwrap();
+        let theirs = git_write_tree(dir.path());
+        prop_assert_eq!(ours, theirs, "tree: {:#?}", tree);
+    }
 }

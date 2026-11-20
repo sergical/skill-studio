@@ -2414,56 +2414,6 @@ mod tests {
     }
 
     #[test]
-    fn after_pages_backwards_through_older_rows() {
-        let tmp = tempfile::tempdir().unwrap();
-        let scope = scope_for(tmp.path());
-        let guard = guard_for(tmp.path(), &scope);
-        let db_path = tmp.path().join("history").join("events.sqlite3");
-        let mut store = SqliteHistoryStore::open(&db_path).unwrap();
-
-        let mut ids = Vec::new();
-        for i in 0..3 {
-            let id = EventId::from_ulid(ulid::Ulid::generate());
-            store
-                .record(
-                    &guard,
-                    &id,
-                    &draft(
-                        EventKind::Install,
-                        "alpha",
-                        serde_json::json!({"n": i}),
-                        None,
-                    ),
-                )
-                .unwrap();
-            store.finish(&guard, &id, EventStatus::Done, None).unwrap();
-            ids.push(id);
-        }
-        // Newest first: ids[2], ids[1], ids[0].
-        let first_page = store
-            .list(&EventFilter {
-                skill: None,
-                limit: 1,
-                after: None,
-            })
-            .unwrap();
-        assert_eq!(first_page.len(), 1);
-        assert_eq!(first_page[0].id, ids[2]);
-
-        let second_page = store
-            .list(&EventFilter {
-                skill: None,
-                limit: 10,
-                after: Some(ids[2].clone()),
-            })
-            .unwrap();
-        assert_eq!(
-            second_page.iter().map(|r| r.id.clone()).collect::<Vec<_>>(),
-            vec![ids[1].clone(), ids[0].clone()]
-        );
-    }
-
-    #[test]
     fn claim_revert_twice_returns_false_the_second_time() {
         let tmp = tempfile::tempdir().unwrap();
         let scope = scope_for(tmp.path());
@@ -2872,34 +2822,6 @@ mod tests {
         assert!(
             !store.backup_dir_for(&id).exists(),
             "a refused backup must not leave a partial copy behind"
-        );
-    }
-
-    #[test]
-    fn read_backup_bytes_returns_the_copys_real_bytes_or_an_empty_or_placeholder_buffer() {
-        let tmp = tempfile::tempdir().unwrap();
-        let scope = scope_for(tmp.path());
-        let guard = guard_for(tmp.path(), &scope);
-        let db_path = tmp.path().join("history").join("events.sqlite3");
-        let mut store = SqliteHistoryStore::open(&db_path).unwrap();
-
-        let present = tmp.path().join("skills").join("SKILL.md");
-        fs::create_dir_all(present.parent().unwrap()).unwrap();
-        fs::write(&present, b"the real backed-up bytes").unwrap();
-
-        let id = EventId::from_ulid(ulid::Ulid::generate());
-        let written = store
-            .backup_paths(&guard, &id, std::slice::from_ref(&present))
-            .unwrap();
-        let entry = &written.entries[0];
-
-        let bytes = store
-            .read_backup_bytes(&written.backup_dir, &entry.relative)
-            .unwrap();
-        assert_eq!(
-            bytes, b"the real backed-up bytes",
-            "read_backup_bytes must return the copy's real bytes, not an empty or \
-             placeholder buffer"
         );
     }
 

@@ -71,6 +71,23 @@ Each test name states the flow, the expectation it checks, and the failure
 it catches. A new test must fail without its matching production fix — a
 test that never goes red proves nothing. Do not assert on wall-clock time.
 
+Do not add these tests:
+
+- A second test of a behavior that a test at another level already proves.
+  Extend the existing test instead.
+- A test that checks what it just set up, or that a mock returns what the
+  test told it to return.
+- A test of exact copy, CSS classes, or DOM nesting. Find controls by role and
+  accessible name, and check the outcome.
+- A test of React, Zustand, serde, clap, or another library.
+- A test of code that has no production caller. Delete the code.
+- A table of hand-picked examples for a function with an invariant (round
+  trip, idempotency, confinement). Write a property test (`proptest`,
+  `fast-check`).
+
+There is no coverage target and no retry setting. Fix a flaky test by
+injecting time or state; do not repeat it until it passes.
+
 ## UI rule
 
 Form controls and buttons come from `@skill-studio/ui`
