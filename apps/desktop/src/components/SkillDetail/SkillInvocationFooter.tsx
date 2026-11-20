@@ -133,9 +133,7 @@ export function SkillInvocationFooter({ skill, files }: SkillInvocationFooterPro
 
   return (
     <div className="mt-3 flex flex-col gap-1.5 border-t border-border-subtle pt-3">
-      <span className="text-caption font-medium tracking-[0.08em] text-text-tertiary uppercase">
-        Invocation
-      </span>
+      <span className="text-small font-medium text-text-secondary">Invocation</span>
       {files.length > 1 && (
         <div className="grid min-h-8 grid-cols-[16px_minmax(0,1fr)_auto] items-center gap-2.5 border-b border-border-subtle pb-2">
           <span aria-hidden="true" />

@@ -1,7 +1,7 @@
 // ============================================================================
 // SkillLocationsCard - "Where it lives": one scope block per Global/project,
 // each with the shared-folder accordion (if any) plus every harness's own
-// entry as a flat sibling row, an uppercase scope eyebrow when the skill
+// entry as a flat sibling row, a scope heading when the skill
 // lives in a project, and the Invocation footer (SkillInvocationFooter). Row
 // rendering lives in SkillLocationScope/SkillLocationRow so this file stays
 // under react-doctor's line cap.
@@ -143,7 +143,7 @@ export function SkillLocationsCard({ skill, onCompareCopies }: SkillLocationsCar
             return (
               <div key={group.label} className="flex flex-col not-first:mt-3">
                 {showEyebrows && (
-                  <span className="flex items-baseline justify-between gap-3 px-2 pb-1.5 text-caption font-medium tracking-[0.08em] text-text-tertiary uppercase">
+                  <span className="flex items-baseline justify-between gap-3 px-2 pb-1.5 text-small font-medium text-text-secondary">
                     {group.label}
                     {marker && (
                       <span className="font-normal tracking-normal normal-case">{marker}</span>

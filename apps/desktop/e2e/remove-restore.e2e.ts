@@ -47,7 +47,10 @@ test("a removed skill shows in Activity, and Restore there puts it back on the S
 
   await openSidebarPage(page, "Activity");
   const history = page.getByRole("main");
-  await expect(history.getByText("Removed", { exact: true })).toBeVisible();
+  const removed = history.getByText("Removed", { exact: true });
+  await expect(removed).toBeVisible();
+  // A History row shows Restore while the pointer is on the row.
+  await removed.hover();
   await history.getByRole("button", { name: "Restore" }).click();
 
   await expect(toasts(page).getByText("Restored")).toBeVisible();
