@@ -740,6 +740,7 @@ pub fn print_outdated_table(envelope: &ResultEnvelope<BTreeMap<String, OutdatedR
             Currency::UpdateAvailable => "update_available",
             Currency::NotTracked => "not_tracked",
             Currency::Unknown => "unknown",
+            Currency::MissingOnDisk => "missing_on_disk",
         };
         let latest_sha = record
             .latest_commit
@@ -1358,7 +1359,13 @@ pub fn print_library(envelope: &ResultEnvelope<skill_studio_core::library::Libra
         println!(
             "{}  {}  {}  {}  {}  {}  {}",
             row.name,
-            row.library,
+            if row.missing_on_disk {
+                "missing_on_disk"
+            } else if row.library {
+                "true"
+            } else {
+                "false"
+            },
             row.source.as_deref().unwrap_or("-"),
             row.uses,
             serde_json::json!(row.agents),

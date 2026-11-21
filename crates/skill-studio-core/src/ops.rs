@@ -763,6 +763,7 @@ pub(crate) fn scan_inner(
             .keys()
             .map(String::as_str)
             .chain(ledger.dotagents.iter().map(|entry| entry.name.as_str()))
+            .chain(ledger.project_lock.keys().map(String::as_str))
             .collect();
         for name in names {
             let folder = library_dir(home, scope).join(name);
@@ -935,7 +936,12 @@ fn set_copy_status(
 }
 
 fn ledger_source(ledger: &ownership::ScopeLedgers, name: &str) -> String {
-    let skills_sh = ledger.lock.skills.get(name);
+    let skills_sh = ledger
+        .lock
+        .skills
+        .get(name)
+        .map(|entry| entry.source.as_str())
+        .or_else(|| ledger.project_lock.get(name)?.get("source")?.as_str());
     ledger
         .dotagents
         .iter()
@@ -945,7 +951,7 @@ fn ledger_source(ledger: &ownership::ScopeLedgers, name: &str) -> String {
             crate::dotagents_ledger::github_repo_from_source(source)
                 .unwrap_or_else(|| "manual".into())
         })
-        .or_else(|| skills_sh.map(|entry| entry.source.clone()))
+        .or_else(|| skills_sh.map(str::to_owned))
         .unwrap_or_else(|| "manual".into())
 }
 
@@ -2754,7 +2760,7 @@ fn classify_owner(cx: &OwnerClassifyContext) -> (LifecycleOwnerKind, Option<Owne
     };
 
     let skills_sh_entry = lock_file::is_skill_installed(&ledger.lock, cx.skill_name)
-        || ledger.project_lock_skills.contains(cx.skill_name);
+        || ledger.project_lock.contains_key(cx.skill_name);
     // `dotagents sync` adopts any undeclared folder in the universal root as
     // a `path:` row - a local folder with no upstream. That row must not
     // outrank (or make ambiguous) a ledger that does have an upstream for
@@ -3853,7 +3859,7 @@ fn outdated_body(
         .iter()
         .filter_map(outdated_target)
         .collect();
-    let result = crate::skill_update_check::outdated(
+    let mut result = crate::skill_update_check::outdated(
         rt.ports.fs.as_ref(),
         &rt.scope.home.lexical,
         &targets,
@@ -3861,6 +3867,12 @@ fn outdated_body(
         commit_lookup,
         plugin_lookup,
     );
+    for entry in inventory.lock_only {
+        result.entry(entry.name.0).or_insert_with(|| {
+            use crate::skill_update_check::{Currency, OutdatedRecord};
+            OutdatedRecord::bare(Currency::MissingOnDisk)
+        });
+    }
     ctx.record_timing(crate::timing::op_timing(
         clock,
         "outdated",

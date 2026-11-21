@@ -47,6 +47,8 @@ pub enum Currency {
     /// malformed lock file must resolve every skills.sh skill to `Unknown`,
     /// never silently to `UpToDate` or `UpdateAvailable`.
     Unknown,
+    /// A lock file lists the skill, but its folder is missing.
+    MissingOnDisk,
 }
 
 /// A commit's identity and when it landed, returned by [`CommitLookup`].
@@ -92,9 +94,8 @@ pub struct OutdatedRecord {
 }
 
 impl OutdatedRecord {
-    /// A record with no installed/latest side and no error - `NotTracked`,
-    /// or the "no entry found" shade of `Unknown`.
-    fn bare(currency: Currency) -> Self {
+    /// A currency verdict with no comparison or lookup error.
+    pub(crate) fn bare(currency: Currency) -> Self {
         Self {
             currency,
             installed_commit: None,
