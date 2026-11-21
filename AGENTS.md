@@ -471,11 +471,17 @@ The shared guard proposed in #531 was not built; #531 was also closed. Before yo
    version change, deploy or secret files, a new dependency, a change to
    `package.json` scripts, workflows, `.githooks/`, `.gate/` or `deny.toml`, and
    policy files. The rules
-   are in `.gate/config.toml`. The owner merges these PRs. Start your reply
-   with `Needs you: #<number> <the one decision>`, then stop. Do not wait for
-   the merge, use `--admin`, or remove the label.
-7. If the review still fails after 2 rounds of fixes, stop and start your reply
-   with `Needs you:` and the disagreement.
+   are in `.gate/config.toml`. The owner merges these PRs. The workflow posts a
+   `Needed from you and why` comment on the PR: the decision, why a person must
+   make it, and the files and rule that matched. Start your reply with
+   `Needs you: #<number> <the one decision>`. End it with that section: link
+   the PR, copy the comment, and add your pick and why. Then stop. Do not wait
+   for the merge, use `--admin` without the owner's go-ahead in the chat, or
+   remove the label.
+7. Review rounds follow the `diff-review` skill. If the review still fails
+   after 2 rounds of fixes, stop and start your reply with `Needs you:` and
+   the disagreement. Findings still open at the end go in your
+   `Needed from you and why` section.
 
 ## Reference docs
 

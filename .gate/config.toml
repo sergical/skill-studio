@@ -21,12 +21,77 @@ base = "origin/main"
 repository = "sergical/skill-studio"
 version_files = ["**/package.json", "package.json", "**/Cargo.toml", "Cargo.toml", "**/tauri*.json"]
 dependency_files = ["**/package.json", "package.json", "**/Cargo.toml", "Cargo.toml"]
+lock_files = ["pnpm-lock.yaml", "**/pnpm-lock.yaml"]
 patch_bots = ["dependabot[bot]", "app/dependabot"]
+
+# What the owner decides for each stop rule, and why a person must decide it.
+# gate-risk posts this text on the PR. The agent copies it into its reply.
+# The rule ids version, dependencies, check-scripts and policy-change come
+# from gate.py, not from [[rules]].
+[owner.release]
+ask = "Ship a new release to users?"
+why = "A release reaches every user who installs or updates Skill Studio. It cannot be taken back from their machines."
+
+[owner.version]
+ask = "Change the version number?"
+why = "The version decides what users get when they update. A wrong number can skip a release or ship one twice."
+
+[owner.dependencies]
+ask = "Accept this outside package change?"
+why = "A new package is code we did not write, and it runs with full access to users' skill files. You decide which outside code we trust."
+
+[owner.check-scripts]
+ask = "Change the commands that check every PR?"
+why = "These scripts decide what passing means. An agent must not change the test that grades its own work."
+
+[owner.gate-policy]
+ask = "Change the checks or the merge rules?"
+why = "These files decide when an agent PR merges without you. An agent must not loosen the rules that judge its own work."
+
+[owner.policy-change]
+ask = "Change the merge rules in .gate/config.toml?"
+why = "This file decides which PRs need you. An agent must not change who reviews its own work."
+
+[owner.deploy-secrets]
+ask = "Change the live server or its secrets?"
+why = "CI cannot test a deploy. A mistake breaks the server for every user or leaks a key."
+
+[owner.policy]
+ask = "Change the license or a project policy?"
+why = "These are legal and project promises made in your name."
 
 [[rules]]
 id = "release"
 tier = "stop"
 paths = ["**/release.yml", "packages/npm/**", "**/tauri.release.conf.json", "scripts/release/**"]
+
+# pnpm overrides, build permissions, install hooks and patches can swap in or
+# change outside code without a package.json change.
+[[rules]]
+id = "dependencies"
+tier = "stop"
+paths = [
+  "pnpm-workspace.yaml",
+  "**/pnpm-workspace.yaml",
+  ".npmrc",
+  "**/.npmrc",
+  ".pnpmfile.*",
+  "**/.pnpmfile.*",
+  "*.patch",
+  "**/*.patch",
+  "package.json5",
+  "**/package.json5",
+  "package.yaml",
+  "**/package.yaml",
+  "package-lock.json",
+  "**/package-lock.json",
+  "npm-shrinkwrap.json",
+  "**/npm-shrinkwrap.json",
+  "yarn.lock",
+  "**/yarn.lock",
+  "bun.lock*",
+  "**/bun.lock*",
+]
 
 [[rules]]
 id = "gate"
@@ -53,8 +118,7 @@ tier = "stop"
 paths = [
   ".gate/*.toml",
   ".gate/.gitignore",
-  "scripts/gate/gate",
-  "scripts/gate/gate.py",
+  "scripts/gate/**",
   ".github/workflows/**",
   ".githooks/**",
   "deny.toml",
