@@ -36,6 +36,10 @@ fn scan(request: &ScanRequest) -> Inventory {
         .alias("/home/.agents/skills/linked-gone", "/home/elsewhere/gone");
     fixture = fixture.file("/home/.agents/.skill-lock.json", br#"{"version":3,"skills":{"linked-gone":{"source":"owner/linked","sourceType":"github","sourceUrl":"https://github.com/owner/linked","skillFolderHash":"hash","installedAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z"},"tracked":{"source":"owner/repo","sourceType":"github","sourceUrl":"https://github.com/owner/repo","skillFolderHash":"hash","installedAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z"},"missing":{"source":"owner/gone","sourceType":"github","sourceUrl":"https://github.com/owner/gone","skillFolderHash":"hash","installedAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z"}}}"#)
         .file("/home/.agents/agents.lock", b"[skills.dot]\nsource = \"git:https://github.com/dot/repo.git\"\n[skills.dot-missing]\nsource = \"dot/gone\"\n");
+    ops::scan(&runtime(fixture, "scan-source"), &ctx(), request).unwrap()
+}
+
+fn runtime(fixture: FixtureBuilder, scope: &str) -> Runtime {
     let ports = Ports {
         fs: Arc::new(fixture.build_fs()),
         clock: Arc::new(FakeClock::at(0)),
@@ -50,8 +54,7 @@ fn scan(request: &ScanRequest) -> Inventory {
         telemetry: Arc::new(skill_studio_core::ports::NoopTelemetry),
         scan_memo: None,
     };
-    let runtime = Runtime::new(&scope_for("scan-source", Path::new("/home")), ports).unwrap();
-    ops::scan(&runtime, &ctx(), request).unwrap()
+    Runtime::new(&scope_for(scope, Path::new("/home")), ports).unwrap()
 }
 
 #[test]
@@ -160,4 +163,100 @@ fn scan_lists_a_locked_broken_link_as_a_skill_or_loses_it_from_both_lists() {
         .unwrap();
     assert_eq!(skill.source, "owner/linked");
     assert!(result.lock_only.iter().all(|e| e.name.0 != "linked-gone"));
+}
+
+fn missing_locked_skills() -> Runtime {
+    runtime(
+        FixtureBuilder::new()
+            .dir("/home/proj")
+            .file(
+                "/home/.agents/.skill-lock.json",
+                br#"{"version":3,"skills":{"home-missing":{"source":"owner/repo","sourceType":"github","sourceUrl":"https://github.com/owner/repo","skillFolderHash":"hash","installedAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z"}}}"#,
+            )
+            .file(
+                "/home/proj/skills-lock.json",
+                br#"{"version":1,"skills":{"project-missing":{"source":"owner/repo","sourceType":"github","computedHash":"hash"}}}"#,
+            )
+            .file("/home/proj/agents.lock", b"[skills.dot-missing]\nsource = \"owner/repo\"\n"),
+        "project",
+    )
+}
+
+struct UnusedLookup;
+
+impl skill_studio_core::skill_update_check::SourceTreeLookup for UnusedLookup {
+    fn tree_shas_at_head(
+        &self,
+        repo: &str,
+    ) -> Result<std::collections::HashMap<String, String>, skill_studio_core::CoreError> {
+        panic!("missing folders must not require an upstream lookup: {repo}")
+    }
+}
+
+impl skill_studio_core::skill_update_check::CommitLookup for UnusedLookup {
+    fn latest_commit(
+        &self,
+        repo: &str,
+        _path: &str,
+    ) -> Result<
+        Option<skill_studio_core::skill_update_check::CommitInfo>,
+        skill_studio_core::CoreError,
+    > {
+        panic!("missing folders must not require an upstream lookup: {repo}")
+    }
+}
+
+impl skill_studio_core::skill_update_check::PluginManifestLookup for UnusedLookup {
+    fn marketplace_version(
+        &self,
+        _marketplace: &str,
+        plugin: &str,
+    ) -> Result<Option<String>, skill_studio_core::CoreError> {
+        panic!("missing folders must not require an upstream lookup: {plugin}")
+    }
+}
+
+#[test]
+fn outdated_reports_missing_locked_skills_in_home_and_project() {
+    let records = ops::outdated(
+        &missing_locked_skills(),
+        &ctx(),
+        &ScanRequest::default(),
+        &UnusedLookup,
+        &UnusedLookup,
+        &UnusedLookup,
+    )
+    .unwrap();
+    let records = serde_json::to_value(records).unwrap();
+    for name in ["home-missing", "project-missing", "dot-missing"] {
+        assert_eq!(
+            records[name]["currency"], "missing_on_disk",
+            "{name}: {records}"
+        );
+    }
+}
+
+#[test]
+fn library_reports_missing_locked_skills_in_home_and_project_by_source() {
+    let runtime = missing_locked_skills();
+    let context = ctx();
+    let inventory = ops::scan_for_usage(&runtime, &context).unwrap();
+    let request = skill_studio_core::library::LibraryRequest {
+        source: Some("owner/repo".into()),
+        ..Default::default()
+    };
+    let report =
+        skill_studio_core::library::library(&runtime, &context, &inventory, &[], &request, false)
+            .unwrap();
+    assert_eq!(report.count, 3, "{report:?}");
+    assert_eq!(report.used, 0);
+    let rows = serde_json::to_value(report.rows).unwrap();
+    for (index, name) in ["dot-missing", "home-missing", "project-missing"]
+        .into_iter()
+        .enumerate()
+    {
+        assert_eq!(rows[index]["name"], name);
+        assert_eq!(rows[index]["source"], "owner/repo");
+        assert_eq!(rows[index]["missing_on_disk"], true);
+    }
 }

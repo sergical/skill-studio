@@ -150,6 +150,35 @@ fn exercise(flow: &str, surface: Surface) {
             );
         }
 
+        "Missing locked skills" => {
+            std::fs::write(
+                f.home.path().join(".agents/.skill-lock.json"),
+                br#"{"version":3,"skills":{"missing":{"source":"owner/repo","sourceType":"github","sourceUrl":"https://github.com/owner/repo","skillFolderHash":"hash","installedAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z"}}}"#,
+            )
+            .unwrap();
+            let outdated = f.call(
+                &["outdated", "--skill", "missing"],
+                "outdated",
+                "outdated",
+                &json!({"skills": ["missing"]}),
+            );
+            let library = f.call(
+                &["library", "--source", "owner/repo"],
+                "library",
+                "library",
+                &json!({"source": "owner/repo"}),
+            );
+            assert_eq!(
+                outdated["data"]["missing"]["currency"], "missing_on_disk",
+                "{outdated}"
+            );
+            assert_eq!(library["data"]["rows"][0]["name"], "missing", "{library}");
+            assert_eq!(
+                library["data"]["rows"][0]["missing_on_disk"], true,
+                "{library}"
+            );
+        }
+
         "Usage history" => {
             for root in [
                 ".claude/projects/work",
@@ -481,6 +510,7 @@ macro_rules! executable_coverage {
 executable_coverage! {
     "Library table" => (cli_library_reports_shared_skill, mcp_library_reports_shared_skill),
     "Library table with a project" => (cli_library_with_a_project_reports_its_skills_or_names_the_missing_one, mcp_library_with_a_project_reports_its_skills_or_names_the_missing_one),
+    "Missing locked skills" => (cli_reports_missing_locked_skills, mcp_reports_missing_locked_skills),
     "Usage history" => (cli_usage_history_counts_uses_or_names_the_missing_evidence, mcp_usage_history_counts_uses_or_names_the_missing_evidence),
     "Invocation policy" => (cli_invocation_manual_sets_both_keys_or_names_the_auto_copy, mcp_invocation_manual_sets_both_keys_or_names_the_auto_copy),
     "Invocation check" => (cli_invocation_check_reports_mismatch_or_names_the_missing_policy, mcp_invocation_check_reports_mismatch_or_names_the_missing_policy),

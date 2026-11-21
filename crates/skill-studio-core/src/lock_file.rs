@@ -6,7 +6,7 @@
 //! home root (from [`crate::scope::NormalizedScope`]) and read the bytes
 //! through [`crate::ports::ScopeFs::read_capped`].
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -340,12 +340,27 @@ pub fn project_lock_file_path(project: &Path) -> PathBuf {
     project.join(PROJECT_LOCK_FILE_NAME)
 }
 
-/// Only the key set of a v1 `skills-lock.json`'s `skills` map - every other
-/// field is per-entry provenance `is_skill_installed`'s callers don't need.
-#[derive(Debug, Clone, Deserialize, Default)]
-struct ProjectLockFile {
+#[derive(Deserialize)]
+#[serde(bound(deserialize = "Entry: Deserialize<'de>"))]
+struct ProjectLockFile<Entry> {
     #[serde(default)]
-    skills: HashMap<String, serde_json::Value>,
+    skills: BTreeMap<String, Entry>,
+}
+
+/// Reads the rows of a project lock. Pass raw JSON for scans that can still use
+/// a skill name when its provenance is incomplete.
+pub(crate) fn read_project_lock_entries<Entry: for<'de> Deserialize<'de>>(
+    fs: &dyn ScopeFs,
+    path: &Path,
+) -> Result<BTreeMap<String, Entry>, CoreError> {
+    let bytes = match fs.read_capped(path, LOCK_FILE_MAX_BYTES) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(e) => return Err(CoreError::io(path, e)),
+    };
+    serde_json::from_slice::<ProjectLockFile<Entry>>(&bytes)
+        .map(|file| file.skills)
+        .map_err(|e| CoreError::new(ErrorCode::Io, format!("cannot parse: {e}")).at(path))
 }
 
 /// The skill names a project-scope `skills-lock.json` at `path` names, or an
@@ -353,11 +368,8 @@ struct ProjectLockFile {
 /// matching [`read_lock_file`]'s "no ledger" behavior instead of failing a
 /// scan over a file `npx skills` may not have written yet.
 pub fn read_project_lock_skill_names(fs: &dyn ScopeFs, path: &Path) -> HashSet<String> {
-    let Ok(bytes) = fs.read_capped(path, LOCK_FILE_MAX_BYTES) else {
-        return HashSet::new();
-    };
-    serde_json::from_slice::<ProjectLockFile>(&bytes)
-        .map(|f| f.skills.into_keys().collect())
+    read_project_lock_entries::<serde_json::Value>(fs, path)
+        .map(|skills| skills.into_keys().collect())
         .unwrap_or_default()
 }
 

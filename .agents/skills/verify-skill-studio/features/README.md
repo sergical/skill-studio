@@ -25,13 +25,14 @@ this index, then use the matching feature file as the recipe.
 
 ## Features
 
-| File                                     | Feature                         | Entry points                                                          |
-| ---------------------------------------- | ------------------------------- | --------------------------------------------------------------------- |
-| [add-from-repo.md](add-from-repo.md)     | Add skills from a repo or pack  | `pack add`, `add`, Add Skill sheet, Packs → Add N new                 |
-| [pack-update.md](pack-update.md)         | Update a pack or every pack     | `pack update`, `update`, Packs → Update / Update all, Home Update all |
-| [undo.md](undo.md)                       | Undo one change                 | `restore --event-id`, `undo`, Activity                                |
-| [park-unpark.md](park-unpark.md)         | Turn skills off and on          | `park`, `unpark`, selection bar Park / Unpark                         |
-| [desktop-harness.md](desktop-harness.md) | Desktop UI flows on the harness | `pnpm --filter skill-studio run test:e2e`                             |
+| File                                                 | Feature                            | Entry points                                                          |
+| ---------------------------------------------------- | ---------------------------------- | --------------------------------------------------------------------- |
+| [add-from-repo.md](add-from-repo.md)                 | Add skills from a repo or pack     | `pack add`, `add`, Add Skill sheet, Packs → Add N new                 |
+| [pack-update.md](pack-update.md)                     | Update a pack or every pack        | `pack update`, `update`, Packs → Update / Update all, Home Update all |
+| [missing-locked-skills.md](missing-locked-skills.md) | Report lock entries with no folder | `outdated`, `library --source <source>`                               |
+| [undo.md](undo.md)                                   | Undo one change                    | `restore --event-id`, `undo`, Activity                                |
+| [park-unpark.md](park-unpark.md)                     | Turn skills off and on             | `park`, `unpark`, selection bar Park / Unpark                         |
+| [desktop-harness.md](desktop-harness.md)             | Desktop UI flows on the harness    | `pnpm --filter skill-studio run test:e2e`                             |
 
 ## Feature entry contract
 
