@@ -29,9 +29,12 @@ Add a stdio MCP server named `skill-studio` with the command `npx` and the argum
 - Find skills that have copies with different content.
 - Check how much of each agent's skill listing budget your skills use.
 - Fix broken skills.
+- List hook events, MCP server names and instruction file paths.
+- Set or clear a review date.
 - Park and unpark skills. Parking turns a skill off for every agent.
 - Turn a skill off for one agent only. The agent checks first, then splits the shared skill and parks one copy.
 - Set whether a skill runs only when you ask for it, or when the model picks it too.
+- Split a shared skill into separate copies for selected agents.
 - Remove a duplicate copy.
 - Install skills, find skills that have a newer version, and update them.
 - List past changes and restore one.
@@ -46,4 +49,4 @@ Find my unused and broken skills and park the ones I don't need.
 
 ## Undo
 
-Each change that your agent makes goes into the same history that the app shows. To undo a change, open **Activity** in the app and select **Restore**, or run `npx skill-studio@latest undo`. To undo a park, unpark the skill.
+Changes with a restore action appear in the same history as app changes. Open **Activity** and select **Restore**, or use `restore_event` with the event ID. The CLI command `npx skill-studio@latest undo` tries the latest change. To reverse a park, use `unpark`. To reverse an unpark, use `park`.

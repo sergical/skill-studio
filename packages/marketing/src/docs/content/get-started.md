@@ -53,7 +53,7 @@ You can browse and install thousands of skills from skills.sh.
 2. Select **Browse skills.sh**.
 3. Find a skill, then install it.
 
-Skill Studio installs skills with the `npx skills` command, so the skills stay in step with the `skills` lock file.
+Choose an install method before you install. The skills.sh method uses `npx skills` and tracks the install in its lock file. The dotagents method uses dotagents and tracks the install in `agents.toml`. You can also install a local copy.
 
 ## Privacy
 

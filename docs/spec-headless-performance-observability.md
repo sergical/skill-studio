@@ -121,20 +121,25 @@ Inverse paths cannot escape the authorized scope through traversal or changed pa
 
 ## CLI contract
 
-Initial commands are `scan`, `doctor`, `capabilities`, `repair preview`, `repair apply`, `history`, and `restore`. These names are proposed public commands. `mcp serve` starts the later local MCP interface.
+Run `skill-studio --help` for the public command list and
+`skill-studio <command> --help` for that command's flags. The
+[CLI contract snapshot](../.gate/snapshots/cli.snap) also records the internal
+commands, including `capabilities`, `preview-repair` and `apply-repair`.
+Use `events` (alias `history`) to list changes, `restore` to reverse one
+and `mcp` to start the local MCP server.
 
 The CLI accepts an explicit project scope and isolated fixture roots. It supports human output and `--json`. JSON mode emits one versioned terminal result to stdout. Logs and progress use stderr. MCP mode reserves stdout for protocol messages.
 
 The result envelope contains `schema_version`, `operation`, `scope`, `status`, `data`, and `errors`. Error entries use stable codes and bounded, sanitized messages. Relevant results include deployment IDs, a correlation ID, and an audit event ID when one exists.
 
-| Exit status | Meaning                                                   |
-| ----------- | --------------------------------------------------------- |
-| 0           | Operation succeeded; `doctor` found no issues             |
-| 1           | `doctor` completed and found issues                       |
-| 2           | Invalid request, unsupported action, or execution failure |
-| 3           | Busy scope, stale proposal, or drift conflict             |
-| 4           | Incomplete scan or diagnosis                              |
-| 130         | Caller cancellation                                       |
+| Exit status | Meaning                                                                 |
+| ----------- | ----------------------------------------------------------------------- |
+| 0           | Operation completed without findings                                    |
+| 1           | Operation completed with findings or all items in a batch update failed |
+| 2           | Invalid request, unsupported action, or execution failure               |
+| 3           | Busy scope, stale proposal, or drift conflict                           |
+| 4           | Partial result                                                          |
+| 130         | Caller cancellation                                                     |
 
 Incomplete diagnosis takes precedence over issue status. Consumers use structured error codes for detail. Commands never prompt interactively in JSON mode. A required trust or force choice returns an actionable error when absent.
 
@@ -142,9 +147,9 @@ Commands run synchronously and return terminal results. Existing expiring in-mem
 
 ## Local MCP contract
 
-The agent client launches `skill-studio mcp serve` on the machine containing the skills. The process uses the same runtime scope and core methods as the CLI.
+The agent client launches `skill-studio mcp` on the machine containing the skills. The process uses the same runtime scope and core methods as the CLI.
 
-Initial tools correspond to scan, diagnosis, capabilities, repair preview, repair apply, history, and restore. Tool schemas preserve the CLI's target, conflict, and completeness semantics. Tool descriptions state effects and restrictions. Tool annotations are advisory; the core enforces the actual policy.
+See the [MCP contract snapshot](../.gate/snapshots/mcp.snap) for the tools published by default. Tool schemas preserve the CLI's target, conflict, and completeness semantics. Tool descriptions state effects and restrictions. Tool annotations are advisory; the core enforces the actual policy.
 
 Read tools do not run recovery or background maintenance. Write tools require the same bound proposal and lease as CLI and Tauri. A tool cannot substitute an arbitrary path for an exact deployment target. The local server does not expose an unrestricted shell tool.
 

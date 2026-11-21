@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import posixpath
 import re
 import subprocess
 import sys
@@ -50,13 +51,18 @@ def matches(path, patterns):
 
 
 def classify(cfg, base, head='HEAD', raise_to=None, reason=None, author=''):
-    files = git('diff', '--name-only', '--no-renames', base, head).splitlines()
+    # -z gives raw names. Without it, git quotes a name with a backslash or a
+    # control character, and the quoted name matches no rule.
+    files = [f for f in subprocess.check_output(['git', 'diff', '--name-only', '--no-renames', '-z', base, head], text=True).split('\0') if f]
     hits = []
     if read_at(base, '.gate/config.toml') != read_at(head, '.gate/config.toml'):
         hits.append({'rule': 'policy-change', 'tier': 'stop', 'files': ['.gate/config.toml']})
+    migrations = cfg.get('additive_migrations', {})
     for rule in cfg.get('rules', []):
         affected = [p for p in files if matches(p, rule['paths'])]
-        if affected:
+        if affected and rule['id'] == migrations.get('rule') and additive_migration(migrations, base, head, affected):
+            hits.append({'rule': rule['id'], 'tier': 'ship', 'files': affected, 'reason': 'a migration that only adds'})
+        elif affected:
             hits.append({'rule': rule['id'], 'tier': rule['tier'], 'files': affected})
     for path in files:
         if not matches(path, cfg.get('version_files', []) + cfg.get('dependency_files', [])):
@@ -67,13 +73,23 @@ def classify(cfg, base, head='HEAD', raise_to=None, reason=None, author=''):
                 hits.append({'rule': 'version', 'tier': 'stop', 'files': [path]})
         if path.endswith('package.json') and old and new and json.loads(old).get('scripts') != json.loads(new).get('scripts'):
             hits.append({'rule': 'check-scripts', 'tier': 'stop', 'files': [path]})
+        if path.endswith('package.json') and installers(old) != installers(new):
+            hits.append({'rule': 'dependencies', 'tier': 'stop', 'files': [path]})
         if matches(path, cfg.get('dependency_files', [])):
             before, after = dependencies(path, old), dependencies(path, new)
-            added = set(after) - set(before)
+            # A new name, or the same name from another source (an npm alias,
+            # a git URL, a local path), is outside code we have not trusted.
+            # Removing an override from another source puts a different package
+            # back in the tree. Removing a dependency adds no code.
+            added = (set(after) - set(before)) | {k for k in set(before) & set(after) if source(before[k]) != source(after[k])} | {
+                k for k in set(before) - set(after) if source(before[k]) and k.startswith(('overrides/', 'resolutions/', 'pnpm/overrides/'))}
             patch = author in cfg.get('patch_bots', []) and set(before) == set(after) and all(
                 before.get(k) == v or patch_bump(before.get(k, ''), v) for k, v in after.items())
             if added or (author in cfg.get('patch_bots', []) and not patch):
                 hits.append({'rule': 'dependencies', 'tier': 'stop', 'files': [path]})
+    for path in files:
+        if matches(path, cfg.get('lock_files', [])) and lock_adds_outside_code(base, head, path):
+            hits.append({'rule': 'dependencies', 'tier': 'stop', 'files': [path]})
     tier = max((h['tier'] for h in hits), key=TIERS.index, default='ship')
     if raise_to:
         if not reason:
@@ -82,7 +98,258 @@ def classify(cfg, base, head='HEAD', raise_to=None, reason=None, author=''):
             raise ValueError('The minimum tier cannot be lowered')
         hits.append({'rule': 'manual', 'tier': raise_to, 'reason': reason})
         tier = raise_to
-    return {'tier': tier, 'reasons': hits, 'base': base, 'head': git('rev-parse', head)}
+    return {'tier': tier, 'reasons': hits, 'needs_you': needs_you(cfg, hits), 'base': base, 'head': git('rev-parse', head)}
+
+
+TABLE = r'(?:"public"\.)?"(?P<t>\w+)"'
+COLUMN_TYPE = (r'(?:text|uuid|boolean|integer|bigint|smallint|real|double precision|jsonb|json|date|bytea|interval'
+               r'|timestamptz|timestamp(?: \(\d\))?(?: with(?:out)? time zone)?'
+               r'|(?:varchar|character varying|char|numeric)(?: ?\(\d+(?:, ?\d+)?\))?)(?:\[\])?')
+CONSTANT = rf"-?\d+(?:\.\d+)?|'\?'(?:::{COLUMN_TYPE})?|true|false|null"
+
+
+def statements(sql):
+    """Split SQL the way drizzle and then PostgreSQL read it: drizzle sends each
+    chunk between `--> statement-breakpoint` markers as its own command, even a
+    marker inside a comment or string. PostgreSQL drops `--` comments and keeps
+    quoted text whole. Each string literal comes back as '?'. None when the text
+    holds what this reader does not model: anything but printable ASCII, tabs and
+    line breaks, block comments, dollar quotes, backslashes, or a quoted name
+    that is not letters, digits and underscores."""
+    if re.search(r'[^\t\n\r\x20-\x7e]|/\*|\$|\\', sql):
+        return None
+    out = []
+    for chunk in sql.split('--> statement-breakpoint'):
+        part = chunk_statements(chunk)
+        if part is None:
+            return None
+        out += part
+    return out
+
+
+def chunk_statements(sql):
+    out, current, i = [], '', 0
+    while i < len(sql):
+        c = sql[i]
+        if c in '\'"':
+            j = i + 1
+            while True:
+                j = sql.find(c, j)
+                if j < 0:
+                    return None
+                if sql[j + 1:j + 2] != c:
+                    break
+                j += 2
+            if c == '"' and not re.fullmatch(r'\w+', sql[i + 1:j]):
+                return None
+            current += sql[i:j + 1] if c == '"' else "'?'"
+            i = j + 1
+        elif sql.startswith('--', i):
+            end = re.compile(r'[\r\n]').search(sql, i)
+            i = end.start() if end else len(sql)
+        elif c == ';':
+            out.append(current)
+            current, i = '', i + 1
+        else:
+            current, i = current + c, i + 1
+    return [' '.join(x.split()) for x in out + [current] if x.strip()]
+
+
+def balanced(text):
+    depth = 0
+    for c in text:
+        depth += {'(': 1, ')': -1}.get(c, 0)
+        if depth < 0:
+            return False
+    return depth == 0
+
+
+def adds_only(sql):
+    """True when each statement adds a table, an index or foreign key on a table the
+    same file creates, or a column that is nullable or has a constant default."""
+    parts = statements(sql)
+    if not parts:
+        return False
+    tables = [re.fullmatch(rf'CREATE TABLE {TABLE} \((?P<body>.*)\)', s, re.I) for s in parts]
+    created = {m['t'] for m in tables if m and balanced(m['body'])}
+    for s, table in zip(parts, tables):
+        if table and table['t'] in created:
+            continue
+        on_new = (re.fullmatch(rf'CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?"\w+" ON {TABLE}(?: USING \w+)? \(.*\)(?: WHERE .*)?', s, re.I)
+                  or re.fullmatch(rf'ALTER TABLE {TABLE} ADD CONSTRAINT "\w+" FOREIGN KEY \([^()]*\) REFERENCES (?:"public"\.)?"\w+" ?\([^()]*\)'
+                                  r'(?: ON (?:DELETE|UPDATE) (?:no action|cascade|set null|set default|restrict))*', s, re.I))
+        if on_new and on_new['t'] in created:
+            continue
+        column = re.fullmatch(rf'ALTER TABLE {TABLE} ADD COLUMN (?:IF NOT EXISTS )?"\w+" {COLUMN_TYPE}(?: DEFAULT (?P<v>{CONSTANT}))?(?P<required> NOT NULL)?', s, re.I)
+        if column and ((column['v'] and column['v'].lower() != 'null') or not column['required']):
+            continue
+        return False
+    return True
+
+
+def additive_migration(spec, base, head, files):
+    """True when the matched files are new migrations that only add, their new
+    snapshots, schema files, and journal entries appended after every older one."""
+    out = subprocess.check_output(['git', 'diff', '--name-status', '--no-renames', '-z', base, head], text=True).split('\0')
+    status = dict(zip(out[1::2], out[0::2]))
+    folder, journal = Path(spec['dir']), spec['journal']
+    sql = [f for f in files if status.get(f) == 'A' and Path(f).parent == folder and f.endswith('.sql')]
+    for f in files:
+        if f in sql or f == journal and status.get(f) == 'M' or f in spec.get('schema', []) and status.get(f) == 'M':
+            continue
+        if status.get(f) == 'A' and Path(f).parent == folder / 'meta' and f.endswith('_snapshot.json'):
+            continue
+        return False
+    if not sql or journal not in files or not all(adds_only(read_at(head, f)) for f in sql):
+        return False
+    try:
+        before = json.loads(read_at(base, journal))['entries']
+        after = json.loads(read_at(head, journal))['entries']
+        added = after[len(before):]
+        times = [max((e['when'] for e in before), default=float('-inf'))] + [e['when'] for e in added]
+        return (after[:len(before)] == before and sorted(str(folder / f"{e['tag']}.sql") for e in added) == sorted(sql)
+                and all(a < b for a, b in zip(times, times[1:])))
+    except (ValueError, KeyError, TypeError):
+        return False
+
+
+def needs_you(cfg, hits):
+    """One entry per stop rule: what the owner decides, why a person must, and the files."""
+    texts, grouped = cfg.get('owner', {}), {}
+    for hit in hits:
+        if hit['tier'] != 'stop':
+            continue
+        text = texts.get(hit['rule'], {})
+        if not (str(text.get('ask', '')).strip() and str(text.get('why', '')).strip()):
+            text = {
+                'ask': hit.get('reason') or f"Merge this PR? Rule `{hit['rule']}` matched.",
+                'why': 'An agent raised this PR to stop by hand.' if hit['rule'] == 'manual'
+                else f"`.gate/config.toml` has no complete [owner.{hit['rule']}] text yet.",
+            }
+        item = grouped.setdefault(hit['rule'], {'rule': hit['rule'], 'ask': text['ask'], 'why': text['why'], 'files': []})
+        item['files'] += [f for f in hit.get('files', []) if f not in item['files']]
+    return list(grouped.values())
+
+
+# The shapes pnpm writes. A key is single-quoted or a plain name; a plain
+# version may carry peer versions in parentheses.
+LOCK_KEY = r"(?:'[^'\t]*'|[A-Za-z0-9_/.^~-][^\s:]*)"
+LOCK_LINK = r"link:([^\s'\"\\]+)"
+PEER = r"\([\w@/.+=-]+\)"
+
+
+def lockfile_outside_link_targets(path, text):
+    """Resolve pnpm's importer links relative to the lockfile and importer.
+
+    Raise if a link or its importer is outside the block syntax we understand.
+    A lockfile can have a separate pnpm bootstrap document before the workspace.
+    """
+    outside, importers = set(), set()
+    in_importers, importer = False, None
+    for line in text.split('\n'):
+        if not line.strip() or line.lstrip(' ').startswith('#'):
+            continue
+        if not line.startswith(' '):
+            in_importers = line == 'importers:'
+            importer = None
+            importers.clear()
+        elif in_importers and not line.startswith('    '):
+            entry = re.fullmatch(rf'  ({LOCK_KEY}):( \{{\}})?', line)
+            if not entry:
+                raise ValueError('Cannot parse pnpm lockfile importer')
+            folder = entry[1].strip("'")
+            if not re.fullmatch(r'[\w./@+~-]+', folder) or folder in importers:
+                raise ValueError('Cannot parse pnpm lockfile importer path')
+            importers.add(folder)
+            importer = None if entry[2] else folder
+        elif in_importers and importer is None:
+            raise ValueError('Missing pnpm lockfile importer for nested entries')
+        if 'link:' not in line or not re.search(r'(?<![\w.-])link:', line):
+            continue
+        link = re.fullmatch(rf'        (?:version|specifier): {LOCK_LINK}', line)
+        if not link or importer is None:
+            raise ValueError('Cannot resolve pnpm lockfile link')
+        target = posixpath.normpath(posixpath.join(posixpath.dirname(path), importer, link[1]))
+        if posixpath.isabs(target) or target == '..' or target.startswith('../'):
+            outside.add(target)
+    return outside
+
+
+def plain_version(value):
+    """A version, with peer versions in parentheses that may nest:
+    `1.0.0(@types/react-dom@19.3.0(@types/react@19.3.0))`."""
+    while re.search(PEER, value):
+        value = re.sub(PEER, '', value)
+    return re.fullmatch(r'\d[\w.+-]*', value) is not None
+
+
+def version_range(value):
+    """A semver range such as `^18 || ^19` or `'>=3.2.0'`, as peer and
+    override entries hold. A range resolves from the registry; it cannot name
+    a path, a URL or another package, which need `:`, `/` or `@`."""
+    if len(value) > 1 and value[0] == value[-1] == "'":
+        value = value[1:-1]
+    return re.fullmatch(r'[\w.^~<>=|* +-]+', value) is not None
+
+
+# Keys whose value does not choose the code that installs: pnpm checks a
+# specifier against the manifest, and the rest describe a package.
+FREE_VALUE_KEYS = {'specifier', 'deprecated', 'lockfileVersion', 'hasBin', 'optional', 'requiresBuild',
+                   'cpu', 'os', 'libc', 'engines', 'bundledDependencies'}
+
+
+def lock_adds_outside_code(base, head, path):
+    """True when a lockfile introduces a link outside the repo or an added
+    line could point at a different package or a source outside the registry.
+
+    YAML can spell one value many ways (quotes, tabs, block scalars, flow
+    maps, values on the next line), and pnpm reads them all. So an added line
+    passes only in a shape pnpm writes: a key that opens a map or has `{}`,
+    a list item, `---`, `resolution: {integrity: sha512-...}`, true or false,
+    a plain version, a version range, a `link:` compared between base and
+    head, or a key in FREE_VALUE_KEYS.
+    Anything else stops."""
+    # Moving an importer changes the target even if its link line is unchanged.
+    try:
+        before = lockfile_outside_link_targets(path, read_at(base, path))
+        after = lockfile_outside_link_targets(path, read_at(head, path))
+    except ValueError:
+        return True
+    if after - before:
+        return True
+
+    diff = subprocess.check_output(['git', '--literal-pathspecs', 'diff', base, head, '--', path])
+    # Git ends lines at LF only. Read bytes so a carriage return cannot start a
+    # line that git did not mark as added.
+    for line in diff.decode('utf-8', 'replace').split('\n'):
+        if not line.startswith('+') or line.startswith('+++'):
+            continue
+        text = line[1:]
+        if re.search(r'[^\t\x20-\x7e]|["\\&!%]|\*\w|^\s*\?|patchedDependencies|pnpmfileChecksum', text):
+            return True
+        if 'resolution' in text and not re.fullmatch(r'\s*resolution: \{integrity: sha512-[A-Za-z0-9+/=]+\}', text):
+            return True
+        if not text.strip() or text == '---' or re.fullmatch(rf' *{LOCK_KEY}:( \{{\}})?', text) or re.fullmatch(rf' *- {LOCK_KEY}', text):
+            continue
+        entry = re.fullmatch(rf' *({LOCK_KEY}): (\S.*)', text)
+        if not entry:
+            return True
+        key, value = entry.group(1).strip("'"), entry.group(2)
+        if key in FREE_VALUE_KEYS | {'resolution'} or value in ('true', 'false') or plain_version(value) or version_range(value):
+            continue
+        if re.fullmatch(LOCK_LINK, value):
+            continue
+        return True
+    return False
+
+
+def installers(text):
+    """Fields that pick or patch the code an install runs: the package manager,
+    a runtime to download, and patched dependencies."""
+    data = json.loads(text) if text else {}
+    pnpm, engines = data.get('pnpm'), data.get('engines')
+    return [data.get('packageManager'), data.get('devEngines'), engines.get('runtime') if isinstance(engines, dict) else None,
+            pnpm.get('patchedDependencies') if isinstance(pnpm, dict) else None]
 
 
 def dependencies(path, text):
@@ -90,7 +357,21 @@ def dependencies(path, text):
         return {}
     if path.endswith('.json'):
         data = json.loads(text)
-        return {f'{section}/{k}': str(v) for section in ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'] for k, v in data.get(section, {}).items()}
+        result = {f'{section}/{k}': str(v) for section in ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'] for k, v in data.get(section, {}).items()}
+        # Overrides and resolutions replace a package anywhere in the tree,
+        # including with another name, a tarball or a git source.
+        # npm writes `"foo": "1"` and `"foo": {".": "1"}` for the same override.
+        def flatten(node, prefix):
+            for key, value in node.items():
+                if isinstance(value, dict):
+                    flatten(value, f'{prefix}/{key}')
+                else:
+                    result[prefix if key == '.' else f'{prefix}/{key}'] = str(value)
+        pnpm = data.get('pnpm')
+        for prefix, node in [('overrides', data.get('overrides')), ('resolutions', data.get('resolutions')), ('pnpm/overrides', pnpm.get('overrides') if isinstance(pnpm, dict) else None)]:
+            if isinstance(node, dict):
+                flatten(node, prefix)
+        return result
     data = tomllib.loads(text)
     result = {}
     def walk(node, prefix=''):
@@ -102,6 +383,19 @@ def dependencies(path, text):
                 walk(value, prefix + key + '/')
     walk(data)
     return result
+
+
+def source(spec):
+    """Where a dependency comes from. None is the default registry."""
+    if isinstance(spec, dict):
+        return {k: spec[k] for k in ['git', 'path', 'registry', 'package', 'branch', 'tag', 'rev'] if k in spec} or None
+    spec = str(spec)
+    if spec.startswith('npm:'):
+        # npm:name@version: the source is the name, not the version.
+        name, _, _ = spec[4:].rpartition('@')
+        return 'npm:' + (name or spec[4:])
+    # `$name` reuses another dependency's spec, so a new reference can be a new source.
+    return spec if ':' in spec or '/' in spec or spec.startswith('$') else None
 
 
 def version(path, text):
@@ -207,11 +501,15 @@ def main():
     os.chdir(git('rev-parse', '--show-toplevel'))
     cfg = config()
     if args.command == 'risk':
+        # The rules come from the trusted base as it is now, so a rule added
+        # after the branch started still applies. The merge base only decides
+        # which files changed.
         base = args.base or cfg['base']
-        base = git('merge-base', base, args.head)
         policy = read_at(base, '.gate/config.toml')
-        result = classify(tomllib.loads(policy) if policy else cfg, base, args.head, args.raise_to, args.reason, args.author)
-        print(json.dumps(result, indent=2) if args.json else result['tier'] + '\n' + '\n'.join(f"- {r['rule']}: {r.get('reason', ', '.join(r.get('files', [])))}" for r in result['reasons']))
+        merge_base = git('merge-base', base, args.head)
+        result = classify(tomllib.loads(policy) if policy else cfg, merge_base, args.head, args.raise_to, args.reason, args.author)
+        print(json.dumps(result, indent=2) if args.json else result['tier'] + '\n' + '\n'.join(f"- {r['rule']}: {r.get('reason', ', '.join(r.get('files', [])))}" for r in result['reasons'])
+              + ''.join(f"\nNeeds you: {n['ask']}\n  Why: {n['why']}" for n in result['needs_you']))
     elif args.command == 'snapshots':
         snapshots(cfg, args.update, args.prepare)
     elif args.command == 'start':

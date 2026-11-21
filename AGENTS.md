@@ -2,22 +2,10 @@
 
 ## Project Overview
 
-Skill Studio is a Tauri 2.x desktop application to manage, sync, and test agent skills across Claude Code, Codex, OpenCode, pi, Cursor, and Grok Build, with skills.sh discovery built in.
-
-### Core Features
-
-1. **Skill Discovery** - Search 36,000+ skills from skills.sh
-2. **Skill Installation** - Install/remove/update via `npx skills` CLI to global or project scope
-3. **First-Class Agents** - Claude Code, Codex, OpenCode, pi, Cursor, Grok Build, plus a shared `.agents/skills` root
-4. **Provenance** - Every installed skill is classified as `skills-sh`, `plugin`, `dotagents`, or `manual` (precedence: dotagents > plugin > skills-sh > manual)
-5. **Native Plugin Enumeration** - Discovers skills shipped inside Claude Code (`~/.claude/plugins/cache`) and Codex (`~/.codex/plugins/cache`) plugin caches, per the agent-plugins.org manifest convention
-6. **Spec Validation** - Flags agentskills.io SKILL.md spec violations (`spec_violations`) and detects the getsentry/skillet spec pattern (`has_spec`)
-
-### Tech Stack
-
-- **Frontend**: React 19 + TypeScript + Tailwind CSS 4.x + Zustand
-- **Backend**: Tauri 2.x (Rust)
-- **Skills Integration**: skills.sh API + `npx skills` CLI
+Skill Studio discovers and manages agent skills in a Tauri 2 desktop app
+(React, TypeScript, Tailwind CSS and Zustand), a Rust CLI and a local MCP
+server. The surfaces share core operations. The host crate provides
+filesystem, process and other adapters.
 
 ## Build & Development Commands
 
@@ -43,24 +31,14 @@ pnpm run preview
 
 ### Rust Commands
 
-```bash
-# Build Rust backend
-cd apps/desktop/src-tauri && cargo build
+Run from the workspace root with the pinned toolchain:
 
-# Run Rust tests
-cd apps/desktop/src-tauri && cargo test
-
-# Run a single Rust test
-cd apps/desktop/src-tauri && cargo test test_name
-
-# Check Rust code
-cd apps/desktop/src-tauri && cargo check
-
-# Format Rust code
-cd apps/desktop/src-tauri && cargo fmt
-
-# Lint Rust code
-cd apps/desktop/src-tauri && cargo clippy
+```sh
+cargo build --workspace --all-features --bins
+cargo test --workspace --all-features
+cargo check --workspace --all-features
+cargo fmt --all --check
+cargo clippy --workspace --all-features --all-targets -- -D warnings
 ```
 
 ### Mutation Testing (`cargo mutants`)
@@ -181,27 +159,13 @@ pnpm run format:check
 # React health check (react-doctor)
 pnpm run doctor
 
-# Full gate: versions:check + typecheck + lint + format:check + doctor + knip + test + types:check + cargo fmt --all --check + clippy --workspace --all-targets -D warnings + cargo test --workspace (CI also runs cargo machete and cargo deny check)
+# Full gate (frontend checks plus workspace Rust checks and tests)
 pnpm run check
 ```
 
 ### Versions
 
 The app, CLI, MCP server, npm packages and workspace packages share one version, taken from `[workspace.package]` in the root `Cargo.toml`. Change it only with `pnpm run version:set <major.minor.patch>`, which writes every manifest and `Cargo.lock`. `pnpm run versions:check` fails on drift; CI runs it on every PR, and `release.yml` runs it against the tag.
-
-## Tech Stack
-
-| Layer       | Technology                                                      |
-| ----------- | --------------------------------------------------------------- |
-| Framework   | Tauri 2.x (macOS desktop app)                                   |
-| Frontend    | React 19.1, TypeScript 5.8                                      |
-| Styling     | Tailwind CSS 4.x                                                |
-| State       | Zustand 5.x                                                     |
-| Linting     | bun lint (JS/TS, `.oxlintrc.json`), clippy (Rust)               |
-| Formatting  | bun fmt (JS/TS, `.oxfmtrc.json`), rustfmt (Rust)                |
-| Lint plugin | anti-slop (local oxlint JS plugin in `tools/oxlint/anti-slop/`) |
-| Icons       | lucide-react                                                    |
-| Backend     | Rust 2021 Edition                                               |
 
 ## Project Structure
 
@@ -216,200 +180,41 @@ removed; do not list individual source files here.
 │   │   ├── src/                  # React frontend: components/, hooks/, lib/, store/
 │   │   └── src-tauri/src/skills/ # Rust backend: scan, lifecycle, Tauri commands
 │   ├── mcp/                      # Rust MCP server over skill-studio-core, stdio
-│   └── server/                   # Node proxy for the skills.sh API (port 8787)
+│   └── server/                   # skills.sh proxy (Node dev server and Cloudflare Worker)
 ├── crates/
 │   ├── skill-studio-core/        # Scope-confined core: scan, ops, events, DTOs, schema/
 │   └── skill-studio-host/        # Real-world port adapters for the core crate
 ├── packages/
 │   ├── lib/                      # Shared TypeScript library
 │   ├── marketing/                # Marketing site (Vite + StyleX) and Remotion walkthroughs
-│   ├── npm/                      # npm packages for the CLI; not workspaces (packages/* stops one level up)
+│   ├── npm/                      # npm packages for the CLI, outside the pnpm workspace
 │   └── ui/                       # Shared UI primitives (@skill-studio/ui)
 ├── docs/                         # Specs and reference docs
 ├── tools/
 │   └── oxlint/anti-slop/         # Local oxlint JS plugin
-└── package.json                  # npm workspaces root
+└── pnpm-workspace.yaml           # pnpm workspace
 ```
 
 ## Code Style Guidelines
 
-### TypeScript/React
-
-**UI primitives:** Form controls and buttons come from `@skill-studio/ui`
-(`Input`, `Textarea`, `Select`, `Button`, and the other exports in
-`packages/ui/src/index.ts`). Raw `<input>`, `<textarea>`, `<select>`, and
-`<button>` are allowed only inside `packages/ui`; the
-`anti-slop/no-raw-form-elements` lint rule enforces this.
-
-**Imports:** Group in order - React, external libs, internal modules, types
-
-```typescript
-import { useEffect, useCallback, useState } from "react";
-import { motion } from "motion/react";
-import { X, Save } from "lucide-react";
-import { useAppStore } from "./store/appStore";
-import type { AgentId, InstalledSkill } from "./lib/skill-types";
-```
-
-**Components:** Use function components with explicit prop interfaces
-
-```typescript
-interface PanelProps {
-  isOpen: boolean;
-  onClose: () => void;
-  title: string;
-  children: React.ReactNode;
-}
-
-export function Panel({ isOpen, onClose, title, children }: PanelProps) {
-  // ...
-}
-```
-
-**Hooks:** Prefix with `use`, return object or array consistently
-
-```typescript
-export function useKeyboardNavigation(options: Options) { ... }
-```
-
-**Types:** Use `interface` for objects, `type` for unions/primitives
-
-```typescript
-export interface BaseEntityFields {
-  id: string;
-  name: string;
-}
-export type EntityType = "settings" | "memory" | "agent";
-export type FilterScope = "all" | "global" | "project";
-```
-
-**Type Guards:** Create explicit type guards for discriminated unions
-
-```typescript
-export function isFlatEntity(entity: DisplayableEntity): entity is FlatEntity {
-  return "path" in entity && "scope" in entity;
-}
-```
-
-**File Headers:** Use comment blocks for major files
-
-```typescript
-// ============================================================================
-// Skill Studio - Module Name
-// Brief description of purpose
-// ============================================================================
-```
-
-### Rust
-
-**Structs:** Use `#[derive(Debug, Serialize, Deserialize, Clone)]`
-
-```rust
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct BaseEntity {
-    pub id: String,
-    pub name: String,
-}
-```
-
-**Tauri Commands:** Use `#[tauri::command]` attribute
-
-```rust
-#[tauri::command]
-pub fn discover_all(project_paths: Option<Vec<String>>) -> Result<DiscoveryResult, String> {
-    // ...
-}
-```
-
-**Error Handling:** Return `Result<T, String>` for Tauri commands
-
-```rust
-fn get_home_dir() -> Option<PathBuf> {
-    dirs::home_dir()
-}
-```
-
-### Tailwind CSS
-
-- Use CSS variables for theming: `var(--color-bg-primary)`, `var(--color-text-primary)`
-- Prefer utility classes over custom CSS
-- Use responsive prefixes: `sm:`, `md:`, `lg:`
-- Common patterns: `flex items-center gap-2`, `px-4 py-2`, `rounded-md`
-
-### State Management (Zustand)
-
-- Single store in `apps/desktop/src/store/appStore.ts`
-- Use selectors for performance: `useAppStore((state) => state.activeView)`
-- Group related state and actions together
-- Invalidate caches by setting `_cachedSections: null`
-
-### Naming Conventions
-
-| Type         | Convention      | Example                    |
-| ------------ | --------------- | -------------------------- |
-| Components   | PascalCase      | `DetailPanel`, `Toast`     |
-| Hooks        | camelCase + use | `useKeyboardNavigation`    |
-| Types        | PascalCase      | `EntityType`, `ViewType`   |
-| Variables    | camelCase       | `selectedEntity`, `isOpen` |
-| Constants    | SCREAMING_SNAKE | `ENTITY_TEMPLATES`         |
-| Files (TS)   | PascalCase.tsx  | `DetailPanel.tsx`          |
-| Files (Rust) | snake_case.rs   | `mod.rs`, `lib.rs`         |
-
-### Naming files
-
-No bare-role filenames (`types.ts`, `api.ts`, `utils.ts`); prefix the domain (`skill-types.ts`, `skill-api.ts`). Use `index.ts` only as a thin re-export.
-
-### Error Handling
-
-**Frontend:** Use try-catch with toast notifications
-
-```typescript
-try {
-  await discoverAll([homeDir]);
-} catch (err) {
-  addToast({
-    type: "error",
-    title: "Discovery Failed",
-    message: err instanceof Error ? err.message : "Unknown error",
-  });
-}
-```
-
-**Backend:** Return Result types, use `.ok_or()` for Option conversion
-
-```rust
-let home = get_home_dir().ok_or("Could not find home directory")?;
-```
-
-### Key Files
-
-| Purpose            | File                                              |
-| ------------------ | ------------------------------------------------- |
-| Main App           | `apps/desktop/src/App.tsx`                        |
-| State Store        | `apps/desktop/src/store/appStore.ts`              |
-| Skill types        | `apps/desktop/src/lib/skill-types.ts`             |
-| Tauri IPC wrappers | `apps/desktop/src/lib/skill-api.ts`               |
-| Tauri commands     | `apps/desktop/src-tauri/src/skills/commands.rs`   |
-| Scanner            | `apps/desktop/src-tauri/src/skills/scan.rs`       |
-| Provenance         | `apps/desktop/src-tauri/src/skills/provenance.rs` |
-| Agent paths        | `apps/desktop/src-tauri/src/skills/agents.rs`     |
-| Lint config        | `.oxlintrc.json`                                  |
-| Format config      | `.oxfmtrc.json`                                   |
-| Tauri Config       | `apps/desktop/src-tauri/tauri.conf.json`          |
-| TS Config          | `apps/desktop/tsconfig.json`                      |
-
-### TypeScript Strictness
-
-Enabled in `apps/desktop/tsconfig.json`:
-
-- `strict: true`
-- `noUnusedLocals: true`
-- `noUnusedParameters: true`
-- `noFallthroughCasesInSwitch: true`
+- Use form controls and buttons from [@skill-studio/ui](packages/ui/src/index.ts).
+  Raw form elements belong inside that package.
+- Group imports by React, external libraries, internal modules and types.
+  Use explicit prop interfaces and type guards. Keep hooks prefixed with
+  `use` and use selectors on the [Zustand store](apps/desktop/src/store/appStore.ts).
+- Name components and types in PascalCase, variables and hooks in camelCase,
+  constants in SCREAMING_SNAKE_CASE and Rust files in snake_case. Use
+  domain-specific file names. Keep `index.ts` to re-exports.
+- Prefer Tailwind utilities and CSS variables for theme colors. Catch UI
+  action errors and show a toast.
+- Follow [core error rule D7](docs/spec-core-primitives.md).
+  Use typed errors and stable codes for shared operations. Return their
+  result envelopes from adapters. Some desktop IPC commands still return
+  strings. Keep their existing contract when editing unrelated code.
 
 ### Testing
 
-- Rust: `cargo test` in `apps/desktop/src-tauri`, tests live in colocated `#[cfg(test)]` modules
+- Rust: tests live in colocated `#[cfg(test)]` modules and crate-level `tests/` directories.
 - Frontend: Vitest is configured; run `pnpm run test`
 - End to end: `pnpm --filter skill-studio run test:e2e` runs the whole app on
   the dev harness (`src/dev/harness`) in WebKit (the Tauri engine on macOS)
@@ -471,67 +276,39 @@ The shared guard proposed in #531 was not built; #531 was also closed. Before yo
    version change, deploy or secret files, a new dependency, a change to
    `package.json` scripts, workflows, `.githooks/`, `.gate/` or `deny.toml`, and
    policy files. The rules
-   are in `.gate/config.toml`. The owner merges these PRs. Start your reply
-   with `Needs you: #<number> <the one decision>`, then stop. Do not wait for
-   the merge, use `--admin`, or remove the label.
-7. If the review still fails after 2 rounds of fixes, stop and start your reply
-   with `Needs you:` and the disagreement.
+   are in `.gate/config.toml`. The owner merges these PRs. The workflow posts a
+   `Needed from you and why` comment on the PR: the decision, why a person must
+   make it, and the files and rule that matched. Start your reply with
+   `Needs you: #<number> <the one decision>`. End it with that section: link
+   the PR, copy the comment, and add your pick and why. Then stop. Do not wait
+   for the merge, use `--admin` without the owner's go-ahead in the chat, or
+   remove the label.
+7. Review rounds follow the `diff-review` skill. If the review still fails
+   after 2 rounds of fixes, stop and start your reply with `Needs you:` and
+   the disagreement. Findings still open at the end go in your
+   `Needed from you and why` section.
 
 ## Reference docs
 
-- `docs/agent-skill-conventions.md` — agentskills.io spec rules, per-agent discovery paths, invocation control (explicit vs model-invocable), the agent settings that hide a skill (read only; Park is the only off), and the local data sources Skill Studio reads. Check it before researching agent behavior again.
-- `docs/flows.md` — every user-facing flow with its UI entry, command, and flow-level test. A new flow adds a row and one test at the lowest seam that proves its file effects; CLI and MCP parity comes from the `flow_parity.rs` table.
-- `docs/state-machines.md` — every explicit state machine (states, legal moves, guard test) and the ones still implicit. A new status field or phase enum with illegal moves adds a row and one table test of its transition function. State derived from other state adds no test.
-
-## Skills.sh Integration
-
-Skill Studio integrates with skills.sh for skill discovery and installation.
-
-### API Endpoint
-
-- Default: requests route through the local Skill Studio server (`apps/server`, default `http://127.0.0.1:8787/api/v1`), which holds the real skills.sh key - no client key needed. Settings shows the resolved mode; see `apps/server/README.md`. Development builds use `http://127.0.0.1:8787`; release builds use the hosted proxy at `https://api.useskillstudio.com`.
-- Developer override: a non-empty `skills_sh_api_key` in `~/.agents/skill-studio.json` instead sends `Authorization: Bearer <key>` straight to `https://skills.sh/api/v1`, bypassing the server.
-- **List**: `GET /skills?view=all-time&page=<0-indexed>&per_page=<n>` - paginated, sorted by install count
-- **Search**: `GET /skills/search?q=<query>&limit=<n>` - no pagination, one shot up to `limit`
-- **Details**: `GET /skills/{owner/repo}/{slug}` - returns the skill's files, including its `SKILL.md`/`AGENTS.md` body
-
-### Lock File (`~/.agents/.skill-lock.json`)
-
-Tracks installed skills with their sources and hashes:
-
-```json
-{
-  "version": 3,
-  "skills": {
-    "skill-name": {
-      "source": "owner/repo",
-      "sourceType": "github",
-      "sourceUrl": "https://github.com/...",
-      "skillFolderHash": "abc123",
-      "installedAt": "2024-01-31T...",
-      "updatedAt": "2024-01-31T..."
-    }
-  }
-}
-```
-
-### CLI Dependency
-
-- Installation: Uses `npx skills add <skill>` for battle-tested install logic
-- Removal: Uses `npx skills remove <skill>`
-- Updates: Uses `npx skills update <skill>`
-- Requires Node.js ^22.18 or >=24.11 (the `npx skills` CLI itself needs only 18+, but the build toolchain needs the newer range)
-
-### First-Class Agents
-
-| Agent       | Project Path                        | Global Path                                  |
-| ----------- | ----------------------------------- | -------------------------------------------- |
-| Claude Code | `.claude/skills/`                   | `~/.claude/skills/`                          |
-| Codex       | `.codex/skills/`                    | `~/.codex/skills/`                           |
-| OpenCode    | `.opencode/skills/` (also `skill/`) | `~/.config/opencode/skills/` (also `skill/`) |
-| pi          | `.pi/skills/`                       | `~/.pi/agent/skills/`                        |
-| Cursor      | `.cursor/skills/`                   | `~/.cursor/skills/`                          |
-| Grok Build  | `.grok/skills/`                     | `~/.grok/skills/`                            |
-| shared      | `.agents/skills/`                   | `~/.agents/skills/`                          |
-
-`npx skills` can still target the full agent list; see `apps/desktop/src-tauri/src/skills/agents.rs` for `AgentId`.
+- [Agent skill conventions](docs/agent-skill-conventions.md) covers roots,
+  including cross-harness reads and plugin caches, invocation and provenance.
+  The core owns [agent IDs and lifecycle ownership](crates/skill-studio-core/src/identity.rs).
+  Skill Studio runs skills.sh and dotagents for their managed installs and
+  moves removed Skill Studio copies and forks into quarantine.
+- [Flow map](docs/flows.md) links each user flow to its entry points and tests.
+  Add one row and a test at the lowest seam that proves a new flow's file
+  effects. CLI and MCP parity comes from the `flow_parity.rs` table.
+- [State machines](docs/state-machines.md) lists the states and legal moves.
+  Add one row and one table test for a new transition rule.
+- [Core contracts](docs/spec-core-primitives.md), [event store](docs/spec-event-store.md)
+  and [headless performance](docs/spec-headless-performance-observability.md)
+  describe shared behavior.
+- [CLI](apps/cli/README.md), [MCP](apps/mcp/README.md) and
+  [skills.sh proxy](apps/server/README.md) cover the adapters.
+- [Shared skill types](packages/lib/src/skill-types.ts),
+  [core scanner](crates/skill-studio-core/src/scan.rs) and
+  [desktop commands](apps/desktop/src-tauri/src/skills/commands.rs) are
+  starting points for code changes.
+- [Performance checks](docs/perf/README.md), [verification notes](docs/verification)
+  and the [verify-skill-studio skill](.agents/skills/verify-skill-studio/SKILL.md)
+  cover checks against real files and tools.

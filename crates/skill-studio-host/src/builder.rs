@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use skill_studio_core::harness::HarnessCatalog;
 use skill_studio_core::ports::Ports;
+use skill_studio_core::scope::{RuntimeScope, ScopeKind};
 
 use crate::clock::SystemClock;
 use crate::discovery::HostProjectDiscovery;
@@ -23,11 +24,34 @@ use crate::tools::PathToolLookup;
 /// them replaces the field on the returned `Ports`, or calls
 /// [`default_ports_with_discovery`] for the common case of wanting both.
 pub fn default_ports(lease_root: PathBuf, catalog: Arc<HarnessCatalog>) -> Ports {
+    ports_with_file_lease(FileLease::new(lease_root), catalog)
+}
+
+/// Builds CLI and MCP ports, opening existing lease files only for read-only
+/// fixture scopes. Live scopes create missing lease files before reading.
+pub fn default_ports_for_scope(
+    lease_root: PathBuf,
+    catalog: Arc<HarnessCatalog>,
+    scope: &RuntimeScope,
+) -> Ports {
+    let lease = match scope.kind {
+        ScopeKind::Fixture => FileLease::read_only(lease_root),
+        ScopeKind::Live => FileLease::new(lease_root),
+    };
+    let mut ports = ports_with_file_lease(lease, catalog);
+    if scope.kind == ScopeKind::Live {
+        ports.discovery = Some(Arc::new(HostProjectDiscovery::for_scope(scope)));
+    }
+    ports.tools = Some(Arc::new(PathToolLookup::new()));
+    ports
+}
+
+fn ports_with_file_lease(lease: FileLease, catalog: Arc<HarnessCatalog>) -> Ports {
     Ports {
         fs: Arc::new(RealFs::new()),
         clock: Arc::new(SystemClock::new()),
         ids: Arc::new(UlidIds::new()),
-        leases: Arc::new(FileLease::new(lease_root)),
+        leases: Arc::new(lease),
         history: Arc::new(NoHistoryOpener),
         sink: Arc::new(NoopSink),
         spawner: None,

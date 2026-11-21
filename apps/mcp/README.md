@@ -1,25 +1,33 @@
 # skill-studio-mcp
 
-A stateless local MCP server over `skill-studio-core`, stdio transport. Each
-tool call builds a fresh `RuntimeScope` and `Ports`, re-reads disk, runs one
-core operation, and drops everything — restarting the process between two
-calls gives identical results (see `apps/mcp/tests/mcp_server.rs`,
-`restart_gives_the_same_envelope_as_the_first_run`). No sessions, no
-subscriptions, no cache between calls (MCP revision 2026-07-28, decision
-D13).
+The local MCP server uses stdio. Each call builds a fresh core runtime and
+resolves its scope again. The server keeps no conversation state. It keeps
+a shared skill usage index in memory and loads it on the first usage call.
 
 ## Tools
 
-One tool per core operation. The `#[tool]` methods in `src/lib.rs` are the
-tool list. By default, `tools/list` leaves out the four tools in
-`DEV_TOOLS` (`capabilities`, `harnesses`, `sweep_quarantine`,
-`install_preferences`); set `SKILL_STUDIO_MCP_DEV_TOOLS=1` to publish them.
-`docs/flows.md` maps each tool to its user flow, its CLI command and its
-parity test. Every tool's input schema is the core's own
-request DTO's `schemars` output, unchanged; every tool's output is the same
-`ResultEnvelope` JSON `skill-studio` (the CLI) prints, as
-`structured_content`, with `is_error` set to match
-`envelope.status == "error"`.
+The [MCP contract snapshot](../../.gate/snapshots/mcp.snap) lists every tool
+published by default and its input schema:
+
+```text
+add  apply_frontmatter_repair  diagnose  diagnose_conflict
+doctor  extras  fix  invocation
+invocation_mismatches  library  list_events  listing
+outdated  pack_add  pack_export  pack_list
+pack_remove  pack_show  pack_switch_source  pack_update
+park  preview_frontmatter_repair  recovery_drop  recovery_list
+remove  restore_event  review_clear  review_due
+review_set  scan  skill_sessions  skill_usage
+split  turn_off_check  turn_off_for_agent  unpark
+update  update_all
+```
+
+Set `SKILL_STUDIO_MCP_DEV_TOOLS=1` to also publish `capabilities`,
+`harnesses`, `sweep_quarantine` and `install_preferences`.
+See the [tool naming rules](../../docs/spec-core-primitives.md#82-mcp-tools)
+and the [flow map](../../docs/flows.md) for CLI equivalents. The server
+returns a result envelope in `structuredContent`. It sets `isError`
+when the envelope has `status: "error"`.
 
 The text block carries the same JSON, as the MCP spec recommends for
 clients that read only `content`. Each client gives its model a different
@@ -39,14 +47,10 @@ block does not hold the JSON. Keep both copies. To make Codex read less,
 make the envelope smaller; do not shorten the text block or branch on the
 client name.
 
-Tools that write, or that open the history store (`list_events`,
-`restore_event`), take the same file lease as the CLI and the desktop app.
-If another process holds it, the call returns the ordinary `scope_busy`
-error envelope (bounded wait, never an indefinite hang).
-
-A core error is never a panic and never a bare string: it comes back as
-`structured_content` carrying the envelope's `errors` array, with
-`is_error: true`.
+The server gives write calls, `list_events` and `outdated` access to
+SQLite history. Core operations use the same lease rules as the CLI and
+desktop app. A call that cannot acquire its lease in time returns
+`scope_busy`.
 
 ## Progress
 
@@ -58,21 +62,14 @@ bracketing around the call, not a step counter.
 
 ## Environment variables
 
-Scope resolution follows the scope, never the process: an explicit home or
-fixture derives its own history root and lease root from itself; only the
-true default (neither variable set) resolves against the real machine. The
-core itself never reads the environment — `apps/mcp/src/scope.rs` is where
-that happens, mirroring `apps/cli/src/scope.rs`'s flag-driven version.
-
-| Variable               | Effect                                                                                                               |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `SKILL_STUDIO_FIXTURE` | Fixture scope rooted at this directory. Lease root: `<dir>/.skill-studio/leases`.                                    |
-| `SKILL_STUDIO_HOME`    | Live scope rooted at this directory instead of the real home. Lease root: `<dir>/.skill-studio/leases`.              |
-| `SKILL_STUDIO_PROJECT` | A `PATH`-style list of explicit project directories (`:` on Unix, `;` on Windows). Optional with either scope above. |
-
-Neither variable set: the real host home (`dirs::home_dir()`), with the
-ambient `$XDG_DATA_HOME/skill-studio` (or `~/.local/share/skill-studio`)
-data root — the same rule `apps/cli/src/scope.rs::data_root` uses.
+| Variable                     | Effect                                                                                                                                                    |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SKILL_STUDIO_FIXTURE`       | Read-only fixture. Looks for existing leases under `<dir>/.skill-studio/leases`. Takes precedence over `SKILL_STUDIO_HOME`.                               |
+| `SKILL_STUDIO_HOME`          | Alternate live home. History and leases are under `<dir>/.skill-studio/`.                                                                                 |
+| `SKILL_STUDIO_PROJECT`       | Explicit project directories. Use the platform path-list separator (`:` on Unix, `;` on Windows).                                                         |
+| `XDG_DATA_HOME`              | With the default home, a nonempty value puts history and leases under `$XDG_DATA_HOME/skill-studio`. Otherwise the root is `~/.local/share/skill-studio`. |
+| `SKILL_STUDIO_MCP_DEV_TOOLS` | Set to `1` to include the developer tools in `tools/list`.                                                                                                |
+| `SKILL_STUDIO_TELEMETRY`     | Set to `0` or `false` to turn telemetry off. Other values leave the host's saved setting in effect.                                                       |
 
 ## Example client configuration
 
@@ -84,7 +81,8 @@ each agent's setup). For a local build, point the client at the binary:
 {
   "mcpServers": {
     "skill-studio": {
-      "command": "/path/to/skill-studio-mcp",
+      "command": "/path/to/checkout/target/debug/skill-studio",
+      "args": ["mcp"],
       "env": {
         "SKILL_STUDIO_HOME": "/Users/you"
       }
@@ -93,21 +91,18 @@ each agent's setup). For a local build, point the client at the binary:
 }
 ```
 
-Point `SKILL_STUDIO_FIXTURE` at a materialized fixture directory instead,
-for a read-only sandboxed session against a known tree rather than the real
-machine.
+Use `SKILL_STUDIO_FIXTURE` to test against a fixture tree. The server
+refuses write calls in this scope with `invalid_scope`.
 
 ## Testing
 
-`apps/mcp/tests/mcp_server.rs` spawns the built binary as a real child
-process over stdio (via `rmcp`'s `TokioChildProcess` client, and, for the
-one case that client cannot exercise — a call with no progress token at
-all — a raw JSON-RPC exchange over the same stdio pipes) and covers:
-restart equivalence, statelessness within one process (a file added between
-two calls on the same server), error mapping for an invalid scope, progress
-notifications with and without a token, that `SKILL_STUDIO_HOME` never
-writes outside itself, and that `skill-studio watch` and a fresh MCP `scan`
-agree on state after a mutation applied through the CLI.
+The [stdio integration suite](tests/mcp_server.rs) starts the real server.
+It checks scope isolation, fixture write refusal, changes between calls,
+progress notifications, tool schemas, history compatibility and agreement
+with CLI results. It also checks the effects of park, unpark, remove and
+restore.
+
+## Read examples
 
 The read-only `extras` tool takes `{}` and uses the server's existing home and
 project scope. It returns the same declaration list as `skill-studio extras

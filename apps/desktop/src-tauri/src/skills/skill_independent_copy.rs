@@ -94,8 +94,9 @@ pub fn make_skill_independent_copy(
     make_skill_independent_copy_with(
         store,
         request,
+        guard,
         &|from, to| fs::rename(from, to),
-        &|home, registry| write_fork_registry_locked(guard, home, &mut registry.clone()),
+        &write_fork_registry_locked,
         &|_| Ok(()),
     )
 }
@@ -103,8 +104,9 @@ pub fn make_skill_independent_copy(
 fn make_skill_independent_copy_with(
     store: &EventStore,
     request: IndependentCopyRequest<'_>,
+    mutation: &WriteLeaseGuard,
     rename: &dyn Fn(&Path, &Path) -> std::io::Result<()>,
-    write_registry: &dyn Fn(&Path, &ForkRegistry) -> Result<(), String>,
+    write_registry: &dyn Fn(&WriteLeaseGuard, &Path, &mut ForkRegistry) -> Result<(), String>,
     after_phase: &dyn Fn(&str) -> Result<(), String>,
 ) -> Result<String, String> {
     let parent = request
@@ -169,13 +171,13 @@ fn make_skill_independent_copy_with(
         &saved_link,
         &mut payload,
         rename,
-        write_registry,
+        &|home, registry| write_registry(mutation, home, &mut registry.clone()),
         after_phase,
     ) {
         Ok(()) => Ok(id),
         Err(error) if is_injected_crash(&error) => Err(error),
         Err(error) => {
-            let rollback = rollback_unstarted_whole_root(store, parent, &payload);
+            let rollback = rollback_unstarted_whole_root(store, parent, &payload, mutation);
             let _ = store.finish(&id, EventStatus::Failed);
             match rollback {
                 Ok(()) => Err(error),
@@ -433,6 +435,7 @@ fn rollback_unstarted_whole_root(
     store: &EventStore,
     parent: &Path,
     payload: &Value,
+    mutation: &WriteLeaseGuard,
 ) -> Result<(), String> {
     let Some(event_id) = payload.get("materialize_event_id").and_then(Value::as_str) else {
         return Ok(());
@@ -449,7 +452,7 @@ fn rollback_unstarted_whole_root(
                 .to_string(),
         );
     }
-    store.restore(event_id, false)?;
+    store.restore(mutation, event_id, false)?;
     store.unregister_materialized_root(parent)
 }
 
@@ -572,7 +575,7 @@ pub fn validate_independent_copy_restore(event: &EventRow) -> Result<(), String>
 fn remove_matching_copy_ownership(
     home: &Path,
     data: &IndependentCopyEventData,
-    guard: Option<&WriteLeaseGuard>,
+    guard: &WriteLeaseGuard,
 ) -> Result<Option<ForkRegistry>, String> {
     let mut registry = read_fork_registry(home)?;
     match registry.copies.get(&data.copy_deployment_id) {
@@ -580,7 +583,7 @@ fn remove_matching_copy_ownership(
         Some(existing) if ownership_matches(existing, data) => {
             let previous = registry.clone();
             registry.copies.remove(&data.copy_deployment_id);
-            write_fork_registry_maybe_locked(guard, home, &mut registry)?;
+            write_fork_registry_locked(guard, home, &mut registry)?;
             Ok(Some(previous))
         }
         Some(_) => Err(
@@ -875,7 +878,7 @@ fn restore_independent_copy_with(
         ));
     }
 
-    let previous_registry = match remove_matching_copy_ownership(home, &data, Some(guard)) {
+    let previous_registry = match remove_matching_copy_ownership(home, &data, guard) {
         Ok(previous) => previous,
         Err(error) => {
             let _ = store.unclaim_event_restore(&target.id, &restore_id);
@@ -953,7 +956,7 @@ pub fn reconcile_interrupted_independent_copy(
     store: &EventStore,
     home: &Path,
     event: &EventRow,
-    guard: Option<&WriteLeaseGuard>,
+    guard: &WriteLeaseGuard,
 ) -> Result<(), String> {
     if event.kind != "make_independent_copy" || event.status != "interrupted" {
         return Ok(());
@@ -1018,7 +1021,7 @@ fn fail_unstarted_copy(
     home: &Path,
     event: &EventRow,
     data: &IndependentCopyEventData,
-    guard: Option<&WriteLeaseGuard>,
+    guard: &WriteLeaseGuard,
 ) -> Result<(), String> {
     remove_recorded_staging(data)?;
     remove_matching_copy_ownership(home, data, guard)?;
@@ -1026,7 +1029,7 @@ fn fail_unstarted_copy(
         if fs::symlink_metadata(&data.expected_root)
             .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
         {
-            store.restore(materialize_event_id, false)?;
+            store.restore(guard, materialize_event_id, false)?;
             store.unregister_materialized_root(&data.expected_root)?;
         }
     }
@@ -1039,7 +1042,7 @@ fn claim_replaced_copy(
     home: &Path,
     event: &EventRow,
     data: &IndependentCopyEventData,
-    guard: Option<&WriteLeaseGuard>,
+    guard: &WriteLeaseGuard,
 ) -> Result<(), String> {
     remove_recorded_staging(data)?;
     let Some(copy_record) = data.copy_record.clone() else {
@@ -1061,7 +1064,7 @@ fn claim_replaced_copy(
     registry
         .copies
         .insert(data.copy_deployment_id.clone(), record);
-    write_fork_registry_maybe_locked(guard, home, &mut registry)?;
+    write_fork_registry_maybe_locked(Some(guard), home, &mut registry)?;
     if fs::symlink_metadata(&data.saved_link)
         .is_ok_and(|metadata| metadata.file_type().is_symlink())
         && data
@@ -1081,7 +1084,7 @@ pub fn reconcile_interrupted_independent_copy_restore(
     store: &EventStore,
     home: &Path,
     event: &EventRow,
-    guard: Option<&WriteLeaseGuard>,
+    guard: &WriteLeaseGuard,
 ) -> Result<(), String> {
     if event.kind != "restore" || event.status != "interrupted" {
         return Ok(());
@@ -1245,7 +1248,7 @@ mod tests {
             .into_iter()
             .find(|row| row.id == event_id)
             .unwrap();
-        reconcile_interrupted_independent_copy(store, home, &event, None)
+        reconcile_interrupted_independent_copy(store, home, &event, &test_guard(home))
     }
 
     fn recover_restore(store: &EventStore, home: &Path, event_id: &str) -> Result<(), String> {
@@ -1260,7 +1263,7 @@ mod tests {
             .into_iter()
             .find(|row| row.id == event_id)
             .unwrap();
-        reconcile_interrupted_independent_copy_restore(store, home, &event, None)
+        reconcile_interrupted_independent_copy_restore(store, home, &event, &test_guard(home))
     }
 
     fn no_unknown_staging(root: &Path) {
@@ -1353,8 +1356,9 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             copy_request,
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|_, _| Err("injected registry failure".to_string()),
+            &|_, _, _| Err("injected registry failure".to_string()),
             &|_| Ok(()),
         )
         .unwrap_err();
@@ -1408,8 +1412,9 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             request(&temp.path().join("home"), &link, &source),
+            &test_guard(&temp.path().join("home")),
             &|from, to| fs::rename(from, to),
-            &|_, _| Err("injected registry failure".to_string()),
+            &|_, _, _| Err("injected registry failure".to_string()),
             &|_| Ok(()),
         )
         .unwrap_err();
@@ -1432,6 +1437,7 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             request(&temp.path().join("home"), &link, &source),
+            &test_guard(&temp.path().join("home")),
             &|from, to| {
                 let call = calls.get();
                 calls.set(call + 1);
@@ -1441,7 +1447,7 @@ mod tests {
                     fs::rename(from, to)
                 }
             },
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &|_| Ok(()),
         )
         .unwrap_err();
@@ -1508,7 +1514,7 @@ mod tests {
                 .unwrap_err();
         assert!(ordering_error.contains("undo independent copies first"));
 
-        store.restore(&explode_id, true).unwrap();
+        store.restore(&guard, &explode_id, true).unwrap();
         let copy = store.get(&copy_id).unwrap().unwrap();
         let error = validate_independent_copy_restore(&copy).unwrap_err();
         assert!(error.contains("no longer the real per-skill root"));
@@ -1576,8 +1582,9 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             request(&home, &link, &source),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &|phase| {
                 if phase == "staged" {
                     fs::remove_file(&link).unwrap();
@@ -1599,8 +1606,9 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             request(&home, &link, &source),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("intent"),
         )
         .unwrap_err();
@@ -1629,8 +1637,9 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             request(&home, &link, &source),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("staged"),
         )
         .unwrap_err();
@@ -1662,8 +1671,9 @@ mod tests {
         make_skill_independent_copy_with(
             &store,
             request(&home, &link, &source),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("staged"),
         )
         .unwrap_err();
@@ -1689,8 +1699,13 @@ mod tests {
 
         for _ in 0..2 {
             let interrupted = store.get(&event_id).unwrap().unwrap();
-            let error = reconcile_interrupted_independent_copy(&store, &home, &interrupted, None)
-                .unwrap_err();
+            let error = reconcile_interrupted_independent_copy(
+                &store,
+                &home,
+                &interrupted,
+                &test_guard(&home),
+            )
+            .unwrap_err();
             assert!(error.contains("without a recorded fingerprint"));
             assert!(data.staging.join("SKILL.md").is_file());
             assert!(read_fork_registry(&home)
@@ -1712,8 +1727,9 @@ mod tests {
         make_skill_independent_copy_with(
             &store,
             request(&home, &link, &source),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("staged"),
         )
         .unwrap_err();
@@ -1732,7 +1748,8 @@ mod tests {
         write_fork_registry(&home, &mut registry).unwrap();
 
         let error =
-            reconcile_interrupted_independent_copy(&store, &home, &event, None).unwrap_err();
+            reconcile_interrupted_independent_copy(&store, &home, &event, &test_guard(&home))
+                .unwrap_err();
 
         assert!(error.contains("staging fingerprint changed"));
         assert_eq!(
@@ -1758,8 +1775,9 @@ mod tests {
         make_skill_independent_copy_with(
             &store,
             request(&home, &link, &source),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("staged"),
         )
         .unwrap_err();
@@ -1783,8 +1801,9 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             request(&home, &link, &source),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("staged"),
         )
         .unwrap_err();
@@ -1822,8 +1841,9 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             copy_request,
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("converted"),
         )
         .unwrap_err();
@@ -1872,8 +1892,9 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             copy_request,
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("materialize_root_removed"),
         )
         .unwrap_err();
@@ -1918,8 +1939,9 @@ mod tests {
         make_skill_independent_copy_with(
             &store,
             copy_request,
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("materialize_root_removed"),
         )
         .unwrap_err();
@@ -1958,8 +1980,9 @@ mod tests {
         make_skill_independent_copy_with(
             &store,
             copy_request,
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("materialize_root_removed"),
         )
         .unwrap_err();
@@ -2002,8 +2025,9 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             request(&home, &link, &source),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("replaced"),
         )
         .unwrap_err();
@@ -2082,8 +2106,9 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             request(&home, &link, &source),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("replaced"),
         )
         .unwrap_err();
@@ -2098,7 +2123,7 @@ mod tests {
             .into_iter()
             .find(|row| row.id == event_id)
             .unwrap();
-        reconcile_interrupted_independent_copy(&store, &home, &event, Some(&guard)).unwrap();
+        reconcile_interrupted_independent_copy(&store, &home, &event, &guard).unwrap();
 
         assert!(link.is_dir());
         assert!(read_fork_registry(&home)
@@ -2116,8 +2141,9 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             request(&home, &link, &source),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("registry"),
         )
         .unwrap_err();
@@ -2156,7 +2182,7 @@ mod tests {
         let restore_event = store.get(&restore_id).unwrap().unwrap();
         assert!(!restore_event.restorable);
         assert!(store
-            .restore(&restore_id, false)
+            .restore(&test_guard(&home), &restore_id, false)
             .unwrap_err()
             .contains("not restorable"));
         recover_restore(&store, &home, &restore_id).unwrap();
