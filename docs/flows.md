@@ -186,6 +186,11 @@ including in a dry run. More than 100 planned updates returns
 `apps/cli/tests/pack.rs::pack_update_caps_the_total_plan_on_cli_and_mcp_before_running_owner_tools`
 checks both entry points.
 
+If two tools claim a skill with the same name in one scope, each pack step
+reports the event ID or error from its own update.
+`crates/skill-studio-core/tests/pack_actions.rs::pack_update_reports_each_owner_result_for_a_shared_skill_name`
+checks the report and journal when one tool fails.
+
 `pack add` always writes the shared `.agents/skills` copy that update and
 remove use, and links each agent named with `--agent` to it. Without
 `--agent`, the CLI and MCP write the shared copy only, which Claude Code does

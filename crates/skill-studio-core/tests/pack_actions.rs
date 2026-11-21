@@ -30,11 +30,12 @@ use skill_studio_host::{FileLease, RealFs, SqliteHistoryOpener};
 const EDITED_TREE: &str = "0000000000000000000000000000000000000000";
 
 /// Stands in for `npx skills`: `add` writes the skill, `remove` deletes it and
-/// its lock row, `update` succeeds or, when told, exits 1.
+/// its lock row, and updates succeed or, when told, exit 1.
 struct FakeSkillsCli {
     home: PathBuf,
     calls: Mutex<Vec<Vec<String>>>,
     fail_updates: AtomicBool,
+    fail_dotagents_install: AtomicBool,
     /// When set, `add` exits 1 and prints this skills diagnostic code.
     fail_auth: Mutex<Option<&'static str>>,
     /// When set, `add` also moves the skill's lock row to the added source,
@@ -48,6 +49,7 @@ impl FakeSkillsCli {
             home: home.to_path_buf(),
             calls: Mutex::new(Vec::new()),
             fail_updates: AtomicBool::new(false),
+            fail_dotagents_install: AtomicBool::new(false),
             fail_auth: Mutex::new(None),
             lock_on_add: AtomicBool::new(false),
         })
@@ -102,7 +104,13 @@ impl ProcessSpawner for FakeSkillsCli {
                 serde_json::from_slice(&std::fs::read(&lock).unwrap()).unwrap();
             doc["skills"].as_object_mut().unwrap().shift_remove(&skill);
             std::fs::write(&lock, serde_json::to_vec(&doc).unwrap()).unwrap();
-        } else if self.fail_updates.load(Ordering::SeqCst) {
+        } else if self.fail_updates.load(Ordering::SeqCst)
+            || (self.fail_dotagents_install.load(Ordering::SeqCst)
+                && spec
+                    .args
+                    .iter()
+                    .any(|arg| arg.starts_with("@sentry/dotagents")))
+        {
             status = 1;
         }
         Ok(ProcessOutput {
@@ -568,6 +576,68 @@ fn pack_update_reports_a_failed_cli_run_as_a_failed_step_and_partial_status() {
         cli.calls()
     );
     std::fs::remove_dir_all(&home).ok();
+}
+
+#[test]
+fn pack_update_reports_each_owner_result_for_a_shared_skill_name() {
+    let home = home("pack_update_shared_name");
+    installed_from_pack(&home, "shared", "deadbeef");
+    std::fs::write(
+        home.join(".agents/agents.toml"),
+        "[[skills]]\nname = \"shared\"\nsource = \"other/pack\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.join(".agents/agents.lock"),
+        "[skills.shared]\nsource = \"other/pack\"\n",
+    )
+    .unwrap();
+    let cli = FakeSkillsCli::new(&home);
+    cli.fail_dotagents_install.store(true, Ordering::SeqCst);
+    let rt = runtime(&home, cli.clone());
+    let report = ops::pack_update(
+        &rt,
+        &ctx(),
+        &PackUpdateRequest {
+            all: true,
+            ..PackUpdateRequest::default()
+        },
+    )
+    .unwrap();
+    let events = ops::list_events(&rt, &ctx(), &ListEventsRequest::default()).unwrap();
+    std::fs::remove_dir_all(&home).ok();
+
+    assert_eq!(report.steps.len(), 2, "{report:?}");
+    assert_eq!(cli.calls().len(), 2, "{:?}", cli.calls());
+    let skills_sh = report
+        .steps
+        .iter()
+        .find(|step| step.source == "owner/pack")
+        .unwrap();
+    let dotagents = report
+        .steps
+        .iter()
+        .find(|step| step.source == "other/pack")
+        .unwrap();
+    let PackStepState::Done { event_id } = &skills_sh.state else {
+        panic!("skills.sh did not report its success: {skills_sh:?}");
+    };
+    assert!(
+        events.iter().any(|event| &event.id == event_id
+            && event.skill.0 == "shared"
+            && event.kind == "update"
+            && event.status == "done"),
+        "{events:?}"
+    );
+    let PackStepState::Failed { code, reason } = &dotagents.state else {
+        panic!("dotagents did not report its failure: {dotagents:?}");
+    };
+    assert_eq!(*code, ErrorCode::Io);
+    assert!(
+        reason.contains("dotagents install failed") && reason.contains("update failed"),
+        "{reason}"
+    );
+    assert_eq!(report.status(), OpStatus::Partial);
 }
 
 #[test]

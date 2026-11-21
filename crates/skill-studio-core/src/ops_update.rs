@@ -1516,6 +1516,19 @@ pub fn update_all_unbounded(
     requests: &[UpdateRequest],
     mut on_outcome: impl FnMut(&SkillName, &Result<UpdateOutcome, CoreError>),
 ) -> Result<UpdateAllOutcome, CoreError> {
+    update_all_with_request_index(rt, ctx, requests, |index, result| {
+        on_outcome(&requests[index].skill, result);
+    })
+}
+
+/// Reports each typed result with its position in the update request slice.
+/// Requests that never ran do not call `on_outcome`.
+pub(crate) fn update_all_with_request_index(
+    rt: &Runtime,
+    ctx: &OpContext,
+    requests: &[UpdateRequest],
+    mut on_outcome: impl FnMut(usize, &Result<UpdateOutcome, CoreError>),
+) -> Result<UpdateAllOutcome, CoreError> {
     // Each `update` call files its own `Operation::Update` record as a nested
     // op under this one, so a failed item never fails the batch.
     rt.run(Operation::UpdateAll, ctx, || {
@@ -1809,7 +1822,7 @@ fn update_all_body(
     rt: &Runtime,
     ctx: &OpContext,
     requests: &[UpdateRequest],
-    on_outcome: &mut impl FnMut(&SkillName, &Result<UpdateOutcome, CoreError>),
+    on_outcome: &mut impl FnMut(usize, &Result<UpdateOutcome, CoreError>),
 ) -> UpdateAllOutcome {
     let clock = rt.ports.clock.as_ref();
     let start = clock.monotonic();
@@ -1889,7 +1902,7 @@ fn update_all_body(
             }
             result
         };
-        on_outcome(&req.skill, &result);
+        on_outcome(index, &result);
         match result {
             Ok(outcome) => items.push(UpdateAllItem {
                 skill: req.skill.clone(),
