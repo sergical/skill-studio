@@ -365,7 +365,7 @@ impl Journal for FsJournal {
         Self::validate_id(id)?;
         let mut record: PlanRecord = self.read_json(&self.plan_path(id))?;
         match record.status {
-            PlanStatus::Pending | PlanStatus::Interrupted => {
+            PlanStatus::Pending | PlanStatus::Interrupted | PlanStatus::Unknown => {
                 return Err(CoreError::new(
                     ErrorCode::InvalidRequest,
                     "recovery still needs this plan's backups",
@@ -1253,7 +1253,9 @@ pub fn trim_backups(
     let mut trimmed = Vec::new();
     for plan in &plans {
         match plan.status {
-            PlanStatus::Pending | PlanStatus::Interrupted => continue,
+            // A newer build may still need the backups of a plan whose
+            // status this build does not know.
+            PlanStatus::Pending | PlanStatus::Interrupted | PlanStatus::Unknown => continue,
             PlanStatus::Done | PlanStatus::Failed | PlanStatus::Reversed | PlanStatus::Dropped => {}
         }
         for backup in &plan.backups {
@@ -1358,7 +1360,7 @@ mod tests {
             plan.record_write_file(Path::new("/root/alpha/SKILL.md"), Some(b"backup bytes"))
                 .unwrap();
             let status = match (protection, index) {
-                ("pending", 0) => PlanStatus::Pending,
+                ("pending" | "newer", 0) => PlanStatus::Pending,
                 ("interrupted", 0) => PlanStatus::Interrupted,
                 ("undoable", 0) => PlanStatus::Done,
                 _ => PlanStatus::Reversed,
@@ -1366,9 +1368,45 @@ mod tests {
             if status != PlanStatus::Pending {
                 plan.finish(status).unwrap();
             }
+            if protection == "newer" && index == 0 {
+                write_status_from_a_newer_build(fs.as_ref(), &journal, &id);
+            }
             ids.push(id);
         }
         (journal, guard, fs, ids)
+    }
+
+    /// Rewrites the plan's status to `paused`, a value only a newer build
+    /// knows, the way that build would leave the file on disk.
+    fn write_status_from_a_newer_build(fs: &dyn ScopeFs, journal: &FsJournal, id: &PlanId) {
+        let path = journal.plan_path(id);
+        let text = String::from_utf8(fs.read_capped(&path, u64::MAX).unwrap()).unwrap();
+        assert!(text.contains(r#""status": "pending""#), "{text}");
+        let text = text.replace(r#""status": "pending""#, r#""status": "paused""#);
+        fs.fsops_remove_file(&path).unwrap();
+        fs.fsops_write_new_file(&path, text.as_bytes()).unwrap();
+    }
+
+    /// Given a plan whose status a newer build wrote, when this build reads
+    /// the journal, then the read succeeds, the plan is not open (so it
+    /// blocks no write), and this build refuses to settle it; on failure the
+    /// panic names the step that refused the journal.
+    #[test]
+    fn a_plan_status_from_a_newer_build_reads_as_unknown_and_blocks_no_write() {
+        let (journal, _guard, _fs, ids) = retention_fixture("newer");
+        let records = journal
+            .all()
+            .expect("a status from a newer build made the whole journal unreadable");
+        assert_eq!(records[0].id, ids[0]);
+        assert_eq!(records[0].status, PlanStatus::Unknown);
+        assert!(
+            journal.pending().expect("pending").is_empty(),
+            "a plan from a newer build counts as open, so every write here waits on it"
+        );
+        let lease = FakeLease::default();
+        journal
+            .finish(&guard(&lease), &ids[0], PlanStatus::Reversed)
+            .expect_err("this build must not settle a plan it does not understand");
     }
 
     #[test]
@@ -1418,7 +1456,14 @@ mod tests {
     #[test]
     fn completed_plan_retention_keeps_the_count_and_age_union_or_deletes_a_protected_backup() {
         use crate::backup_retention::BACKUP_RETENTION_COUNT;
-        for protection in ["count", "recent", "undoable", "pending", "interrupted"] {
+        for protection in [
+            "count",
+            "recent",
+            "undoable",
+            "pending",
+            "interrupted",
+            "newer",
+        ] {
             let (journal, guard, fs, ids) = retention_fixture(protection);
             trim_backups(&journal, &guard, Utc::now()).unwrap();
             let records = journal.all().unwrap();
