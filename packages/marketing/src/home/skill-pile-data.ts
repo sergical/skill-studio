@@ -1,10 +1,13 @@
 // ============================================================================
 // Skill Studio - Skill pile data
 // The made-up skill pile the homepage hero throws around: 92 skills in 11
-// folders, with a fixed seed so the prerender and every visit draw the same pile
+// folders, with a fixed seed so the prerender and every visit draw the same pile.
+// Each skill has the state an agent's model sees it in. The three counts keep
+// the ratio measured on one machine (Claude Code, 1% listing budget): 49
+// described, 107 name only, 129 hidden.
 // ============================================================================
 
-export type PileState = "ok" | "outdated" | "broken" | "unused" | "copy";
+export type PileState = "described" | "name-only" | "hidden";
 
 export interface PileChip {
   id: string;
@@ -27,26 +30,26 @@ const FOLDERS = [
   "old-prototype",
 ];
 
-const KEPT: ReadonlyArray<[name: string, state: PileState]> = [
-  ["agent-browser", "ok"],
-  ["frontend-design", "ok"],
-  ["motion", "broken"],
-  ["tailwind", "ok"],
-  ["commit", "ok"],
-  ["skill-creator", "outdated"],
-  ["prepare-videos", "ok"],
-  ["release-notes", "ok"],
-  ["code-review", "broken"],
-  ["pdf-tools", "outdated"],
-  ["deploy-preview", "ok"],
-  ["writing-skills", "ok"],
-  ["sentry-debug", "ok"],
-  ["db-migrate", "outdated"],
-  ["changelog", "broken"],
-  ["playwright", "ok"],
+const DESCRIBED = [
+  "agent-browser",
+  "frontend-design",
+  "motion",
+  "tailwind",
+  "commit",
+  "skill-creator",
+  "prepare-videos",
+  "release-notes",
+  "code-review",
+  "pdf-tools",
+  "deploy-preview",
+  "writing-skills",
+  "sentry-debug",
+  "db-migrate",
+  "changelog",
+  "playwright",
 ];
 
-const UNUSED = [
+const NAME_ONLY = [
   "pr-writer",
   "api-docs",
   "seo-audit",
@@ -81,7 +84,10 @@ const UNUSED = [
   "linear-triage",
 ];
 
+// Copies of a skill in another folder. Most are hidden: an agent does not list a skill that
+// is manual-only, turned off, or installed for another project.
 const COPY_COUNT = 44;
+const NAME_ONLY_COPIES = 3;
 
 // A fixed seed, so the prerender and every visit draw the same pile.
 function seededRandom(seed: number) {
@@ -98,16 +104,24 @@ function buildPile(): PileChip[] {
   const random = seededRandom(455);
   const pick = <T>(items: ReadonlyArray<T>) => items[Math.floor(random() * items.length)];
   const entries: Array<Pick<PileChip, "name" | "folder" | "state">> = [
-    ...KEPT.map(([name, state]) => ({ name, state, folder: pick(FOLDERS.slice(0, 3)) })),
-    ...UNUSED.map((name) => ({ name, state: "unused" as const, folder: pick(FOLDERS) })),
+    ...DESCRIBED.map((name) => ({
+      name,
+      state: "described" as const,
+      folder: pick(FOLDERS.slice(0, 3)),
+    })),
+    ...NAME_ONLY.map((name) => ({ name, state: "name-only" as const, folder: pick(FOLDERS) })),
   ];
   const originals = [...entries];
   for (let index = 0; index < COPY_COUNT; index += 1) {
     const original = pick(originals);
     const folder = pick(FOLDERS.filter((candidate) => candidate !== original.folder));
-    entries.push({ name: original.name, folder, state: "copy" });
+    entries.push({
+      name: original.name,
+      folder,
+      state: index < NAME_ONLY_COPIES ? "name-only" : "hidden",
+    });
   }
-  // Shuffled, so kept skills are spread through the pile instead of on top of it.
+  // Shuffled, so described skills are spread through the pile instead of on top of it.
   for (let index = entries.length - 1; index > 0; index -= 1) {
     const swap = Math.floor(random() * (index + 1));
     [entries[index], entries[swap]] = [entries[swap], entries[index]];
@@ -119,26 +133,31 @@ function buildPile(): PileChip[] {
 }
 
 export const PILE = buildPile();
-export const isKept = (chip: PileChip) =>
-  chip.state === "ok" || chip.state === "broken" || chip.state === "outdated";
-export const KEPT_CHIPS = PILE.filter(isKept);
+/** A described skill takes a place in the sorted list. Every other skill goes to a drawer. */
+export const isDescribed = (chip: PileChip) => chip.state === "described";
+export const DESCRIBED_CHIPS = PILE.filter(isDescribed);
 const countState = (state: PileState) => PILE.filter((chip) => chip.state === state).length;
 
 export const PILE_COUNTS = {
   total: PILE.length,
   folders: FOLDERS.length,
-  copies: countState("copy"),
-  unused: countState("unused"),
-  broken: countState("broken"),
-  outdated: countState("outdated"),
-  kept: KEPT_CHIPS.length,
-  parked: PILE.length - KEPT_CHIPS.length,
+  described: DESCRIBED_CHIPS.length,
+  nameOnly: countState("name-only"),
+  hidden: countState("hidden"),
+  notDescribed: PILE.length - DESCRIBED_CHIPS.length,
 };
 
+export type DrawerState = Exclude<PileState, "described">;
+export const DRAWER_STATES = ["name-only", "hidden"] as const satisfies ReadonlyArray<DrawerState>;
+
 export const STATE_COLOR = {
-  ok: "oklch(0.75 0.17 150)",
-  outdated: "oklch(0.72 0.15 240)",
-  broken: "oklch(0.66 0.21 25)",
-  unused: "oklch(0.6 0.02 290)",
-  copy: "oklch(0.8 0.15 80)",
+  described: "oklch(0.75 0.17 150)",
+  "name-only": "oklch(0.8 0.15 80)",
+  hidden: "oklch(0.6 0.02 290)",
+} as const satisfies Record<PileState, string>;
+
+export const STATE_LABEL = {
+  described: "Described",
+  "name-only": "Name only",
+  hidden: "Hidden",
 } as const satisfies Record<PileState, string>;

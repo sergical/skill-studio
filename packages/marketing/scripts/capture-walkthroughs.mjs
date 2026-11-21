@@ -122,15 +122,42 @@ function captureActivity(theme, width, suffix = "") {
   capture(`activity-${theme}-7d${suffix}`);
 }
 
+function captureSessions(theme, width, suffix = "") {
+  open("sessions", theme, width);
+  browser("wait", "--text", "sessions read");
+  capture(`sessions-${theme}-findings${suffix}`);
+}
+
+function captureListing(theme, width, suffix = "") {
+  open("listing", theme, width);
+  browser("wait", "--text", "listed skills keep a description");
+  capture(`listing-${theme}-now${suffix}`);
+  browser("fill", "#listing-budget", "0.1");
+  capture(`listing-${theme}-typed${suffix}`);
+  clickExact("Compare");
+  browser("wait", "--text", "At new budget");
+  capture(`listing-${theme}-compare${suffix}`);
+}
+
+const features = {
+  map: captureMap,
+  repair: captureRepair,
+  install: captureInstall,
+  activity: captureActivity,
+  sessions: captureSessions,
+  listing: captureListing,
+};
+// WALKTHROUGH_ONLY=sessions,listing captures only those features.
+const only = process.env.WALKTHROUGH_ONLY?.split(",");
+
 for (const theme of ["dark", "light"]) {
   for (const [width, suffix] of [
     [1040, ""],
     [800, "-mobile"],
   ]) {
-    captureMap(theme, width, suffix);
-    captureRepair(theme, width, suffix);
-    captureInstall(theme, width, suffix);
-    captureActivity(theme, width, suffix);
+    for (const [name, captureFeature] of Object.entries(features)) {
+      if (!only || only.includes(name)) captureFeature(theme, width, suffix);
+    }
   }
 }
 

@@ -142,3 +142,61 @@ describe("ProductMock Packs page", () => {
     );
   });
 });
+
+describe("ProductMock Sessions page", () => {
+  it("is the first page, and marks a possible miss as a guess", () => {
+    render(<ProductMock theme="dark" onToggleTheme={() => {}} />);
+    expect(screen.getByRole("button", { name: "Sessions" }).getAttribute("aria-current")).toBe(
+      "page",
+    );
+    const missed = screen.getByRole("region", { name: "Possibly missed" });
+    expect(missed.textContent).toContain("A guess:");
+    expect(screen.getByRole("region", { name: "Sessions" }).textContent).toContain(
+      "Possibly missed (guess): emil-interaction-details, name only.",
+    );
+  });
+
+  it("says that Cursor does not record its listing", async () => {
+    const user = userEvent.setup();
+    render(<ProductMock theme="dark" onToggleTheme={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "Cursor" }));
+    expect(screen.getByText("This agent does not record its listing.")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Possibly missed" })).toBeNull();
+  });
+});
+
+describe("ProductMock Model listing page", () => {
+  it("compares a budget, marks the skills that change, and gives the setting line", async () => {
+    const user = userEvent.setup();
+    render(<ProductMock theme="dark" onToggleTheme={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "Model listing" }));
+    expect(screen.getByText(/49 of 156 listed skills keep a description/)).toBeTruthy();
+    const compare = screen.getByRole("button", { name: "Compare" });
+    expect(compare.hasAttribute("disabled")).toBe(true);
+    const setting = screen.getByRole("region", { name: "Listing setting" });
+    expect(setting.textContent).toContain('"skillListingBudgetFraction": 0.01');
+
+    await user.type(
+      screen.getByRole("textbox", { name: "Try a budget, in percent of the context window" }),
+      "2",
+    );
+    await user.click(compare);
+    expect(screen.getByRole("status").textContent).toBe(
+      "At 2%: 3 of these 10 skills gain a description.",
+    );
+    const rows = within(screen.getByRole("list", { name: "Listing" })).getAllByRole("listitem");
+    expect(rows.filter((row) => row.textContent?.includes("Name onlyDescribed"))).toHaveLength(3);
+    expect(setting.textContent).toContain('"skillListingBudgetFraction": 0.02');
+    expect(setting.textContent).toContain("Skill Studio does not write agent settings.");
+  });
+
+  it("shows hidden skills with their reason on request", async () => {
+    const user = userEvent.setup();
+    render(<ProductMock theme="dark" onToggleTheme={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "Model listing" }));
+    expect(screen.queryByText("(manual-only)")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Show 129 hidden skills" }));
+    expect(screen.getByText("(manual-only)")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Hide hidden skills" })).toBeTruthy();
+  });
+});

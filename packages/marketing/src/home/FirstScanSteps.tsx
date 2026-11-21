@@ -1,7 +1,8 @@
 // ============================================================================
 // Skill Studio - First scan steps
 // The desktop app's first run as three steps: pick agents, find folders, scan
-// and tidy. It answers "how does it know where my skills are" before download.
+// and see what the model sees. It answers "how does it know where my skills
+// are" before download.
 // ============================================================================
 import type { ReactNode } from "react";
 import * as stylex from "@stylexjs/stylex";
@@ -10,7 +11,7 @@ import { Check, FolderOpen, History } from "lucide-react";
 import { AgentIcon, type AgentId } from "../AgentIcon";
 import { siteTokens } from "../SiteTheme.stylex";
 import { homeSectionStyles } from "./HomeSection.stylex";
-import { PILE_COUNTS } from "./skill-pile-data";
+import { PILE_COUNTS, STATE_COLOR } from "./skill-pile-data";
 
 // Row states and wording match apps/desktop FirstRunScreen.
 const AGENT_ROWS = [
@@ -31,12 +32,17 @@ const FOLDER_ROWS = [
   { path: "~/work/design-system", source: "history" },
 ] as const;
 
+// The same made-up library as the hero pile, so the page shows one set of numbers.
 const SCAN_ROWS = [
-  { label: "skills found", value: PILE_COUNTS.total, color: "oklch(0.75 0.17 150)" },
-  { label: "copies of one skill", value: PILE_COUNTS.copies, color: "oklch(0.8 0.15 80)" },
-  { label: "not used in 30 days", value: PILE_COUNTS.unused, color: "oklch(0.6 0.02 290)" },
-  { label: "broken", value: PILE_COUNTS.broken, color: "oklch(0.66 0.21 25)" },
-] as const;
+  { label: "skills found", value: PILE_COUNTS.total, color: siteTokens.text },
+  {
+    label: "listed with a description",
+    value: PILE_COUNTS.described,
+    color: STATE_COLOR.described,
+  },
+  { label: "listed by name only", value: PILE_COUNTS.nameOnly, color: STATE_COLOR["name-only"] },
+  { label: "hidden from the model", value: PILE_COUNTS.hidden, color: STATE_COLOR.hidden },
+];
 
 function Step({
   number,
@@ -117,9 +123,7 @@ function ScanRows() {
         ))}
       </ul>
       <div {...stylex.props(styles.parkRow)}>
-        <span>
-          Park {PILE_COUNTS.parked} · keep {PILE_COUNTS.kept}
-        </span>
+        <span>Park the skills you do not use</span>
         <span {...stylex.props(styles.undo)}>Undo</span>
       </div>
     </>
@@ -138,6 +142,7 @@ export function FirstScanSteps() {
           </p>
           <ul {...stylex.props(styles.promises)}>
             <li>It does not search the rest of your disk.</li>
+            <li>It reads agent settings and session files. It does not write them.</li>
             <li>Park moves a skill away from every agent. Undo puts it back.</li>
             <li>It runs on your Mac. Free and open source.</li>
           </ul>
@@ -159,8 +164,8 @@ export function FirstScanSteps() {
           </Step>
           <Step
             number={3}
-            title="Scan, then tidy."
-            copy="See every skill in one list. Fix the broken ones and park the copies and the unused."
+            title="It shows what the model sees."
+            copy="Each skill shows as described, name only or hidden, for each agent. Park the skills you do not use, and fix the broken ones."
           >
             <ScanRows />
           </Step>
