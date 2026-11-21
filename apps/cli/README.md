@@ -10,31 +10,35 @@ core, so the CLI, the desktop app, and the MCP server agree.
 
 `skill-studio --help` lists these:
 
-```
+```text
 invocation  Check invocation across copies, or set every copy of a skill
 scan        List every skill installed for your agents
 diagnose    Find broken skills and say what is wrong with each
 conflicts   Find skills that have different copies in different places
 review      Set, clear, or list skill review dates
-usage       Show which skills your agents used, and which they never used
-park        Turn a skill off for all agents
-turn-off    Split a shared skill and park one agent's copy
+library     Show library skills, their sources, uses, invocation modes and agent copies
+pack        List, add, update, remove or switch the source of packs: one source that ships skills
+recovery    List or drop interrupted writes that recovery cannot undo
+usage       Show which skills your agents used in the last 30 days, and which they did not
+park        Turn a skill off for all agents. You can turn it on again later
+turn-off    Split a shared skill and park one agent's copy. Stops source updates for the copies
 unpark      Turn a parked skill on again
-enable      Same as `unpark`
-disable     Same as `park`
-remove      Remove a skill
+enable      Same as `unpark`: turn a parked skill on again
+disable     Same as `park`: turn a skill off for all agents
+remove      Remove a skill. Copies you made go to a recovery folder
 fix         Repair a skill's problems and list the ones it cannot repair
 undo        Reverse your last change
-events      List your past changes, newest first (alias: history)
+events      List your past changes, newest first [alias: history]
 restore     Reverse one change from your history
 add         Install a skill for one or more agents
 outdated    List skills that have an update
 update      Update installed skills
-mcp         Start the MCP server
-extras      List hook events, MCP server names, and instruction file paths
-listing     Show which skills each agent lists with a description
-sessions    Show per session which skills were listed, used, or missed
-doctor      Check skill state and model listing budgets
+mcp         Start the MCP server so an agent can tidy your skills
+extras      List hook events, MCP server names, and instruction file paths. Writes nothing
+listing     Show which skills each agent lists for the model with a description, with a name only, or not at all. This writes nothing
+sessions    Show, per recent session, which skills were listed with a description, by name only, or not at all, which were used, and which were possibly missed. This writes nothing
+doctor      Check skill state and model listing budgets. This writes nothing
+help        Print this message or the help of the given subcommand(s)
 ```
 
 Run `skill-studio <command> --help` for each command's flags.
@@ -47,47 +51,27 @@ Run `skill-studio <command> --help` for each command's flags.
   summary line.
 - `mcp` serves the Skill Studio MCP server over stdio.
 
-`--fixture`, `--timings` and the commands below other than `scan` and
-`diagnose` are hidden from `--help`. They stay for tests and
-tooling.
-
-```
-skill-studio scan         [--home <dir>] [--project <dir>]... [--fixture <dir>] [--skill <name>]... [--timings] [--json]
-skill-studio diagnose     (same flags)
-skill-studio capabilities [--harness <id>]... [--observe] [--tool <name>]... [--json]
-skill-studio watch        [--home <dir>] [--fixture <dir>] [--since <revision>] [--json]
-skill-studio schema       [--out <dir>]
-```
-
-- `scan` inventories every installed skill.
-- `diagnose` inventories and derives issues (broken links, spec violations,
-  repairable frontmatter, drift, duplicates, parked and disabled skills).
-- `capabilities` reports what each harness supports, per the built-in
-  catalog; `--observe` also probes the machine (config presence, runner
-  binary on `PATH`).
-- `watch` polls the scope every 200ms and prints one JSON line per change,
-  each carrying the new revision and the full inventory that revision names.
-  The watcher already holds that inventory, so it sends it instead of making
-  the reader run its own `scan`; a revision-only line would force that scan
-  to race the watcher and label newer bytes with an older revision.
-  `--since <revision>` suppresses the initial line when the revision already
-  matches what the caller last saw. `Ctrl-C` exits 130, the same code a
-  cancelled read or write command uses.
-- `schema` writes one JSON Schema file per request/result DTO (via
-  `schemars`) into `--out` (default `crates/skill-studio-core/schema`).
+The [CLI contract snapshot](../../.gate/snapshots/cli.snap) also records
+help for internal commands and nested subcommands. For example,
+`preview-repair` and `apply-repair` serve the frontmatter repair flow.
+`watch` emits one JSON line per inventory change. Use `--since <revision>`
+to skip the first line if the revision matches. `schema` writes the core
+DTO schemas.
 
 ## Scope flags
 
-- `--fixture <dir>` scans an in-memory-shaped fixture directory instead of
-  the real machine (`RuntimeScope::fixture`); its lease root is
+- `--fixture <dir>` uses a fixture directory and opens existing leases at
   `<dir>/.skill-studio/leases`.
-- Without `--fixture`, the scope is `Live`, rooted at `--home` or the host's
-  home directory. Its lease root is `<data_root>/leases`, where
-  `data_root` is `$XDG_DATA_HOME/skill-studio` or
-  `~/.local/share/skill-studio`. The core itself never reads `HOME` or
-  calls `dirs`; this crate is where that happens.
-- `--project <dir>` (repeatable) adds explicit projects. Without one,
-  projects are discovered through `TranscriptProjectDiscovery`.
+- `--home <dir>` uses that directory as a live home. It keeps history at
+  `<dir>/.skill-studio/history` and leases at `<dir>/.skill-studio/leases`.
+- With neither flag, the CLI uses the host home. It keeps history and leases
+  under `$XDG_DATA_HOME/skill-studio` or, if unset or empty,
+  `~/.local/share/skill-studio`.
+- Repeat `--project <dir>` to name projects. Live scopes with no explicit
+  projects use `HostProjectDiscovery`.
+
+Set `SKILL_STUDIO_TELEMETRY` to `0` or `false` to turn telemetry off.
+Other values leave the host's saved setting in effect.
 
 ## Output
 
@@ -152,17 +136,17 @@ bare. Every invocation carries a fresh ULID `correlation_id`.
 
 ### Exit statuses
 
-| Exit | Meaning                                                                                                                                                    |
-| ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0    | `status: "ok"`, no issues (`scan`, or `diagnose` with no issues).                                                                                          |
-| 1    | `status: "ok"`, but the result has a problem: `diagnose` (`Warning` or above), `conflicts`, `doctor`, `fix` (unrepaired items) or `update` (errors).       |
-| 2    | `status: "error"`, a request- or scope-shaped error (`invalid_request`, `invalid_scope`, `ambiguous_target`, `unsupported`, `execution_failed`, `io`).     |
-| 3    | `status: "error"`, a concurrency conflict (`scope_busy`, `stale_proposal`, `drift_conflict`, `ownership_changed`, `already_reverted`, `recovery_pending`). |
-| 4    | `status: "partial"` — some scope roots could not be read; see `data.observations`.                                                                         |
-| 130  | `status: "error"`, `code: "cancelled"`.                                                                                                                    |
+| Exit | Meaning                                                                                                                                                                                                                                            |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0    | `status: "ok"`, no issues (`scan`, or `diagnose` with no issues).                                                                                                                                                                                  |
+| 1    | `status: "ok"`, with findings. Examples include `diagnose` (warning or higher), `conflicts`, `doctor`, and `fix` (unrepaired items or conflicts). Also used when every item in a batch update fails (`status: "error"`, details in `data.errors`). |
+| 2    | `status: "error"`, a request- or scope-shaped error (`invalid_request`, `invalid_scope`, `ambiguous_target`, `unsupported`, `backup_expired`, `execution_failed`, `io`).                                                                           |
+| 3    | `status: "error"`, a concurrency conflict (`scope_busy`, `stale_proposal`, `drift_conflict`, `ownership_changed`, `already_reverted`, `recovery_pending`).                                                                                         |
+| 4    | `status: "partial"` — the result is incomplete, for example an unreadable scope root or a batch that partly succeeded.                                                                                                                             |
+| 130  | `status: "error"`, `code: "cancelled"`.                                                                                                                                                                                                            |
 
-The mapping is exact: it is `ErrorCode::exit_status()` in the core, tested
-there and exercised end-to-end in `apps/cli/tests/envelope.rs`.
+See [result status](../../crates/skill-studio-core/src/ops.rs) and
+[error codes](../../crates/skill-studio-core/src/error.rs) for the full rules.
 
 List hook events and counts, MCP server names, and instruction file paths:
 

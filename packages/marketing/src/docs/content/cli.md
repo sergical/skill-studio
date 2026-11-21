@@ -86,7 +86,7 @@ npx skill-studio@latest park --id <id>
 
 ## Turn a skill off
 
-Turning a skill off means parking it. This turns it off for all agents:
+Turn a skill off for all agents with `disable`:
 
 ```sh
 npx skill-studio@latest disable my-skill
@@ -146,7 +146,7 @@ Install a skill from a GitHub repository:
 npx skill-studio@latest add owner/repo --name my-skill
 ```
 
-Remove a skill that you installed with Skill Studio, `npx skills` or dotagents:
+Remove a skill managed by skills.sh or dotagents, or a copy or fork tracked by Skill Studio:
 
 ```sh
 npx skill-studio@latest remove my-skill
@@ -162,4 +162,4 @@ Add `--json` to get output that a script can read:
 npx skill-studio@latest diagnose --json
 ```
 
-`diagnose`, `conflicts`, `fix`, `doctor` and `update` exit with code 1 when they find a problem. Other errors use codes 2 and higher.
+Commands such as `diagnose`, `conflicts`, `fix` and `doctor` exit with code 1 when they complete with findings. A batch update also exits with code 1 if every item fails. If only some items fail, it exits with code 4. Check `data.errors` for the batch update errors.

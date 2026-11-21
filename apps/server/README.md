@@ -17,14 +17,23 @@ The server refuses to start without it. `PORT` defaults to `8787`, bound to
 
 - `GET /health` -> `{ ok: true }`, no upstream call
 - `GET /api/v1/skills`, `GET /api/v1/skills/search`, `GET /api/v1/skills/:owner/:repo/:slug`
-  -> proxied to `https://skills.sh/api/v1`, query string passed through verbatim
+  -> proxied to `https://skills.sh/api/v1`, with these query parameters:
+  - List: `page`, `per_page`, `view`
+  - Search: `limit`, `q`
+  - Detail: none
+
+The proxy keeps the first value for each allowed parameter and forwards the
+parameters in the order shown.
 
 ## Deploy to Cloudflare Workers
 
 The same app also runs as a public Cloudflare Worker (`src/worker.ts`), for
 release builds of the desktop app that don't have a local server to talk to
 (see `SKILL_STUDIO_SERVER_URL` in the root `apps/desktop` release build). It's
-hosted at `https://api.useskillstudio.com`.
+hosted at `https://api.useskillstudio.com`. The Worker also has a
+`workers.dev` endpoint because `workers_dev` is enabled. That setting
+stays enabled pending owner review of the [deploy configuration](wrangler.jsonc)
+and any callers of the endpoint.
 
 The shortest path, from `apps/server`:
 
@@ -54,6 +63,7 @@ The Worker is public, so it adds two things the Node dev server doesn't need:
 - **Rate limit**: 60 requests per 60 seconds per caller IP
   (`CF-Connecting-IP`), via the Workers Rate Limiting binding. A refused
   request gets `429` with `Retry-After: 60`.
-- **Edge cache**: successful (`200`) responses only, keyed by the full
-  request URL - 300 seconds for the list/search routes, 3600 seconds for a
-  skill's detail route. `/health` is never rate limited or cached.
+- **Edge cache**: successful (`200`) responses only, keyed by the
+  request origin, path and the same filtered, ordered query sent upstream.
+  The list and search routes cache for 300 seconds. The detail route caches
+  for 3600 seconds. `/health` is never rate limited or cached.
