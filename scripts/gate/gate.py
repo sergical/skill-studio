@@ -88,8 +88,7 @@ def classify(cfg, base, head='HEAD', raise_to=None, reason=None, author=''):
             if added or (author in cfg.get('patch_bots', []) and not patch):
                 hits.append({'rule': 'dependencies', 'tier': 'stop', 'files': [path]})
     for path in files:
-        if matches(path, cfg.get('lock_files', [])) and lock_adds_outside_code(
-                subprocess.check_output(['git', 'diff', base, head, '--', path]), path, read_at(head, path)):
+        if matches(path, cfg.get('lock_files', [])) and lock_adds_outside_code(base, head, path):
             hits.append({'rule': 'dependencies', 'tier': 'stop', 'files': [path]})
     tier = max((h['tier'] for h in hits), key=TIERS.index, default='ship')
     if raise_to:
@@ -232,29 +231,48 @@ def needs_you(cfg, hits):
     return list(grouped.values())
 
 
-def links_outside_repo(path, text):
-    """Lockfile lines whose `link:` target is outside the repository, or that
-    sit outside `importers:`, where the folder they are relative to is unknown.
-    An importer is a two-space key under `importers:`; its links are relative
-    to its folder."""
-    outside, importer = set(), None
-    for line in text.split('\n'):
-        if line and not line.startswith(' '):
-            importer = '' if line == 'importers:' else None
-        elif importer is not None and re.fullmatch(r"  [^ ].*:", line):
-            importer = line.strip()[:-1].strip("'")
-        match = re.search(r'(?<![\w.-])link:(\S*)', line)
-        if match:
-            target = posixpath.normpath(posixpath.join(posixpath.dirname(path), importer or '', match.group(1)))
-            if importer is None or posixpath.isabs(match.group(1)) or target == '..' or target.startswith('../'):
-                outside.add(line[1:] if line.startswith('+') else line)
-    return outside
-
-
 # The shapes pnpm writes. A key is single-quoted or a plain name; a plain
 # version may carry peer versions in parentheses.
 LOCK_KEY = r"(?:'[^'\t]*'|[A-Za-z0-9_/.^~-][^\s:]*)"
+LOCK_LINK = r"link:([^\s'\"\\]+)"
 PEER = r"\([\w@/.+=-]+\)"
+
+
+def lockfile_outside_link_targets(path, text):
+    """Resolve pnpm's importer links relative to the lockfile and importer.
+
+    Raise if a link or its importer is outside the block syntax we understand.
+    A lockfile can have a separate pnpm bootstrap document before the workspace.
+    """
+    outside, importers = set(), set()
+    in_importers, importer = False, None
+    for line in text.split('\n'):
+        if not line.strip() or line.lstrip(' ').startswith('#'):
+            continue
+        if not line.startswith(' '):
+            in_importers = line == 'importers:'
+            importer = None
+            importers.clear()
+        elif in_importers and not line.startswith('    '):
+            entry = re.fullmatch(rf'  ({LOCK_KEY}):( \{{\}})?', line)
+            if not entry:
+                raise ValueError('Cannot parse pnpm lockfile importer')
+            folder = entry[1].strip("'")
+            if not re.fullmatch(r'[\w./@+~-]+', folder) or folder in importers:
+                raise ValueError('Cannot parse pnpm lockfile importer path')
+            importers.add(folder)
+            importer = None if entry[2] else folder
+        elif in_importers and importer is None:
+            raise ValueError('Missing pnpm lockfile importer for nested entries')
+        if 'link:' not in line or not re.search(r'(?<![\w.-])link:', line):
+            continue
+        link = re.fullmatch(rf'        (?:version|specifier): {LOCK_LINK}', line)
+        if not link or importer is None:
+            raise ValueError('Cannot resolve pnpm lockfile link')
+        target = posixpath.normpath(posixpath.join(posixpath.dirname(path), importer, link[1]))
+        if posixpath.isabs(target) or target == '..' or target.startswith('../'):
+            outside.add(target)
+    return outside
 
 
 def plain_version(value):
@@ -280,18 +298,27 @@ FREE_VALUE_KEYS = {'specifier', 'deprecated', 'lockfileVersion', 'hasBin', 'opti
                    'cpu', 'os', 'libc', 'engines', 'bundledDependencies'}
 
 
-def lock_adds_outside_code(diff, path='', head_text=''):
-    """True when an added lockfile line could point a package anywhere but the
-    registry, or at another package than its name.
+def lock_adds_outside_code(base, head, path):
+    """True when a lockfile introduces a link outside the repo or an added
+    line could point at a different package or a source outside the registry.
 
     YAML can spell one value many ways (quotes, tabs, block scalars, flow
     maps, values on the next line), and pnpm reads them all. So an added line
     passes only in a shape pnpm writes: a key that opens a map or has `{}`,
     a list item, `---`, `resolution: {integrity: sha512-...}`, true or false,
-    a plain version, a version range, a `link:` to a folder inside the
-    repository, or a key in FREE_VALUE_KEYS.
+    a plain version, a version range, a `link:` compared between base and
+    head, or a key in FREE_VALUE_KEYS.
     Anything else stops."""
-    outside = links_outside_repo(path, head_text)
+    # Moving an importer changes the target even if its link line is unchanged.
+    try:
+        before = lockfile_outside_link_targets(path, read_at(base, path))
+        after = lockfile_outside_link_targets(path, read_at(head, path))
+    except ValueError:
+        return True
+    if after - before:
+        return True
+
+    diff = subprocess.check_output(['git', '--literal-pathspecs', 'diff', base, head, '--', path])
     # Git ends lines at LF only. Read bytes so a carriage return cannot start a
     # line that git did not mark as added.
     for line in diff.decode('utf-8', 'replace').split('\n'):
@@ -310,7 +337,7 @@ def lock_adds_outside_code(diff, path='', head_text=''):
         key, value = entry.group(1).strip("'"), entry.group(2)
         if key in FREE_VALUE_KEYS | {'resolution'} or value in ('true', 'false') or plain_version(value) or version_range(value):
             continue
-        if re.fullmatch(r"link:[^\s'\"]+", value) and text not in outside:
+        if re.fullmatch(LOCK_LINK, value):
             continue
         return True
     return False

@@ -401,6 +401,23 @@ class GateTests(GitRepoFixture, unittest.TestCase):
                 self.commit()
                 self.assertEqual(self.risk()['tier'], 'stop')
 
+    def test_lockfile_importer_changes_recheck_unchanged_links(self):
+        self.cfg['lock_files'] = ['pnpm-lock.yaml']
+        lock = ('importers:\n  apps/desktop:\n    dependencies:\n      lib:\n'
+                '        specifier: workspace:*\n        version: link:../../packages/lib\n')
+        self.write('pnpm-lock.yaml', lock)
+        self.commit()
+        self.base = self.git('rev-parse', 'HEAD')
+        for importer, tier in [('  apps/web:\n', 'ship'), ('  .:\n', 'stop'), ('', 'stop')]:
+            with self.subTest(importer=importer):
+                self.write('pnpm-lock.yaml', lock.replace('  apps/desktop:\n', importer))
+                self.commit()
+                risk = self.risk()
+                self.assertEqual(risk['tier'], tier)
+                if tier == 'stop':
+                    self.assertIn({'rule': 'dependencies', 'tier': 'stop', 'files': ['pnpm-lock.yaml']},
+                                  risk['reasons'])
+
     def test_every_stop_rule_in_the_repo_config_has_owner_text(self):
         import tomllib
         cfg = tomllib.loads((Path(__file__).resolve().parents[2] / '.gate/config.toml').read_text())
