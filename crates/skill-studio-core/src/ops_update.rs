@@ -768,8 +768,14 @@ fn refuse_parked(rt: &Runtime, req: &UpdateRequest) -> Result<(), CoreError> {
 }
 
 /// True when `skill`'s Universal copy at `scope` is parked, so Update must
-/// leave it alone.
+/// leave it alone. A name that is not one folder name, such as one read from
+/// a lock file, is never parked, so the check never looks outside the parked
+/// root.
 pub(crate) fn is_parked(rt: &Runtime, skill: &SkillName, scope: &RootScope) -> bool {
+    let mut parts = std::path::Path::new(&skill.0).components();
+    if !matches!(parts.next(), Some(std::path::Component::Normal(_))) || parts.next().is_some() {
+        return false;
+    }
     let fs = rt.ports.fs.as_ref();
     let parked_root = rt
         .scope

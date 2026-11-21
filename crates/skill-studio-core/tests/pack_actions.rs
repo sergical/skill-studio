@@ -516,6 +516,37 @@ fn pack_update_skips_a_parked_skill_instead_of_failing_it() {
     std::fs::remove_dir_all(&home).ok();
 }
 
+/// Given a lock file row whose name climbs out of the skills folder, and a
+/// folder at the parked path that name resolves to, when the pack update is
+/// planned, then the step is not skipped as parked; on failure the parked
+/// check probed a path outside the parked root and revealed that it exists.
+#[test]
+fn pack_update_never_probes_outside_the_parked_root_for_a_lock_file_name() {
+    let home = home("pack_update_parked_escape");
+    installed_from_pack(&home, "../outside", "deadbeef");
+    assert!(home.join(".agents/outside/SKILL.md").exists());
+    std::fs::create_dir_all(home.join(".agents/skills-parked")).unwrap();
+    let cli = FakeSkillsCli::new(&home);
+    let rt = runtime(&home, cli);
+
+    let report = ops::pack_update(&rt, &ctx(), &update(true)).unwrap();
+
+    let reasons: Vec<String> = report
+        .steps
+        .iter()
+        .filter_map(|step| match &step.state {
+            PackStepState::Skipped { reason } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !reasons.iter().any(|reason| reason.contains("parked")),
+        "the parked check looked outside the parked root: {:?}",
+        report.steps
+    );
+    std::fs::remove_dir_all(&home).ok();
+}
+
 #[test]
 fn pack_update_reports_a_failed_cli_run_as_a_failed_step_and_partial_status() {
     let home = home("pack_update_fails");
