@@ -58,7 +58,7 @@ pub const DEFAULT_EVENT_LIMIT: u32 = 200;
 /// an unreadable root entry rather than truncated.
 pub const SKILL_MD_MAX_BYTES: u64 = 2 * 1024 * 1024;
 
-/// Most items one `update_all`, `park_batch` or `unpark_batch` call takes.
+/// Most items a bounded update, park, or unpark batch can run.
 /// A larger batch is refused before any item runs.
 pub const MAX_BATCH_ITEMS: usize = 100;
 

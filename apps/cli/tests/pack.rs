@@ -50,6 +50,90 @@ fn pack_list_gives_the_same_packs_on_cli_and_mcp_or_the_surfaces_drift() {
     assert_eq!(packs[0]["remote"]["state"], "not_checked");
 }
 
+#[cfg(unix)]
+#[test]
+fn pack_update_caps_the_total_plan_on_cli_and_mcp_before_running_owner_tools() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path();
+    write(
+        root,
+        ".agents/skill-studio.json",
+        &json!({"projects": {"added": [root.join("project")]}}).to_string(),
+    );
+    write(root, "bin/npx", "#!/bin/sh\n: > \"${0%/*}/owner-called\"\n");
+    std::fs::set_permissions(root.join("bin/npx"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let env = [("PATH".to_string(), root.join("bin").display().to_string())];
+
+    let skill = json!({
+        "source": "owner/pack",
+        "sourceType": "github",
+        "sourceUrl": "https://github.com/owner/pack.git",
+        "skillFolderHash": "unknown",
+        "installedAt": "2026-01-01T00:00:00Z",
+        "updatedAt": "2026-01-01T00:00:00Z",
+    });
+    let lock = |prefix: &str, path: &str, version: u32, count: usize| {
+        let mut rows = serde_json::Map::new();
+        for i in 0..count {
+            let name = format!("skill-{i}");
+            write(
+                root,
+                &format!("{prefix}.agents/skills/{name}/SKILL.md"),
+                &format!("---\nname: {name}\ndescription: A test skill.\n---\nBody.\n"),
+            );
+            rows.insert(name, skill.clone());
+        }
+        write(
+            root,
+            path,
+            &json!({"version": version, "skills": rows}).to_string(),
+        );
+    };
+    lock("", ".agents/.skill-lock.json", 3, 50);
+    lock("project/", "project/skills-lock.json", 1, 51);
+
+    let update = |dry_run: bool| {
+        let mut args = vec!["pack", "update", "--all"];
+        if dry_run {
+            args.push("--dry-run");
+        }
+        let cli = headless::cli_with_env(root, &args, &env);
+        let mcp = headless::mcp_with_env(
+            root,
+            "pack_update",
+            &json!({"all": true, "dry_run": dry_run}),
+            &env,
+        );
+        (cli, mcp["result"]["structuredContent"].clone())
+    };
+    let (cli, mcp) = update(false);
+    assert_eq!(
+        [cli["errors"][0]["code"].as_str(), mcp["errors"][0]["code"].as_str()],
+        [Some("invalid_request"); 2],
+        "a 101-step plan must fail on CLI and MCP before updates (CLI status {}, MCP status {}, owner called {})",
+        cli["status"], mcp["status"], root.join("bin/owner-called").exists(),
+    );
+    for result in [&cli, &mcp] {
+        assert!(result["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("101 skills"));
+    }
+    assert!(!root.join("bin/owner-called").exists());
+
+    lock("project/", "project/skills-lock.json", 1, 50);
+    let (cli, mcp) = update(true);
+    for result in [&cli, &mcp] {
+        assert_eq!(result["status"], "ok", "{}", result["errors"]);
+        let steps = result["data"]["steps"].as_array().unwrap();
+        assert_eq!(steps.len(), 100);
+        assert!(steps.iter().all(|step| step["state"]["state"] == "planned"));
+    }
+    assert!(!root.join("bin/owner-called").exists());
+}
+
 #[test]
 fn pack_show_reports_one_pack_and_names_a_missing_source_on_cli_and_mcp_or_fails_silently() {
     let home = home();

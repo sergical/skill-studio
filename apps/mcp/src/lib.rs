@@ -799,7 +799,7 @@ impl SkillStudioServer {
             true,
             req.project_path.as_deref(),
             &context,
-            |rt, ctx| ops::pack_update(rt, ctx, &req),
+            |rt, ctx| skill_studio_core::pack_action::pack_update_bounded(rt, ctx, &req),
         )
         .await
     }
