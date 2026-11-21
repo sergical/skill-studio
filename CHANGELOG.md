@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 
 - CLI and MCP pack updates reject plans with more than 100 update steps across all scopes before running an owner tool.
+- Codex usage keeps a fork's copied skill uses when the parent rollout is gone.
 - Pack updates report each tool's own result when skills.sh and dotagents claim the same skill name in one scope.
 
 ## v0.4.0
