@@ -363,10 +363,18 @@ lease held by another process.
 
 The CLI and MCP use the same pager. A `next_cursor` identifies one list and
 one offset. Its versioned checksum covers the operation, effective scope,
-parsed request and full ordered contents of that list. Page size and field
-projection can change between calls. A cursor with a different scope, request,
+parsed request and the list's ordered row keys. Changes to values such as
+counts or timestamps expire a cursor only if they change which keys appear
+or their order. Page size and field projection can change between calls. A cursor with a different scope, request,
 list or checksum returns `invalid_request` with instructions to start again
 without a cursor. Older numeric and list-plus-offset cursors also expire.
+
+Each pageable result declares its keys. Skill tables use the skill name and
+add a harness when the same name has separate rows per harness. Keyed maps
+use their member names. Diagnostics have no row ID. Their keys use kind,
+skill and deployment for diagnosis, and invariant and path for doctor.
+Repeated diagnostics with the same key are tracked by their occurrence
+in the list.
 
 ### 8.2 MCP tools
 

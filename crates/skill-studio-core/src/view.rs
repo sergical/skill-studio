@@ -17,6 +17,24 @@ use crate::ops::{OpStatus, Outcome, ResultEnvelope};
 /// lists share what the rest of the envelope leaves.
 pub const ANSWER_BYTES: usize = 32 * 1024;
 
+/// A pageable list and the stable fields that identify each row.
+#[derive(Clone, Copy)]
+pub struct ViewList<'a> {
+    pointer: &'a str,
+    key_fields: &'static [&'static str],
+}
+
+impl<'a> ViewList<'a> {
+    /// `pointer` locates the list in data. Key fields are JSON pointers
+    /// within an array row. Leave them empty for scalar arrays or keyed maps.
+    pub const fn new(pointer: &'a str, key_fields: &'static [&'static str]) -> Self {
+        Self {
+            pointer,
+            key_fields,
+        }
+    }
+}
+
 /// What part of a result's lists to return.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
@@ -105,11 +123,9 @@ pub fn render_document<T: Outcome>(
             doc.remove("timings");
         }
     }
-    let query = Sha256::new_with_prefix(serde_json::to_vec(&(
-        &json["operation"],
-        &json["scope"],
-        request,
-    ))?);
+    let mut query = serde_json::to_value((&json["operation"], &json["scope"], request))?;
+    query.sort_all_objects();
+    let query = Sha256::new_with_prefix(query.to_string());
     if let Err(message) = fit_answer(&mut json, T::LISTS, view, &query)? {
         if let Value::Object(doc) = &mut json {
             let error = ErrorEntry {
@@ -131,7 +147,7 @@ pub fn render_document<T: Outcome>(
 /// Rows go until the whole document, `page` included, is `ANSWER_BYTES`.
 fn fit_answer(
     json: &mut Value,
-    lists: &[&str],
+    lists: &[ViewList<'_>],
     view: &ViewRequest,
     query: &Sha256,
 ) -> serde_json::Result<Result<(), String>> {
@@ -165,10 +181,10 @@ fn fit_answer(
 }
 
 /// Bytes of the envelope with every list in `lists` left empty.
-fn bytes_without_lists(json: &mut Value, lists: &[&str]) -> usize {
+fn bytes_without_lists(json: &mut Value, lists: &[ViewList<'_>]) -> usize {
     let taken: Vec<_> = lists
         .iter()
-        .map(|pointer| format!("/data{pointer}"))
+        .map(|list| format!("/data{}", list.pointer))
         .filter_map(|pointer| {
             let list = std::mem::take(json.pointer_mut(&pointer)?);
             Some((pointer, list))
@@ -185,7 +201,7 @@ fn bytes_without_lists(json: &mut Value, lists: &[&str]) -> usize {
 
 fn apply(
     data: &mut Value,
-    lists: &[&str],
+    lists: &[ViewList<'_>],
     view: &ViewRequest,
     mut budget: usize,
     query: &Sha256,
@@ -199,19 +215,20 @@ fn apply(
             Ok(None)
         };
     };
-    let (target, offset) = parse_cursor(view.cursor.as_deref(), main)?;
-    if !lists.contains(&target) {
-        return Err(INVALID_CURSOR.into());
-    }
-    let Some(mut page) = cut(data, target, offset, view, &mut budget, 1, query)? else {
+    let (target, offset) = parse_cursor(view.cursor.as_deref(), main.pointer)?;
+    let list = lists
+        .iter()
+        .find(|list| list.pointer == target)
+        .ok_or(INVALID_CURSOR)?;
+    let Some(mut page) = cut(data, *list, offset, view, &mut budget, 1, query)? else {
         return Ok(None);
     };
     let other_view = ViewRequest {
         limit: (view.limit == Some(0) || view.cursor.is_some()).then_some(0),
         ..ViewRequest::default()
     };
-    for pointer in lists.iter().filter(|pointer| **pointer != target) {
-        let other = cut(data, pointer, 0, &other_view, &mut budget, 0, query)?;
+    for list in lists.iter().filter(|list| list.pointer != target) {
+        let other = cut(data, *list, 0, &other_view, &mut budget, 0, query)?;
         if let Some(other) = other {
             if other.returned < other.total {
                 page.also.push(other);
@@ -237,13 +254,39 @@ fn parse_cursor<'a>(cursor: Option<&'a str>, main: &'a str) -> Result<(&'a str, 
     Ok((list, offset.parse().map_err(|_| invalid())?))
 }
 
-fn list_cursor_seed(query: &Sha256, pointer: &str, list: &Value) -> Sha256 {
+fn list_cursor_seed(query: &Sha256, list: ViewList<'_>, data: &Value) -> Result<Sha256, String> {
     let mut digest = query.clone();
     digest.update([0]);
-    digest.update(pointer);
+    digest.update(list.pointer);
+    let keys: Vec<Value> = match data {
+        Value::Array(rows) if list.key_fields.is_empty() => {
+            if rows.iter().any(|row| row.is_object() || row.is_array()) {
+                return Err(format!(
+                    "Page list {} has no stable row key fields",
+                    list.pointer
+                ));
+            }
+            rows.clone()
+        }
+        Value::Array(rows) => rows
+            .iter()
+            .map(|row| {
+                Value::Array(
+                    list.key_fields
+                        .iter()
+                        .map(|field| row.pointer(field).cloned().unwrap_or(Value::Null))
+                        .collect(),
+                )
+            })
+            .collect(),
+        Value::Object(map) => map.keys().cloned().map(Value::String).collect(),
+        _ => return Err(INVALID_CURSOR.into()),
+    };
+    let mut keys = Value::Array(keys);
+    keys.sort_all_objects();
     digest.update([0]);
-    digest.update(list.to_string());
-    digest
+    digest.update(keys.to_string());
+    Ok(digest)
 }
 
 fn page_cursor(seed: &Sha256, pointer: &str, offset: usize) -> String {
@@ -259,13 +302,14 @@ fn page_cursor(seed: &Sha256, pointer: &str, offset: usize) -> String {
 
 fn cut(
     data: &mut Value,
-    pointer: &str,
+    list: ViewList<'_>,
     offset: usize,
     view: &ViewRequest,
     budget: &mut usize,
     min_rows: usize,
     query: &Sha256,
 ) -> Result<Option<Page>, String> {
+    let pointer = list.pointer;
     let Some(slot) = data
         .pointer_mut(pointer)
         .filter(|slot| slot.is_array() || slot.is_object())
@@ -276,7 +320,7 @@ fn cut(
             Ok(None)
         };
     };
-    let cursor_seed = list_cursor_seed(query, pointer, slot);
+    let cursor_seed = list_cursor_seed(query, list, slot)?;
     let (is_map, rows): (bool, Vec<(Option<String>, Value)>) = match std::mem::take(slot) {
         Value::Array(items) => (false, items.into_iter().map(|row| (None, row)).collect()),
         Value::Object(map) => (
@@ -390,9 +434,12 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    const ROWS: ViewList<'static> = ViewList::new("/rows", &["/name"]);
+    const UNUSED: ViewList<'static> = ViewList::new("/unused", &[]);
+
     fn apply(
         data: &mut Value,
-        lists: &[&str],
+        lists: &[ViewList<'_>],
         view: &ViewRequest,
         budget: usize,
     ) -> Result<Option<Page>, String> {
@@ -401,7 +448,7 @@ mod tests {
 
     fn fit_answer(
         json: &mut Value,
-        lists: &[&str],
+        lists: &[ViewList<'_>],
         view: &ViewRequest,
     ) -> serde_json::Result<Result<(), String>> {
         super::fit_answer(json, lists, view, &Sha256::new())
@@ -431,11 +478,54 @@ mod tests {
     }
 
     #[test]
+    fn cursor_is_deterministic_across_json_object_order_but_rejects_reordered_rows() {
+        use crate::dto::Inventory;
+
+        let doc = json!({
+            "operation": "scan",
+            "scope": {"id": "home", "projects": ["/work"]},
+            "status": "ok",
+            "data": {"skills": [
+                {"name": "alpha", "deployments": [{"frontmatter":{"metadata":{"z":"last","a":"first"}}}]},
+                {"name": "beta", "deployments": []},
+                {"name": "gamma", "deployments": []}
+            ]}
+        });
+        let page_view = view(Some(1), None, &[], None);
+        let render = |doc: Value, view: &ViewRequest| {
+            render_document::<Inventory>(doc, 0, view, &(), false)
+                .unwrap()
+                .json
+        };
+        let first = render(doc.clone(), &page_view);
+        let cursor = &first["page"]["next_cursor"];
+        assert!(cursor.is_string());
+        assert_eq!(
+            render(doc.clone(), &page_view)["page"]["next_cursor"],
+            *cursor
+        );
+
+        let mut reordered_fields = doc.clone();
+        reordered_fields["data"]["skills"][0]["deployments"][0]["frontmatter"]["metadata"]
+            .sort_all_objects();
+        let decoded = serde_json::from_str(&reordered_fields.to_string()).unwrap();
+        assert_eq!(render(decoded, &page_view)["page"]["next_cursor"], *cursor);
+
+        let mut reordered_rows = doc;
+        reordered_rows["data"]["skills"]
+            .as_array_mut()
+            .unwrap()
+            .swap(0, 1);
+        let next = render(reordered_rows, &view(Some(1), cursor.as_str(), &[], None));
+        assert_eq!(next["errors"][0]["code"], "invalid_request");
+    }
+
+    #[test]
     fn no_view_and_a_small_list_leaves_data_alone() {
         let mut data = rows(3);
         let before = data.clone();
         assert_eq!(
-            apply(&mut data, &["/rows"], &ViewRequest::default(), ANSWER_BYTES),
+            apply(&mut data, &[ROWS], &ViewRequest::default(), ANSWER_BYTES),
             Ok(None)
         );
         assert_eq!(data, before);
@@ -446,7 +536,7 @@ mod tests {
         let mut data = rows(2_000);
         let page = apply(
             &mut data,
-            &["/rows", "/unused"],
+            &[ROWS, UNUSED],
             &ViewRequest::default(),
             ANSWER_BYTES,
         )
@@ -464,9 +554,13 @@ mod tests {
     #[test]
     fn every_cut_list_shares_one_answer_budget() {
         let mut doc = json!({"status": "ok", "data": {"rows": rows(2_000)["rows"], "unused": rows(2_000)["rows"]}});
-        fit_answer(&mut doc, &["/rows", "/unused"], &ViewRequest::default())
-            .unwrap()
-            .unwrap();
+        fit_answer(
+            &mut doc,
+            &[ROWS, ViewList::new("/unused", &["/name"])],
+            &ViewRequest::default(),
+        )
+        .unwrap()
+        .unwrap();
         let page = &doc["page"];
         assert!(doc.to_string().len() <= ANSWER_BYTES, "{page}");
         assert_eq!(page["also"].as_array().map(Vec::len), Some(1), "{page}");
@@ -481,7 +575,7 @@ mod tests {
         let mut doc = json!({"status": "ok", "data": rows(1_500)});
         fit_answer(
             &mut doc,
-            &["/rows", "/unused"],
+            &[ROWS, UNUSED],
             &view(None, None, &[], Some("name")),
         )
         .unwrap()
@@ -496,7 +590,7 @@ mod tests {
 
     #[test]
     fn a_cursor_continues_its_own_list_and_no_list_repeats_rows() {
-        let lists = ["/rows", "/unused"];
+        let lists = [ROWS, UNUSED];
         let mut data = rows(2_000);
         let first = apply(&mut data, &lists, &ViewRequest::default(), ANSWER_BYTES)
             .unwrap()
@@ -539,7 +633,7 @@ mod tests {
         let mut data = rows(5);
         let page = apply(
             &mut data,
-            &["/rows"],
+            &[ROWS],
             &view(Some(1), None, &["name"], Some("source")),
             ANSWER_BYTES,
         )
@@ -553,7 +647,7 @@ mod tests {
         let mut data = rows(5);
         let page = apply(
             &mut data,
-            &["/rows"],
+            &[ROWS],
             &view(Some(0), None, &[], Some("agents")),
             ANSWER_BYTES,
         )
@@ -570,7 +664,7 @@ mod tests {
         let mut data = rows(4);
         let page = apply(
             &mut data,
-            &["/rows", "/unused"],
+            &[ROWS, UNUSED],
             &view(Some(0), None, &[], None),
             ANSWER_BYTES,
         )
@@ -590,7 +684,7 @@ mod tests {
         let mut data = json!({"a": {"v": 1}, "b": {"v": 2}, "c": {"v": 3}});
         let first = apply(
             &mut data.clone(),
-            &[""],
+            &[ViewList::new("", &[])],
             &view(Some(1), None, &[], None),
             ANSWER_BYTES,
         )
@@ -598,7 +692,7 @@ mod tests {
         .unwrap();
         let page = apply(
             &mut data,
-            &[""],
+            &[ViewList::new("", &[])],
             &view(Some(1), first.next_cursor.as_deref(), &[], None),
             ANSWER_BYTES,
         )
@@ -612,7 +706,7 @@ mod tests {
     fn an_unknown_field_a_bad_cursor_or_no_list_is_an_invalid_request() {
         let err = apply(
             &mut rows(2),
-            &["/rows"],
+            &[ROWS],
             &view(None, None, &["nmae"], None),
             ANSWER_BYTES,
         )
@@ -620,21 +714,21 @@ mod tests {
         assert!(err.contains("`nmae`") && err.contains("name"), "{err}");
         assert!(apply(
             &mut rows(2),
-            &["/rows"],
+            &[ROWS],
             &view(None, None, &[], Some("x")),
             ANSWER_BYTES
         )
         .is_err());
         assert!(apply(
             &mut rows(2),
-            &["/rows"],
+            &[ROWS],
             &view(None, Some("x"), &[], None),
             ANSWER_BYTES
         )
         .is_err());
         assert!(apply(
             &mut rows(2),
-            &["/rows"],
+            &[ROWS],
             &view(None, Some("/nope@0"), &[], None),
             ANSWER_BYTES
         )

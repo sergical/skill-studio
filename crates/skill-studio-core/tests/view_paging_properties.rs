@@ -11,13 +11,13 @@
 use proptest::prelude::*;
 use serde_json::{json, Value};
 use skill_studio_core::ops::Outcome;
-use skill_studio_core::view::{render_document, ViewRequest, ANSWER_BYTES};
+use skill_studio_core::view::{render_document, ViewList, ViewRequest, ANSWER_BYTES};
 
 /// An outcome with one pageable list at `/rows`, like `library`.
 struct Rows;
 
 impl Outcome for Rows {
-    const LISTS: &'static [&'static str] = &["/rows"];
+    const LISTS: &'static [ViewList<'static>] = &[ViewList::new("/rows", &["/name"])];
 }
 
 fn rows() -> impl Strategy<Value = Vec<Value>> {
