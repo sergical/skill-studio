@@ -1508,10 +1508,8 @@ pub fn update_all(
 }
 
 /// [`update_all`] without the [`crate::ops::MAX_BATCH_ITEMS`] limit, for a
-/// caller whose set comes from saved state, not from the request: the
-/// desktop's "Update all" (the outdated list) and `pack update` (the pack
-/// file, on every surface). A request that lists its own skills calls
-/// [`update_all`].
+/// batch whose size was checked by the caller, or whose caller permits an
+/// unlimited batch (the desktop's "Update all").
 pub fn update_all_unbounded(
     rt: &Runtime,
     ctx: &OpContext,

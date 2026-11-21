@@ -242,12 +242,31 @@ pub fn pack_add(
     })
 }
 
-/// Updates every skill of one pack, or of every pack, through its owner tool.
+/// Updates installed packs through their owner tools without a step limit.
 /// Skips skills with local edits, which an update would overwrite.
 pub fn pack_update(
     rt: &Runtime,
     ctx: &OpContext,
     req: &PackUpdateRequest,
+) -> Result<PackActionReport, CoreError> {
+    pack_update_with_limit(rt, ctx, req, false)
+}
+
+/// Updates packs from the CLI or MCP, refusing plans over the shared batch
+/// limit across all scopes before any owner tool runs, including on dry runs.
+pub fn pack_update_bounded(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &PackUpdateRequest,
+) -> Result<PackActionReport, CoreError> {
+    pack_update_with_limit(rt, ctx, req, true)
+}
+
+fn pack_update_with_limit(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &PackUpdateRequest,
+    bounded: bool,
 ) -> Result<PackActionReport, CoreError> {
     rt.run(Operation::PackUpdate, ctx, || {
         let source = match (&req.source, req.all) {
@@ -286,6 +305,11 @@ pub fn pack_update(
                     _ => InstallMethod::SkillsSh,
                 });
             }
+        }
+        if bounded {
+            crate::ops::check_batch_size(
+                steps.iter().filter(|step| step.state == PackStepState::Planned).count(),
+            )?;
         }
         require_node_for(rt, &steps)?;
         if !req.dry_run {

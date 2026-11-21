@@ -180,6 +180,12 @@ dotagents skills of one scope share one event, and restoring it undoes all of
 them. Update and remove skip plugin and npm packs, and skills with local
 edits, which the owner tool would overwrite.
 
+CLI and MCP pack updates count planned updates across all selected scopes,
+including in a dry run. More than 100 planned updates returns
+`invalid_request` before any owner tool runs.
+`apps/cli/tests/pack.rs::pack_update_caps_the_total_plan_on_cli_and_mcp_before_running_owner_tools`
+checks both entry points.
+
 `pack add` always writes the shared `.agents/skills` copy that update and
 remove use, and links each agent named with `--agent` to it. Without
 `--agent`, the CLI and MCP write the shared copy only, which Claude Code does

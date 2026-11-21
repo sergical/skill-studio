@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed
+
+- CLI and MCP pack updates reject plans with more than 100 update steps across all scopes before running an owner tool.
+
 ## v0.4.0
 
 ### Added
