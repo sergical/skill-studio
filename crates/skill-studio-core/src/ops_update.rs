@@ -755,30 +755,7 @@ fn update_then_release(
 /// would fetch it again and undo the park. Checked before anything runs, so
 /// the CLI is never spawned and no journal row is written.
 fn refuse_parked(rt: &Runtime, req: &UpdateRequest) -> Result<(), CoreError> {
-    let fs = rt.ports.fs.as_ref();
-    let parked_root = rt
-        .scope
-        .home
-        .lexical
-        .join(crate::identity::PARKED_ROOT_RELATIVE);
-    let (project_key, legacy_flat) = match &req.scope {
-        RootScope::Global => (None, parked_root.join(&req.skill.0).join("SKILL.md")),
-        RootScope::Project(project) => (
-            Some(crate::park_layout::project_key(
-                &fs.canonicalize(&project.0)
-                    .unwrap_or_else(|_| project.0.clone()),
-            )),
-            PathBuf::new(),
-        ),
-    };
-    let origin = crate::identity::RootRef {
-        scope: req.scope.clone(),
-        kind: crate::identity::RootKind::Universal,
-    };
-    let slot = crate::park_layout::parked_slot_dir(&parked_root, &origin, project_key.as_deref());
-    let is_parked = slot.is_some_and(|slot| fs.symlink_metadata(&slot.join(&req.skill.0)).is_ok())
-        || (!legacy_flat.as_os_str().is_empty() && fs.symlink_metadata(&legacy_flat).is_ok());
-    if is_parked {
+    if is_parked(rt, &req.skill, &req.scope) {
         return Err(CoreError::new(
             ErrorCode::InvalidRequest,
             format!(
@@ -788,6 +765,34 @@ fn refuse_parked(rt: &Runtime, req: &UpdateRequest) -> Result<(), CoreError> {
         ));
     }
     Ok(())
+}
+
+/// True when `skill`'s Universal copy at `scope` is parked, so Update must
+/// leave it alone.
+pub(crate) fn is_parked(rt: &Runtime, skill: &SkillName, scope: &RootScope) -> bool {
+    let fs = rt.ports.fs.as_ref();
+    let parked_root = rt
+        .scope
+        .home
+        .lexical
+        .join(crate::identity::PARKED_ROOT_RELATIVE);
+    let (project_key, legacy_flat) = match scope {
+        RootScope::Global => (None, parked_root.join(&skill.0).join("SKILL.md")),
+        RootScope::Project(project) => (
+            Some(crate::park_layout::project_key(
+                &fs.canonicalize(&project.0)
+                    .unwrap_or_else(|_| project.0.clone()),
+            )),
+            PathBuf::new(),
+        ),
+    };
+    let origin = crate::identity::RootRef {
+        scope: scope.clone(),
+        kind: crate::identity::RootKind::Universal,
+    };
+    let slot = crate::park_layout::parked_slot_dir(&parked_root, &origin, project_key.as_deref());
+    slot.is_some_and(|slot| fs.symlink_metadata(&slot.join(&skill.0)).is_ok())
+        || (!legacy_flat.as_os_str().is_empty() && fs.symlink_metadata(&legacy_flat).is_ok())
 }
 
 fn update_body(

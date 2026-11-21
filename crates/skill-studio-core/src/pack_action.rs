@@ -277,7 +277,8 @@ pub fn pack_update(
                         "comes from the npm package {}; update the package, then run npx skills sync",
                         pack.source
                     )),
-                    PackKind::SkillsSh | PackKind::Dotagents => edited_reason(skill),
+                    PackKind::SkillsSh | PackKind::Dotagents => edited_reason(skill)
+                        .or_else(|| parked_reason(rt, skill)),
                 };
                 steps.push(step(pack, skill, PackStepAction::Update, skip));
                 methods.push(match pack.kind {
@@ -547,6 +548,12 @@ fn removable(inventory: &Inventory, skill: &PackSkill) -> Option<DeploymentId> {
 fn edited_reason(skill: &PackSkill) -> Option<String> {
     (skill.edited == Some(true))
         .then(|| "has local edits, which the owner tool would overwrite or delete".to_string())
+}
+
+/// Update leaves a parked skill alone, so the step is skipped, not failed.
+fn parked_reason(rt: &Runtime, skill: &PackSkill) -> Option<String> {
+    crate::ops_update::is_parked(rt, &SkillName(skill.name.clone()), &skill.scope)
+        .then(|| "parked, so Update leaves it alone; turn it on first".to_string())
 }
 
 fn planned_or_skipped(skip: Option<String>) -> PackStepState {

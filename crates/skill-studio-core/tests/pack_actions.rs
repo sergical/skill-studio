@@ -485,6 +485,37 @@ fn pack_update_dry_run_plans_clean_skills_and_skips_edited_ones() {
     std::fs::remove_dir_all(&home).ok();
 }
 
+/// Given a pack with one parked skill, when the pack updates, then the
+/// parked skill is skipped before any process runs and the run is not a
+/// partial failure; on failure the assert names the state the parked step got.
+#[test]
+fn pack_update_skips_a_parked_skill_instead_of_failing_it() {
+    let home = home("pack_update_parked");
+    installed_from_pack(&home, "clean", "deadbeef");
+    installed_from_pack(&home, "parked", "deadbeef");
+    let parked = home.join(".agents/skills-parked");
+    std::fs::create_dir_all(&parked).unwrap();
+    std::fs::rename(home.join(".agents/skills/parked"), parked.join("parked")).unwrap();
+    let cli = FakeSkillsCli::new(&home);
+    let rt = runtime(&home, cli.clone());
+
+    let report = ops::pack_update(&rt, &ctx(), &update(false)).unwrap();
+
+    assert_eq!(
+        states(&report),
+        [("clean".into(), "done"), ("parked".into(), "skipped")]
+    );
+    assert_eq!(report.status(), OpStatus::Ok, "{:?}", report.errors());
+    assert!(
+        !cli.calls()
+            .iter()
+            .any(|call| call.iter().any(|arg| arg == "parked")),
+        "Update ran the CLI for a parked skill: {:?}",
+        cli.calls()
+    );
+    std::fs::remove_dir_all(&home).ok();
+}
+
 #[test]
 fn pack_update_reports_a_failed_cli_run_as_a_failed_step_and_partial_status() {
     let home = home("pack_update_fails");
