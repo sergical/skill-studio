@@ -642,7 +642,7 @@ pub(crate) fn scan_inner(
         scan_one_plugin_target(&sc, target, &mut accum)?;
     }
     op_steps.push(crate::timing::step(clock, "roots_walk", step_start));
-    // These four are cumulative sub-times already counted inside
+    // These are cumulative sub-times already counted inside
     // `roots_walk`, not additional wall-clock time - `parent` says so.
     op_steps.push(crate::timing::StepTiming {
         name: "dir_walk".to_string(),
@@ -662,6 +662,26 @@ pub(crate) fn scan_inner(
     op_steps.push(crate::timing::StepTiming {
         name: "plugin_cache_walk".to_string(),
         elapsed_ms: timings.plugin_cache_walk.get().as_millis() as u64,
+        parent: Some("roots_walk".to_string()),
+    });
+    op_steps.push(crate::timing::StepTiming {
+        name: "scan_memo_stamp".to_string(),
+        elapsed_ms: timings.memo_stamp.get().as_millis() as u64,
+        parent: Some("roots_walk".to_string()),
+    });
+    op_steps.push(crate::timing::StepTiming {
+        name: "folder_facts_walk".to_string(),
+        elapsed_ms: timings.folder_facts_walk.get().as_millis() as u64,
+        parent: Some("roots_walk".to_string()),
+    });
+    op_steps.push(crate::timing::StepTiming {
+        name: "folder_content_hash".to_string(),
+        elapsed_ms: timings.folder_content_hash.get().as_millis() as u64,
+        parent: Some("roots_walk".to_string()),
+    });
+    op_steps.push(crate::timing::StepTiming {
+        name: "folder_token_count".to_string(),
+        elapsed_ms: timings.folder_token_count.get().as_millis() as u64,
         parent: Some("roots_walk".to_string()),
     });
 
@@ -955,6 +975,16 @@ struct ScanTimings {
     skill_md_read: Cell<Duration>,
     frontmatter_parse: Cell<Duration>,
     plugin_cache_walk: Cell<Duration>,
+    /// Time [`read_skill_md`] spent stamping a skill folder for the scan
+    /// memo, which lists every entry of the folder before it reads anything.
+    memo_stamp: Cell<Duration>,
+    /// Time [`walk_folder_for_facts`] spent walking each skill folder.
+    folder_facts_walk: Cell<Duration>,
+    /// Time [`content_hash_from_walk`]/[`content_fingerprint`] spent
+    /// reading and hashing each skill folder's files.
+    folder_content_hash: Cell<Duration>,
+    /// Time the cl100k tokenizer spent counting each `SKILL.md`'s tokens.
+    folder_token_count: Cell<Duration>,
 }
 
 impl ScanTimings {
@@ -1821,7 +1851,13 @@ fn read_skill_md(
         return read_skill_md_from_disk(fs, ctx, clock, skill_dir, name, timings);
     };
     let now = clock.now();
-    let Some(stamp) = crate::scan_memo::folder_stamp(fs, ctx, skill_dir, now)? else {
+    let stamp_start = clock.monotonic();
+    let stamp = crate::scan_memo::folder_stamp(fs, ctx, skill_dir, now)?;
+    ScanTimings::add(
+        &timings.memo_stamp,
+        clock.monotonic().saturating_sub(stamp_start),
+    );
+    let Some(stamp) = stamp else {
         return read_skill_md_from_disk(fs, ctx, clock, skill_dir, name, timings);
     };
     if let Some(kept) = memo.get(skill_dir, name, &stamp, now) {
@@ -1897,7 +1933,9 @@ fn read_skill_md_from_disk(
     );
     let violations = frontmatter::validate_skill(name, &parsed, content.lines().count());
     let description = parsed.as_frontmatter().and_then(|f| f.description.clone());
-    let facts = compute_content_facts(fs, ctx, skill_dir, &bytes, truncated, &parsed)?;
+    let facts = compute_content_facts(
+        fs, ctx, clock, timings, skill_dir, &bytes, truncated, &parsed,
+    )?;
     Ok(SkillMdRead::Found {
         description,
         violations,
@@ -3236,9 +3274,12 @@ impl Default for ContentFacts {
 /// the `content_hash` walk's byte budget first, since that walk re-hashes
 /// `SKILL.md` as part of the folder; `content_fingerprint` keeps its own
 /// unreduced budget, unchanged from before this merge.
+#[allow(clippy::too_many_arguments)]
 fn compute_content_facts(
     fs: &dyn ScopeFs,
     ctx: &OpContext,
+    clock: &dyn Clock,
+    timings: &ScanTimings,
     skill_dir: &Path,
     skill_md_bytes: &[u8],
     skill_md_truncated: bool,
@@ -3256,14 +3297,20 @@ fn compute_content_facts(
         .unwrap_or_default();
 
     let mut walk = FactsWalk::default();
-    walk_folder_for_facts(
+    let walk_start = clock.monotonic();
+    let walked = walk_folder_for_facts(
         fs,
         ctx,
         skill_dir,
         skill_dir,
         MAX_FOLDER_BYTES.saturating_sub(skill_md_bytes.len() as u64),
         &mut walk,
-    )?;
+    );
+    ScanTimings::add(
+        &timings.folder_facts_walk,
+        clock.monotonic().saturating_sub(walk_start),
+    );
+    walked?;
 
     let skill_md_path = skill_dir.join("SKILL.md");
     let skill_md = SkillMdBytes {
@@ -3279,23 +3326,38 @@ fn compute_content_facts(
             .all(|(file, (rel, abs, len))| {
                 file.rel_path == *rel && file.abs_path == *abs && file.len == *len
             });
-    let content_hash = content_hash_from_walk(walk.hashable, fs, ctx, MAX_FOLDER_BYTES, &skill_md)?;
-    let content_fingerprint = if same_files {
-        Fingerprint::parse(&content_hash)?
-    } else {
-        content_fingerprint(fs, &walk.fingerprint_files, &skill_md)
-    };
+    let hash_start = clock.monotonic();
+    let hash_work = (|| -> Result<(String, Fingerprint), CoreError> {
+        let content_hash =
+            content_hash_from_walk(walk.hashable, fs, ctx, MAX_FOLDER_BYTES, &skill_md)?;
+        let content_fingerprint = if same_files {
+            Fingerprint::parse(&content_hash)?
+        } else {
+            content_fingerprint(fs, &walk.fingerprint_files, &skill_md)
+        };
+        Ok((content_hash, content_fingerprint))
+    })();
+    ScanTimings::add(
+        &timings.folder_content_hash,
+        clock.monotonic().saturating_sub(hash_start),
+    );
+    let (content_hash, content_fingerprint) = hash_work?;
+    let tokens_start = clock.monotonic();
     let tok = tokenizer();
+    let skill_md_tokens = count_tokens(&content, tok);
+    let description_tokens =
+        count_tokens(&format!("{name_for_tokens}: {description_for_tokens}"), tok);
+    ScanTimings::add(
+        &timings.folder_token_count,
+        clock.monotonic().saturating_sub(tokens_start),
+    );
     Ok(ContentFacts {
         frontmatter_fields: frontmatter::frontmatter_fields(&content),
         has_spec: walk.has_spec,
         folder_bytes: walk.total_bytes,
         file_count: walk.file_count,
-        skill_md_tokens: count_tokens(&content, tok),
-        description_tokens: count_tokens(
-            &format!("{name_for_tokens}: {description_for_tokens}"),
-            tok,
-        ),
+        skill_md_tokens,
+        description_tokens,
         content_fingerprint,
         content_hash,
         modified_at: walk.newest,
@@ -7697,8 +7759,17 @@ mod tests {
             .build_fs();
         let parsed = frontmatter::parse_frontmatter(std::str::from_utf8(md).unwrap());
         let ctx = OpContext::uncancellable(CorrelationId("hash-reads".into()));
-        let facts =
-            compute_content_facts(&fs, &ctx, Path::new("/h/demo"), md, false, &parsed).unwrap();
+        let facts = compute_content_facts(
+            &fs,
+            &ctx,
+            &crate::testing::FakeClock::at(0),
+            &ScanTimings::default(),
+            Path::new("/h/demo"),
+            md,
+            false,
+            &parsed,
+        )
+        .unwrap();
         assert_eq!(facts.content_fingerprint.bare_hex(), facts.content_hash);
         assert_eq!(fs.capped_reads.load(Ordering::Relaxed), 1);
     }
@@ -7721,7 +7792,17 @@ mod tests {
                 fixture = fixture.alias(&format!("/h/demo/link{i:04}.md"), "/h/target.md");
             }
             let fs = fixture.build_fs();
-            compute_content_facts(&fs, &ctx, Path::new("/h/demo"), md, false, &parsed).unwrap()
+            compute_content_facts(
+                &fs,
+                &ctx,
+                &crate::testing::FakeClock::at(0),
+                &ScanTimings::default(),
+                Path::new("/h/demo"),
+                md,
+                false,
+                &parsed,
+            )
+            .unwrap()
         };
         let before = facts_with_last_file(b"one");
         let after = facts_with_last_file(b"two");
