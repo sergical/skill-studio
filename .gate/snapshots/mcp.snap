@@ -922,6 +922,14 @@
           "description": "Keep rows that each named agent (`claude-code`, `codex`, ...) reads\nin the given mode.",
           "type": "object"
         },
+        "project_path": {
+          "default": null,
+          "description": "Also include this project's skills, like the CLI `--project` flag.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "since": {
           "default": null,
           "description": "Inclusive start (YYYY-MM-DD or RFC 3339), 30 days ago at the earliest.",
