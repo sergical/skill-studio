@@ -898,6 +898,10 @@ impl PlanStatus {
                 ErrorCode::InvalidRequest,
                 "finish must not set Pending",
             )),
+            (_, PlanStatus::Unknown) => Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                "Unknown is only read from disk, never set",
+            )),
             (PlanStatus::Pending, PlanStatus::Dropped) => Err(CoreError::new(
                 ErrorCode::InvalidRequest,
                 "only an interrupted plan can be dropped",

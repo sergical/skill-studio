@@ -219,6 +219,14 @@ impl FsJournal {
 
     fn write_record(&self, record: &PlanRecord) -> Result<(), CoreError> {
         Self::validate_id(&record.id)?;
+        // `Unknown` stands for a status only a newer build knows. Writing the
+        // record back would replace that status with "unknown" on disk.
+        if record.status == PlanStatus::Unknown {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                "this plan has a status from a newer build; this build leaves it alone",
+            ));
+        }
         let path = self.plan_path(&record.id);
         let bytes = serde_json::to_vec_pretty(record)
             .map_err(|e| CoreError::new(ErrorCode::Io, e.to_string()).at(&path))?;
@@ -1393,7 +1401,7 @@ mod tests {
     /// panic names the step that refused the journal.
     #[test]
     fn a_plan_status_from_a_newer_build_reads_as_unknown_and_blocks_no_write() {
-        let (journal, _guard, _fs, ids) = retention_fixture("newer");
+        let (journal, _guard, fs, ids) = retention_fixture("newer");
         let records = journal
             .all()
             .expect("a status from a newer build made the whole journal unreadable");
@@ -1404,9 +1412,28 @@ mod tests {
             "a plan from a newer build counts as open, so every write here waits on it"
         );
         let lease = FakeLease::default();
+        let g = guard(&lease);
         journal
-            .finish(&guard(&lease), &ids[0], PlanStatus::Reversed)
+            .finish(&g, &ids[0], PlanStatus::Reversed)
             .expect_err("this build must not settle a plan it does not understand");
+        journal
+            .record_step(
+                &g,
+                &ids[0],
+                PlanStep::Stage {
+                    staged: PathBuf::from("/root/.staged"),
+                },
+            )
+            .expect_err("a step on a plan from a newer build would overwrite its status");
+        let text = String::from_utf8(
+            fs.read_capped(&journal.plan_path(&ids[0]), u64::MAX)
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            text.contains(r#""status": "paused""#),
+            "this build rewrote the newer build's status: {text}"
+        );
     }
 
     #[test]
@@ -2038,7 +2065,15 @@ mod tests {
             (Interrupted, Reversed),
             (Interrupted, Dropped),
         ];
-        let all = [Pending, Done, Failed, Reversed, Interrupted, Dropped];
+        let all = [
+            Pending,
+            Done,
+            Failed,
+            Reversed,
+            Interrupted,
+            Dropped,
+            Unknown,
+        ];
         for from in all {
             for to in all {
                 let result = from.settle(to);
