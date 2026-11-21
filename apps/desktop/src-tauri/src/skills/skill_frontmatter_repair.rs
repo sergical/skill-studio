@@ -526,7 +526,7 @@ pub async fn apply_skill_frontmatter_repair(
             } = request;
             let home = dirs::home_dir().ok_or("Could not find home directory")?;
             let write_lease = super::write_lease::WriteLease::default();
-            let write_guard = write_lease.begin_mutation(&home)?;
+            let write_guard = write_lease.try_acquire(&home)?;
             let snapshot =
                 super::skill_lifecycle::rebuild_fresh_lifecycle_snapshot(&app, &refresh_state)?;
             let deployment = exact_target(&snapshot, &target)?.clone();
@@ -677,7 +677,7 @@ mod tests {
     use skill_studio_core::frontmatter::{parse_frontmatter, FrontmatterParseResult};
 
     fn home_guard(home: &Path) -> WriteLeaseGuard {
-        WriteLease::default().begin_mutation(home).unwrap()
+        WriteLease::default().try_acquire(home).unwrap()
     }
 
     fn malformed() -> &'static str {
@@ -1304,7 +1304,7 @@ mod tests {
 
         let lease_root = temp.path().join("leases");
         let lease = WriteLease::with_lease_root(lease_root.clone())
-            .begin_mutation(temp.path())
+            .try_acquire(temp.path())
             .unwrap();
         let (transaction, validated) = begin_bound_frontmatter_repair_transaction(
             &lease,
@@ -1512,7 +1512,7 @@ mod tests {
         let rows = store.reconcile_at_startup().unwrap();
 
         let write_lease = super::super::write_lease::WriteLease::default();
-        let guard = write_lease.begin_mutation(&home).unwrap();
+        let guard = write_lease.try_acquire(&home).unwrap();
         reconcile_interrupted_frontmatter_repair(&store, &home, &rows[0], &guard).unwrap();
 
         assert!(super::super::skill_fork_registry::read_fork_registry(&home)

@@ -1000,7 +1000,7 @@ mod tests {
 
     fn test_guard(root: &Path) -> WriteLeaseGuard {
         super::super::write_lease::WriteLease::default()
-            .begin_mutation(root)
+            .try_acquire(root)
             .expect("take the write lease")
     }
 

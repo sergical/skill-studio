@@ -84,7 +84,7 @@ impl WriteLeaseGuard {
 /// unpark.
 pub struct WriteLease {
     lease: FileLease,
-    /// How long `begin_mutation` waits for a holder to release.
+    /// How long `try_acquire` waits for a holder to release.
     wait: Duration,
     /// How long `acquire_scan_lease` waits for a writer to release.
     scan_wait: Duration,
@@ -204,7 +204,7 @@ impl WriteLease {
     /// instead of flattening it to the same "in progress" message, which
     /// would send a caller looking for a concurrent writer that doesn't
     /// exist.
-    pub fn begin_mutation(&self, root: &Path) -> Result<WriteLeaseGuard, String> {
+    pub fn try_acquire(&self, root: &Path) -> Result<WriteLeaseGuard, String> {
         let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         let key = LeaseKey { canonical_root };
         self.lease
@@ -316,13 +316,13 @@ mod tests {
         std::fs::create_dir_all(&other).unwrap();
 
         let lease = WriteLease::with_lease_root(lease_root);
-        let first = lease.begin_mutation(&root).unwrap();
-        let second = lease.begin_mutation(&root);
+        let first = lease.try_acquire(&root).unwrap();
+        let second = lease.try_acquire(&root);
         assert!(second.err().unwrap().contains("Another write"));
         // The adapter picks the key: two roots must not share one.
-        assert!(lease.begin_mutation(&other).is_ok());
+        assert!(lease.try_acquire(&other).is_ok());
         drop(first);
-        assert!(lease.begin_mutation(&root).is_ok());
+        assert!(lease.try_acquire(&root).is_ok());
     }
 
     /// A command holds `WriteLease` on `home` for its whole run (fork, add,
@@ -341,7 +341,7 @@ mod tests {
         std::fs::create_dir_all(&home).unwrap();
 
         let write_lease = WriteLease::default();
-        let guard = write_lease.begin_mutation(&home).unwrap();
+        let guard = write_lease.try_acquire(&home).unwrap();
 
         let mut registry = super::super::skill_fork_registry::ForkRegistry::default();
         let result = super::super::skill_fork_registry::write_fork_registry_locked(

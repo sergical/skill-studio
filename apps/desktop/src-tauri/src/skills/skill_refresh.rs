@@ -5919,7 +5919,7 @@ resolved_commit = "old"
                 .unwrap_or_else(|e| panic!("{label}: the save was refused: {e}"));
             let lease =
                 super::super::write_lease::WriteLease::with_lease_root(tmp.path().join("leases"))
-                    .begin_mutation(tmp.path())
+                    .try_acquire(tmp.path())
                     .unwrap();
             write_skill_md_compare_and_swap(
                 &lease,
@@ -6078,7 +6078,7 @@ resolved_commit = "old"
         let original = home.join(".claude/skills/mover");
 
         let guard = super::super::write_lease::WriteLease::default()
-            .begin_mutation(&home)
+            .try_acquire(&home)
             .unwrap();
         let aside = tmp.path().join("aside");
         fs::rename(&original, &aside).unwrap();
@@ -6124,7 +6124,7 @@ resolved_commit = "old"
         let state = fixture_state();
 
         let guard = super::super::write_lease::WriteLease::default()
-            .begin_mutation(&home)
+            .try_acquire(&home)
             .unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         super::super::write_lease::scan_wait_probe::watch(home.canonicalize().unwrap(), tx);
@@ -6176,7 +6176,7 @@ resolved_commit = "old"
         std::thread::scope(|scope| {
             let (update_lease, home) = (&update_lease, &home);
             let update = scope.spawn(move || {
-                let guard = update_lease.begin_mutation(home).unwrap();
+                let guard = update_lease.try_acquire(home).unwrap();
                 held_tx.send(()).unwrap();
                 release_rx.recv().unwrap();
                 drop(guard);
@@ -6246,7 +6246,7 @@ resolved_commit = "old"
                 .unwrap()
             });
             paused_rx.recv().unwrap();
-            let write = write_lease.begin_mutation(home);
+            let write = write_lease.try_acquire(home);
             resume_tx.send(()).unwrap();
             let (snapshot, _report) = rebuild.join().unwrap();
             assert!(
@@ -6276,7 +6276,7 @@ resolved_commit = "old"
                 try_rebuild_lock(&state, scan).unwrap().is_none()
             });
             queued_rx.recv().unwrap();
-            let write = lease.begin_mutation(&home);
+            let write = lease.try_acquire(&home);
             drop(indexing);
             let released_before_waiting = queued.join().unwrap();
             assert!(
@@ -6303,7 +6303,7 @@ resolved_commit = "old"
         let update_check_path = tmp.path().join("update-check.json");
 
         let _guard = super::super::write_lease::WriteLease::default()
-            .begin_mutation(&home)
+            .try_acquire(&home)
             .unwrap();
         let result = core_scan_installed_skills(&home, &[], &update_check_path, &[]);
         assert_eq!(

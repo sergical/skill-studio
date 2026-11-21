@@ -216,7 +216,7 @@ fn desktop_restore(
     event_id: &str,
     force: bool,
 ) -> Result<String, String> {
-    let lease = WriteLease::with_lease_root(home.join(".leases")).begin_mutation(home)?;
+    let lease = WriteLease::with_lease_root(home.join(".leases")).try_acquire(home)?;
     store.restore(&lease, event_id, force)
 }
 

@@ -50,7 +50,6 @@ use skill_studio_lib::skills::event_store::{
 };
 use skill_studio_lib::skills::skill_materialize::repair_remove_link;
 use skill_studio_lib::skills::skill_park::park_with_runtime;
-use skill_studio_lib::write_lease::WriteLease;
 
 const UNIVERSAL_ROOT_RELATIVE: &str = ".agents/skills";
 const CLAUDE_ROOT_RELATIVE: &str = ".claude/skills";
@@ -441,74 +440,6 @@ fn a_desktop_written_repair_event_still_appears_in_history_and_still_undoes() {
     assert!(
         std::fs::symlink_metadata(&link).is_ok(),
         "undo must recreate the symlink repair_remove_link deleted"
-    );
-
-    std::fs::remove_dir_all(&home).ok();
-}
-
-/// An undo needs the write lease over the data root: while another writer
-/// holds it, the undo refuses before it touches the file, and once the
-/// lease is free it rewrites the file and finishes its `restore` row.
-#[test]
-fn a_desktop_undo_refuses_without_the_write_lease_and_writes_the_file_under_it() {
-    let home = unique_temp_dir("undo_write_lease");
-    std::fs::create_dir_all(&home).unwrap();
-    let data_root = data_root_for(&home);
-    let skill = "iota-lease";
-    write_manual_universal_skill(&home, skill);
-    let claude_dir = home.join(CLAUDE_ROOT_RELATIVE);
-    std::fs::create_dir_all(&claude_dir).unwrap();
-    let link = claude_dir.join(skill);
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(home.join(UNIVERSAL_ROOT_RELATIVE).join(skill), &link).unwrap();
-
-    let store = desktop_store(&home, &data_root);
-    repair_remove_link(&store, &link, skill, "claude-code").unwrap();
-    assert!(
-        std::fs::symlink_metadata(&link).is_err(),
-        "repair_remove_link must have deleted the symlink"
-    );
-    let row = store
-        .list(50, Some(skill))
-        .unwrap()
-        .into_iter()
-        .find(|r| r.kind == "repair_remove_link")
-        .expect("the desktop-written event must be visible");
-
-    // Another writer over the same data root: the core writers take the same
-    // `<data_root>/leases` directory, and advisory locks do not nest within
-    // one process, so the undo below cannot take it.
-    let held = WriteLease::with_lease_root(data_root.join("leases"))
-        .begin_mutation(&home)
-        .expect("the competing writer must take the lease");
-
-    let refused = restore_event_with_runtime(&store, &home, &data_root, &row.id, false)
-        .expect_err("an undo must refuse while another writer holds the write lease");
-    assert!(
-        refused.contains("Another write is in progress"),
-        "unexpected refusal: {refused}"
-    );
-    assert!(
-        std::fs::symlink_metadata(&link).is_err(),
-        "a refused undo must not recreate the symlink"
-    );
-    drop(held);
-
-    restore_event_with_runtime(&store, &home, &data_root, &row.id, false)
-        .expect("an undo under the write lease must run");
-    assert!(
-        std::fs::symlink_metadata(&link).is_ok(),
-        "the undo must recreate the symlink repair_remove_link deleted"
-    );
-    let restore_row = store
-        .list(50, Some(skill))
-        .unwrap()
-        .into_iter()
-        .find(|r| r.kind == "restore")
-        .expect("the undo must record a restore event");
-    assert_eq!(
-        restore_row.status, "done",
-        "the undo must finish its history event before it releases the lease"
     );
 
     std::fs::remove_dir_all(&home).ok();

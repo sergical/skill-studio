@@ -83,7 +83,7 @@ pub struct IndependentCopyRequest<'a> {
 /// undo. `guard` must be the caller's own held `WriteLease` over `home` (the
 /// command that dispatches here takes one for the whole call) - writing the
 /// registry through it via `write_fork_registry_locked` instead of the
-/// unlocked `write_fork_registry` avoids a second, conflicting `begin_mutation`
+/// unlocked `write_fork_registry` avoids a second, conflicting `try_acquire`
 /// on the same lease: advisory locks don't nest within one process, so that
 /// second acquire would report the caller's own lease as busy.
 pub fn make_skill_independent_copy(
@@ -96,7 +96,7 @@ pub fn make_skill_independent_copy(
         request,
         guard,
         &|from, to| fs::rename(from, to),
-        &|home, registry| write_fork_registry_locked(guard, home, &mut registry.clone()),
+        &write_fork_registry_locked,
         &|_| Ok(()),
     )
 }
@@ -106,7 +106,7 @@ fn make_skill_independent_copy_with(
     request: IndependentCopyRequest<'_>,
     mutation: &WriteLeaseGuard,
     rename: &dyn Fn(&Path, &Path) -> std::io::Result<()>,
-    write_registry: &dyn Fn(&Path, &ForkRegistry) -> Result<(), String>,
+    write_registry: &dyn Fn(&WriteLeaseGuard, &Path, &mut ForkRegistry) -> Result<(), String>,
     after_phase: &dyn Fn(&str) -> Result<(), String>,
 ) -> Result<String, String> {
     let parent = request
@@ -171,7 +171,7 @@ fn make_skill_independent_copy_with(
         &saved_link,
         &mut payload,
         rename,
-        write_registry,
+        &|home, registry| write_registry(mutation, home, &mut registry.clone()),
         after_phase,
     ) {
         Ok(()) => Ok(id),
@@ -1162,22 +1162,7 @@ mod tests {
 
     fn test_guard(home: &Path) -> WriteLeaseGuard {
         super::super::write_lease::WriteLease::default()
-            .begin_mutation(home)
-            .unwrap()
-    }
-
-    /// A guard on a root of its own, for a test path that only needs a lease
-    /// proof: no other test shares its key, so it never waits.
-    fn fresh_guard() -> WriteLeaseGuard {
-        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let root = std::env::temp_dir().join(format!(
-            "skill-studio-lease-{}-{}",
-            std::process::id(),
-            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&root).unwrap();
-        super::super::write_lease::WriteLease::default()
-            .begin_mutation(&root)
+            .try_acquire(home)
             .unwrap()
     }
 
@@ -1263,7 +1248,7 @@ mod tests {
             .into_iter()
             .find(|row| row.id == event_id)
             .unwrap();
-        reconcile_interrupted_independent_copy(store, home, &event, &fresh_guard())
+        reconcile_interrupted_independent_copy(store, home, &event, &test_guard(home))
     }
 
     fn recover_restore(store: &EventStore, home: &Path, event_id: &str) -> Result<(), String> {
@@ -1278,7 +1263,7 @@ mod tests {
             .into_iter()
             .find(|row| row.id == event_id)
             .unwrap();
-        reconcile_interrupted_independent_copy_restore(store, home, &event, &fresh_guard())
+        reconcile_interrupted_independent_copy_restore(store, home, &event, &test_guard(home))
     }
 
     fn no_unknown_staging(root: &Path) {
@@ -1371,9 +1356,9 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             copy_request,
-            &fresh_guard(),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|_, _| Err("injected registry failure".to_string()),
+            &|_, _, _| Err("injected registry failure".to_string()),
             &|_| Ok(()),
         )
         .unwrap_err();
@@ -1427,9 +1412,9 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             request(&temp.path().join("home"), &link, &source),
-            &fresh_guard(),
+            &test_guard(&temp.path().join("home")),
             &|from, to| fs::rename(from, to),
-            &|_, _| Err("injected registry failure".to_string()),
+            &|_, _, _| Err("injected registry failure".to_string()),
             &|_| Ok(()),
         )
         .unwrap_err();
@@ -1452,7 +1437,7 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             request(&temp.path().join("home"), &link, &source),
-            &fresh_guard(),
+            &test_guard(&temp.path().join("home")),
             &|from, to| {
                 let call = calls.get();
                 calls.set(call + 1);
@@ -1462,7 +1447,7 @@ mod tests {
                     fs::rename(from, to)
                 }
             },
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &|_| Ok(()),
         )
         .unwrap_err();
@@ -1597,9 +1582,9 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             request(&home, &link, &source),
-            &fresh_guard(),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &|phase| {
                 if phase == "staged" {
                     fs::remove_file(&link).unwrap();
@@ -1621,9 +1606,9 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             request(&home, &link, &source),
-            &fresh_guard(),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("intent"),
         )
         .unwrap_err();
@@ -1652,9 +1637,9 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             request(&home, &link, &source),
-            &fresh_guard(),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("staged"),
         )
         .unwrap_err();
@@ -1686,9 +1671,9 @@ mod tests {
         make_skill_independent_copy_with(
             &store,
             request(&home, &link, &source),
-            &fresh_guard(),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("staged"),
         )
         .unwrap_err();
@@ -1714,9 +1699,13 @@ mod tests {
 
         for _ in 0..2 {
             let interrupted = store.get(&event_id).unwrap().unwrap();
-            let error =
-                reconcile_interrupted_independent_copy(&store, &home, &interrupted, &fresh_guard())
-                    .unwrap_err();
+            let error = reconcile_interrupted_independent_copy(
+                &store,
+                &home,
+                &interrupted,
+                &test_guard(&home),
+            )
+            .unwrap_err();
             assert!(error.contains("without a recorded fingerprint"));
             assert!(data.staging.join("SKILL.md").is_file());
             assert!(read_fork_registry(&home)
@@ -1738,9 +1727,9 @@ mod tests {
         make_skill_independent_copy_with(
             &store,
             request(&home, &link, &source),
-            &fresh_guard(),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("staged"),
         )
         .unwrap_err();
@@ -1758,8 +1747,9 @@ mod tests {
         );
         write_fork_registry(&home, &mut registry).unwrap();
 
-        let error = reconcile_interrupted_independent_copy(&store, &home, &event, &fresh_guard())
-            .unwrap_err();
+        let error =
+            reconcile_interrupted_independent_copy(&store, &home, &event, &test_guard(&home))
+                .unwrap_err();
 
         assert!(error.contains("staging fingerprint changed"));
         assert_eq!(
@@ -1785,9 +1775,9 @@ mod tests {
         make_skill_independent_copy_with(
             &store,
             request(&home, &link, &source),
-            &fresh_guard(),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("staged"),
         )
         .unwrap_err();
@@ -1811,9 +1801,9 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             request(&home, &link, &source),
-            &fresh_guard(),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("staged"),
         )
         .unwrap_err();
@@ -1851,9 +1841,9 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             copy_request,
-            &fresh_guard(),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("converted"),
         )
         .unwrap_err();
@@ -1902,9 +1892,9 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             copy_request,
-            &fresh_guard(),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("materialize_root_removed"),
         )
         .unwrap_err();
@@ -1949,9 +1939,9 @@ mod tests {
         make_skill_independent_copy_with(
             &store,
             copy_request,
-            &fresh_guard(),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("materialize_root_removed"),
         )
         .unwrap_err();
@@ -1990,9 +1980,9 @@ mod tests {
         make_skill_independent_copy_with(
             &store,
             copy_request,
-            &fresh_guard(),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("materialize_root_removed"),
         )
         .unwrap_err();
@@ -2035,9 +2025,9 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             request(&home, &link, &source),
-            &fresh_guard(),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("replaced"),
         )
         .unwrap_err();
@@ -2061,7 +2051,7 @@ mod tests {
     /// function uses to record Copy ownership must write through that same
     /// held guard, not take a second, conflicting one. Before the fix, the
     /// public wrapper always wrote through the unlocked `write_fork_registry`
-    /// (which does its own `begin_mutation`); with an outer guard already held,
+    /// (which does its own `try_acquire`); with an outer guard already held,
     /// advisory locks don't nest within one process, so that second acquire
     /// reported the caller's own lease as busy, the write was refused, and
     /// the rollback undid the whole copy - "Make independent copy" could
@@ -2076,7 +2066,7 @@ mod tests {
             home.join(".test-leases"),
         );
         let write_lease = super::super::write_lease::WriteLease::default();
-        let guard = write_lease.begin_mutation(&home).unwrap();
+        let guard = write_lease.try_acquire(&home).unwrap();
 
         let id =
             make_skill_independent_copy(&store, request(&home, &link, &source), &guard).unwrap();
@@ -2099,7 +2089,7 @@ mod tests {
     /// which used to call the unlocked `write_fork_registry` from inside
     /// `claim_replaced_copy`, taking a second, conflicting lease on the same
     /// root. Advisory locks don't nest within one process, so that second
-    /// `begin_mutation` reported the caller's own lease as busy and the
+    /// `try_acquire` reported the caller's own lease as busy and the
     /// half-finished copy was never claimed, on every launch. Passing the
     /// held guard through (`Some(&guard)`, mirroring
     /// `write_fork_registry_locked`) is the fix; recovering with no guard at
@@ -2116,9 +2106,9 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             request(&home, &link, &source),
-            &fresh_guard(),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("replaced"),
         )
         .unwrap_err();
@@ -2127,7 +2117,7 @@ mod tests {
         store.reconcile_at_startup().unwrap();
 
         let write_lease = super::super::write_lease::WriteLease::default();
-        let guard = write_lease.begin_mutation(&home).unwrap();
+        let guard = write_lease.try_acquire(&home).unwrap();
         let interrupted = store.interrupted_independent_copy_events().unwrap();
         let event = interrupted
             .into_iter()
@@ -2151,9 +2141,9 @@ mod tests {
         let error = make_skill_independent_copy_with(
             &store,
             request(&home, &link, &source),
-            &fresh_guard(),
+            &test_guard(&home),
             &|from, to| fs::rename(from, to),
-            &|home, registry| write_fork_registry(home, &mut registry.clone()),
+            &write_fork_registry_locked,
             &crash_at("registry"),
         )
         .unwrap_err();

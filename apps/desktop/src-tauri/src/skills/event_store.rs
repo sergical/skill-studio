@@ -150,6 +150,9 @@ fn open_locked(db_path: &Path) -> Result<Connection, String> {
     Ok(conn)
 }
 
+#[cfg(test)]
+type HistoryObserver = Box<dyn Fn(&str) + Send>;
+
 /// Owns the event store connection plus the app data dir its backups live
 /// under (`<app_data>/backups/<event-id>/`).
 ///
@@ -171,6 +174,8 @@ pub struct EventStore {
     pub conn: GuardedConnection,
     pub app_data: PathBuf,
     journal: skill_studio_core::journal::FsJournal,
+    #[cfg(test)]
+    pub(crate) observe_history: Option<HistoryObserver>,
 }
 
 impl EventStore {
@@ -204,6 +209,8 @@ impl EventStore {
             conn,
             app_data: app_data.to_path_buf(),
             journal,
+            #[cfg(test)]
+            observe_history: None,
         })
     }
 
@@ -407,6 +414,10 @@ impl EventStore {
     /// Settles `id` as `done` or `failed` under the shared row lifecycle in
     /// `skill_studio_core::events::EventStatus::settle`.
     pub fn finish(&self, id: &str, status: EventStatus) -> Result<(), String> {
+        #[cfg(test)]
+        if let Some(observe) = &self.observe_history {
+            observe("finish");
+        }
         let tx = self
             .conn
             .unchecked_transaction()
@@ -463,6 +474,10 @@ impl EventStore {
     }
 
     fn get_event(&self, id: &str) -> Result<Option<EventRow>, String> {
+        #[cfg(test)]
+        if let Some(observe) = &self.observe_history {
+            observe("read");
+        }
         self.conn
             .query_row("SELECT * FROM events WHERE id = ?1", params![id], row_from)
             .optional()
@@ -1572,7 +1587,7 @@ mod tests {
 
     fn mutation(dir: &Path) -> WriteLeaseGuard {
         WriteLease::with_lease_root(dir.join("leases"))
-            .begin_mutation(dir)
+            .try_acquire(dir)
             .expect("take the write lease")
     }
 
@@ -2099,7 +2114,7 @@ mod tests {
         fs::write(&file, b"drifted-by-user").unwrap();
 
         let lease = WriteLease::with_lease_root(tmp.path().join("leases"))
-            .begin_mutation(tmp.path())
+            .try_acquire(tmp.path())
             .unwrap();
         let err = store.restore(&lease, &id, false).unwrap_err();
         assert!(

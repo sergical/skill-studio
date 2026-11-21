@@ -169,7 +169,7 @@ fn set_harness_enabled_at(
     {
         return Err("Choose a known agent.".into());
     }
-    let guard = lease.begin_mutation(home)?;
+    let guard = lease.try_acquire(home)?;
     let mut registry = super::skill_fork_registry::read_fork_registry(home)?;
     let choice = registry
         .harnesses
@@ -203,7 +203,7 @@ fn save_harnesses_choice_at(
     consent: &skill_studio_host::telemetry::Consent,
     env_override: Option<String>,
 ) -> Result<(), String> {
-    let guard = write_lease.begin_mutation(home)?;
+    let guard = write_lease.try_acquire(home)?;
     let mut registry = super::skill_fork_registry::read_fork_registry(home)?;
     registry.harnesses = Some(choice);
     registry.telemetry_enabled = telemetry_enabled;
