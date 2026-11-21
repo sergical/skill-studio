@@ -480,12 +480,6 @@ pub(crate) fn selected_scopes(
     }
 }
 
-#[derive(Deserialize, Default)]
-struct ProjectLock {
-    #[serde(default)]
-    skills: BTreeMap<String, ProjectLockEntry>,
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProjectLockEntry {
@@ -553,8 +547,7 @@ fn ledger_entries(
     let mut global_lock = None;
     let skills_sh: Vec<(String, ProjectLockEntry)> = if let Some(project) = project {
         let path = lock_file::project_lock_file_path(project);
-        read_json::<ProjectLock>(fs, &path)?
-            .skills
+        lock_file::read_project_lock_entries(fs, &path)?
             .into_iter()
             .collect()
     } else {
@@ -1047,19 +1040,6 @@ fn skill_folders(fs: &dyn ScopeFs, dir: &Path) -> Vec<String> {
         .collect();
     names.sort();
     names
-}
-
-fn read_json<T: for<'de> Deserialize<'de> + Default>(
-    fs: &dyn ScopeFs,
-    path: &Path,
-) -> Result<T, CoreError> {
-    let bytes = match fs.read_capped(path, lock_file::LOCK_FILE_MAX_BYTES) {
-        Ok(bytes) => bytes,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(T::default()),
-        Err(e) => return Err(CoreError::io(path, e)),
-    };
-    serde_json::from_slice(&bytes)
-        .map_err(|e| CoreError::new(ErrorCode::Io, format!("cannot parse: {e}")).at(path))
 }
 
 /// The skills CLI's `computedHash` of a skill folder: SHA-256 over each

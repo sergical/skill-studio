@@ -5052,6 +5052,11 @@
             "const": "unknown",
             "description": "A method claims the skill but the check could not run: a missing\nlock/ledger entry, a malformed lock file, or a lookup failure.\nDistinct from `NotTracked` so the UI can tell \"we don't know\" from\n\"there is nothing to know\" - and, per the crash test below, a\nmalformed lock file must resolve every skills.sh skill to `Unknown`,\nnever silently to `UpToDate` or `UpdateAvailable`.",
             "type": "string"
+          },
+          {
+            "const": "missing_on_disk",
+            "description": "A lock file lists the skill, but its folder is missing.",
+            "type": "string"
           }
         ]
       },

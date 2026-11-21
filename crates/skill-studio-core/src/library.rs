@@ -84,7 +84,10 @@ pub struct LibraryRow {
     /// Every deployment is parked.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub parked: bool,
-    /// Installed name.
+    /// A lock file lists this skill, but its folder is missing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub missing_on_disk: bool,
+    /// Skill name.
     #[schemars(extend("x-untrusted" = true))]
     pub name: String,
     /// Repository from the install ledgers, or null for a non-repository install.
@@ -188,6 +191,7 @@ pub fn library(
                 .deployments
                 .iter()
                 .all(|d| d.root.kind == RootKind::Parked),
+            missing_on_disk: false,
             name: skill.name.0.clone(),
             source: lock
                 .as_ref()
@@ -288,6 +292,32 @@ pub fn library(
             }
         }
         rows.push(row);
+    }
+    if let Some(source) = request
+        .source
+        .as_ref()
+        .filter(|_| request.copy_status.is_none() && request.modes.is_empty())
+    {
+        rows.extend(
+            inventory
+                .lock_only
+                .iter()
+                .filter(|entry| {
+                    &entry.source == source
+                        && (request.skills.is_empty() || request.skills.contains(&entry.name.0))
+                })
+                .map(|entry| LibraryRow {
+                    library: false,
+                    parked: false,
+                    missing_on_disk: true,
+                    name: entry.name.0.clone(),
+                    source: (source != "manual").then(|| source.clone()),
+                    uses: 0,
+                    agents: BTreeMap::new(),
+                    modes: BTreeMap::new(),
+                    copies: BTreeMap::new(),
+                }),
+        );
     }
     let count = rows.len();
     let used = rows.iter().filter(|row| row.uses > 0).count();

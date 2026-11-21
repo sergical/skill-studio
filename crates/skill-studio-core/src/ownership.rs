@@ -8,7 +8,7 @@
 //! `std::fs` so the core never touches a path outside its scope. See
 //! `docs/spec-core-primitives.md` section 13.4 for the precedence table.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -50,18 +50,13 @@ pub(crate) struct DotagentsEntry {
 pub(crate) struct ScopeLedgers {
     pub lock: SkillLockFile,
     pub dotagents: Vec<DotagentsEntry>,
-    /// Skill names a project-scope `<project>/skills-lock.json` (schema
-    /// version 1) names - a second, project-root source for skills.sh
-    /// ownership alongside `lock` above, which only ever sees the shared
-    /// `.skill-lock.json`. Always empty for the home scope, which has no
-    /// such file.
-    pub project_lock_skills: HashSet<String>,
+    /// Rows from the project-root `skills-lock.json`. Empty for the home scope.
+    pub project_lock: BTreeMap<String, serde_json::Value>,
 }
 
 /// Reads the skills.sh lock under `agents_dir` (normally
 /// `<scope root>/.agents`) and the dotagents ledger under `dotagents_dir`
-/// (see [`crate::dotagents_ledger::dotagents_dir`]), plus `project_lock_path`'s skill names when the scope is a project (see
-/// [`ScopeLedgers::project_lock_skills`]). A missing or unreadable file
+/// (see [`crate::dotagents_ledger::dotagents_dir`]), plus the project's `skills-lock.json` when applicable. A missing or unreadable file
 /// yields an empty ledger rather than an error: most scopes have no
 /// dotagents or skills.sh install at all, and a scan must still report
 /// every other deployment.
@@ -78,13 +73,13 @@ pub(crate) fn read_scope_ledgers(
                 skills: std::collections::HashMap::new(),
             }
         });
-    let project_lock_skills = project_lock_path
-        .map(|path| lock_file::read_project_lock_skill_names(fs, path))
+    let project_lock = project_lock_path
+        .and_then(|path| lock_file::read_project_lock_entries(fs, path).ok())
         .unwrap_or_default();
     ScopeLedgers {
         lock,
         dotagents: read_dotagents_ledger(fs, dotagents_dir),
-        project_lock_skills,
+        project_lock,
     }
 }
 
