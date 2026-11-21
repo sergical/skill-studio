@@ -869,7 +869,7 @@ fn confirm_add_skill_trust_with(
 
     // Background add work acquires these locks in this order. Do not hold the
     // operation-state lock while trying to acquire the filesystem lock.
-    let guard = write_lease.try_acquire(home)?;
+    let guard = write_lease.begin_mutation(home)?;
     let (parent_event, queued) = {
         let mut inner = state.lock()?;
         if inner.records.contains_key(retry_operation_id) {
@@ -1324,7 +1324,7 @@ mod tests {
         let writer_ready = Arc::clone(&ready);
         let writer_release = Arc::clone(&release);
         let writer = thread::spawn(move || {
-            let _guard = writer_lock.try_acquire(&writer_home).unwrap();
+            let _guard = writer_lock.begin_mutation(&writer_home).unwrap();
             let mut registry =
                 super::super::skill_fork_registry::read_fork_registry(&writer_home).unwrap();
             registry.preferred_editor = Some("Cursor".to_string());

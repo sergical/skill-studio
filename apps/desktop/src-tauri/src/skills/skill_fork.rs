@@ -1162,7 +1162,7 @@ pub async fn fork_skill(
         let refresh_state = app.state::<SkillRefreshState>();
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let write_lease = super::write_lease::WriteLease::default();
-        let guard = write_lease.try_acquire(&home)?;
+        let guard = write_lease.begin_mutation(&home)?;
         let app_data = app
             .path()
             .app_data_dir()
@@ -1585,7 +1585,7 @@ pub async fn pull_fork_upstream(
         let refresh_state = app.state::<SkillRefreshState>();
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let write_lease = super::write_lease::WriteLease::default();
-        let guard = write_lease.try_acquire(&home)?;
+        let guard = write_lease.begin_mutation(&home)?;
         let app_data = app
             .path()
             .app_data_dir()
@@ -1657,7 +1657,7 @@ pub async fn unfork_skill(
         let refresh_state = app.state::<SkillRefreshState>();
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let write_lease = super::write_lease::WriteLease::default();
-        let guard = write_lease.try_acquire(&home)?;
+        let guard = write_lease.begin_mutation(&home)?;
         let app_data = app
             .path()
             .app_data_dir()
@@ -1730,7 +1730,7 @@ mod tests {
 
     fn test_guard(home: &Path) -> super::super::write_lease::WriteLeaseGuard {
         super::super::write_lease::WriteLease::default()
-            .try_acquire(home)
+            .begin_mutation(home)
             .unwrap()
     }
 
@@ -2039,7 +2039,7 @@ mod tests {
             let writer = scope.spawn(move || {
                 let result = (|| {
                     let lease = super::super::write_lease::WriteLease::default();
-                    let guard = lease.try_acquire(home)?;
+                    let guard = lease.begin_mutation(home)?;
                     let fresh = skill_refresh::rebuild_snapshot_at(home, state, |_| Ok(()))?;
                     let (skill, deployment) =
                         super::super::skill_lifecycle::resolve_lifecycle_target(
@@ -2063,7 +2063,7 @@ mod tests {
             let completed = completed_rx.recv_timeout(std::time::Duration::from_secs(10));
             let released = matches!(completed, Ok(Ok(_)))
                 && super::super::write_lease::WriteLease::default()
-                    .try_acquire(home)
+                    .begin_mutation(home)
                     .is_ok();
             let revision_before_resume = state.snapshot.read().unwrap().as_ref().unwrap().revision;
             resume_tx.send(()).unwrap();

@@ -31,6 +31,7 @@ use std::path::{Path, PathBuf};
 use super::event_store::{
     allocate_id, fingerprint_path, EventDraft, EventRow, EventStatus, EventStore, InverseOp,
 };
+use super::write_lease::WriteLeaseGuard;
 
 struct StagingDirectory(PathBuf);
 
@@ -406,14 +407,16 @@ pub struct ConvertThenDisableRequest<'a> {
 pub fn convert_root_then_disable(
     store: &EventStore,
     request: ConvertThenDisableRequest<'_>,
+    mutation: &WriteLeaseGuard,
 ) -> Result<(), String> {
-    convert_root_then_disable_with_hook(store, request, &|_| Ok(()))
+    convert_root_then_disable_with_hook(store, request, &|_| Ok(()), mutation)
 }
 
 pub(crate) fn convert_root_then_disable_with_hook(
     store: &EventStore,
     request: ConvertThenDisableRequest<'_>,
     after_phase: &dyn Fn(&str) -> Result<(), String>,
+    mutation: &WriteLeaseGuard,
 ) -> Result<(), String> {
     let intent_id = allocate_id();
     let materialize_event_id = allocate_id();
@@ -466,7 +469,12 @@ pub(crate) fn convert_root_then_disable_with_hook(
             store.finish(&intent_id, EventStatus::Done)
         }
         Err(disable_error) => {
-            match rollback_unchanged_materialization(store, request.root, &materialize_event_id) {
+            match rollback_unchanged_materialization(
+                store,
+                request.root,
+                &materialize_event_id,
+                mutation,
+            ) {
                 Ok(true) => {
                     store.finish(&intent_id, EventStatus::Failed)?;
                     Err(format!(
@@ -487,6 +495,7 @@ fn rollback_unchanged_materialization(
     store: &EventStore,
     root: &Path,
     materialize_event_id: &str,
+    mutation: &WriteLeaseGuard,
 ) -> Result<bool, String> {
     let event = store
         .get(materialize_event_id)?
@@ -503,7 +512,7 @@ fn rollback_unchanged_materialization(
     if fingerprint_path(root) != expected {
         return Ok(false);
     }
-    store.restore(materialize_event_id, false)?;
+    store.restore(mutation, materialize_event_id, false)?;
     store.unregister_materialized_root(root)?;
     Ok(true)
 }
@@ -512,6 +521,7 @@ fn rollback_unchanged_materialization(
 pub fn reconcile_interrupted_convert_then_disable(
     store: &EventStore,
     event: &EventRow,
+    mutation: &WriteLeaseGuard,
 ) -> Result<(), String> {
     if event.kind != "materialize_then_disable" || event.status != "interrupted" {
         return Ok(());
@@ -587,7 +597,12 @@ pub fn reconcile_interrupted_convert_then_disable(
             match unlink_harness(store, &root, skill, harness) {
                 Ok(()) => store.finish(&event.id, EventStatus::Done),
                 Err(error) => {
-                    if rollback_unchanged_materialization(store, &root, materialize_event_id)? {
+                    if rollback_unchanged_materialization(
+                        store,
+                        &root,
+                        materialize_event_id,
+                        mutation,
+                    )? {
                         store.finish(&event.id, EventStatus::Failed)?;
                         Ok(())
                     } else {
@@ -983,6 +998,12 @@ mod tests {
         EventStore::open(&dir.join("app_data")).expect("open store")
     }
 
+    fn test_guard(root: &Path) -> WriteLeaseGuard {
+        super::super::write_lease::WriteLease::default()
+            .begin_mutation(root)
+            .expect("take the write lease")
+    }
+
     #[test]
     fn unlink_then_restore_recreates_the_symlink_with_the_same_target() {
         let tmp = tempfile::tempdir().unwrap();
@@ -998,7 +1019,9 @@ mod tests {
 
         let events = store.list(10, Some("find-bugs")).unwrap();
         assert_eq!(events[0].kind, "unlink_harness");
-        store.restore(&events[0].id, false).unwrap();
+        store
+            .restore(&test_guard(&home), &events[0].id, false)
+            .unwrap();
 
         let restored = root.join("find-bugs");
         assert!(fs::symlink_metadata(&restored)
@@ -1100,6 +1123,7 @@ mod tests {
                     Ok(())
                 }
             },
+            &test_guard(&home),
         )
         .unwrap_err();
 
@@ -1151,6 +1175,7 @@ mod tests {
                     Ok(())
                 }
             },
+            &test_guard(&home),
         )
         .unwrap_err();
         assert!(crash.starts_with("injected independent-copy crash"));
@@ -1161,8 +1186,8 @@ mod tests {
             .unwrap()
             .pop()
             .unwrap();
-        reconcile_interrupted_convert_then_disable(&store, &event).unwrap();
-        reconcile_interrupted_convert_then_disable(&store, &event).unwrap();
+        reconcile_interrupted_convert_then_disable(&store, &event, &test_guard(&home)).unwrap();
+        reconcile_interrupted_convert_then_disable(&store, &event, &test_guard(&home)).unwrap();
 
         assert!(fs::symlink_metadata(&deployment_path).is_err());
         assert!(fs::symlink_metadata(root.join("write-docs")).is_ok());
@@ -1205,6 +1230,7 @@ mod tests {
                     Ok(())
                 }
             },
+            &test_guard(&home),
         )
         .unwrap_err();
         store.reconcile_at_startup().unwrap();
@@ -1214,7 +1240,7 @@ mod tests {
             .pop()
             .unwrap();
 
-        reconcile_interrupted_convert_then_disable(&store, &event).unwrap();
+        reconcile_interrupted_convert_then_disable(&store, &event, &test_guard(&home)).unwrap();
 
         assert!(fs::symlink_metadata(&root)
             .unwrap()
@@ -1296,7 +1322,9 @@ mod tests {
         // symlink back.
         relink_harness(&store, &root, "find-bugs", "claude-code").unwrap();
         restore_guard_for_explode(&store, explode_event, &home).unwrap();
-        store.restore(&explode_event.id, false).unwrap();
+        store
+            .restore(&test_guard(&home), &explode_event.id, false)
+            .unwrap();
         assert!(fs::symlink_metadata(&root)
             .unwrap()
             .file_type()
@@ -1353,7 +1381,9 @@ mod tests {
 
         // Undo restores the original (broken) link, same shape as
         // `unlink_harness`'s undo.
-        store.restore(&events[0].id, false).unwrap();
+        store
+            .restore(&test_guard(&home), &events[0].id, false)
+            .unwrap();
         assert_eq!(
             fs::read_link(&broken).unwrap(),
             PathBuf::from("/does/not/exist/find-bugs")

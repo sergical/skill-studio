@@ -716,7 +716,7 @@ mod tests {
         let (release_first_tx, release_first_rx) = mpsc::channel();
         let first = std::thread::spawn(move || {
             let lease = WriteLease::with_lease_root(first_lease_root)
-                .try_acquire(&first_home)
+                .begin_mutation(&first_home)
                 .unwrap();
             super::super::skill_md_write::write_skill_md_compare_and_swap_with(
                 &lease,
@@ -740,7 +740,7 @@ mod tests {
                 lease_root,
                 std::time::Duration::from_secs(10),
             )
-            .try_acquire(&second_home)?;
+            .begin_mutation(&second_home)?;
             write_skill_md_compare_and_swap(&lease, &second_path, "shared baseline", "second write")
         });
         release_first_tx.send(()).unwrap();
@@ -1829,7 +1829,7 @@ fn write_skill_md_if_unchanged_for_snapshot(
     expected_content: &str,
     content: &str,
 ) -> Result<(), String> {
-    let lease = write_lease.try_acquire(home)?;
+    let lease = write_lease.begin_mutation(home)?;
     let canonical = validate_skill_md_write(path, content, snapshot)?;
     write_skill_md_compare_and_swap(&lease, &canonical, expected_content, content)
 }
@@ -2569,7 +2569,7 @@ fn run_plugin_lifecycle_action<T>(
 ) -> Result<T, String> {
     super::skill_plugin_lifecycle::require_claude_code_harness(harness)?;
     let write_lease = super::write_lease::WriteLease::default();
-    let _guard = write_lease.try_acquire(home)?;
+    let _guard = write_lease.begin_mutation(home)?;
     let result = action()?;
     skill_refresh::request_snapshot_rebuild(app);
     Ok(result)

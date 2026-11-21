@@ -89,11 +89,11 @@ fn reconcile_event_store_at_startup(
                     .and_then(|home| {
                         if row.kind == "make_independent_copy" {
                             skills::skill_independent_copy::reconcile_interrupted_independent_copy(
-                                store, &home, row, Some(guard),
+                                store, &home, row, guard,
                             )
                         } else {
                             skills::skill_independent_copy::reconcile_interrupted_independent_copy_restore(
-                                store, &home, row, Some(guard),
+                                store, &home, row, guard,
                             )
                         }
                     });
@@ -115,7 +115,7 @@ fn reconcile_event_store_at_startup(
             for row in &convert_rows {
                 if let Err(error) =
                     skills::skill_materialize::reconcile_interrupted_convert_then_disable(
-                        store, row,
+                        store, row, guard,
                     )
                 {
                     eprintln!(

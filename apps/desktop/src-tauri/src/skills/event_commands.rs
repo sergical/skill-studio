@@ -325,12 +325,16 @@ fn core_restore_event_at(
 /// Undoes one event against `store`, rooted at `home`/`data_root`. Dispatches
 /// by the kind that actually owns the event's inverse shape
 /// (`owning_restore_kind`): desktop-written kinds go through
-/// `EventStore::restore` under the desktop's own `write_lease`; every other
+/// `EventStore::restore` under the desktop's own write lease; every other
 /// kind goes through the core's `ops::restore_event`, which manages its own
-/// lease and must not be called while `write_lease` is held. Refuses an
+/// lease and must not be called while the desktop holds one. Refuses an
 /// `explode_shared_dir` restore while any of its skills are individually
 /// disabled (`restore_guard_for_explode`), and unregisters the materialized
 /// root once such a restore succeeds.
+///
+/// The desktop lease is taken before the row is read, and held until the
+/// restore event is finished and the backup retention has run, so no read
+/// of the row and no write it leads to happens outside it.
 ///
 /// Free of `tauri::AppHandle` so both the real command below and tests can
 /// call it directly against a tempdir-backed `EventStore` and `home`,
@@ -344,6 +348,8 @@ pub fn restore_event_with_runtime(
     event_id: &str,
     force: bool,
 ) -> Result<(), String> {
+    let write_lease = super::write_lease::WriteLease::for_data_root(data_root);
+    let mutation = write_lease.begin_mutation(home)?;
     let target = store
         .get(event_id)?
         .ok_or_else(|| format!("Event {event_id} not found"))?;
@@ -358,10 +364,8 @@ pub fn restore_event_with_runtime(
                     .to_string(),
             );
         }
-        let write_lease = super::write_lease::WriteLease::default();
-        let guard = write_lease.try_acquire(home)?;
-        super::skill_independent_copy::restore_independent_copy(store, home, &target, &guard)?;
-        store.retain_backups(guard.as_exclusive_guard());
+        super::skill_independent_copy::restore_independent_copy(store, home, &target, &mutation)?;
+        store.retain_backups(mutation.as_exclusive_guard());
         return Ok(());
     }
 
@@ -378,16 +382,16 @@ pub fn restore_event_with_runtime(
         None => DESKTOP_OWNED_KINDS.contains(&owning_restore_kind(store, &target).as_str()),
     };
     if !desktop_owns {
-        // `ops::restore_event` manages its own lease; holding `write_lease`
-        // across this call would self-deadlock (see
-        // `core_restore_event_at`'s doc comment).
+        // `ops::restore_event` manages its own lease; holding the desktop's
+        // across this call would self-deadlock on the same lease file (see
+        // `core_restore_event_at`'s doc comment). Release it first, so the
+        // core takes the lease itself.
+        drop(mutation);
         return core_restore_event_at(home, data_root, event_id, force);
     }
 
-    let write_lease = super::write_lease::WriteLease::default();
-    let retention_guard = write_lease.try_acquire(home)?;
-    store.restore_with_lease(&retention_guard, event_id, force)?;
-    store.retain_backups(retention_guard.as_exclusive_guard());
+    store.restore(&mutation, event_id, force)?;
+    store.retain_backups(mutation.as_exclusive_guard());
     if target.kind == "explode_shared_dir" {
         if let Some(root) = target.payload.get("root").and_then(|v| v.as_str()) {
             store.unregister_materialized_root(Path::new(root))?;
@@ -509,7 +513,7 @@ pub async fn materialize_harness_root(
             let event_store = app.state::<EventStoreState>();
             let home = dirs::home_dir().ok_or("Could not find home directory")?;
             let write_lease = super::write_lease::WriteLease::default();
-            let retention_guard = write_lease.try_acquire(&home)?;
+            let retention_guard = write_lease.begin_mutation(&home)?;
             let root_path = PathBuf::from(&root);
             skill_materialize::validate_materialize_root(&root_path)?;
 
@@ -564,7 +568,7 @@ pub async fn materialize_harness_root_then_disable(
             let event_store = app.state::<EventStoreState>();
             let home = dirs::home_dir().ok_or("Could not find home directory")?;
             let write_lease = super::write_lease::WriteLease::default();
-            let retention_guard = write_lease.try_acquire(&home)?;
+            let retention_guard = write_lease.begin_mutation(&home)?;
             let deployment_id = target
                 .deployment_id
                 .as_deref()
@@ -625,6 +629,7 @@ pub async fn materialize_harness_root_then_disable(
                     scope: &deployment.scope,
                     project_path: deployment.project_path.as_deref(),
                 },
+                &retention_guard,
             )?;
             store.retain_backups(retention_guard.as_exclusive_guard());
             drop(guard);
@@ -654,7 +659,7 @@ pub async fn make_skill_independent_copy(
             let event_store = app.state::<EventStoreState>();
             let home = dirs::home_dir().ok_or("Could not find home directory")?;
             let write_lease = super::write_lease::WriteLease::default();
-            let write_guard = write_lease.try_acquire(&home)?;
+            let write_guard = write_lease.begin_mutation(&home)?;
             let deployment_id = target
                 .deployment_id
                 .as_deref()
@@ -818,7 +823,7 @@ pub async fn repair_skill_link(
         let event_store = app.state::<EventStoreState>();
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let write_lease = super::write_lease::WriteLease::default();
-        let retention_guard = write_lease.try_acquire(&home)?;
+        let retention_guard = write_lease.begin_mutation(&home)?;
         let link = PathBuf::from(&path);
 
         let snapshot =
@@ -1343,7 +1348,7 @@ mod tests {
     /// `restore_event_with_runtime` takes `home`'s `WriteLease` itself before
     /// dispatching to `skill_independent_copy::restore_independent_copy`,
     /// which used to record the removed Copy ownership through the unlocked
-    /// `write_fork_registry` (a second, conflicting `try_acquire` on the
+    /// `write_fork_registry` (a second, conflicting `begin_mutation` on the
     /// lease `restore_event_with_runtime` already holds). Drives undo through
     /// the same seam the real `restore_skill_event` command calls, so a
     /// revert of the guard-threading fix in `restore_independent_copy`
@@ -1367,7 +1372,7 @@ mod tests {
 
         let event_id = {
             let write_lease = super::super::write_lease::WriteLease::default();
-            let guard = write_lease.try_acquire(&home).unwrap();
+            let guard = write_lease.begin_mutation(&home).unwrap();
             super::super::skill_independent_copy::make_skill_independent_copy(
                 &store,
                 super::super::skill_independent_copy::IndependentCopyRequest {
