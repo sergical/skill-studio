@@ -63,7 +63,7 @@ pub fn open_event_store_at(
 /// root's write lease and the command readiness gate is closed.
 fn reconcile_event_store_at_startup(
     store: &skills::event_store::EventStore,
-    _home: &Path,
+    home: &Path,
     guard: &skills::write_lease::WriteLeaseGuard,
 ) {
     match store.reconcile_at_startup() {
@@ -115,7 +115,7 @@ fn reconcile_event_store_at_startup(
             for row in &convert_rows {
                 if let Err(error) =
                     skills::skill_materialize::reconcile_interrupted_convert_then_disable(
-                        store, row, guard,
+                        store, row, home, guard,
                     )
                 {
                     eprintln!(

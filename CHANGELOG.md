@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed
+
+- Desktop Undo confines file changes to approved skill and backup directories, even if a directory is replaced by a symlink.
+
 ## v0.4.0
 
 ### Added

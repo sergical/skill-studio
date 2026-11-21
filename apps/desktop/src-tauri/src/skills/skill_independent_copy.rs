@@ -177,7 +177,8 @@ fn make_skill_independent_copy_with(
         Ok(()) => Ok(id),
         Err(error) if is_injected_crash(&error) => Err(error),
         Err(error) => {
-            let rollback = rollback_unstarted_whole_root(store, parent, &payload, mutation);
+            let rollback =
+                rollback_unstarted_whole_root(store, request.home, parent, &payload, mutation);
             let _ = store.finish(&id, EventStatus::Failed);
             match rollback {
                 Ok(()) => Err(error),
@@ -433,6 +434,7 @@ fn is_injected_crash(error: &str) -> bool {
 
 fn rollback_unstarted_whole_root(
     store: &EventStore,
+    home: &Path,
     parent: &Path,
     payload: &Value,
     mutation: &WriteLeaseGuard,
@@ -452,7 +454,7 @@ fn rollback_unstarted_whole_root(
                 .to_string(),
         );
     }
-    store.restore(mutation, event_id, false)?;
+    store.restore(mutation, home, event_id, false)?;
     store.unregister_materialized_root(parent)
 }
 
@@ -1029,7 +1031,7 @@ fn fail_unstarted_copy(
         if fs::symlink_metadata(&data.expected_root)
             .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
         {
-            store.restore(guard, materialize_event_id, false)?;
+            store.restore(guard, home, materialize_event_id, false)?;
             store.unregister_materialized_root(&data.expected_root)?;
         }
     }
@@ -1514,7 +1516,7 @@ mod tests {
                 .unwrap_err();
         assert!(ordering_error.contains("undo independent copies first"));
 
-        store.restore(&guard, &explode_id, true).unwrap();
+        store.restore(&guard, &home, &explode_id, true).unwrap();
         let copy = store.get(&copy_id).unwrap().unwrap();
         let error = validate_independent_copy_restore(&copy).unwrap_err();
         assert!(error.contains("no longer the real per-skill root"));
@@ -2182,7 +2184,7 @@ mod tests {
         let restore_event = store.get(&restore_id).unwrap().unwrap();
         assert!(!restore_event.restorable);
         assert!(store
-            .restore(&test_guard(&home), &restore_id, false)
+            .restore(&test_guard(&home), &home, &restore_id, false)
             .unwrap_err()
             .contains("not restorable"));
         recover_restore(&store, &home, &restore_id).unwrap();

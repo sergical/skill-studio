@@ -503,6 +503,84 @@ fn a_legacy_move_aside_disable_row_undoes_through_the_desktop() {
     std::fs::remove_dir_all(&home).ok();
 }
 
+#[cfg(unix)]
+fn assert_undo_refuses_outside_path(replace_skill_root: bool) {
+    let fixture = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let home = fixture.path().join("home");
+    let outside = fixture.path().join("outside");
+    let skill_root = home.join(CLAUDE_ROOT_RELATIVE);
+    let aside = home.join(UNIVERSAL_ROOT_RELATIVE).join("sample");
+    std::fs::create_dir_all(&skill_root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::create_dir_all(aside.parent().unwrap()).unwrap();
+    std::fs::write(&aside, b"skill bytes").unwrap();
+
+    let unrelated = outside.join("sample");
+    let target = if replace_skill_root {
+        skill_root.join("sample")
+    } else {
+        unrelated.clone()
+    };
+    std::fs::write(&unrelated, b"unrelated bytes").unwrap();
+
+    let data_root = data_root_for(&home);
+    let store = desktop_store(&home, &data_root);
+    let id = allocate_id();
+    store
+        .record(
+            &id,
+            &EventDraft {
+                kind: "move_aside_disable".into(),
+                skill: "sample".into(),
+                harness: Some("claude-code".into()),
+                scope: None,
+                project_path: None,
+                payload: serde_json::json!({}),
+                inverse: Some(
+                    serde_json::to_value(InverseOp::MoveBack {
+                        from: aside.clone(),
+                        to: target,
+                        pre_fingerprint: "absent".into(),
+                        post_fingerprint: None,
+                    })
+                    .unwrap(),
+                ),
+                backup_dir: None,
+                restorable: true,
+            },
+        )
+        .unwrap();
+    store.finish(&id, EventStatus::Done).unwrap();
+
+    if replace_skill_root {
+        std::fs::remove_dir(&skill_root).unwrap();
+        std::os::unix::fs::symlink(&outside, skill_root).unwrap();
+    }
+
+    let result = restore_event_with_runtime(&store, &home, &data_root, &id, true);
+    assert_eq!(
+        std::fs::read(unrelated).unwrap(),
+        b"unrelated bytes",
+        "Undo must leave out-of-scope bytes untouched"
+    );
+    let error = result.expect_err("Undo must refuse the recorded path");
+    assert!(error.contains("Undo refused"), "{error}");
+    assert_eq!(std::fs::read(aside).unwrap(), b"skill bytes");
+    assert!(store.get(&id).unwrap().unwrap().reverted_by.is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn undo_refuses_a_skill_root_replaced_by_an_outside_symlink() {
+    assert_undo_refuses_outside_path(true);
+}
+
+#[cfg(unix)]
+#[test]
+fn undo_refuses_a_recorded_destination_outside_skill_roots() {
+    assert_undo_refuses_outside_path(false);
+}
+
 // ---------------------------------------------------------------------
 // (d) The one-time import of a pre-migration desktop event log runs once:
 // a second startup imports nothing twice, and a corrupt legacy file does

@@ -63,6 +63,8 @@ pub use builder::{
     default_ports, default_ports_for_scope, default_ports_with_discovery,
     default_ports_with_history,
 };
+/// Directory capability used by the host filesystem's confined operations.
+pub use cap_std::fs::Dir as ConfinedDir;
 pub use clock::SystemClock;
 pub use data_folder_version::{
     check_compatible, guard_read_data_folder, lock_data_folders, migrate,
@@ -74,7 +76,9 @@ pub use discovery::{
     agent_home, agent_path, codex_home, discover_skill_projects, discovery_harnesses,
     opencode_config_dir, opencode_config_dir_under, resolve_agent_homes, HostProjectDiscovery,
 };
-pub use fs::RealFs;
+pub use fs::{
+    copy_confined_entry, open_confined_child, open_confined_dir, write_confined_file, RealFs,
+};
 pub use gh_currency::{
     parse_tree_response, GhCommitLookup, GhPluginManifestLookup, GhSourceTreeLookup,
 };
