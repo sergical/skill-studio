@@ -3125,8 +3125,8 @@ fn run_pack(action: PackCommand, time: bool) -> ExitCode {
 
 fn run_pack_action(action: PackCommand, time: bool) -> ExitCode {
     use skill_studio_core::pack_action::{
-        PackActionReport, PackAddRequest, PackRemoveRequest, PackSwitchSourceRequest,
-        PackUpdateRequest,
+        pack_update_bounded, PackActionReport, PackAddRequest, PackRemoveRequest,
+        PackSwitchSourceRequest, PackUpdateRequest,
     };
     let (operation, args) = match &action {
         PackCommand::Add { args, .. } => (Operation::PackAdd, args),
@@ -3181,7 +3181,7 @@ fn run_pack_action(action: PackCommand, time: bool) -> ExitCode {
                         .map(|r| r as &dyn skill_studio_core::pack::PackRemote),
                 )
             }),
-        PackCommand::Update { source, all, .. } => ops::pack_update(
+        PackCommand::Update { source, all, .. } => pack_update_bounded(
             &rt,
             &ctx,
             &PackUpdateRequest {

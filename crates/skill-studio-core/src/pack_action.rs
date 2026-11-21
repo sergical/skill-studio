@@ -242,12 +242,31 @@ pub fn pack_add(
     })
 }
 
-/// Updates every skill of one pack, or of every pack, through its owner tool.
+/// Updates installed packs through their owner tools without a step limit.
 /// Skips skills with local edits, which an update would overwrite.
 pub fn pack_update(
     rt: &Runtime,
     ctx: &OpContext,
     req: &PackUpdateRequest,
+) -> Result<PackActionReport, CoreError> {
+    pack_update_with_limit(rt, ctx, req, false)
+}
+
+/// Updates packs from the CLI or MCP, refusing plans over the shared batch
+/// limit across all scopes before any owner tool runs, including on dry runs.
+pub fn pack_update_bounded(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &PackUpdateRequest,
+) -> Result<PackActionReport, CoreError> {
+    pack_update_with_limit(rt, ctx, req, true)
+}
+
+fn pack_update_with_limit(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &PackUpdateRequest,
+    bounded: bool,
 ) -> Result<PackActionReport, CoreError> {
     rt.run(Operation::PackUpdate, ctx, || {
         let source = match (&req.source, req.all) {
@@ -286,6 +305,11 @@ pub fn pack_update(
                     _ => InstallMethod::SkillsSh,
                 });
             }
+        }
+        if bounded {
+            crate::ops::check_batch_size(
+                steps.iter().filter(|step| step.state == PackStepState::Planned).count(),
+            )?;
         }
         require_node_for(rt, &steps)?;
         if !req.dry_run {
@@ -670,8 +694,8 @@ fn cancelled_or_failed(err: &CoreError) -> PackStepState {
     }
 }
 
-/// One `update_all` batch per scope: skill names are unique within a scope,
-/// and `update_all` reports by name.
+/// Runs one update batch per scope, keeping results tied to their requested
+/// step when two owner tools claim the same skill name.
 fn update_by_scope(
     rt: &Runtime,
     ctx: &OpContext,
@@ -696,38 +720,33 @@ fn update_by_scope(
                 ref_pin: None,
             })
             .collect();
-        let outcome = match crate::ops::update_all_unbounded(rt, ctx, &requests, |_, _| {}) {
-            Ok(outcome) => outcome,
-            Err(err) => {
-                for &i in &indexes {
-                    steps[i].state = PackStepState::Failed {
+        let batch = crate::ops_update::update_all_with_request_index(
+            rt,
+            ctx,
+            &requests,
+            |index, result| {
+                steps[indexes[index]].state = match result {
+                    Ok(done) => PackStepState::Done {
+                        event_id: done.event_id.clone(),
+                    },
+                    Err(err) => PackStepState::Failed {
                         code: err.code,
                         reason: err.text(),
-                    };
-                }
-                continue;
-            }
-        };
-        for &i in &indexes {
-            let name = steps[i].skill.as_str();
-            steps[i].state = if let Some(done) = outcome
-                .items
-                .iter()
-                .find_map(|item| item.outcome.as_ref().filter(|o| o.skill.0 == name))
-            {
-                PackStepState::Done {
-                    event_id: done.event_id.clone(),
-                }
-            } else if let Some(reason) = outcome.errors.get(name) {
-                PackStepState::Failed {
-                    code: ErrorCode::Io,
-                    reason: reason.clone(),
-                }
-            } else {
-                PackStepState::Skipped {
+                    },
+                };
+            },
+        );
+        for i in indexes {
+            if let Err(err) = &batch {
+                steps[i].state = PackStepState::Failed {
+                    code: err.code,
+                    reason: err.text(),
+                };
+            } else if steps[i].state == PackStepState::Planned {
+                steps[i].state = PackStepState::Skipped {
                     reason: "cancelled".to_string(),
-                }
-            };
+                };
+            }
         }
     }
 }
