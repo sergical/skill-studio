@@ -58,26 +58,27 @@ npx skill-studio@latest diagnose
 npm install -g skill-studio
 ```
 
-| Command               | What it does                                    |
-| --------------------- | ----------------------------------------------- |
-| `scan`                | List every installed skill                      |
-| `diagnose`            | Find broken skills and spec violations          |
-| `conflicts`           | Find copies of the same skill that do not match |
-| `usage`               | Show how often each skill is used               |
-| `fix`                 | Repair broken frontmatter                       |
-| `doctor`              | Check skill listing budgets for each agent      |
-| `park` / `unpark`     | Turn a skill off or on for every agent          |
-| `turn-off`            | Turn a shared skill off for one agent           |
-| `invocation`          | Check or set how a skill can start              |
-| `review`              | Set and list skill review dates                 |
-| `add`                 | Install a skill                                 |
-| `outdated` / `update` | Find and apply skill updates                    |
-| `remove`              | Remove a skill                                  |
-| `events` / `restore`  | Show the change history and restore a change    |
-| `undo`                | Undo the last change                            |
-| `mcp`                 | Start the MCP server                            |
+| Command               | What it does                                                             |
+| --------------------- | ------------------------------------------------------------------------ |
+| `scan`                | List every installed skill                                               |
+| `diagnose`            | Find broken skills and spec violations                                   |
+| `conflicts`           | Find copies of the same skill that do not match                          |
+| `usage`               | Show how often each skill is used                                        |
+| `fix`                 | Repair frontmatter and report remaining problems, including broken links |
+| `doctor`              | Check skill listing budgets for each agent                               |
+| `park` / `unpark`     | Turn a skill off or on for every agent (aliases: `disable` / `enable`)   |
+| `turn-off`            | Turn a shared skill off for one agent                                    |
+| `invocation`          | Check or set how a skill can start                                       |
+| `review`              | Set, clear or list skill review dates                                    |
+| `add`                 | Install a skill                                                          |
+| `outdated` / `update` | Find and apply skill updates                                             |
+| `remove`              | Remove a skill                                                           |
+| `events` / `restore`  | Show the change history and restore a change                             |
+| `undo`                | Undo the latest change. For a park or unpark, use the opposite command   |
+| `extras`              | List hook events, MCP server names and instruction file paths            |
+| `mcp`                 | Start the MCP server                                                     |
 
-See the [CLI docs](https://useskillstudio.com/docs/cli/).
+Run `skill-studio --help` for the full command list. See the [CLI docs](https://useskillstudio.com/docs/cli/).
 
 ### MCP server
 
