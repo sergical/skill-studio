@@ -349,37 +349,20 @@ fn build_runtime(
         ));
     }
     let catalog = Arc::new(HarnessCatalog::builtin());
-    let mut ports = if with_history {
+    let mut ports = skill_studio_host::default_ports_for_scope(lease_root, catalog, &runtime_scope);
+    ports.history = if with_history {
         let db_path = runtime_scope.history_root.join("events.sqlite3");
-        skill_studio_host::default_ports_with_history(lease_root, catalog, db_path)
+        Arc::new(skill_studio_host::SqliteHistoryOpener::new(db_path))
     } else {
-        skill_studio_host::default_ports_with_discovery(lease_root, catalog)
-    };
-    if !with_history {
-        ports.history = Arc::new(skill_studio_host::GuardedNoHistoryOpener::new(
+        Arc::new(skill_studio_host::GuardedNoHistoryOpener::new(
             runtime_scope.history_root.clone(),
-        ));
-    }
+        ))
+    };
     ports.telemetry = skill_studio_host::telemetry::port(
         skill_studio_host::telemetry::Surface::Mcp,
         env!("CARGO_PKG_VERSION"),
     );
-    ports.discovery = if runtime_scope.kind == skill_studio_core::scope::ScopeKind::Fixture {
-        None
-    } else {
-        Some(Arc::new(
-            skill_studio_host::HostProjectDiscovery::for_scope(&runtime_scope),
-        ))
-    };
-    if with_history {
-        ports.tools = Some(Arc::new(skill_studio_host::PathToolLookup::new()));
-    }
     ports.spawner = Some(Arc::new(scope::process_spawner(&runtime_scope.home_root)));
-    if !with_history && runtime_scope.kind == skill_studio_core::scope::ScopeKind::Fixture {
-        // Fixture scopes name their own projects explicitly; discovery would
-        // otherwise walk the real machine's transcripts for a fake home.
-        ports.discovery = None;
-    }
     Runtime::new(&runtime_scope, ports)
 }
 

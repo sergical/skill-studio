@@ -61,8 +61,8 @@ impl ScopeArgs {
 
     /// Builds the `RuntimeScope` and the lease root for this invocation.
     ///
-    /// `--fixture <dir>` builds `RuntimeScope::fixture(dir)`, with its lease
-    /// root at `<dir>/.skill-studio/leases`. `--home <dir>` builds a `Live` scope
+    /// `--fixture <dir>` builds `RuntimeScope::fixture(dir)` and only opens
+    /// existing leases at `<dir>/.skill-studio/leases`. `--home <dir>` builds a `Live` scope
     /// rooted at `<dir>`, but keeps its history and lease roots namespaced
     /// under that same `<dir>` (`<dir>/.skill-studio/history` and
     /// `<dir>/.skill-studio/leases`) rather than the real machine's data

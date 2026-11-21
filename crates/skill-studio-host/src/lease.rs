@@ -24,15 +24,25 @@ const STALE_RETRY_INTERVAL: Duration = Duration::from_millis(5);
 /// Older clients can hold open descriptors, so these files must never be removed.
 pub struct FileLease {
     lease_root: PathBuf,
+    read_only: bool,
 }
 
 impl FileLease {
-    /// Builds a provider whose lock files live under `lease_root`.
-    ///
-    /// `lease_root` never sits inside a scope home or project; the adapter
-    /// wiring is responsible for choosing an app-data directory.
+    /// Builds a provider that creates lock files under the adapter's lease root.
     pub fn new(lease_root: PathBuf) -> Self {
-        FileLease { lease_root }
+        FileLease {
+            lease_root,
+            read_only: false,
+        }
+    }
+
+    /// Builds a read-only lease provider that shares existing locks without
+    /// creating files or granting exclusive leases.
+    pub(crate) fn read_only(lease_root: PathBuf) -> Self {
+        FileLease {
+            lease_root,
+            read_only: true,
+        }
     }
 
     fn lock_path(&self, key: &LeaseKey) -> PathBuf {
@@ -71,6 +81,49 @@ fn try_lock(file: &File, mode: LeaseMode) -> Result<bool, io::Error> {
         Ok(()) => Ok(true),
         Err(fs::TryLockError::WouldBlock) => Ok(false),
         Err(fs::TryLockError::Error(e)) => Err(e),
+    }
+}
+
+/// Whether the current process was denied write access to the lease root.
+fn unwritable(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem
+    )
+}
+
+/// Opens `path` for the lease `mode`, creating the file when `may_create`.
+///
+/// A shared acquire creates the file too: a missing file is the state before
+/// the first acquire on this root, not a lock-free mode, and a shared handle
+/// that locked nothing would leave the scan it guards racing a writer on the
+/// same root.
+///
+/// A shared acquire without write access locks an existing file when present
+/// and skips an absent file so read-only queries can still answer.
+fn open_lock_file(
+    path: &Path,
+    mode: LeaseMode,
+    may_create: bool,
+) -> Result<Option<File>, CoreError> {
+    if may_create {
+        match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+        {
+            Ok(file) => return Ok(Some(file)),
+            // Fall back to a read-only open if this process cannot write.
+            Err(error) if mode == LeaseMode::Shared && unwritable(&error) => {}
+            Err(error) => return Err(CoreError::io(path, error)),
+        }
+    }
+    match File::open(path) {
+        Ok(file) => Ok(Some(file)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(CoreError::io(path, error)),
     }
 }
 
@@ -144,27 +197,28 @@ impl LeaseProvider for FileLease {
         let mut sorted_keys = keys.to_vec();
         sorted_keys.sort();
 
-        if mode == LeaseMode::Exclusive {
-            fs::create_dir_all(&self.lease_root).map_err(|e| CoreError::io(&self.lease_root, e))?;
-        }
+        let may_create = if self.read_only {
+            if mode == LeaseMode::Exclusive {
+                return Err(CoreError::new(
+                    ErrorCode::InvalidScope,
+                    "Read-only scope cannot acquire an exclusive lease.",
+                ));
+            }
+            false
+        } else {
+            match fs::create_dir_all(&self.lease_root) {
+                Ok(()) => true,
+                Err(error) if mode == LeaseMode::Shared && unwritable(&error) => false,
+                Err(error) => return Err(CoreError::io(&self.lease_root, error)),
+            }
+        };
 
         let deadline = Instant::now().checked_add(wait);
         let mut files = Vec::with_capacity(sorted_keys.len());
         for key in &sorted_keys {
             let path = self.lock_path(key);
-            let mut options = OpenOptions::new();
-            options.read(true);
-            if mode == LeaseMode::Exclusive {
-                options.create(true).truncate(false).write(true);
-            }
-            let file = match options.open(&path) {
-                Ok(file) => file,
-                Err(error)
-                    if mode == LeaseMode::Shared && error.kind() == io::ErrorKind::NotFound =>
-                {
-                    continue
-                }
-                Err(error) => return Err(CoreError::io(&path, error)),
+            let Some(file) = open_lock_file(&path, mode, may_create)? else {
+                continue;
             };
             let stale_deadline = Instant::now() + STALE_TAKEOVER_TIMEOUT;
             let mut attempted = false;
@@ -297,6 +351,130 @@ mod tests {
             .acquire(&keys, LeaseMode::Exclusive, Duration::from_millis(500))
             .unwrap();
         assert_eq!(exclusive.mode(), LeaseMode::Exclusive);
+    }
+
+    /// Given a lease root whose lock file does not exist yet, when one handle
+    /// holds a shared lease, then an exclusive acquire waits for it and reports
+    /// busy instead of taking a file the shared handle never locked; on failure
+    /// the panic names the exclusive acquire that ran beside the reader.
+    #[test]
+    fn a_shared_lease_on_a_root_with_no_lock_file_blocks_an_exclusive_lease_until_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease_root = dir.path().join("leases");
+        let keys = vec![key("fresh-root-reader")];
+
+        let reader = FileLease::new(lease_root.clone());
+        let shared = reader
+            .acquire(&keys, LeaseMode::Shared, Duration::ZERO)
+            .unwrap();
+        assert!(
+            reader.lock_path(&keys[0]).exists(),
+            "a shared acquire left no lock file on a fresh root, so it holds no lock"
+        );
+
+        let writer = FileLease::new(lease_root.clone()).acquire(
+            &keys,
+            LeaseMode::Exclusive,
+            Duration::from_millis(100),
+        );
+        assert!(
+            matches!(writer, Err(ref error) if error.code == ErrorCode::ScopeBusy),
+            "an exclusive acquire ran while the shared holder held the root: {:?}",
+            writer.as_ref().err()
+        );
+
+        drop(shared);
+        assert!(
+            FileLease::new(lease_root)
+                .acquire(&keys, LeaseMode::Exclusive, Duration::from_millis(500))
+                .is_ok(),
+            "the root stayed busy after the shared handle dropped"
+        );
+    }
+
+    /// Whether the process writes through a `0o555` directory anyway, as root
+    /// does. Such a run cannot exercise a read-only lease root.
+    #[cfg(unix)]
+    fn writes_through_a_read_only_directory(dir: &Path) -> bool {
+        let probe = dir.join(".write-probe");
+        let wrote = fs::write(&probe, b"").is_ok();
+        let _ = fs::remove_file(&probe);
+        wrote
+    }
+
+    /// Given a lease root that holds a lock file but denies a new one, when a
+    /// shared acquire runs, then it locks the file it finds and answers
+    /// instead of failing; a read-only home keeps serving read-only queries.
+    #[test]
+    #[cfg(unix)]
+    fn a_shared_acquire_locks_the_file_it_finds_on_a_read_only_lease_root() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let lease_root = dir.path().join("leases");
+        let keys = vec![key("read-only-existing")];
+        let lease = FileLease::new(lease_root.clone());
+        drop(
+            lease
+                .acquire(&keys, LeaseMode::Exclusive, Duration::ZERO)
+                .unwrap(),
+        );
+        let lock_path = lease.lock_path(&keys[0]);
+        let before = fs::read(&lock_path).unwrap();
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o444)).unwrap();
+        fs::set_permissions(&lease_root, fs::Permissions::from_mode(0o555)).unwrap();
+        let privileged = writes_through_a_read_only_directory(&lease_root);
+
+        let shared = lease.acquire(&keys, LeaseMode::Shared, Duration::ZERO);
+
+        fs::set_permissions(&lease_root, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o644)).unwrap();
+        if privileged {
+            return;
+        }
+        assert_eq!(
+            shared
+                .expect("a shared acquire failed on a read-only lease root")
+                .mode(),
+            LeaseMode::Shared
+        );
+        assert_eq!(
+            fs::read(&lock_path).unwrap(),
+            before,
+            "a shared acquire rewrote the lock file on a read-only lease root"
+        );
+    }
+
+    /// Given a lease root that cannot hold a lock file at all, when a shared
+    /// acquire runs, then it answers without a lock, and a writer fails there
+    /// too, so no writer can run against the reader it would exclude.
+    #[test]
+    #[cfg(unix)]
+    fn a_shared_acquire_on_a_root_that_cannot_hold_a_lock_file_answers() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let lease_root = dir.path().join("leases");
+        let keys = vec![key("read-only-absent")];
+        fs::create_dir(&lease_root).unwrap();
+        fs::set_permissions(&lease_root, fs::Permissions::from_mode(0o555)).unwrap();
+        let privileged = writes_through_a_read_only_directory(&lease_root);
+
+        let lease = FileLease::new(lease_root.clone());
+        let shared = lease.acquire(&keys, LeaseMode::Shared, Duration::ZERO);
+        let writer = lease.acquire(&keys, LeaseMode::Exclusive, Duration::from_millis(100));
+
+        fs::set_permissions(&lease_root, fs::Permissions::from_mode(0o755)).unwrap();
+        if privileged {
+            return;
+        }
+        assert!(
+            shared.is_ok(),
+            "a shared acquire failed on a lease root that cannot hold a lock file: {:?}",
+            shared.err()
+        );
+        assert!(
+            writer.is_err(),
+            "a writer acquired an exclusive lease on a lease root that cannot hold a lock file"
+        );
     }
 
     /// Given an exclusive lease held by this process, when a second

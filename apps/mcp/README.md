@@ -66,7 +66,7 @@ that happens, mirroring `apps/cli/src/scope.rs`'s flag-driven version.
 
 | Variable               | Effect                                                                                                               |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `SKILL_STUDIO_FIXTURE` | Fixture scope rooted at this directory. Lease root: `<dir>/.skill-studio/leases`.                                    |
+| `SKILL_STUDIO_FIXTURE` | Read-only fixture scope rooted at this directory. Opens existing locks at `<dir>/.skill-studio/leases`.              |
 | `SKILL_STUDIO_HOME`    | Live scope rooted at this directory instead of the real home. Lease root: `<dir>/.skill-studio/leases`.              |
 | `SKILL_STUDIO_PROJECT` | A `PATH`-style list of explicit project directories (`:` on Unix, `;` on Windows). Optional with either scope above. |
 
