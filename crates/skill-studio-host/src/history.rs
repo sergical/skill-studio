@@ -1986,7 +1986,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "manual disk measurement: creates 1,000 real update backups"]
+    #[ignore = "creates 1,000 real update backups; weekly-checks.yml runs it: cargo test -p skill-studio-host --lib -- --ignored thousand_updates --nocapture"]
     fn thousand_updates_report_disk_use_before_and_after_retention_or_keep_expired_backups() {
         use skill_studio_core::backup_retention::{
             BackupRetentionScope, BACKUP_RETENTION_AGE, BACKUP_RETENTION_COUNT,
