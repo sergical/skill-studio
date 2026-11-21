@@ -526,7 +526,7 @@ pub async fn apply_skill_frontmatter_repair(
             } = request;
             let home = dirs::home_dir().ok_or("Could not find home directory")?;
             let write_lease = super::write_lease::WriteLease::default();
-            let write_guard = write_lease.try_acquire(&home)?;
+            let write_guard = write_lease.begin_mutation(&home)?;
             let snapshot =
                 super::skill_lifecycle::rebuild_fresh_lifecycle_snapshot(&app, &refresh_state)?;
             let deployment = exact_target(&snapshot, &target)?.clone();
@@ -677,7 +677,7 @@ mod tests {
     use skill_studio_core::frontmatter::{parse_frontmatter, FrontmatterParseResult};
 
     fn home_guard(home: &Path) -> WriteLeaseGuard {
-        WriteLease::default().try_acquire(home).unwrap()
+        WriteLease::default().begin_mutation(home).unwrap()
     }
 
     fn malformed() -> &'static str {
@@ -1166,9 +1166,7 @@ mod tests {
                 expected
             );
 
-            store
-                .restore_with_lease(&home_guard(&skill), "repair", false)
-                .unwrap();
+            store.restore(&home_guard(&skill), "repair", false).unwrap();
 
             assert_eq!(
                 fs::read(skill.join("SKILL.md")).unwrap(),
@@ -1306,7 +1304,7 @@ mod tests {
 
         let lease_root = temp.path().join("leases");
         let lease = WriteLease::with_lease_root(lease_root.clone())
-            .try_acquire(temp.path())
+            .begin_mutation(temp.path())
             .unwrap();
         let (transaction, validated) = begin_bound_frontmatter_repair_transaction(
             &lease,
@@ -1375,11 +1373,11 @@ mod tests {
         fs::write(skill.join("SKILL.md"), "external drift").unwrap();
         let lease = home_guard(&skill);
         assert!(store
-            .restore_with_lease(&lease, "repair-2", false)
+            .restore(&lease, "repair-2", false)
             .unwrap_err()
             .contains("has changed"));
         fs::write(skill.join("SKILL.md"), intent.proposed_content).unwrap();
-        store.restore_with_lease(&lease, "repair-2", false).unwrap();
+        store.restore(&lease, "repair-2", false).unwrap();
         assert_eq!(
             fs::read_to_string(skill.join("SKILL.md")).unwrap(),
             malformed()
@@ -1514,7 +1512,7 @@ mod tests {
         let rows = store.reconcile_at_startup().unwrap();
 
         let write_lease = super::super::write_lease::WriteLease::default();
-        let guard = write_lease.try_acquire(&home).unwrap();
+        let guard = write_lease.begin_mutation(&home).unwrap();
         reconcile_interrupted_frontmatter_repair(&store, &home, &rows[0], &guard).unwrap();
 
         assert!(super::super::skill_fork_registry::read_fork_registry(&home)

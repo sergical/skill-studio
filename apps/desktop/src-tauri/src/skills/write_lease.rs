@@ -84,7 +84,7 @@ impl WriteLeaseGuard {
 /// unpark.
 pub struct WriteLease {
     lease: FileLease,
-    /// How long `try_acquire` waits for a holder to release.
+    /// How long `begin_mutation` waits for a holder to release.
     wait: Duration,
     /// How long `acquire_scan_lease` waits for a writer to release.
     scan_wait: Duration,
@@ -109,6 +109,19 @@ impl WriteLease {
             lease: FileLease::new(lease_root),
             wait: Duration::ZERO,
             scan_wait: Duration::ZERO,
+        }
+    }
+
+    /// A lease rooted at `<data_root>/leases`, the directory the core writers
+    /// for that data root take, so a desktop mutation and a CLI or MCP write
+    /// over the same data root exclude each other. The default provider
+    /// resolves to the machine's own data directory, which is not the data
+    /// root a caller passed - a fixture run or a test passes its own.
+    pub fn for_data_root(data_root: &Path) -> Self {
+        WriteLease {
+            lease: FileLease::new(data_root.join("leases")),
+            wait: SCAN_WAIT,
+            scan_wait: SCAN_READ_WAIT,
         }
     }
 
@@ -175,15 +188,23 @@ impl WriteLease {
             .map_err(|error| error.to_string())
     }
 
-    /// Acquires an exclusive lease on `root`, waiting a few seconds at most
-    /// for a background scan to finish. `Err` mirrors
-    /// the old mutation mutex's message shape when another writer already
-    /// holds it, naming its pid and how long it has held the lease when the
-    /// lease reports one; any other failure (e.g. the lease directory isn't
-    /// writable) passes the underlying error text through instead of
-    /// flattening it to the same "in progress" message, which would send a
-    /// caller looking for a concurrent writer that doesn't exist.
-    pub fn try_acquire(&self, root: &Path) -> Result<WriteLeaseGuard, String> {
+    /// The desktop's one mutation entry point: takes the exclusive write
+    /// lease on `root` and returns the guard the mutation runs under. Call it
+    /// before the first read of the state a mutation changes and hold the
+    /// guard until its last write and its history row are finished, so every
+    /// step between the check and the write stays under one lease. Anything
+    /// that writes a skill path takes its proof from here instead of
+    /// acquiring a lease of its own.
+    ///
+    /// Waits a few seconds at most for a background scan to finish. `Err`
+    /// mirrors the old mutation mutex's message shape when another writer
+    /// already holds the lease, naming its pid and how long it has held it
+    /// when the lease reports one; any other failure (e.g. the lease
+    /// directory isn't writable) passes the underlying error text through
+    /// instead of flattening it to the same "in progress" message, which
+    /// would send a caller looking for a concurrent writer that doesn't
+    /// exist.
+    pub fn begin_mutation(&self, root: &Path) -> Result<WriteLeaseGuard, String> {
         let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         let key = LeaseKey { canonical_root };
         self.lease
@@ -295,13 +316,13 @@ mod tests {
         std::fs::create_dir_all(&other).unwrap();
 
         let lease = WriteLease::with_lease_root(lease_root);
-        let first = lease.try_acquire(&root).unwrap();
-        let second = lease.try_acquire(&root);
+        let first = lease.begin_mutation(&root).unwrap();
+        let second = lease.begin_mutation(&root);
         assert!(second.err().unwrap().contains("Another write"));
         // The adapter picks the key: two roots must not share one.
-        assert!(lease.try_acquire(&other).is_ok());
+        assert!(lease.begin_mutation(&other).is_ok());
         drop(first);
-        assert!(lease.try_acquire(&root).is_ok());
+        assert!(lease.begin_mutation(&root).is_ok());
     }
 
     /// A command holds `WriteLease` on `home` for its whole run (fork, add,
@@ -320,7 +341,7 @@ mod tests {
         std::fs::create_dir_all(&home).unwrap();
 
         let write_lease = WriteLease::default();
-        let guard = write_lease.try_acquire(&home).unwrap();
+        let guard = write_lease.begin_mutation(&home).unwrap();
 
         let mut registry = super::super::skill_fork_registry::ForkRegistry::default();
         let result = super::super::skill_fork_registry::write_fork_registry_locked(
