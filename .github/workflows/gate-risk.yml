@@ -38,13 +38,36 @@ jobs:
           # Classify with the base branch code and policy, never the PR code.
           scripts/gate/gate risk --base "$BASE_SHA" --head "$HEAD_SHA" --author "$AUTHOR" --json > risk.json
           tier=$(jq -r .tier risk.json)
-          reasons=$(jq -r '[.reasons[] | select(.tier == "stop") | .rule] | unique | join(", ")' risk.json)
+          ask=$(jq -r '.needs_you[0].ask // ""' risk.json)
+          # Label and status first, so a comment error cannot leave a stop PR
+          # free to merge.
           if [ "$tier" = stop ]; then
             # Pending, not failure: the PR cannot merge by itself, and no
             # failure email goes out. The owner merges it.
             gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels" -f "labels[]=risk:owner" > /dev/null
-            gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f context=gate/risk -f state=pending -f description="Owner merges: ${reasons:0:120}"
+            gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f context=gate/risk -f state=pending -f description="Needed from you: ${ask:0:120}"
           else
             gh api --method DELETE "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels/risk%3Aowner" > /dev/null 2>&1 || true
             gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f context=gate/risk -f state=success -f description="Risk: $tier"
           fi
+          # One comment per PR says what the owner decides, why, and which files
+          # and rule matched, so the owner can change a rule that asks too often.
+          # The agent copies it into its reply. comment.jq escapes file names.
+          marker='<!-- gate-risk -->'
+          ids=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id")
+          keep=""
+          if [ "$tier" = stop ]; then
+            jq -r --arg marker "$marker" -f scripts/gate/comment.jq risk.json > comment.md
+            keep=$(printf '%s\n' "$ids" | head -n 1)
+            # A comment deleted since the lookup gets a new one.
+            if [ -z "$keep" ] || ! gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$keep" -F body=@comment.md > /dev/null; then
+              keep=""
+              gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -F body=@comment.md > /dev/null
+            fi
+          fi
+          # Remove the rest: a stale comment, or a duplicate from a cancelled run.
+          for id in $ids; do
+            if [ "$id" != "$keep" ]; then
+              gh api --method DELETE "repos/$GITHUB_REPOSITORY/issues/comments/$id" > /dev/null 2>&1 || true
+            fi
+          done

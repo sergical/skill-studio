@@ -12,5 +12,7 @@
 
 <!-- The command you ran and the part of its real output that shows the change works. -->
 
-<!-- Needs you: add this section only when the PR has the risk:owner label
-     or a review disagreement after 2 rounds. Say the one decision. -->
+<!-- Needed from you and why: add this section only when the PR has the
+     risk:owner label or review findings still open after the last round.
+     The decision in one line, why a person must make it, and your pick.
+     For risk:owner, the gate-risk comment has the first two. -->
