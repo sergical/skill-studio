@@ -104,7 +104,7 @@ pub struct SkillUsage {
 }
 
 /// Optional exact matches over recorded history. Paths use lexical path equality.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct UsageFilter {
     /// Exact recorded harness id, or all harnesses.
     pub harness: Option<String>,

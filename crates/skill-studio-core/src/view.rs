@@ -3,10 +3,12 @@
 //! default and the caller can ask for one page, some fields, or counts.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 
 use crate::error::{ErrorCode, ErrorEntry};
 use crate::ops::{OpStatus, Outcome, ResultEnvelope};
@@ -22,9 +24,9 @@ pub struct ViewRequest {
     /// Rows to return from the main list. `0` returns only `page` (totals
     /// and `counts`). Without it, rows until the answer is 32 KB.
     pub limit: Option<usize>,
-    /// A `next_cursor` from `page` or `page.also` of an earlier call with the
-    /// same filters. It continues that one list; the other lists return only
-    /// totals.
+    /// Continue one list with its opaque `next_cursor`. Repeat the same scope
+    /// and filters. If the cursor is invalid or the list changed, retry
+    /// without a cursor.
     pub cursor: Option<String>,
     /// Row fields to keep. Empty keeps every field.
     pub fields: Vec<String>,
@@ -71,16 +73,19 @@ pub struct Rendered {
 /// Serializes `envelope` with `view` applied to the lists in
 /// [`Outcome::LISTS`]. `timings` keeps the envelope's `timings`.
 ///
+/// `request` is the parsed operation input, excluding view controls.
 /// An invalid view replaces the result with an `invalid_request` error.
 pub fn render<T: Outcome + Serialize>(
     envelope: &ResultEnvelope<T>,
     view: &ViewRequest,
+    request: &impl Serialize,
     timings: bool,
 ) -> Result<Rendered, serde_json::Error> {
     render_document::<T>(
         serde_json::to_value(envelope)?,
         envelope.exit_status(),
         view,
+        request,
         timings,
     )
 }
@@ -92,6 +97,7 @@ pub fn render_document<T: Outcome>(
     mut json: Value,
     mut exit_status: i32,
     view: &ViewRequest,
+    request: &impl Serialize,
     timings: bool,
 ) -> Result<Rendered, serde_json::Error> {
     if !timings {
@@ -99,7 +105,12 @@ pub fn render_document<T: Outcome>(
             doc.remove("timings");
         }
     }
-    if let Err(message) = fit_answer(&mut json, T::LISTS, view)? {
+    let query = Sha256::new_with_prefix(serde_json::to_vec(&(
+        &json["operation"],
+        &json["scope"],
+        request,
+    ))?);
+    if let Err(message) = fit_answer(&mut json, T::LISTS, view, &query)? {
         if let Value::Object(doc) = &mut json {
             let error = ErrorEntry {
                 code: ErrorCode::InvalidRequest,
@@ -122,6 +133,7 @@ fn fit_answer(
     json: &mut Value,
     lists: &[&str],
     view: &ViewRequest,
+    query: &Sha256,
 ) -> serde_json::Result<Result<(), String>> {
     let rest = bytes_without_lists(json, lists);
     let Value::Object(doc) = json else {
@@ -133,7 +145,7 @@ fn fit_answer(
     let mut budget = ANSWER_BYTES.saturating_sub(rest);
     loop {
         let mut viewed = data.clone();
-        let page = match apply(&mut viewed, lists, view, budget) {
+        let page = match apply(&mut viewed, lists, view, budget, query) {
             Ok(page) => page,
             Err(message) => return Ok(Err(message)),
         };
@@ -176,33 +188,32 @@ fn apply(
     lists: &[&str],
     view: &ViewRequest,
     mut budget: usize,
+    query: &Sha256,
 ) -> Result<Option<Page>, String> {
     let Some(main) = lists.first() else {
-        return if view.is_set() {
+        return if view.cursor.is_some() {
+            Err(INVALID_CURSOR.into())
+        } else if view.is_set() {
             Err("this result has no list to page, project or count".into())
         } else {
             Ok(None)
         };
     };
-    let (target, offset) = parse_cursor(view.cursor.as_deref(), main, lists)?;
-    let Some(mut page) = cut(data, target, offset, view.limit, view, &mut budget, 1)? else {
+    let (target, offset) = parse_cursor(view.cursor.as_deref(), main)?;
+    if !lists.contains(&target) {
+        return Err(INVALID_CURSOR.into());
+    }
+    let Some(mut page) = cut(data, target, offset, view, &mut budget, 1, query)? else {
         return Ok(None);
     };
-    name_cursor(&mut page, main);
-    let other_limit = (view.limit == Some(0) || view.cursor.is_some()).then_some(0);
+    let other_view = ViewRequest {
+        limit: (view.limit == Some(0) || view.cursor.is_some()).then_some(0),
+        ..ViewRequest::default()
+    };
     for pointer in lists.iter().filter(|pointer| **pointer != target) {
-        let other = cut(
-            data,
-            pointer,
-            0,
-            other_limit,
-            &ViewRequest::default(),
-            &mut budget,
-            0,
-        )?;
-        if let Some(mut other) = other {
+        let other = cut(data, pointer, 0, &other_view, &mut budget, 0, query)?;
+        if let Some(other) = other {
             if other.returned < other.total {
-                name_cursor(&mut other, main);
                 page.also.push(other);
             }
         }
@@ -211,47 +222,61 @@ fn apply(
     Ok((cut_any || view.is_set()).then_some(page))
 }
 
-fn name_cursor(page: &mut Page, main: &str) {
-    if page.list != main {
-        page.next_cursor = page
-            .next_cursor
-            .take()
-            .map(|offset| format!("{}@{offset}", page.list));
-    }
-}
+const INVALID_CURSOR: &str = "Invalid or stale page cursor. Start again without a cursor.";
 
-/// The list a cursor continues and its offset: `<offset>` for the main list,
-/// `<list>@<offset>` for another list.
-fn parse_cursor<'a>(
-    cursor: Option<&str>,
-    main: &'a str,
-    lists: &[&'a str],
-) -> Result<(&'a str, usize), String> {
+fn parse_cursor<'a>(cursor: Option<&'a str>, main: &'a str) -> Result<(&'a str, usize), String> {
     let Some(cursor) = cursor else {
         return Ok((main, 0));
     };
-    let invalid = || format!("cursor `{cursor}` is not a page.next_cursor");
-    let (list, offset) = cursor.rsplit_once('@').unwrap_or((main, cursor));
-    let list = lists
-        .iter()
-        .copied()
-        .find(|pointer| *pointer == list)
+    let invalid = || INVALID_CURSOR.to_owned();
+    let (position, _) = cursor
+        .strip_prefix("v1@")
+        .and_then(|s| s.rsplit_once('@'))
         .ok_or_else(invalid)?;
+    let (list, offset) = position.rsplit_once('@').ok_or_else(invalid)?;
     Ok((list, offset.parse().map_err(|_| invalid())?))
+}
+
+fn list_cursor_seed(query: &Sha256, pointer: &str, list: &Value) -> Sha256 {
+    let mut digest = query.clone();
+    digest.update([0]);
+    digest.update(pointer);
+    digest.update([0]);
+    digest.update(list.to_string());
+    digest
+}
+
+fn page_cursor(seed: &Sha256, pointer: &str, offset: usize) -> String {
+    let mut digest = seed.clone();
+    digest.update([0]);
+    digest.update(offset.to_string());
+    let mut cursor = format!("v1@{pointer}@{offset}@");
+    for byte in digest.finalize().iter().take(16) {
+        let _ = write!(cursor, "{byte:02x}");
+    }
+    cursor
 }
 
 fn cut(
     data: &mut Value,
     pointer: &str,
     offset: usize,
-    limit: Option<usize>,
     view: &ViewRequest,
     budget: &mut usize,
     min_rows: usize,
+    query: &Sha256,
 ) -> Result<Option<Page>, String> {
-    let Some(slot) = data.pointer_mut(pointer) else {
-        return Ok(None);
+    let Some(slot) = data
+        .pointer_mut(pointer)
+        .filter(|slot| slot.is_array() || slot.is_object())
+    else {
+        return if view.cursor.is_some() {
+            Err(INVALID_CURSOR.into())
+        } else {
+            Ok(None)
+        };
     };
+    let cursor_seed = list_cursor_seed(query, pointer, slot);
     let (is_map, rows): (bool, Vec<(Option<String>, Value)>) = match std::mem::take(slot) {
         Value::Array(items) => (false, items.into_iter().map(|row| (None, row)).collect()),
         Value::Object(map) => (
@@ -263,8 +288,13 @@ fn cut(
             return Ok(None);
         }
     };
-    check_fields(&rows, view)?;
     let total = rows.len();
+    if let Some(cursor) = &view.cursor {
+        if offset >= total || *cursor != page_cursor(&cursor_seed, pointer, offset) {
+            return Err(INVALID_CURSOR.into());
+        }
+    }
+    check_fields(&rows, view)?;
     let counts = view.count_by.as_deref().map(|key| count(&rows, key));
     let mut kept: Vec<_> = rows.into_iter().skip(offset).collect();
     if !view.fields.is_empty() {
@@ -274,7 +304,9 @@ fn cut(
             }
         }
     }
-    let returned = limit.map_or_else(|| fit(&kept, budget, min_rows), |n| n.min(kept.len()));
+    let returned = view
+        .limit
+        .map_or_else(|| fit(&kept, budget, min_rows), |n| n.min(kept.len()));
     kept.truncate(returned);
     let next = offset.saturating_add(returned);
     *slot = if is_map {
@@ -290,7 +322,7 @@ fn cut(
         list: pointer.to_owned(),
         total,
         returned,
-        next_cursor: (next < total).then(|| next.to_string()),
+        next_cursor: (next < total).then(|| page_cursor(&cursor_seed, pointer, next)),
         counts,
         also: Vec::new(),
     }))
@@ -358,6 +390,23 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn apply(
+        data: &mut Value,
+        lists: &[&str],
+        view: &ViewRequest,
+        budget: usize,
+    ) -> Result<Option<Page>, String> {
+        super::apply(data, lists, view, budget, &Sha256::new())
+    }
+
+    fn fit_answer(
+        json: &mut Value,
+        lists: &[&str],
+        view: &ViewRequest,
+    ) -> serde_json::Result<Result<(), String>> {
+        super::fit_answer(json, lists, view, &Sha256::new())
+    }
+
     fn rows(n: usize) -> Value {
         json!({
             "rows": (0..n)
@@ -408,7 +457,7 @@ mod tests {
         assert_eq!(page.returned, kept.len());
         assert!(kept.len() < 2_000);
         assert!(data["rows"].to_string().len() <= ANSWER_BYTES);
-        assert_eq!(page.next_cursor, Some(kept.len().to_string()));
+        assert!(page.next_cursor.is_some());
         assert_eq!(page.also[0].list, "/unused", "{:?}", page.also);
     }
 
@@ -453,14 +502,13 @@ mod tests {
             .unwrap()
             .unwrap();
         let unused = &first.also[0];
-        let cursor = format!("/unused@{}", unused.returned);
-        assert_eq!(unused.next_cursor.as_deref(), Some(cursor.as_str()));
+        let cursor = unused.next_cursor.as_deref().unwrap();
 
         let mut data = rows(2_000);
         let next = apply(
             &mut data,
             &lists,
-            &view(None, Some(&cursor), &[], None),
+            &view(None, Some(cursor), &[], None),
             ANSWER_BYTES,
         )
         .unwrap()
@@ -468,7 +516,8 @@ mod tests {
         assert_eq!(next.list, "/unused");
         assert_eq!(data["unused"][0], format!("s{}", unused.returned));
         assert_eq!(data["rows"], json!([]));
-        assert_eq!(next.also[0].next_cursor.as_deref(), Some("0"));
+        assert_eq!(next.also[0].returned, 0);
+        assert!(next.also[0].next_cursor.is_some());
 
         let mut data = rows(2_000);
         let main = apply(
@@ -481,7 +530,8 @@ mod tests {
         .unwrap();
         assert_eq!(data["rows"][0]["name"], format!("s{}", first.returned));
         assert_eq!(data["unused"], json!([]));
-        assert_eq!(main.also[0].next_cursor.as_deref(), Some("/unused@0"));
+        assert_eq!(main.also[0].returned, 0);
+        assert!(main.also[0].next_cursor.is_some());
     }
 
     #[test]
@@ -538,16 +588,24 @@ mod tests {
     #[test]
     fn a_map_list_pages_by_key_order() {
         let mut data = json!({"a": {"v": 1}, "b": {"v": 2}, "c": {"v": 3}});
+        let first = apply(
+            &mut data.clone(),
+            &[""],
+            &view(Some(1), None, &[], None),
+            ANSWER_BYTES,
+        )
+        .unwrap()
+        .unwrap();
         let page = apply(
             &mut data,
             &[""],
-            &view(Some(1), Some("1"), &[], None),
+            &view(Some(1), first.next_cursor.as_deref(), &[], None),
             ANSWER_BYTES,
         )
         .unwrap()
         .unwrap();
         assert_eq!(data, json!({"b": {"v": 2}}));
-        assert_eq!(page.next_cursor.as_deref(), Some("2"));
+        assert!(page.next_cursor.is_some());
     }
 
     #[test]

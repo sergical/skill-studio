@@ -864,7 +864,7 @@ struct ViewArgs {
     /// Print at most N rows of the main list; 0 prints only the totals.
     #[arg(long, value_name = "N", requires = "json")]
     limit: Option<usize>,
-    /// Continue the list of a `next_cursor` from the last call.
+    /// Continue with an opaque `next_cursor`. Repeat the same scope and filters.
     #[arg(long, requires = "json")]
     cursor: Option<String>,
     /// Keep only these row fields, comma-separated.
@@ -1315,7 +1315,7 @@ fn build_runtime_write_with_project<T: ops::Outcome + serde::Serialize>(
         let envelope: ResultEnvelope<T> = error_envelope(operation, err, &runtime_scope);
         let code = exit_code(envelope.exit_status());
         if json {
-            output::print_json(&envelope, &ViewRequest::default(), false);
+            output::print_json(&envelope, &ViewRequest::default(), &(), false);
         } else {
             for error in &envelope.errors {
                 eprintln!("{}: {}", error.code.as_str(), error.message);
@@ -1356,7 +1356,7 @@ fn build_runtime_with_project<T: ops::Outcome + serde::Serialize>(
         let envelope: ResultEnvelope<T> = error_envelope(operation, err, &runtime_scope);
         let code = exit_code(envelope.exit_status());
         if json {
-            output::print_json(&envelope, &ViewRequest::default(), false);
+            output::print_json(&envelope, &ViewRequest::default(), &(), false);
         } else {
             for error in &envelope.errors {
                 eprintln!("{}: {}", error.code.as_str(), error.message);
@@ -1453,7 +1453,7 @@ fn run_scan(
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let result = ops::scan(&rt, &ctx, req);
     let envelope = ResultEnvelope::from_result(Operation::Scan, &rt.scope, &ctx, result);
-    finish_view(&envelope, view, json, time, output::print_scan_table)
+    finish_view(&envelope, view, req, json, time, output::print_scan_table)
 }
 
 fn run_diagnose(
@@ -1480,7 +1480,14 @@ fn run_diagnose(
     };
     let result = ops::diagnose(&rt, &ctx, &req);
     let envelope = ResultEnvelope::from_result(Operation::Diagnose, &rt.scope, &ctx, result);
-    finish_view(&envelope, view, json, time, output::print_diagnose_table)
+    finish_view(
+        &envelope,
+        view,
+        &req,
+        json,
+        time,
+        output::print_diagnose_table,
+    )
 }
 
 fn run_capabilities(
@@ -1515,7 +1522,7 @@ fn run_capabilities(
             );
             let code = exit_code(envelope.exit_status());
             if json {
-                output::print_json(&envelope, &ViewRequest::default(), time);
+                output::print_json(&envelope, &ViewRequest::default(), &(), time);
             } else {
                 for error in &envelope.errors {
                     eprintln!("{}: {}", error.code.as_str(), error.message);
@@ -1869,6 +1876,7 @@ fn run_diagnose_conflict(
     finish_view(
         &envelope,
         view,
+        &(),
         json,
         time,
         output::print_conflict_report_table,
@@ -1888,6 +1896,7 @@ fn run_doctor(scope: &ScopeArgs, view: &ViewRequest, json: bool, time: bool) -> 
     finish_view(
         &envelope,
         view,
+        &(),
         json,
         time,
         output::print_doctor_report_table,
@@ -2568,7 +2577,14 @@ fn run_usage(
         steps,
     ));
     let envelope = ResultEnvelope::from_result(Operation::SkillUsage, &rt.scope, &ctx, result);
-    finish_view(&envelope, view, json, time, output::print_usage_table)
+    finish_view(
+        &envelope,
+        view,
+        &(days, filter),
+        json,
+        time,
+        output::print_usage_table,
+    )
 }
 
 use skill_studio_host::NoGhLookup;
@@ -2610,7 +2626,14 @@ fn run_outdated(
         None => ops::outdated(&rt, &ctx, &req, &NoGhLookup, &NoGhLookup, &NoGhLookup),
     };
     let envelope = ResultEnvelope::from_result(Operation::Outdated, &rt.scope, &ctx, result);
-    finish_view(&envelope, view, json, time, output::print_outdated_table)
+    finish_view(
+        &envelope,
+        view,
+        &req,
+        json,
+        time,
+        output::print_outdated_table,
+    )
 }
 
 /// Prunes the global quarantine cap, via `ops::sweep_quarantine`. Global
@@ -2834,18 +2857,26 @@ fn finish<T: serde::Serialize + ops::Outcome>(
             "a result with lists to page needs ViewArgs and finish_view, or its cursor cannot be sent back"
         );
     }
-    finish_view(envelope, &ViewRequest::default(), json, time, print_table)
+    finish_view(
+        envelope,
+        &ViewRequest::default(),
+        &(),
+        json,
+        time,
+        print_table,
+    )
 }
 
 fn finish_view<T: serde::Serialize + ops::Outcome>(
     envelope: &ResultEnvelope<T>,
     view: &ViewRequest,
+    request: &impl serde::Serialize,
     json: bool,
     time: bool,
     print_table: impl FnOnce(&ResultEnvelope<T>),
 ) -> ExitCode {
     let status = if json {
-        output::print_json(envelope, view, time)
+        output::print_json(envelope, view, request, time)
     } else {
         print_table(envelope);
         envelope.exit_status()
@@ -2949,7 +2980,7 @@ fn run_extras(scope: &ScopeArgs, view: &ViewRequest, json: bool, time: bool) -> 
         &skill_studio_core::extras::ExtrasRequest::default(),
     );
     let envelope = ResultEnvelope::from_result(Operation::Extras, &rt.scope, &ctx, result);
-    finish_view(&envelope, view, json, time, output::print_extras_table)
+    finish_view(&envelope, view, &(), json, time, output::print_extras_table)
 }
 
 fn run_skill_sessions(
@@ -2970,7 +3001,14 @@ fn run_skill_sessions(
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let result = skill_studio_core::skill_sessions::skill_sessions(&rt, &ctx, request);
     let envelope = ResultEnvelope::from_result(Operation::SkillSessions, &rt.scope, &ctx, result);
-    finish_view(&envelope, view, json, time, output::print_sessions_table)
+    finish_view(
+        &envelope,
+        view,
+        request,
+        json,
+        time,
+        output::print_sessions_table,
+    )
 }
 
 fn run_listing(
@@ -2991,7 +3029,14 @@ fn run_listing(
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let result = skill_studio_core::listing_visibility::listing(&rt, &ctx, request);
     let envelope = ResultEnvelope::from_result(Operation::Listing, &rt.scope, &ctx, result);
-    finish_view(&envelope, view, json, time, output::print_listing_table)
+    finish_view(
+        &envelope,
+        view,
+        request,
+        json,
+        time,
+        output::print_listing_table,
+    )
 }
 
 fn run_invocation(
@@ -3027,7 +3072,14 @@ fn run_invocation(
     };
     let result = invocation(&rt, &ctx, &req);
     let envelope = ResultEnvelope::from_result(Operation::Invocation, &rt.scope, &ctx, result);
-    finish_view(&envelope, view, json, time, output::print_invocation_table)
+    finish_view(
+        &envelope,
+        view,
+        &req,
+        json,
+        time,
+        output::print_invocation_table,
+    )
 }
 
 fn run_invocation_mismatches(
@@ -3049,6 +3101,7 @@ fn run_invocation_mismatches(
     finish_view(
         &envelope,
         view,
+        &(),
         json,
         time,
         output::print_invocation_mismatches,
@@ -3092,35 +3145,38 @@ fn run_pack(action: PackCommand, time: bool) -> ExitCode {
         .as_ref()
         .map(|r| r as &dyn skill_studio_core::pack::PackRemote);
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
-    let result = match source {
-        Some(source) => ops::pack_show(
-            &rt,
-            &ctx,
-            &PackShowRequest {
-                source,
-                project_path: args.project_path,
-                remote: args.remote,
-            },
-            remote,
-        ),
-        None => ops::pack_list(
-            &rt,
-            &ctx,
-            &PackListRequest {
-                project_path: args.project_path,
-                remote: args.remote,
-            },
-            remote,
-        ),
+    let view = args.view.into();
+    let finish_pack = |result, request: &serde_json::Value| {
+        let envelope = ResultEnvelope::from_result(operation, &rt.scope, &ctx, result);
+        finish_view(
+            &envelope,
+            &view,
+            request,
+            args.json,
+            time,
+            output::print_packs,
+        )
     };
-    let envelope = ResultEnvelope::from_result(operation, &rt.scope, &ctx, result);
-    finish_view(
-        &envelope,
-        &args.view.into(),
-        args.json,
-        time,
-        output::print_packs,
-    )
+    if let Some(source) = source {
+        let request = PackShowRequest {
+            source,
+            project_path: args.project_path,
+            remote: args.remote,
+        };
+        finish_pack(
+            ops::pack_show(&rt, &ctx, &request, remote),
+            &serde_json::json!(request),
+        )
+    } else {
+        let request = PackListRequest {
+            project_path: args.project_path,
+            remote: args.remote,
+        };
+        finish_pack(
+            ops::pack_list(&rt, &ctx, &request, remote),
+            &serde_json::json!(request),
+        )
+    }
 }
 
 fn run_pack_action(action: PackCommand, time: bool) -> ExitCode {
@@ -3275,7 +3331,14 @@ fn run_recovery(action: RecoveryCommand, time: bool) -> ExitCode {
             let result = ops::recovery_list(&rt, &ctx);
             let envelope =
                 ResultEnvelope::from_result(Operation::RecoveryList, &rt.scope, &ctx, result);
-            finish_view(&envelope, &view.into(), json, time, output::print_recovery)
+            finish_view(
+                &envelope,
+                &view.into(),
+                &(),
+                json,
+                time,
+                output::print_recovery,
+            )
         }
         RecoveryCommand::Drop {
             plan_id,
@@ -3360,5 +3423,5 @@ fn run_library(
         scope.desktop_usage_cache().as_deref(),
     );
     let envelope = ResultEnvelope::from_result(Operation::Library, &rt.scope, &ctx, result);
-    finish_view(&envelope, view, json, time, output::print_library)
+    finish_view(&envelope, view, request, json, time, output::print_library)
 }

@@ -44,7 +44,7 @@ proptest! {
         for _ in 0..=all.len() + 1 {
             let document = json!({"status": "ok", "data": {"rows": all.clone()}, "errors": []});
             let view = ViewRequest { limit, cursor: cursor.clone(), ..ViewRequest::default() };
-            let rendered = render_document::<Rows>(document, 0, &view, false).unwrap();
+            let rendered = render_document::<Rows>(document, 0, &view, &(), false).unwrap();
             if limit.is_none() {
                 let bytes = rendered.json.to_string().len();
                 prop_assert!(bytes <= ANSWER_BYTES, "answer of {} bytes", bytes);

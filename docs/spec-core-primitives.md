@@ -359,6 +359,15 @@ normalize (e.g. `--fixture /nonexistent`, `invalid_scope`, exit 2) and
 `status: "error"`/`errors: [{ "code": "scope_busy", ... }]` (exit 3) for a
 lease held by another process.
 
+### Paging read results
+
+The CLI and MCP use the same pager. A `next_cursor` identifies one list and
+one offset. Its versioned checksum covers the operation, effective scope,
+parsed request and full ordered contents of that list. Page size and field
+projection can change between calls. A cursor with a different scope, request,
+list or checksum returns `invalid_request` with instructions to start again
+without a cursor. Older numeric and list-plus-offset cursors also expire.
+
 ### 8.2 MCP tools
 
 Tools usually use the serde name of the core operation. These tools use

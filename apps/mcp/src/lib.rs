@@ -446,10 +446,17 @@ async fn run_op_in_project<T: Outcome + serde::Serialize + schemars::JsonSchema 
         with_history,
         project,
         &ViewRequest::default(),
+        &(),
         context,
         call,
     )
     .await
+}
+
+fn parse_view_usage_bound(
+    text: Option<&str>,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, String> {
+    text.map(skill_studio_host::parse_usage_time).transpose()
 }
 
 async fn run_op_viewed<T: Outcome + serde::Serialize + schemars::JsonSchema + 'static>(
@@ -457,6 +464,7 @@ async fn run_op_viewed<T: Outcome + serde::Serialize + schemars::JsonSchema + 's
     with_history: bool,
     project: Option<&std::path::Path>,
     view: &ViewRequest,
+    request: &impl serde::Serialize,
     context: &RequestContext<RoleServer>,
     call: impl FnOnce(&Runtime, &OpContext) -> Result<T, CoreError>,
 ) -> CallToolResult {
@@ -483,6 +491,7 @@ async fn run_op_viewed<T: Outcome + serde::Serialize + schemars::JsonSchema + 's
                 json,
                 envelope.envelope.exit_status(),
                 view,
+                request,
                 false,
             )
         })
@@ -544,9 +553,15 @@ impl SkillStudioServer {
         Parameters(Viewed { request: req, view }): Parameters<Viewed<ScanRequest>>,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
-        run_op_viewed(Operation::Scan, false, None, &view, &context, |rt, ctx| {
-            ops::scan(rt, ctx, &req)
-        })
+        run_op_viewed(
+            Operation::Scan,
+            false,
+            None,
+            &view,
+            &req,
+            &context,
+            |rt, ctx| ops::scan(rt, ctx, &req),
+        )
         .await
     }
 
@@ -559,37 +574,38 @@ impl SkillStudioServer {
         Parameters(Viewed { request: req, view }): Parameters<Viewed<LibraryRequest>>,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
+        let request = (|| -> Result<_, String> {
+            Ok(skill_studio_core::library::LibraryRequest {
+                all: req.all,
+                source: req.source.clone(),
+                skills: req.skills.clone(),
+                copy_status: req.copy_status,
+                modes: req.modes.clone(),
+                days: Some(req.days.unwrap_or(skill_studio_host::DEFAULT_USAGE_DAYS)),
+                since: parse_view_usage_bound(req.since.as_deref())?,
+                until: parse_view_usage_bound(req.until.as_deref())?,
+                sort: req.sort,
+                top: req.top,
+            })
+        })();
+        let query = request.as_ref().ok();
         run_op_viewed(
             Operation::Library,
             false,
             req.project_path.as_deref(),
             &view,
+            &query,
             &context,
             |rt, ctx| {
-                let bound = |text: &Option<String>| {
-                    text.as_deref()
-                        .map(skill_studio_host::parse_usage_time)
-                        .transpose()
-                        .map_err(|message| {
-                            CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
-                        })
-                };
-                let request = skill_studio_core::library::LibraryRequest {
-                    all: req.all,
-                    source: req.source.clone(),
-                    skills: req.skills.clone(),
-                    copy_status: req.copy_status,
-                    modes: req.modes.clone(),
-                    days: req.days,
-                    since: bound(&req.since)?,
-                    until: bound(&req.until)?,
-                    sort: req.sort,
-                    top: req.top,
-                };
                 skill_studio_host::library_report(
                     rt,
                     ctx,
-                    &request,
+                    request.as_ref().map_err(|message| {
+                        CoreError::new(
+                            skill_studio_core::ErrorCode::InvalidRequest,
+                            message.as_str(),
+                        )
+                    })?,
                     scope::desktop_usage_cache().as_deref(),
                 )
             },
@@ -614,6 +630,7 @@ impl SkillStudioServer {
             false,
             None,
             &view,
+            &(),
             &context,
             |rt, ctx| {
                 skill_studio_core::ops_invocation::invocation(rt, ctx, &Default::default())
@@ -637,6 +654,7 @@ impl SkillStudioServer {
             false,
             None,
             &view,
+            &req,
             &context,
             |rt, ctx| ops::diagnose(rt, ctx, &req),
         )
@@ -709,6 +727,7 @@ impl SkillStudioServer {
             false,
             req.project_path.as_deref(),
             &view,
+            &req,
             &context,
             |rt, ctx| {
                 let remote = pack_remote(rt, req.remote);
@@ -734,6 +753,7 @@ impl SkillStudioServer {
             false,
             req.project_path.as_deref(),
             &view,
+            &req,
             &context,
             |rt, ctx| {
                 let remote = pack_remote(rt, req.remote);
@@ -858,6 +878,7 @@ impl SkillStudioServer {
             false,
             None,
             &view,
+            &(),
             &context,
             ops::recovery_list,
         )
@@ -889,28 +910,29 @@ impl SkillStudioServer {
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
         let days = req.days.unwrap_or(skill_studio_host::DEFAULT_USAGE_DAYS);
+        let filter = (|| -> Result<_, String> {
+            Ok(skill_studio_host::UsageFilter {
+                harness: req.harness,
+                projects: req.project.into_iter().collect(),
+                since: parse_view_usage_bound(req.since.as_deref())?,
+                until: parse_view_usage_bound(req.until.as_deref())?,
+                top: req.top,
+            })
+        })();
         run_op_viewed(
             Operation::SkillUsage,
             false,
             None,
             &view,
+            &(days, filter.as_ref().ok()),
             &context,
             |rt, ctx| {
-                let bound = |text: &Option<String>| {
-                    text.as_deref()
-                        .map(skill_studio_host::parse_usage_time)
-                        .transpose()
-                        .map_err(|message| {
-                            CoreError::new(skill_studio_core::ErrorCode::InvalidRequest, message)
-                        })
-                };
-                let filter = skill_studio_host::UsageFilter {
-                    harness: req.harness.clone(),
-                    projects: req.project.clone().into_iter().collect(),
-                    since: bound(&req.since)?,
-                    until: bound(&req.until)?,
-                    top: req.top,
-                };
+                let filter = filter.as_ref().map_err(|message| {
+                    CoreError::new(
+                        skill_studio_core::ErrorCode::InvalidRequest,
+                        message.as_str(),
+                    )
+                })?;
                 filter
                     .check_window(days, chrono::Utc::now())
                     .map_err(|message| {
@@ -927,7 +949,7 @@ impl SkillStudioServer {
                     &inventory,
                     days,
                     chrono::Utc::now(),
-                    &filter,
+                    filter,
                 ))
             },
         )
@@ -1059,6 +1081,7 @@ impl SkillStudioServer {
             false,
             None,
             &view,
+            &req,
             &context,
             |rt, ctx| ops::diagnose_conflict(rt, ctx, &req),
         )
@@ -1079,6 +1102,7 @@ impl SkillStudioServer {
             false,
             None,
             &view,
+            &req,
             &context,
             |rt, ctx| ops::extras(rt, ctx, &req),
         )
@@ -1099,6 +1123,7 @@ impl SkillStudioServer {
             false,
             None,
             &view,
+            &req,
             &context,
             |rt, ctx| skill_studio_core::listing_visibility::listing(rt, ctx, &req),
         )
@@ -1119,6 +1144,7 @@ impl SkillStudioServer {
             false,
             None,
             &view,
+            &req,
             &context,
             |rt, ctx| skill_studio_core::skill_sessions::skill_sessions(rt, ctx, &req),
         )
@@ -1139,6 +1165,7 @@ impl SkillStudioServer {
             false,
             None,
             &view,
+            &req,
             &context,
             |rt, ctx| ops::doctor(rt, ctx, &req),
         )
@@ -1161,8 +1188,17 @@ impl SkillStudioServer {
             req.policy.is_some(),
             None,
             &view,
+            &req,
             &context,
-            |rt, ctx| skill_studio_core::ops_invocation::invocation(rt, ctx, &req),
+            |rt, ctx| {
+                if req.policy.is_some() && view.cursor.is_some() {
+                    return Err(CoreError::new(
+                        skill_studio_core::ErrorCode::InvalidRequest,
+                        "Invocation writes do not accept page cursors. Start again without a cursor.",
+                    ));
+                }
+                skill_studio_core::ops_invocation::invocation(rt, ctx, &req)
+            },
         )
         .await
     }
@@ -1377,6 +1413,7 @@ impl SkillStudioServer {
             true,
             None,
             &view,
+            &req,
             &context,
             |rt, ctx| match rt.ports.tools.as_ref().and_then(|t| t.find_binary("gh")) {
                 Some(gh_bin) => ops::outdated(
