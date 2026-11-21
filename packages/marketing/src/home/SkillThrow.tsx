@@ -355,7 +355,11 @@ export function SkillThrow() {
           easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
         },
       )
-      .finished.finally(() => ring.remove());
+      // A cancelled animation rejects `finished`; that is not a failure, so both outcomes clean up.
+      .finished.then(
+        () => ring.remove(),
+        () => ring.remove(),
+      );
   };
 
   const shockwave = (at: Point, self: number) => {

@@ -136,7 +136,7 @@ function useScript(lines: ReadonlyArray<Line>, runId: number) {
       new Promise<void>((resolve) => {
         timer = window.setTimeout(resolve, ms);
       });
-    (async () => {
+    void (async () => {
       setState({ shown: 0, chars: 0 });
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];

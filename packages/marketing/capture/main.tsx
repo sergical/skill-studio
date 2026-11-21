@@ -163,7 +163,7 @@ function setScene(scene: Scene): void {
 }
 
 setScene(initialScene);
-window.__capture = { setScene, snapshot: control.snapshot };
+window.__capture = { setScene, snapshot: () => control.snapshot() };
 createRoot(document.getElementById("root")!).render(<App />);
 requestAnimationFrame(() =>
   requestAnimationFrame(() => {

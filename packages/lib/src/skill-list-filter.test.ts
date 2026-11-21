@@ -268,7 +268,11 @@ describe("applySkillListFilter", () => {
 });
 
 describe("applySkillListFilter query properties", () => {
-  const word = fc.string({ unit: fc.constantFrom(..."abcXYZ09"), minLength: 1, maxLength: 4 });
+  const word = fc.string({
+    unit: fc.constantFrom(...Array.from("abcXYZ09")),
+    minLength: 1,
+    maxLength: 4,
+  });
   const words = fc.array(word, { minLength: 1, maxLength: 4 });
   const wordBreak = fc.constantFrom("-", " ", "_", "/", ".", "--", " - ");
   /** `parts` joined with a word break picked per gap. */

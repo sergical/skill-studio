@@ -260,7 +260,7 @@ export function SkillPage({
 
   const handleSave = (content: string) => {
     if (editorOpenedContent === null) return;
-    saveContent(content, editorOpenedContent, () => {
+    void saveContent(content, editorOpenedContent, () => {
       setEditorOpenedContent(null);
       setIsEditorDirty(false);
     });

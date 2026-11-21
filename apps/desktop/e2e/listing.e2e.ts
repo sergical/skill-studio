@@ -39,10 +39,12 @@ test("the Codex listing gives the tier and how far the budget is from the next o
 }) => {
   await page.getByRole("combobox", { name: "Agent" }).click();
   await page.getByRole("option", { name: "Codex" }).click();
+  const tier = page.getByRole("region", { name: "Listing tier" });
+  await expect(tier).toContainText("Descriptions are shortened");
   await expect(
-    page.getByText(/names and paths only 3,214 \(skill roots table 212\)\. Every skill is listed/),
+    tier.getByText(/Names and paths only 3,214, of which the skill roots table is 212\./),
   ).toBeVisible();
   await expect(
-    page.getByText(/2226 tokens are left before Codex drops all descriptions/),
+    page.getByText(/2,226 tokens are left before Codex drops all descriptions/),
   ).toBeVisible();
 });

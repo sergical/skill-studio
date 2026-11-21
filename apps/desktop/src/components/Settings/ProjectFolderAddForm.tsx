@@ -29,7 +29,8 @@ export function ProjectFolderAddForm({ onAdd, onClose }: ProjectFolderAddFormPro
     const trimmed = value.trim();
     if (!trimmed || saving) return;
     setSaving(true);
-    onAdd(trimmed)
+    // `onAdd` returns its error as a message; it does not reject.
+    void onAdd(trimmed)
       .then((message) => {
         if (message) {
           setError(message);

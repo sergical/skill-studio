@@ -88,14 +88,26 @@ export function AppVersionCard() {
       .catch((err) => {
         if (!cancelled) setUpdateStatus({ status: "error", message: invokeErrorMessage(err) });
       });
+    // A listener that fails to register is a toast, not an update status: the status read above
+    // owns that field, and either write would erase the other (a lost "Restart to update", or a
+    // "checking" that never ends). It leaves nothing to unlisten.
     const unlisten = onUpdateStatus((status) => {
       if (!cancelled) setUpdateStatus(status);
+    }).catch((err) => {
+      if (!cancelled) {
+        addToast({
+          type: "error",
+          title: "Couldn't follow update progress",
+          message: invokeErrorMessage(err),
+        });
+      }
+      return null;
     });
     return () => {
       cancelled = true;
-      unlisten.then((fn) => fn());
+      void unlisten.then((fn) => fn?.());
     };
-  }, []);
+  }, [addToast]);
 
   const handleCheckForUpdate = () => {
     setUpdateStatus({ status: "checking" });

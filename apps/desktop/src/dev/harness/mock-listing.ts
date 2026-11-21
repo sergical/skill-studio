@@ -74,7 +74,7 @@ function row(
             average_description_chars: 48,
             cap: 10000,
             summary:
-              "Every skill is listed, and descriptions are cut to about 48 characters. 16602 more tokens would keep every description whole. 2226 tokens are left before Codex drops all descriptions, about 130 more skills. The setting is capped at 10000 tokens.",
+              "Every skill is listed, and descriptions are cut to about 48 characters. 16,602 more tokens would keep every description whole. 2,226 tokens are left before Codex drops all descriptions, about 130 more skills. The setting is capped at 10,000 tokens.",
           }
         : null,
     entries: list,

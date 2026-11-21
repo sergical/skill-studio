@@ -52,6 +52,9 @@ const UNSCRUBBED_SPAN_ATTRIBUTES = [
 export function scrubSentrySpan(span: StreamedSpan): StreamedSpan {
   for (const key of UNSCRUBBED_SPAN_ATTRIBUTES) delete span.attributes[key];
   const method = span.attributes["http.request.method"];
+  // A span attribute is a primitive or an array of them; any value that is not a known method
+  // name, including an array's joined text, labels as OTHER.
+  // oxlint-disable-next-line typescript/no-base-to-string -- see above
   if (method !== undefined) span.attributes["http.request.method"] = methodLabel(String(method));
   return span;
 }

@@ -176,28 +176,42 @@ pub struct ListingThresholds {
 }
 
 /// The tier and how far the budget is from the next tier, in plain words.
+/// `16602` as `16,602`.
+fn grouped(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 fn thresholds_summary(t: &ListingThresholds, budget: u64, unit: &str, omitted: usize) -> String {
     let cap = t
         .cap
-        .map(|c| format!(" The setting is capped at {c} {unit}."))
+        .map(|c| format!(" The setting is capped at {} {unit}.", grouped(c)))
         .unwrap_or_default();
     match t.tier {
         ListingTier::AllDescribed => format!(
             "Every description is whole. {} {unit} are left before Codex starts to shorten descriptions.{cap}",
-            budget - t.full_cost
+            grouped(budget - t.full_cost)
         ),
         ListingTier::DescriptionsShortened => {
             let left = budget - t.names_only_cost;
+            let left_text = grouped(left);
             format!(
-                "Every skill is listed, and descriptions are cut to about {} characters. {} more {unit} would keep every description whole. {left} {unit} are left before Codex drops all descriptions, about {} more skills.{cap}",
+                "Every skill is listed, and descriptions are cut to about {} characters. {} more {unit} would keep every description whole. {left_text} {unit} are left before Codex drops all descriptions, about {} more skills.{cap}",
                 t.average_description_chars,
-                t.full_cost - budget,
-                left / t.average_line_cost.max(1)
+                grouped(t.full_cost - budget),
+                grouped(left / t.average_line_cost.max(1))
             )
         }
         ListingTier::NamesOnly => format!(
             "No descriptions, and {omitted} skills are left out. {} more {unit} would list every skill with a shortened description.{cap}",
-            t.names_only_cost - budget
+            grouped(t.names_only_cost - budget)
         ),
     }
 }
@@ -2079,6 +2093,20 @@ mod tests {
                 "f"
             ),
             Some(("0x10".into(), "TRUE".into()))
+        );
+    }
+
+    #[test]
+    fn tier_numbers_are_grouped_by_thousands() {
+        assert_eq!(
+            [
+                grouped(7),
+                grouped(212),
+                grouped(2226),
+                grouped(16602),
+                grouped(1_000_000)
+            ],
+            ["7", "212", "2,226", "16,602", "1,000,000"]
         );
     }
 
