@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Usage counts each legacy Claude Code sidechain log as its own session, even when it shares its parent's session ID.
 - CLI and MCP pack updates reject plans with more than 100 update steps across all scopes before running an owner tool.
 - Pack updates report each tool's own result when skills.sh and dotagents claim the same skill name in one scope.
 

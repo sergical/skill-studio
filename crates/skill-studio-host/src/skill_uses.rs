@@ -61,6 +61,8 @@ const MAX_RUN_BYTES: u64 = 128 * 1024 * 1024;
 /// loaded, so a runaway cache can't blow up memory on startup.
 const MAX_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
+const USAGE_READER_VERSION: u32 = 7;
+
 /// Claude Code keeps one directory per project here, and (for subagent
 /// sessions) one `<session>/subagents/*.jsonl` per parent session inside it.
 #[cfg(test)]
@@ -242,10 +244,16 @@ fn is_subagent_log(path: &Path) -> bool {
         .is_some_and(|name| name == "subagents")
 }
 
-fn log_session(file: &TranscriptFile<'_>, session: Option<&str>) -> String {
+fn is_legacy_claude_subagent_log(path: &Path) -> bool {
+    path.file_stem()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("agent-"))
+}
+
+fn log_session(file: &TranscriptFile<'_>, session: Option<&str>, legacy_sidechain: bool) -> String {
     match session {
         None => file.path.to_string_lossy().into_owned(),
-        Some(session) if is_subagent_log(file.path) => {
+        Some(session) if legacy_sidechain || is_subagent_log(file.path) => {
             format!(
                 "{session}:subagent:{}",
                 file.path.file_name().unwrap_or_default().to_string_lossy()
@@ -447,28 +455,24 @@ fn parse_claude_code_uses_with_context(
     invalid: &mut usize,
 ) -> Vec<SkillInvocation> {
     let mut unidentified = Vec::new();
+    let legacy_subagent_log = is_legacy_claude_subagent_log(file.path);
     for line in text.lines() {
         let mut uses = parse_claude_code_uses_checked(line, invalid);
         if uses.is_empty() {
             continue;
         }
-        let key = serde_json::from_str::<serde_json::Value>(line)
-            .ok()
-            .and_then(|record| {
-                let uuid = record
-                    .get("uuid")?
-                    .as_str()
-                    .filter(|uuid| !uuid.is_empty())?;
-                let session = record
-                    .get("sessionId")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("");
-                Some(format!("{session}/{uuid}"))
-            });
+        let record = serde_json::from_str::<serde_json::Value>(line).ok();
+        let legacy_sidechain = legacy_subagent_log
+            && record.as_ref().and_then(|r| r["isSidechain"].as_bool()) == Some(true);
+        for use_ in &mut uses {
+            use_.use_session = Some(log_session(file, use_.session.as_deref(), legacy_sidechain));
+        }
+        let key = record.and_then(|record| {
+            let uuid = record["uuid"].as_str().filter(|uuid| !uuid.is_empty())?;
+            let session = record["sessionId"].as_str().unwrap_or("");
+            Some(format!("{session}/{uuid}"))
+        });
         if let Some(key) = key {
-            for use_ in &mut uses {
-                use_.use_session = Some(log_session(file, use_.session.as_deref()));
-            }
             context.claude_records.entry(key).or_insert(uses);
         } else {
             unidentified.extend(uses);
@@ -1197,7 +1201,7 @@ impl Default for SkillInvocationIndex {
     fn default() -> Self {
         Self {
             codex_home: None,
-            reader_version: 6,
+            reader_version: USAGE_READER_VERSION,
             files: BTreeMap::new(),
             databases: BTreeMap::new(),
             file_budget: MAX_FILE_BYTES,
@@ -1238,12 +1242,9 @@ impl SkillInvocationIndex {
     #[cfg(test)]
     fn with_budgets(file_bytes: u64, run_bytes: u64) -> Self {
         Self {
-            codex_home: None,
-            reader_version: 6,
-            files: BTreeMap::new(),
-            databases: BTreeMap::new(),
             file_budget: file_bytes,
             run_budget: run_bytes,
+            ..Self::default()
         }
     }
 
@@ -1375,10 +1376,10 @@ impl SkillInvocationIndex {
     /// cached entries. Never panics: unreadable dirs/files/databases are
     /// skipped.
     pub fn refresh(&mut self, home: &Path, sources: &DiscoverySources) -> SkillUseRefreshReport {
-        if self.reader_version != 6 {
+        if self.reader_version != USAGE_READER_VERSION {
             self.files.clear();
             self.databases.clear();
-            self.reader_version = 6;
+            self.reader_version = USAGE_READER_VERSION;
         }
         let mut report = SkillUseRefreshReport::default();
         let mut run_budget = self.run_budget;
@@ -1557,7 +1558,8 @@ impl SkillInvocationIndex {
             };
             let mut parsed = parse(&file, &text, &mut context, &mut invalid);
             for use_ in &mut parsed {
-                use_.use_session = Some(log_session(&file, use_.session.as_deref()));
+                use_.use_session
+                    .get_or_insert_with(|| log_session(&file, use_.session.as_deref(), false));
             }
             uses.extend(parsed);
             if invalid > 0 || gaps > 0 {
@@ -1678,7 +1680,8 @@ impl SkillInvocationIndex {
             let mut invalid = 0;
             let mut parsed = parse(transcript, &text, &mut entry.context, &mut invalid);
             for use_ in &mut parsed {
-                use_.use_session = Some(log_session(transcript, use_.session.as_deref()));
+                use_.use_session
+                    .get_or_insert_with(|| log_session(transcript, use_.session.as_deref(), false));
             }
             entry.uses.extend(parsed);
             entry.parsed_bytes += consumed;
@@ -1804,11 +1807,17 @@ impl SkillInvocationIndex {
             .flat_map(|(_, uses)| uses.iter())
             .collect();
         let mut seen_uuids = BTreeSet::new();
+        let claude_subagent =
+            |path: &Path| is_subagent_log(path) || is_legacy_claude_subagent_log(path);
         let claude_uses = self
             .files
             .iter()
-            .filter(|(path, _)| !is_subagent_log(path))
-            .chain(self.files.iter().filter(|(path, _)| is_subagent_log(path)))
+            .filter(move |(path, _)| !claude_subagent(path))
+            .chain(
+                self.files
+                    .iter()
+                    .filter(move |(path, _)| claude_subagent(path)),
+            )
             .flat_map(|(_, t)| t.context.claude_records.iter())
             .filter(move |(key, _)| seen_uuids.insert(key.as_str()))
             .flat_map(|(_, uses)| uses.iter());
