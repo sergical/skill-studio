@@ -547,7 +547,16 @@ mod tests {
         assert_eq!(ready.trim(), "ready");
         drop(reader);
         let lock = coordination_lock(&folder_identity(dir.path()).unwrap()).unwrap();
-        let result = lock.try_lock();
+        // Another test's child holds a copy of this process's files until it runs its program, so
+        // the lock can be busy for a moment. This child waits for "release", so a leak stays busy.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let result = loop {
+            let result = lock.try_lock();
+            if result.is_ok() || std::time::Instant::now() >= deadline {
+                break result;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
         child.stdin.take().unwrap().write_all(b"release\n").unwrap();
         assert!(child.wait().unwrap().success());
         result.unwrap();
