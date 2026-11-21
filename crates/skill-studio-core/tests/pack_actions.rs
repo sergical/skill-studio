@@ -485,6 +485,68 @@ fn pack_update_dry_run_plans_clean_skills_and_skips_edited_ones() {
     std::fs::remove_dir_all(&home).ok();
 }
 
+/// Given a pack with one parked skill, when the pack updates, then the
+/// parked skill is skipped before any process runs and the run is not a
+/// partial failure; on failure the assert names the state the parked step got.
+#[test]
+fn pack_update_skips_a_parked_skill_instead_of_failing_it() {
+    let home = home("pack_update_parked");
+    installed_from_pack(&home, "clean", "deadbeef");
+    installed_from_pack(&home, "parked", "deadbeef");
+    let parked = home.join(".agents/skills-parked");
+    std::fs::create_dir_all(&parked).unwrap();
+    std::fs::rename(home.join(".agents/skills/parked"), parked.join("parked")).unwrap();
+    let cli = FakeSkillsCli::new(&home);
+    let rt = runtime(&home, cli.clone());
+
+    let report = ops::pack_update(&rt, &ctx(), &update(false)).unwrap();
+
+    assert_eq!(
+        states(&report),
+        [("clean".into(), "done"), ("parked".into(), "skipped")]
+    );
+    assert_eq!(report.status(), OpStatus::Ok, "{:?}", report.errors());
+    assert!(
+        !cli.calls()
+            .iter()
+            .any(|call| call.iter().any(|arg| arg == "parked")),
+        "Update ran the CLI for a parked skill: {:?}",
+        cli.calls()
+    );
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Given a lock file row whose name climbs out of the skills folder, and a
+/// folder at the parked path that name resolves to, when the pack update is
+/// planned, then the step is not skipped as parked; on failure the parked
+/// check probed a path outside the parked root and revealed that it exists.
+#[test]
+fn pack_update_never_probes_outside_the_parked_root_for_a_lock_file_name() {
+    let home = home("pack_update_parked_escape");
+    installed_from_pack(&home, "../outside", "deadbeef");
+    assert!(home.join(".agents/outside/SKILL.md").exists());
+    std::fs::create_dir_all(home.join(".agents/skills-parked")).unwrap();
+    let cli = FakeSkillsCli::new(&home);
+    let rt = runtime(&home, cli);
+
+    let report = ops::pack_update(&rt, &ctx(), &update(true)).unwrap();
+
+    let reasons: Vec<String> = report
+        .steps
+        .iter()
+        .filter_map(|step| match &step.state {
+            PackStepState::Skipped { reason } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !reasons.iter().any(|reason| reason.contains("parked")),
+        "the parked check looked outside the parked root: {:?}",
+        report.steps
+    );
+    std::fs::remove_dir_all(&home).ok();
+}
+
 #[test]
 fn pack_update_reports_a_failed_cli_run_as_a_failed_step_and_partial_status() {
     let home = home("pack_update_fails");
