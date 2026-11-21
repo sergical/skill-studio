@@ -1435,6 +1435,7 @@ mod tests {
 
     #[test]
     fn history_connection_keeps_migration_locked_until_drop_or_allows_a_newer_writer() {
+        let _serial = crate::fork_test_guard();
         let tmp = tempfile::tempdir().unwrap();
         let folder = tmp.path().join("history");
         let store = SqliteHistoryStore::open(&folder.join("events.sqlite3")).unwrap();

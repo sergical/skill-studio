@@ -24,6 +24,18 @@
 // module doc for what the `unsafe` block promises).
 #![deny(unsafe_code)]
 
+/// Tests that fork a child which pauses before exec, and tests that check a
+/// lock is free after its holder drops, run one at a time. A fork copies
+/// every open file of the process, other tests' lock files included, until
+/// the child calls exec, so a paused child can hold another test's lock.
+#[cfg(test)]
+pub(crate) fn fork_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    static FORKING_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    FORKING_TESTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 mod builder;
 mod clock;
 mod data_folder_version;
