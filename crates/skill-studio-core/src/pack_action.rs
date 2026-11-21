@@ -436,7 +436,12 @@ pub fn pack_switch_source(
                 skill: &s.skill,
             })
             .collect();
-        let from = report.packs[0].source.clone();
+        // Keep the original's pin, so `pack show --remote` reads the branch
+        // or tag the project installed, not the default branch.
+        let from = match &report.packs[0].ref_pin {
+            Some(git_ref) => format!("{}#{git_ref}", report.packs[0].source),
+            None => report.packs[0].source.clone(),
+        };
         let mut all_back = false;
         if !req.dry_run && !moves.is_empty() {
             // Recorded first, so a skill never sits on `to` without its

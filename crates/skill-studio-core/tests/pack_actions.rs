@@ -951,6 +951,55 @@ fn pack_switch_source_in_a_project_moves_the_project_lock_row_and_undo_restores_
     std::fs::remove_dir_all(&home).ok();
 }
 
+/// Given a project pack pinned to `release`, when it switches to a fork, then
+/// the recorded original keeps the pin, so `pack show --remote` reads the
+/// release branch; on failure the assert shows the original that was kept.
+#[test]
+fn pack_switch_source_keeps_the_original_ref_pin() {
+    let home = home("pack_switch_ref_pin");
+    let project = home.join("proj");
+    write_skill(&project, "alpha");
+    std::fs::write(
+        project.join("skills-lock.json"),
+        serde_json::to_vec(&serde_json::json!({"version": 1, "skills": {"alpha": {
+            "source": "owner/pack", "sourceType": "github", "ref": "release", "computedHash": "x"
+        }}}))
+        .unwrap(),
+    )
+    .unwrap();
+    let cli = FakeSkillsCli::new(&home);
+    cli.lock_on_add.store(true, Ordering::SeqCst);
+    let mut scope = RuntimeScope::fixture(&home);
+    scope.projects = skill_studio_core::scope::ProjectSelection::Explicit {
+        paths: vec![project.clone()],
+    };
+    let rt = runtime_in(&scope, &home, cli);
+    let request = PackSwitchSourceRequest {
+        project_path: Some(project.clone()),
+        ..switch("owner/pack", "me/fork", false)
+    };
+
+    let report = ops::pack_switch_source(&rt, &ctx(), &request).unwrap();
+
+    assert_eq!(states(&report), [("alpha".into(), "done")]);
+    let shown = ops::pack_show(
+        &rt,
+        &ctx(),
+        &PackShowRequest {
+            source: "me/fork".to_string(),
+            project_path: Some(project.clone()),
+            ..PackShowRequest::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        shown.packs[0].original.as_ref().map(|o| o.source.as_str()),
+        Some("owner/pack#release")
+    );
+    std::fs::remove_dir_all(&home).ok();
+}
+
 /// Fails if a target that is the same pack, a local path, or a skill the
 /// pack lacks gets a plan, or if a skill whose move failed reports the fork's
 /// original.
