@@ -59,7 +59,10 @@ mod test_scripts;
 mod tools;
 mod usage_report;
 
-pub use builder::{default_ports, default_ports_with_discovery, default_ports_with_history};
+pub use builder::{
+    default_ports, default_ports_for_scope, default_ports_with_discovery,
+    default_ports_with_history,
+};
 pub use clock::SystemClock;
 pub use data_folder_version::{
     check_compatible, guard_read_data_folder, lock_data_folders, migrate,

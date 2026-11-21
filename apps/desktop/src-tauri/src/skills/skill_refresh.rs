@@ -6262,23 +6262,37 @@ resolved_commit = "old"
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         write_skill(&home, "alpha");
+        let lease_root = tmp.path().join("leases");
+        let immediate_writer =
+            super::super::write_lease::WriteLease::with_lease_root(lease_root.clone());
         let lease = super::super::write_lease::WriteLease::with_lease_root_and_wait(
-            tmp.path().join("leases"),
+            lease_root,
             std::time::Duration::from_secs(3),
         );
         let state = fixture_state();
         let indexing = state.rebuild_lock.lock().unwrap();
         let (queued_tx, queued_rx) = std::sync::mpsc::channel();
+        let (try_rebuild_tx, try_rebuild_rx) = std::sync::mpsc::channel();
         std::thread::scope(|scope| {
-            let queued = scope.spawn(|| {
-                let scan = acquire_rebuild_lease(&lease, &state, &home).unwrap();
+            let lease = &lease;
+            let state = &state;
+            let home = &home;
+            let queued = scope.spawn(move || {
+                let scan = acquire_rebuild_lease(lease, state, home).unwrap();
                 queued_tx.send(()).unwrap();
-                try_rebuild_lock(&state, scan).unwrap().is_none()
+                try_rebuild_rx.recv().unwrap();
+                try_rebuild_lock(state, scan).unwrap().is_none()
             });
             queued_rx.recv().unwrap();
-            let write = lease.try_acquire(&home);
+            let write_while_scan_holds_lease = immediate_writer.try_acquire(home).map(drop);
+            try_rebuild_tx.send(()).unwrap();
+            let write = lease.try_acquire(home);
             drop(indexing);
             let released_before_waiting = queued.join().unwrap();
+            assert!(
+                write_while_scan_holds_lease.is_err(),
+                "a writer acquired the home lease while the queued scan held it"
+            );
             assert!(
                 write.is_ok(),
                 "a queued scan blocked a write during indexing"
