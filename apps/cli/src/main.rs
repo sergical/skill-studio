@@ -1294,19 +1294,12 @@ fn build_runtime_write_with_project<T: ops::Outcome + serde::Serialize>(
     let (runtime_scope, lease_root) = scope.resolve_with_extra_project(extra_project);
     let catalog = Arc::new(HarnessCatalog::builtin());
     let db_path = runtime_scope.history_root.join("events.sqlite3");
-    let mut ports = skill_studio_host::default_ports_with_history(lease_root, catalog, db_path);
+    let mut ports = skill_studio_host::default_ports_for_scope(lease_root, catalog, &runtime_scope);
+    ports.history = Arc::new(skill_studio_host::SqliteHistoryOpener::new(db_path));
     ports.telemetry = skill_studio_host::telemetry::port(
         skill_studio_host::telemetry::Surface::Cli,
         env!("CARGO_PKG_VERSION"),
     );
-    if runtime_scope.kind == skill_studio_core::scope::ScopeKind::Fixture {
-        ports.discovery = None;
-    } else {
-        ports.discovery = Some(Arc::new(
-            skill_studio_host::HostProjectDiscovery::for_scope(&runtime_scope),
-        ));
-    }
-    ports.tools = Some(Arc::new(skill_studio_host::PathToolLookup::new()));
     ports.spawner = Some(Arc::new(scope.process_spawner(&runtime_scope.home_root)));
     let runtime = if runtime_scope.kind == skill_studio_core::scope::ScopeKind::Fixture
         && !matches!(operation, Operation::ListEvents | Operation::Outdated)
@@ -1350,10 +1343,7 @@ fn build_runtime_with_project<T: ops::Outcome + serde::Serialize>(
 ) -> Result<Runtime, ExitCode> {
     let (runtime_scope, lease_root) = scope.resolve_with_extra_project(extra_project);
     let catalog = Arc::new(HarnessCatalog::builtin());
-    let mut ports = skill_studio_host::default_ports_with_discovery(lease_root, catalog);
-    ports.discovery = Some(Arc::new(
-        skill_studio_host::HostProjectDiscovery::for_scope(&runtime_scope),
-    ));
+    let mut ports = skill_studio_host::default_ports_for_scope(lease_root, catalog, &runtime_scope);
     ports.history = Arc::new(skill_studio_host::GuardedNoHistoryOpener::new(
         runtime_scope.history_root.clone(),
     ));
@@ -1362,11 +1352,6 @@ fn build_runtime_with_project<T: ops::Outcome + serde::Serialize>(
         env!("CARGO_PKG_VERSION"),
     );
     ports.spawner = Some(Arc::new(scope.process_spawner(&runtime_scope.home_root)));
-    if runtime_scope.kind == skill_studio_core::scope::ScopeKind::Fixture {
-        // Fixture scopes name their own projects explicitly; discovery would
-        // otherwise walk the real machine's transcripts for a fake home.
-        ports.discovery = None;
-    }
     Runtime::new(&runtime_scope, ports).map_err(|err| {
         let envelope: ResultEnvelope<T> = error_envelope(operation, err, &runtime_scope);
         let code = exit_code(envelope.exit_status());

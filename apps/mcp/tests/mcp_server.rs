@@ -1835,6 +1835,26 @@ async fn review_cli_mcp_json_matches_for_set_due_clear_and_unknown_or_one_adapte
 }
 
 #[tokio::test]
+async fn mcp_first_fixture_scan_leaves_the_writable_home_unchanged() {
+    let (_dir, home) = live_home();
+    let before = complete_folder_tree(&home);
+    let (client, _) = connect(&[
+        ("HOME", home.to_str().unwrap()),
+        ("SKILL_STUDIO_FIXTURE", home.to_str().unwrap()),
+        ("SKILL_STUDIO_TELEMETRY", "off"),
+    ])
+    .await;
+    let scan = call_scan(&client, None).await;
+    assert_eq!(scan["status"], "ok", "{scan}");
+    client.cancel().await.unwrap();
+    assert_eq!(
+        before,
+        complete_folder_tree(&home),
+        "fixture scan changed the home tree"
+    );
+}
+
+#[tokio::test]
 async fn fixture_scope_refuses_write_without_tree_changes() {
     let home = materialized_fixture("basic");
     let before = complete_folder_tree(&home);
