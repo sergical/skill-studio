@@ -329,6 +329,125 @@ fn library_cursor_rejects_changed_filters_and_rows_on_the_cli_and_mcp() {
     }
 }
 
+#[test]
+fn scan_cursor_survives_changed_deployment_details() {
+    assert_skill_cursor_survives_row_updates("scan", "scan", "skills", "name", "description");
+}
+
+#[test]
+fn usage_cursor_survives_changed_counts_and_dates() {
+    assert_skill_cursor_survives_row_updates(
+        "usage",
+        "skill_usage",
+        "rows",
+        "skill",
+        "recent_uses",
+    );
+}
+
+#[test]
+fn library_cursor_survives_changed_use_counts() {
+    assert_skill_cursor_survives_row_updates("library", "library", "rows", "name", "uses");
+}
+
+fn assert_skill_cursor_survives_row_updates(
+    command: &str,
+    tool: &str,
+    list: &str,
+    name_key: &str,
+    changed_key: &str,
+) {
+    for surface in ["cli", "mcp"] {
+        let home = tempfile::tempdir().unwrap();
+        let skills = home.path().join(".agents/skills");
+        for name in ["bravo", "charlie", "delta"] {
+            write_skill(&skills, name, "Body.");
+        }
+        let transcript = home.path().join(".claude/projects/-work/session.jsonl");
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        let mut uses = [
+            ("bravo", 2),
+            ("bravo", 3),
+            ("bravo", 4),
+            ("bravo", 5),
+            ("charlie", 6),
+            ("charlie", 7),
+            ("delta", 8),
+        ]
+        .map(|(skill, day)| claude_skill_line(skill, &noon_ago(day)))
+        .join("\n");
+        uses.push('\n');
+        std::fs::write(&transcript, &uses).unwrap();
+
+        let call = |limit: &str, cursor: Option<&str>| {
+            if surface == "cli" {
+                let mut args = vec![command, "--limit", limit];
+                if let Some(cursor) = cursor {
+                    args.extend(["--cursor", cursor]);
+                }
+                headless::cli(home.path(), &args)
+            } else {
+                let mut args = json!({"limit": limit.parse::<usize>().unwrap()});
+                if let Some(cursor) = cursor {
+                    args["cursor"] = json!(cursor);
+                }
+                headless::mcp_envelope(&headless::mcp(home.path(), tool, &args))
+            }
+        };
+        let first = call("1", None);
+        let cursor = first["page"]["next_cursor"].as_str().unwrap();
+        let assert_pages = |next: &serde_json::Value| {
+            assert_eq!(
+                next["status"], "ok",
+                "{surface} {command}: {}",
+                next["errors"]
+            );
+            let names: Vec<_> = [&first, next]
+                .iter()
+                .flat_map(|page| {
+                    page["data"][list]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|row| row[name_key].as_str().unwrap())
+                })
+                .collect();
+            assert_eq!(names, ["bravo", "charlie", "delta"], "{surface} {command}");
+            assert!(next["page"]["next_cursor"].is_null(), "{surface} {command}");
+        };
+        let before = call("2", Some(cursor));
+        assert_pages(&before);
+
+        std::fs::write(
+            skills.join("charlie/SKILL.md"),
+            "---\nname: charlie\ndescription: Edited skill.\nmetadata:\n  a: one\n  z: two\n---\nBody.",
+        ).unwrap();
+        uses.push_str(&claude_skill_line("charlie", &noon_ago(1)));
+        uses.push('\n');
+        std::fs::write(&transcript, uses).unwrap();
+
+        let after = call("2", Some(cursor));
+        assert_pages(&after);
+        assert_ne!(
+            before["data"][list][0][changed_key], after["data"][list][0][changed_key],
+            "{surface} {command}: fixture must change {changed_key}"
+        );
+        if command == "usage" {
+            assert_ne!(
+                before["data"][list][0]["last_used"],
+                after["data"][list][0]["last_used"]
+            );
+        }
+
+        write_skill(&skills, "alpha", "Body.");
+        let inserted = call("2", Some(cursor));
+        assert_eq!(
+            inserted["errors"][0]["code"], "invalid_request",
+            "{surface} {command}: {inserted}"
+        );
+    }
+}
+
 /// Flow: `library --fields nope` on the CLI and the MCP `library` tool.
 /// Expectation: an `invalid_request` error that names the row fields, with
 /// exit status 2 on the CLI and `isError` on MCP.

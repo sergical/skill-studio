@@ -49,6 +49,7 @@ use crate::ports::{
     PlanStatus, ProcessSpec, Runtime, ScopeFs, ScopedPath, ScopedReads,
 };
 use crate::scope::{EffectiveScope, NormalizedScope};
+use crate::view::ViewList;
 use crate::SCHEMA_VERSION;
 
 /// Default number of history rows returned by `list_events`.
@@ -190,13 +191,13 @@ pub enum OpStatus {
 /// Invariant: a `Partial` outcome maps to exit status 4 even though no
 /// error was raised.
 pub trait Outcome {
-    /// JSON pointers into the serialized value of the lists that
-    /// [`crate::view::render`] bounds; the first one is the list a view
-    /// pages, projects and counts. Empty for a result without lists.
-    const LISTS: &'static [&'static str] = &[];
+    /// Lists in the serialized value and their stable row keys.
+    /// A view pages, projects and counts the first list by default.
+    /// Empty for a result without lists.
+    const LISTS: &'static [ViewList<'static>] = &[];
 
-    /// JSON pointer within each primary array row to page if the row is too large.
-    const NESTED_LIST: Option<&'static str> = None;
+    /// List inside a primary row to page when that row exceeds the byte cap.
+    const NESTED_LIST: Option<ViewList<'static>> = None;
 
     /// Status of this value.
     fn status(&self) -> OpStatus {
@@ -226,7 +227,7 @@ pub trait Outcome {
 }
 
 impl Outcome for Inventory {
-    const LISTS: &'static [&'static str] = &["/skills"];
+    const LISTS: &'static [ViewList<'static>] = &[ViewList::new("/skills", &["/name"])];
 
     fn status(&self) -> OpStatus {
         match self.completeness {
@@ -237,7 +238,10 @@ impl Outcome for Inventory {
 }
 
 impl Outcome for Diagnosis {
-    const LISTS: &'static [&'static str] = &["/issues", "/inventory/skills"];
+    const LISTS: &'static [ViewList<'static>] = &[
+        ViewList::new("/issues", &["/kind", "/skill", "/deployment_id"]),
+        ViewList::new("/inventory/skills", &["/name"]),
+    ];
 
     fn status(&self) -> OpStatus {
         self.inventory.status()
@@ -251,13 +255,20 @@ impl Outcome for Diagnosis {
 }
 
 impl Outcome for crate::extras::ExtrasReport {
-    const LISTS: &'static [&'static str] = &["/entries"];
+    const LISTS: &'static [ViewList<'static>] = &[ViewList::new(
+        "/entries",
+        &["/harness", "/path", "/scope", "/project", "/kind", "/name"],
+    )];
 }
 impl Outcome for crate::listing_visibility::ListingReport {
-    const LISTS: &'static [&'static str] = &["/listings"];
+    const LISTS: &'static [ViewList<'static>] =
+        &[ViewList::new("/listings", &["/harness", "/scope"])];
 }
 impl Outcome for crate::skill_sessions::SkillSessionsReport {
-    const LISTS: &'static [&'static str] = &["/skills", "/sessions"];
+    const LISTS: &'static [ViewList<'static>] = &[
+        ViewList::new("/skills", &["/harness", "/name"]),
+        ViewList::new("/sessions", &["/harness", "/transcript", "/id"]),
+    ];
 }
 impl Outcome for Capabilities {}
 impl Outcome for HarnessReport {}
@@ -353,14 +364,20 @@ impl Outcome for crate::dto::FixSkillOutcome {
     }
 }
 impl Outcome for crate::dto::ConflictReport {
-    const LISTS: &'static [&'static str] = &["/conflicts"];
+    const LISTS: &'static [ViewList<'static>] = &[ViewList::new(
+        "/conflicts",
+        &["/skill", "/path_a", "/path_b"],
+    )];
 
     fn found_issues(&self) -> bool {
         !self.conflicts.is_empty()
     }
 }
 impl Outcome for crate::dto::DoctorReport {
-    const LISTS: &'static [&'static str] = &["/violations", "/listing_cost"];
+    const LISTS: &'static [ViewList<'static>] = &[
+        ViewList::new("/violations", &["/invariant", "/path"]),
+        ViewList::new("/listing_cost", &["/harness", "/scope"]),
+    ];
 
     fn found_issues(&self) -> bool {
         !self.violations.is_empty() || self.listing_cost.iter().any(|row| row.warning.is_some())
@@ -405,7 +422,7 @@ impl Outcome for crate::dto::InstallPreferences {}
 /// partial - a lookup failure resolves the affected skill to `Unknown`
 /// rather than raising.
 impl Outcome for std::collections::BTreeMap<String, crate::skill_update_check::OutdatedRecord> {
-    const LISTS: &'static [&'static str] = &[""];
+    const LISTS: &'static [ViewList<'static>] = &[ViewList::new("", &[])];
 }
 /// `sweep_quarantine` has no outcome payload of its own - it either prunes
 /// the cap or returns an error - so it wraps in an envelope over `()`,

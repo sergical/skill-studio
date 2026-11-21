@@ -17,6 +17,7 @@ use crate::identity::{EventId, PlanId, SkillName};
 use crate::journal::FsJournal;
 use crate::ops::{Operation, Outcome};
 use crate::ports::{Journal, OpContext, PlanRecord, PlanStatus, Runtime, WriteHold};
+use crate::view::ViewList;
 
 /// One journal plan that recovery has not closed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -67,7 +68,7 @@ pub struct RecoveryReport {
 }
 
 impl Outcome for RecoveryReport {
-    const LISTS: &'static [&'static str] = &["/plans"];
+    const LISTS: &'static [ViewList<'static>] = &[ViewList::new("/plans", &["/id"])];
 }
 
 /// Request to give up one interrupted plan.
