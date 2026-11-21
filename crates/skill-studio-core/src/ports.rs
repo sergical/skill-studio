@@ -881,6 +881,12 @@ pub enum PlanStatus {
     /// The person gave up an `Interrupted` plan. Recovery no longer retries
     /// it, and its files stay as the last attempt left them.
     Dropped,
+    /// A status that a newer build wrote and this build does not know.
+    /// This build leaves such a plan alone: it does not count it as open,
+    /// does not settle or recover it, and keeps its backups, so a journal
+    /// from a newer build never blocks writes here.
+    #[serde(other)]
+    Unknown,
 }
 
 impl PlanStatus {
@@ -891,6 +897,10 @@ impl PlanStatus {
             (_, PlanStatus::Pending) => Err(CoreError::new(
                 ErrorCode::InvalidRequest,
                 "finish must not set Pending",
+            )),
+            (_, PlanStatus::Unknown) => Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                "Unknown is only read from disk, never set",
             )),
             (PlanStatus::Pending, PlanStatus::Dropped) => Err(CoreError::new(
                 ErrorCode::InvalidRequest,
