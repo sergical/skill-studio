@@ -413,6 +413,7 @@ mod tests {
     /// budget produced instead of a lease.
     #[test]
     fn acquire_waits_out_a_short_lived_holder_within_its_own_deadline_or_gives_up_too_soon() {
+        let _serial = crate::fork_test_guard();
         let dir = tempfile::tempdir().unwrap();
         let lease_root = dir.path().to_path_buf();
         let keys = vec![key("short-lived-holder")];
@@ -449,6 +450,7 @@ mod tests {
     /// returned instead.
     #[test]
     fn acquire_takes_over_a_dead_holders_lease_even_with_no_wait_budget_or_reports_it_busy() {
+        let _serial = crate::fork_test_guard();
         let dir = tempfile::tempdir().unwrap();
         let lease = FileLease::new(dir.path().to_path_buf());
         let keys = vec![key("dead-holder-no-wait")];
