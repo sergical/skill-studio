@@ -258,6 +258,8 @@ pub struct LibraryRequest {
     pub sort: Option<skill_studio_core::library::LibrarySort>,
     /// Keep the N most used skills.
     pub top: Option<usize>,
+    /// Also include this project's skills, like the CLI `--project` flag.
+    pub project_path: Option<std::path::PathBuf>,
 }
 
 /// A read tool's input, with the view that bounds its answer.
@@ -577,7 +579,7 @@ impl SkillStudioServer {
         run_op_viewed(
             Operation::Library,
             false,
-            None,
+            req.project_path.as_deref(),
             &view,
             &context,
             |rt, ctx| {
