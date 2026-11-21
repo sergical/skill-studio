@@ -154,6 +154,7 @@ pub struct PackReport {
 
 impl Outcome for PackReport {
     const LISTS: &'static [&'static str] = &["/packs"];
+    const NESTED_LIST: Option<&'static str> = Some("/skills");
 
     fn status(&self) -> OpStatus {
         if self

@@ -195,6 +195,9 @@ pub trait Outcome {
     /// pages, projects and counts. Empty for a result without lists.
     const LISTS: &'static [&'static str] = &[];
 
+    /// JSON pointer within each primary array row to page if the row is too large.
+    const NESTED_LIST: Option<&'static str> = None;
+
     /// Status of this value.
     fn status(&self) -> OpStatus {
         OpStatus::Ok

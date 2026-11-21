@@ -110,7 +110,7 @@ pub fn render_document<T: Outcome>(
         &json["scope"],
         request,
     ))?);
-    if let Err(message) = fit_answer(&mut json, T::LISTS, view, &query)? {
+    if let Err(message) = fit_answer(&mut json, T::LISTS, T::NESTED_LIST, view, &query)? {
         if let Value::Object(doc) = &mut json {
             let error = ErrorEntry {
                 code: ErrorCode::InvalidRequest,
@@ -120,6 +120,7 @@ pub fn render_document<T: Outcome>(
             };
             doc.insert("status".into(), serde_json::to_value(OpStatus::Error)?);
             doc.insert("data".into(), Value::Null);
+            doc.remove("page");
             doc.insert("errors".into(), serde_json::to_value([error])?);
         }
         exit_status = ErrorCode::InvalidRequest.exit_status();
@@ -132,6 +133,7 @@ pub fn render_document<T: Outcome>(
 fn fit_answer(
     json: &mut Value,
     lists: &[&str],
+    nested_list: Option<&str>,
     view: &ViewRequest,
     query: &Sha256,
 ) -> serde_json::Result<Result<(), String>> {
@@ -145,7 +147,7 @@ fn fit_answer(
     let mut budget = ANSWER_BYTES.saturating_sub(rest);
     loop {
         let mut viewed = data.clone();
-        let page = match apply(&mut viewed, lists, view, budget, query) {
+        let page = match apply(&mut viewed, lists, nested_list, view, budget, query) {
             Ok(page) => page,
             Err(message) => return Ok(Err(message)),
         };
@@ -157,8 +159,15 @@ fn fit_answer(
         let over = serde_json::to_string(&*doc)?
             .len()
             .saturating_sub(ANSWER_BYTES);
-        if over == 0 || budget == 0 {
+        if over == 0 {
             return Ok(Ok(()));
+        }
+        if budget == 0 {
+            return Ok(if nested_list.is_some() {
+                Err(OVERSIZED_ROW.into())
+            } else {
+                Ok(())
+            });
         }
         budget = budget.saturating_sub(over);
     }
@@ -186,11 +195,12 @@ fn bytes_without_lists(json: &mut Value, lists: &[&str]) -> usize {
 fn apply(
     data: &mut Value,
     lists: &[&str],
+    nested_list: Option<&str>,
     view: &ViewRequest,
     mut budget: usize,
     query: &Sha256,
 ) -> Result<Option<Page>, String> {
-    let Some(main) = lists.first() else {
+    let Some(&main) = lists.first() else {
         return if view.cursor.is_some() {
             Err(INVALID_CURSOR.into())
         } else if view.is_set() {
@@ -200,10 +210,55 @@ fn apply(
         };
     };
     let (target, offset) = parse_cursor(view.cursor.as_deref(), main)?;
+    if let Some(field) = nested_list {
+        if target == main {
+            let oversized = view.limit != Some(0)
+                && data
+                    .pointer(main)
+                    .and_then(|rows| rows.get(offset))
+                    .is_some_and(|row| {
+                        let mut row = row.clone();
+                        project_row(&mut row, &view.fields);
+                        row.to_string().len() + 1 > budget
+                    });
+            if oversized {
+                let nested = NestedListPage {
+                    parent: main,
+                    field,
+                    row: offset,
+                };
+                return nested.render(data, view, budget, query, None).map(Some);
+            }
+        } else if let Some(row) = target
+            .strip_prefix(main)
+            .and_then(|tail| tail.strip_prefix('/'))
+            .and_then(|tail| tail.strip_suffix(field))
+            .and_then(|index| index.parse().ok())
+        {
+            let nested = NestedListPage {
+                parent: main,
+                field,
+                row,
+            };
+            return nested
+                .render(data, view, budget, query, Some(offset))
+                .map(Some);
+        }
+    }
     if !lists.contains(&target) {
         return Err(INVALID_CURSOR.into());
     }
-    let Some(mut page) = cut(data, target, offset, view, &mut budget, 1, query)? else {
+    let min_rows = usize::from(nested_list.is_none() || target != main);
+    let Some(mut page) = cut(
+        data.pointer_mut(target),
+        target,
+        offset,
+        view,
+        &mut budget,
+        min_rows,
+        query,
+    )?
+    else {
         return Ok(None);
     };
     let other_view = ViewRequest {
@@ -211,7 +266,15 @@ fn apply(
         ..ViewRequest::default()
     };
     for pointer in lists.iter().filter(|pointer| **pointer != target) {
-        let other = cut(data, pointer, 0, &other_view, &mut budget, 0, query)?;
+        let other = cut(
+            data.pointer_mut(pointer),
+            pointer,
+            0,
+            &other_view,
+            &mut budget,
+            0,
+            query,
+        )?;
         if let Some(other) = other {
             if other.returned < other.total {
                 page.also.push(other);
@@ -220,6 +283,88 @@ fn apply(
     }
     let cut_any = page.returned < page.total || !page.also.is_empty();
     Ok((cut_any || view.is_set()).then_some(page))
+}
+
+const OVERSIZED_ROW: &str =
+    "Pack answer exceeds 32 KB. Request fewer fields or omit count_by, then try again.";
+
+struct NestedListPage<'a> {
+    parent: &'a str,
+    field: &'a str,
+    row: usize,
+}
+
+impl NestedListPage<'_> {
+    fn render(
+        &self,
+        data: &mut Value,
+        view: &ViewRequest,
+        mut budget: usize,
+        query: &Sha256,
+        continuation: Option<usize>,
+    ) -> Result<Page, String> {
+        let parent = data.pointer_mut(self.parent).ok_or(INVALID_CURSOR)?;
+        let seed = list_cursor_seed(query, self.parent, parent);
+        let mut parent_view = if continuation.is_some() {
+            ViewRequest::default()
+        } else {
+            view.clone()
+        };
+        parent_view.limit = Some(1);
+        let mut parent_page = cut(
+            Some(&mut *parent),
+            self.parent,
+            self.row,
+            &parent_view,
+            &mut budget,
+            1,
+            query,
+        )?
+        .ok_or(INVALID_CURSOR)?;
+        let row = parent.get_mut(0).ok_or(INVALID_CURSOR)?;
+
+        // Count the pack metadata before fitting any of its skill rows.
+        let missing_list = if continuation.is_some() {
+            INVALID_CURSOR
+        } else {
+            OVERSIZED_ROW
+        };
+        let mut rows = std::mem::replace(
+            row.pointer_mut(self.field)
+                .filter(|list| list.is_array())
+                .ok_or(missing_list)?,
+            Value::Array(Vec::new()),
+        );
+        budget = budget.saturating_sub(row.to_string().len() + 1);
+
+        let target = format!("{}/{}{}", self.parent, self.row, self.field);
+        let default_view = ViewRequest::default();
+        let nested_view = if continuation.is_some() {
+            view
+        } else {
+            &default_view
+        };
+        let mut page = cut(
+            Some(&mut rows),
+            &target,
+            continuation.unwrap_or_default(),
+            nested_view,
+            &mut budget,
+            0,
+            &seed,
+        )?
+        .ok_or(missing_list)?;
+        if page.returned == 0 && page.next_cursor.is_some() && nested_view.limit != Some(0) {
+            return Err(OVERSIZED_ROW.into());
+        }
+        *row.pointer_mut(self.field).ok_or(missing_list)? = rows;
+        page.list = format!("{}/0{}", self.parent, self.field);
+        if continuation.is_some() {
+            return Ok(page);
+        }
+        parent_page.also.push(page);
+        Ok(parent_page)
+    }
 }
 
 const INVALID_CURSOR: &str = "Invalid or stale page cursor. Start again without a cursor.";
@@ -258,7 +403,7 @@ fn page_cursor(seed: &Sha256, pointer: &str, offset: usize) -> String {
 }
 
 fn cut(
-    data: &mut Value,
+    slot: Option<&mut Value>,
     pointer: &str,
     offset: usize,
     view: &ViewRequest,
@@ -266,10 +411,7 @@ fn cut(
     min_rows: usize,
     query: &Sha256,
 ) -> Result<Option<Page>, String> {
-    let Some(slot) = data
-        .pointer_mut(pointer)
-        .filter(|slot| slot.is_array() || slot.is_object())
-    else {
+    let Some(slot) = slot.filter(|slot| slot.is_array() || slot.is_object()) else {
         return if view.cursor.is_some() {
             Err(INVALID_CURSOR.into())
         } else {
@@ -299,14 +441,18 @@ fn cut(
     let mut kept: Vec<_> = rows.into_iter().skip(offset).collect();
     if !view.fields.is_empty() {
         for (_, row) in &mut kept {
-            if let Value::Object(fields) = row {
-                fields.retain(|key, _| view.fields.contains(key));
-            }
+            project_row(row, &view.fields);
         }
     }
-    let returned = view
-        .limit
-        .map_or_else(|| fit(&kept, budget, min_rows), |n| n.min(kept.len()));
+    if let Some(limit) = view.limit {
+        kept.truncate(limit);
+    }
+    // A zero minimum lets the caller split an oversized primary row.
+    let returned = if view.limit.is_none() || min_rows == 0 {
+        fit(&kept, budget, min_rows)
+    } else {
+        kept.len()
+    };
     kept.truncate(returned);
     let next = offset.saturating_add(returned);
     *slot = if is_map {
@@ -340,6 +486,14 @@ fn fit(rows: &[(Option<String>, Value)], budget: &mut usize, min: usize) -> usiz
         fitting += 1;
     }
     fitting
+}
+
+fn project_row(row: &mut Value, fields: &[String]) {
+    if !fields.is_empty() {
+        if let Value::Object(row) = row {
+            row.retain(|key, _| fields.contains(key));
+        }
+    }
 }
 
 fn check_fields(rows: &[(Option<String>, Value)], view: &ViewRequest) -> Result<(), String> {
@@ -396,7 +550,7 @@ mod tests {
         view: &ViewRequest,
         budget: usize,
     ) -> Result<Option<Page>, String> {
-        super::apply(data, lists, view, budget, &Sha256::new())
+        super::apply(data, lists, None, view, budget, &Sha256::new())
     }
 
     fn fit_answer(
@@ -404,7 +558,7 @@ mod tests {
         lists: &[&str],
         view: &ViewRequest,
     ) -> serde_json::Result<Result<(), String>> {
-        super::fit_answer(json, lists, view, &Sha256::new())
+        super::fit_answer(json, lists, None, view, &Sha256::new())
     }
 
     fn rows(n: usize) -> Value {

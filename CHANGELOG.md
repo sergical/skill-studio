@@ -24,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- CLI and MCP pack reads page the installed skill list inside an oversized pack so the answer fits the 32 KB budget.
 - CLI and MCP page cursors now ask callers to restart if the scope, filters, or rows change between pages.
 - Model listing: the Codex tier has its own box with grouped numbers, the comparison column stays empty until you try a budget, and a page subtitle no longer draws over the title in a narrow window. Sessions links each agent's skills docs.
 - The doctor listing budget for Claude Code now uses the model's context window from Claude Code's model catalog cache and the model's characters per token (3 for current models). Before, it used 200,000 tokens at 4 characters, so the limit for Opus 5.5 was 2,000 tokens instead of 7,500. Codex uses `context_window` from `models_cache.json` for the configured model.

@@ -368,6 +368,12 @@ projection can change between calls. A cursor with a different scope, request,
 list or checksum returns `invalid_request` with instructions to start again
 without a cursor. Older numeric and list-plus-offset cursors also expire.
 
+Pack results name a nested list of installed skills. If a pack cannot fit
+on its own, the pager emits a page for that list in `page.also`. The nested
+cursor binds to the original pack row and resumes into the first returned
+pack row, so the page pointer addresses the returned data. Outer and nested
+continuations advance independently and both honor the 32 KB budget.
+
 ### 8.2 MCP tools
 
 Tools usually use the serde name of the core operation. These tools use
