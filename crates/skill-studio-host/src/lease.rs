@@ -144,28 +144,23 @@ impl LeaseProvider for FileLease {
         let mut sorted_keys = keys.to_vec();
         sorted_keys.sort();
 
-        if mode == LeaseMode::Exclusive {
-            fs::create_dir_all(&self.lease_root).map_err(|e| CoreError::io(&self.lease_root, e))?;
-        }
+        fs::create_dir_all(&self.lease_root).map_err(|e| CoreError::io(&self.lease_root, e))?;
 
         let deadline = Instant::now().checked_add(wait);
         let mut files = Vec::with_capacity(sorted_keys.len());
         for key in &sorted_keys {
             let path = self.lock_path(key);
-            let mut options = OpenOptions::new();
-            options.read(true);
-            if mode == LeaseMode::Exclusive {
-                options.create(true).truncate(false).write(true);
-            }
-            let file = match options.open(&path) {
-                Ok(file) => file,
-                Err(error)
-                    if mode == LeaseMode::Shared && error.kind() == io::ErrorKind::NotFound =>
-                {
-                    continue
-                }
-                Err(error) => return Err(CoreError::io(&path, error)),
-            };
+            // A shared acquire creates the file too: a missing file is the
+            // state before the first acquire on this root, not a lock-free
+            // mode, and a shared handle that locked nothing would leave the
+            // scan it guards races with a writer on the same root.
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(&path)
+                .map_err(|error| CoreError::io(&path, error))?;
             let stale_deadline = Instant::now() + STALE_TAKEOVER_TIMEOUT;
             let mut attempted = false;
             loop {
@@ -297,6 +292,45 @@ mod tests {
             .acquire(&keys, LeaseMode::Exclusive, Duration::from_millis(500))
             .unwrap();
         assert_eq!(exclusive.mode(), LeaseMode::Exclusive);
+    }
+
+    /// Given a lease root whose lock file does not exist yet, when one handle
+    /// holds a shared lease, then an exclusive acquire waits for it and reports
+    /// busy instead of taking a file the shared handle never locked; on failure
+    /// the panic names the exclusive acquire that ran beside the reader.
+    #[test]
+    fn a_shared_lease_on_a_root_with_no_lock_file_blocks_an_exclusive_lease_until_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease_root = dir.path().join("leases");
+        let keys = vec![key("fresh-root-reader")];
+
+        let reader = FileLease::new(lease_root.clone());
+        let shared = reader
+            .acquire(&keys, LeaseMode::Shared, Duration::ZERO)
+            .unwrap();
+        assert!(
+            reader.lock_path(&keys[0]).exists(),
+            "a shared acquire left no lock file on a fresh root, so it holds no lock"
+        );
+
+        let writer = FileLease::new(lease_root.clone()).acquire(
+            &keys,
+            LeaseMode::Exclusive,
+            Duration::from_millis(100),
+        );
+        assert!(
+            matches!(writer, Err(ref error) if error.code == ErrorCode::ScopeBusy),
+            "an exclusive acquire ran while the shared holder held the root: {:?}",
+            writer.as_ref().err()
+        );
+
+        drop(shared);
+        assert!(
+            FileLease::new(lease_root)
+                .acquire(&keys, LeaseMode::Exclusive, Duration::from_millis(500))
+                .is_ok(),
+            "the root stayed busy after the shared handle dropped"
+        );
     }
 
     /// Given an exclusive lease held by this process, when a second
