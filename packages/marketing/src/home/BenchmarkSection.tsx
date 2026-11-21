@@ -174,7 +174,11 @@ function useGrowClock(target: RefObject<HTMLElement | null>, total: number) {
     if (!node || reduced.matches || !("IntersectionObserver" in window)) return;
     setElapsed(0);
     let frame = 0;
+    // `disconnect()` keeps entries already queued, so a queued callback could start the
+    // bars again after reduced motion showed the final values.
+    let done = false;
     const tick = (start: number) => (now: number) => {
+      if (done) return;
       const ms = now - start;
       setElapsed(ms < total ? ms : Infinity);
       if (ms < total) frame = requestAnimationFrame(tick(start));
@@ -183,7 +187,7 @@ function useGrowClock(target: RefObject<HTMLElement | null>, total: number) {
       (entries) => {
         // The newest entry is the current state. `isIntersecting` is also true below the
         // threshold, when only an edge shows, so the ratio decides.
-        if (entries[entries.length - 1].intersectionRatio < MEASURE_IN_VIEW) return;
+        if (done || entries[entries.length - 1].intersectionRatio < MEASURE_IN_VIEW) return;
         observer.disconnect();
         frame = requestAnimationFrame(tick(performance.now()));
       },
@@ -191,6 +195,7 @@ function useGrowClock(target: RefObject<HTMLElement | null>, total: number) {
     );
     const finish = () => {
       if (!reduced.matches) return;
+      done = true;
       observer.disconnect();
       cancelAnimationFrame(frame);
       setElapsed(Infinity);

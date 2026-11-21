@@ -223,8 +223,13 @@ in the bars.
 
 171 runs: 4 agents, 10 models, 3 runs per cell, on Skill Studio from #626.
 A "pair" is one agent and model: its `raw` cell and its best Skill Studio
-cell (see [Metrics](#metrics)). The ratios are medians over the pairs; the
-homepage shows the best pair.
+cell, CLI or MCP (see [Metrics](#metrics)). The ratios in this table are
+medians of the per-pair ratios.
+
+The homepage shows other numbers. It puts the median over the pairs' `raw`
+cells next to the median over their MCP cells, for example 86.7 s against
+18.6 s on the usage task. It uses MCP only, not the best cell, so its gaps are
+smaller than the ratios in this table.
 
 | Task     | Pairs | Time        | Tool calls | Cost       | Correct by hand | Correct with Skill Studio | Slower pairs |
 | -------- | ----- | ----------- | ---------- | ---------- | --------------- | ------------------------- | ------------ |
