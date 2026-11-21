@@ -504,6 +504,12 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
+    /// A fork copies every open file of the process, the lock files of
+    /// other tests included, and keeps them until the child calls exec.
+    /// The child in `child_spawned_during_scan_…` waits before exec, so a
+    /// test that checks that a lock is free must not run beside it.
+    static FORKING_TESTS: Mutex<()> = Mutex::new(());
+
     #[test]
     fn write_after_short_scan_waits_and_migrates_or_reports_a_false_lock_error() {
         let dir = tempfile::tempdir().unwrap();
@@ -530,6 +536,9 @@ mod tests {
     #[test]
     fn scan_lock_closes_on_child_exec_or_a_running_child_blocks_the_writer() {
         use std::io::{BufRead, Write};
+        let _serial = FORKING_TESTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         use std::process::{Command, Stdio};
         let dir = tempfile::tempdir().unwrap();
         drop(coordination_lock(&folder_identity(dir.path()).unwrap()).unwrap());
@@ -556,6 +565,9 @@ mod tests {
     #[test]
     fn child_spawned_during_scan_does_not_keep_lock_or_block_a_later_writer() {
         use std::io::{Read, Write};
+        let _serial = FORKING_TESTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         use std::os::unix::{net::UnixStream, process::CommandExt};
         use std::process::Command;
         let dir = tempfile::tempdir().unwrap();
