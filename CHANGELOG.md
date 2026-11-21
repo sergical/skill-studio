@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - CLI and MCP pack updates reject plans with more than 100 update steps across all scopes before running an owner tool.
 - Pack updates report each tool's own result when skills.sh and dotagents claim the same skill name in one scope.
+- Usage drops sessions from the former Codex home when the Codex root changes and keeps other agents' cached history.
 
 ## v0.4.0
 

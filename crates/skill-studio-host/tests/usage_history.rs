@@ -213,6 +213,93 @@ fn usage_cache_round_trip_preserves_complete_history() {
     assert_eq!(fs::read_dir(cache.parent().unwrap()).unwrap().count(), 1);
 }
 
+/// Flow: switch the Codex root with a saved cache and an unreadable Claude root.
+/// Expect only the new Codex session and the cached Claude session.
+/// Failure: the old Codex root still counts, or the Claude use disappears.
+#[test]
+fn usage_cache_switches_codex_roots_and_keeps_claude_history() {
+    let dir = fixture();
+    let home = dir.path();
+    let old_codex = home.join("old-codex");
+    let new_codex = home.join("new-codex");
+    for (root, subdir, id) in [
+        (&old_codex, "sessions", "old-live"),
+        (&old_codex, "archived_sessions", "old-archived"),
+        (&new_codex, "sessions", "current"),
+    ] {
+        let logs = root.join(subdir);
+        fs::create_dir_all(&logs).unwrap();
+        let header = serde_json::json!({"type": "session_meta", "payload": {"id": id}});
+        let record = serde_json::json!({
+            "type": "response_item", "timestamp": "2026-09-29T12:00:00Z",
+            "payload": {"type": "message", "role": "user", "content": [{
+                "type": "input_text", "text": "<skill>\n<name>gamma</name>\n<path>/u/.agents/skills/gamma/SKILL.md</path>"
+            }]}
+        });
+        let text = format!("{header}\n{record}\n");
+        if subdir == "archived_sessions" {
+            fs::write(
+                logs.join("session.jsonl.zst"),
+                zstd::stream::encode_all(text.as_bytes(), 1).unwrap(),
+            )
+            .unwrap();
+        } else {
+            fs::write(logs.join("session.jsonl"), text).unwrap();
+        }
+    }
+    let claude_root = home.join(".claude/projects");
+    fs::create_dir_all(claude_root.join("work")).unwrap();
+    let claude = serde_json::json!({
+        "type": "user", "sessionId": "claude-session", "timestamp": "2026-09-29T12:00:00Z",
+        "message": {"content": "<command-name>/gamma</command-name>"}
+    });
+    fs::write(
+        claude_root.join("work/session.jsonl"),
+        format!("{claude}\n"),
+    )
+    .unwrap();
+
+    let inventory = scan(home);
+    let now = "2026-09-30T12:00:00Z".parse().unwrap();
+    let cache = home.join("usage-cache.json");
+    let mut usage = SkillUsage::default();
+    usage.set_codex_home(old_codex);
+    let first = usage.report(home, &inventory, 30, now);
+    assert_eq!(first.rows[0].agents["codex"], 2);
+    assert_eq!(first.rows[0].agents["claude-code"], 1);
+    usage.save_cache(&cache).unwrap();
+
+    // Claude cannot be read again this pass. Its unmodified source still
+    // contributes its cached use when only the Codex root changes.
+    fs::rename(&claude_root, home.join("claude-history")).unwrap();
+    fs::write(&claude_root, "not a directory").unwrap();
+    let mut reloaded = SkillUsage::load_read_only(Some(&cache));
+    reloaded.set_codex_home(new_codex.clone());
+    let second = reloaded.report(home, &inventory, 30, now);
+    assert_eq!(
+        second.rows[0].agents["codex"], 1,
+        "only the current Codex root counts"
+    );
+    assert_eq!(second.rows[0].agents["claude-code"], 1);
+
+    fs::remove_file(&claude_root).unwrap();
+    fs::rename(home.join("claude-history"), &claude_root).unwrap();
+    let mut legacy: serde_json::Value = serde_json::from_slice(&fs::read(&cache).unwrap()).unwrap();
+    legacy.as_object_mut().unwrap().remove("transcript_roots");
+    for file in legacy["files"].as_object_mut().unwrap().values_mut() {
+        file.as_object_mut().unwrap().remove("source_harness");
+    }
+    fs::write(&cache, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let mut legacy = SkillUsage::load_read_only(Some(&cache));
+    legacy.set_codex_home(new_codex);
+    let rebuilt = legacy.report(home, &inventory, 30, now);
+    assert!(!rebuilt.partial);
+    assert_eq!(
+        rebuilt.rows, second.rows,
+        "legacy caches rebuild from the current roots"
+    );
+}
+
 #[test]
 fn usage_oversized_without_marker_is_complete_instead_of_a_gap() {
     let dir = fixture();
