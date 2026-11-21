@@ -130,6 +130,8 @@ struct DotagentsPlan {
     /// Names of the non-wildcard `[[skills]]` entries, which `install`
     /// refreshes along with the one being updated.
     declared: Vec<String>,
+    /// Absent live folders that install can recreate for older, still-listed parks.
+    parked_folders_to_keep_absent: Vec<PathBuf>,
     /// `agents.toml` as read, written back when the install fails.
     original_config: String,
     /// The edited `agents.toml` text to write once the row is recorded;
@@ -216,6 +218,7 @@ fn plan_dotagents_update(
         lock: crate::ports::resolve_config_link(fs, &dir.join("agents.lock"))?,
         dir,
         declared,
+        parked_folders_to_keep_absent: Vec::new(),
         original_config: text,
         edited_config: pinned.map(|()| doc.to_string()),
     })
@@ -246,6 +249,26 @@ fn other_declared_folders(
         }
     }
     folders
+}
+
+/// Removes copies a scope-wide install recreated for parked skills. The parked
+/// originals and any live copies present before the update are left in place.
+fn remove_recreated_parked_folders(
+    rt: &Runtime,
+    session: &MutationSession,
+    folders: &[PathBuf],
+) -> Result<(), CoreError> {
+    for folder in folders {
+        match rt.ports.fs.symlink_metadata(folder) {
+            Ok(_) => {
+                let trash = crate::park_move::move_to_trash(rt, session, folder)?;
+                crate::park_move::remove_trash(rt, session, &trash);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(CoreError::io(folder, error)),
+        }
+    }
+    Ok(())
 }
 
 /// Names of the skill-shaped entries directly under `universal_root`.
@@ -683,6 +706,13 @@ fn update_write(
                 }
                 Ok(())
             });
+            // Install can recreate a parked folder even when a later dependency fails.
+            let refreshed = if let Some(plan) = dotagents {
+                remove_recreated_parked_folders(rt, session, &plan.parked_folders_to_keep_absent)
+                    .and(refreshed)
+            } else {
+                refreshed
+            };
             if let Err(e) = refreshed {
                 if let Some(plan) = dotagents.filter(|p| p.edited_config.is_some()) {
                     // Best effort: the original error is the one to report.
@@ -896,7 +926,7 @@ fn prepare_update(
     };
     // Same ordering for `Dotagents`: `agents.toml` is read, checked and
     // edited in memory here, so a missing entry fails before any row.
-    let dotagents = match req.method {
+    let mut dotagents = match req.method {
         InstallMethod::Dotagents => Some(plan_dotagents_update(rt, fs, req)?),
         InstallMethod::Copy | InstallMethod::SkillsSh => None,
     };
@@ -934,15 +964,23 @@ fn prepare_update(
     };
     let mut backup_targets = vec![destination.clone()];
     let mut folders_before = Vec::new();
-    if let Some(plan) = &dotagents {
+    if let Some(plan) = &mut dotagents {
         backup_targets.push(plan.config.clone());
         backup_targets.push(plan.lock.clone());
-        backup_targets.extend(other_declared_folders(
-            fs,
-            plan,
-            &universal_root,
-            &destination,
-        ));
+        let siblings = other_declared_folders(fs, plan, &universal_root, &destination);
+        plan.parked_folders_to_keep_absent = siblings
+            .iter()
+            .filter(|folder| {
+                fs.symlink_metadata(folder)
+                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+                    && folder
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| is_parked(rt, &SkillName(name.to_owned()), &req.scope))
+            })
+            .cloned()
+            .collect();
+        backup_targets.extend(siblings);
         folders_before = skill_folder_names(fs, &universal_root)?;
     }
     let manifest = session
