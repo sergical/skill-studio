@@ -1,6 +1,6 @@
 // ============================================================================
 // Skill Studio - Jobs section
-// Four everyday skill jobs, each shown by hand and then with Skill Studio.
+// Five everyday skill jobs, each shown by hand and then with Skill Studio.
 // Pack names are fictional; every command and app action is real.
 // ============================================================================
 import { useState, type KeyboardEvent } from "react";
@@ -8,6 +8,7 @@ import * as stylex from "@stylexjs/stylex";
 import {
   Check,
   FolderSearch,
+  ListTree,
   PackageOpen,
   Stethoscope,
   Users,
@@ -17,7 +18,7 @@ import {
 import { siteTokens } from "../SiteTheme.stylex";
 import { homeSectionStyles } from "./HomeSection.stylex";
 
-type JobId = "update" | "share" | "broken" | "unused";
+type JobId = "ignored" | "unused" | "budget" | "update" | "share";
 
 interface Step {
   text: string;
@@ -42,6 +43,81 @@ interface Job {
 }
 
 const jobs: ReadonlyArray<Job> = [
+  {
+    id: "ignored",
+    icon: Stethoscope,
+    label: "Your agent ignores a skill",
+    blurb: "See what the model saw.",
+    byHand: [
+      {
+        text: "Find the session file and the skill list in it. Claude Code and Codex record the list. The other agents do not.",
+        code: "grep -l skill_listing ~/.claude/projects/*/*.jsonl",
+      },
+      { text: "Read the list. Check if the skill has a description there, or only a name." },
+      {
+        text: "Check that the skill is in a folder this agent reads. Claude Code does not read .agents/skills.",
+      },
+      {
+        text: "Open SKILL.md and check the header. A bad header can stop the agent from loading the skill.",
+      },
+    ],
+    byHandRepeat: "for each session",
+    byHandCost:
+      "Each agent writes its sessions in a different format, and none of them tells you why it skipped a skill.",
+    studioStep: "Open Sessions.",
+    studioNotes: [
+      "Sessions shows what each session listed and used: each skill described, by name only, or not listed. It marks a skill as possibly missed. That mark is a guess from your first prompt.",
+      "Then fix the cause. Raise the budget in Model listing, reword the description, or make the skills you only type manual-only. For a broken skill, click Fix.",
+    ],
+    command: "skill-studio sessions",
+  },
+  {
+    id: "unused",
+    icon: FolderSearch,
+    label: "Your agents load skills you never use",
+    blurb: "Park them. Undo any time.",
+    byHand: [
+      { text: "List the skills in the agent's folders." },
+      {
+        text: "Search the agent's session files to find which skills ran. Each agent uses a different format.",
+      },
+      { text: "Delete the folders you think you do not need, and hope that you are right." },
+    ],
+    byHandRepeat: "for each agent",
+    byHandCost:
+      "Each listed skill takes space in the list, used or not. That space is what other skills need to keep a description.",
+    studioStep: "Click Park on the skills you do not need.",
+    studioNotes: [
+      "Sessions already lists each skill that was listed in nearly every session and never used. On one machine, that was 119 skills.",
+      "A parked skill leaves your agents' lists. Nothing is deleted, and Unpark brings it back.",
+    ],
+    command: "skill-studio usage",
+  },
+  {
+    id: "budget",
+    icon: ListTree,
+    label: "Your skills do not fit the list",
+    blurb: "Try another budget first.",
+    byHand: [
+      {
+        text: "Find the listing budget of each agent. Claude Code and Codex each take a share of the context window, and each has its own setting.",
+      },
+      {
+        text: "Add up the length of each name and description. Compare the total with the budget.",
+      },
+      {
+        text: "Change the setting, start a new session, and ask the agent which skills it sees.",
+      },
+    ],
+    byHandRepeat: "for each agent",
+    byHandCost: "No agent tells you which descriptions it cut, or which it would cut next.",
+    studioStep: "Type a budget in Model listing.",
+    studioNotes: [
+      "Model listing already shows each skill as described, name only or hidden. Compare marks each skill that gains or loses a description at the new budget.",
+      "Skill Studio does not write agent settings. It gives you the line and the file to put it in.",
+    ],
+    command: "skill-studio listing --claude-fraction 0.02",
+  },
   {
     id: "update",
     icon: PackageOpen,
@@ -87,60 +163,14 @@ const jobs: ReadonlyArray<Job> = [
     studioStep: "Your teammate adds your repo in Packs.",
     studioNotes: [
       "Your skills live in one git repo, such as acme-labs/review-skills. Packs lists the skills it will add, and one more click adds them.",
-      "Check upstream finds new versions and new skills. Update skips each skill your teammate edited, and says why.",
+      "Check upstream finds new versions and new skills. Update skips each skill your teammate edited, and says why. Each machine needs Node.js and git.",
     ],
     command: "skill-studio pack add acme-labs/review-skills",
   },
-  {
-    id: "broken",
-    icon: Stethoscope,
-    label: "Your agent ignores a skill",
-    blurb: "Find out why in one check.",
-    byHand: [
-      {
-        text: "Check that the skill is in a folder this agent reads. Claude Code does not read .agents/skills.",
-      },
-      {
-        text: "Open SKILL.md and check the header. A bad header can stop the agent from loading the skill.",
-      },
-      {
-        text: "Follow the link. The folder it points at can be gone.",
-        code: "readlink ~/.claude/skills/pdf-tools",
-      },
-    ],
-    byHandRepeat: "for each agent",
-    byHandCost:
-      "Each agent reads different folders, and none of them tells you why it skipped a skill.",
-    studioStep: "Click Fix on the skill.",
-    studioNotes: [
-      "Home already lists the skill under Broken, with the problem for each agent.",
-      "Fix repairs the header, and tells you what it cannot repair. For a broken link, the skill page offers the repair. Activity can undo each fix.",
-    ],
-    command: "skill-studio diagnose",
-  },
-  {
-    id: "unused",
-    icon: FolderSearch,
-    label: "Your agents load skills you never use",
-    blurb: "Keep only the skills that run.",
-    byHand: [
-      { text: "List the skills in the agent's folders." },
-      {
-        text: "Search the agent's session logs to find which skills ran. Each agent uses a different log format.",
-      },
-      { text: "Delete the folders you think you do not need, and hope that you are right." },
-    ],
-    byHandRepeat: "for each agent",
-    byHandCost:
-      "Each skill's description goes into your agent's prompt, used or not. No agent shows which skills it used, so the list only gets longer.",
-    studioStep: "Click Park on the skills you do not need.",
-    studioNotes: [
-      "Home already lists each skill that no agent used in the last 30 days. Park it from its row on Home, or from its skill page.",
-      "A parked skill leaves your agents' lists. Nothing is deleted, and Unpark brings it back.",
-    ],
-    command: "skill-studio usage",
-  },
 ];
+
+// On a phone the tabs sit in two columns. With an odd count the last tab takes the full row.
+const LAST_TAB_ALONE = jobs.length % 2 === 1;
 
 const TAB_STEPS = new Map([
   ["ArrowRight", 1],
@@ -150,7 +180,7 @@ const TAB_STEPS = new Map([
 ]);
 
 export function JobsSection() {
-  const [active, setActive] = useState<JobId>("update");
+  const [active, setActive] = useState<JobId>("ignored");
   const job = jobs.find((j) => j.id === active)!;
 
   const onTabKey = (event: KeyboardEvent) => {
@@ -167,8 +197,8 @@ export function JobsSection() {
     <>
       <h2 {...stylex.props(homeSectionStyles.title, styles.title)}>Jobs you do by hand today.</h2>
       <p {...stylex.props(styles.lede)}>
-        Each agent keeps its own skill folders. Every update, fix and clean-up means a trip through
-        all of them. Skill Studio shows them in one place.
+        Each agent keeps its own skill folders and its own session files. To learn what a model saw,
+        you open them by hand. Skill Studio reads them for you.
       </p>
       <div {...stylex.props(homeSectionStyles.columns)}>
         <div
@@ -178,7 +208,7 @@ export function JobsSection() {
           onKeyDown={onTabKey}
           {...stylex.props(styles.tabs)}
         >
-          {jobs.map(({ id, icon: Icon, label, blurb }) => (
+          {jobs.map(({ id, icon: Icon, label, blurb }, index) => (
             <button
               key={id}
               type="button"
@@ -188,7 +218,11 @@ export function JobsSection() {
               aria-controls="job-panel"
               tabIndex={active === id ? 0 : -1}
               onClick={() => setActive(id)}
-              {...stylex.props(styles.tab, active === id && styles.tabOn)}
+              {...stylex.props(
+                styles.tab,
+                active === id && styles.tabOn,
+                LAST_TAB_ALONE && index === jobs.length - 1 && styles.tabWide,
+              )}
             >
               <span {...stylex.props(styles.tabIcon, active === id && styles.tabIconOn)}>
                 <Icon size={18} aria-hidden="true" />
@@ -308,6 +342,7 @@ const styles = stylex.create({
     borderColor: siteTokens.border,
     color: siteTokens.text,
   },
+  tabWide: { "@media (max-width: 760px)": { gridColumn: "1 / -1" } },
   tabIcon: {
     alignItems: "center",
     borderRadius: 9,

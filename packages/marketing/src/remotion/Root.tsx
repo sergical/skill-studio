@@ -3,6 +3,8 @@ import { Composition } from "remotion";
 import { ProductWalkthrough } from "./ProductWalkthrough";
 
 const walkthroughs = [
+  ["Sessions", "sessions", 270],
+  ["Listing", "listing", 300],
   ["Map", "map", 450],
   ["Repair", "repair", 270],
   ["Install", "install", 300],

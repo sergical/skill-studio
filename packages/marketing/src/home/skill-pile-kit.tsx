@@ -9,35 +9,28 @@ import * as stylex from "@stylexjs/stylex";
 
 import { siteTokens } from "../SiteTheme.stylex";
 import {
+  DESCRIBED_CHIPS,
   PILE,
-  KEPT_CHIPS,
   PILE_COUNTS,
   STATE_COLOR,
-  isKept,
+  STATE_LABEL,
+  isDescribed,
+  type DrawerState,
   type PileChip,
   type PileState,
 } from "./skill-pile-data";
 
-export const KEPT_SLOT = new Map(KEPT_CHIPS.map((chip, slot) => [chip.id, slot]));
+export const DESCRIBED_SLOT = new Map(DESCRIBED_CHIPS.map((chip, slot) => [chip.id, slot]));
 const SETTLE = "cubic-bezier(0.32, 0.72, 0, 1)";
 
-const MESSY_SUMMARY = `${PILE_COUNTS.total} skills in ${PILE_COUNTS.folders} folders. ${PILE_COUNTS.copies} of them are copies.`;
-const TIDY_SUMMARY = `${PILE_COUNTS.kept} kept. ${PILE_COUNTS.parked} parked, ${PILE_COUNTS.broken} fixed, ${PILE_COUNTS.outdated} updated.`;
+const MESSY_SUMMARY = `${PILE_COUNTS.total} skills in ${PILE_COUNTS.folders} folders.`;
+const SORTED_SUMMARY = `Sorted. The model sees ${PILE_COUNTS.described} of ${PILE_COUNTS.total} skills with a description, ${PILE_COUNTS.nameOnly} by name only, and ${PILE_COUNTS.hidden} not at all.`;
 
 const LEGEND = [
-  ["copy", `${PILE_COUNTS.copies} copies`],
-  ["unused", `${PILE_COUNTS.unused} not used`],
-  ["broken", `${PILE_COUNTS.broken} broken`],
-  ["outdated", `${PILE_COUNTS.outdated} outdated`],
+  ["described", `${PILE_COUNTS.described} described`],
+  ["name-only", `${PILE_COUNTS.nameOnly} name only`],
+  ["hidden", `${PILE_COUNTS.hidden} hidden`],
 ] satisfies ReadonlyArray<[PileState, string]>;
-
-const RESOLVED_LABEL = {
-  ok: undefined,
-  broken: "fixed",
-  outdated: "updated",
-  unused: undefined,
-  copy: undefined,
-} satisfies Record<PileState, string | undefined>;
 
 export interface Point {
   x: number;
@@ -56,11 +49,13 @@ export interface Geometry {
   w: number;
   h: number;
   narrow: boolean;
-  // Mascot on top, drawer at the bottom: for a stage alone in a centred column.
+  // Mascot on top, drawers at the bottom: for a stage alone in a centred column.
   stacked: boolean;
   mascotSize: number;
   mascot: Point;
+  // The top drawer. The heap and the sorted list keep clear of it.
   drawer: Point;
+  drawers: Record<DrawerState, Point>;
 }
 
 export interface StageSize {
@@ -68,6 +63,8 @@ export interface StageSize {
   h: number;
   centered: boolean;
 }
+
+const DRAWER_STEP = 36;
 
 export function geometry({ w, h, centered }: StageSize): Geometry {
   const narrow = w < 520;
@@ -77,11 +74,15 @@ export function geometry({ w, h, centered }: StageSize): Geometry {
   const drawer = stacked
     ? { x: w / 2, y: h - 18 }
     : { x: mascot.x, y: mascot.y + mascotSize / 2 + 34 };
-  return { w, h, narrow, stacked, mascotSize, mascot, drawer };
+  // Side by side under a stacked stage, one under the other beside a wide one.
+  const drawers = stacked
+    ? { "name-only": { x: w / 2 - 54, y: drawer.y }, hidden: { x: w / 2 + 63, y: drawer.y } }
+    : { "name-only": drawer, hidden: { x: drawer.x, y: drawer.y + DRAWER_STEP } };
+  return { w, h, narrow, stacked, mascotSize, mascot, drawer, drawers };
 }
 
 export function slotPose(g: Geometry, slot: number): Pose {
-  const perColumn = Math.ceil(KEPT_CHIPS.length / 2);
+  const perColumn = Math.ceil(DESCRIBED_CHIPS.length / 2);
   const column = slot < perColumn ? 0 : 1;
   const row = slot % perColumn;
   if (g.narrow) return { x: column === 0 ? 0 : g.w / 2 + 4, y: 128 + row * 32, ax: 0 };
@@ -274,8 +275,8 @@ export function usePileStage() {
   const stageRef = useRef<HTMLDivElement>(null);
   const chipRefs = useRef<Array<HTMLSpanElement | null>>([]);
   const mascotRef = useRef<HTMLButtonElement>(null);
-  const drawerRef = useRef<HTMLSpanElement>(null);
-  const countRef = useRef<HTMLSpanElement>(null);
+  const drawerRefs = useRef<Partial<Record<DrawerState, HTMLSpanElement | null>>>({});
+  const countRefs = useRef<Partial<Record<DrawerState, HTMLSpanElement | null>>>({});
   const [size, setSize] = useState<StageSize | null>(null);
 
   useLayoutEffect(() => {
@@ -296,48 +297,35 @@ export function usePileStage() {
     return () => observer.disconnect();
   }, []);
 
-  return { stageRef, chipRefs, mascotRef, drawerRef, countRef, size };
+  return { stageRef, chipRefs, mascotRef, drawerRefs, countRefs, size };
 }
 
-export function setCount(countRef: { current: HTMLSpanElement | null }, value: number) {
-  if (countRef.current) countRef.current.textContent = String(value);
+export function setCount(element: HTMLSpanElement | null | undefined, value: number) {
+  if (element) element.textContent = String(value);
 }
 
 export function PileChipView({
   chip,
-  tidy,
+  sorted,
   narrow,
-  badge,
   chipRef,
 }: {
   chip: PileChip;
-  tidy: boolean;
+  sorted: boolean;
   narrow: boolean;
-  badge?: string;
   chipRef: Ref<HTMLSpanElement>;
 }) {
-  const kept = isKept(chip);
-  const resolved = tidy && kept ? RESOLVED_LABEL[chip.state] : undefined;
-  const meta = tidy && kept ? resolved : chip.folder;
+  // In the sorted list the folder is noise: the list answers which skills, not where.
+  const showFolder = !narrow && !(sorted && isDescribed(chip));
   return (
     <span
       ref={chipRef}
       aria-hidden="true"
       {...stylex.props(styles.chip, narrow && styles.chipNarrow)}
     >
-      <span
-        {...stylex.props(
-          styles.dot,
-          styles.dotColor(resolved ? STATE_COLOR.ok : STATE_COLOR[chip.state]),
-        )}
-      />
+      <span {...stylex.props(styles.dot, styles.dotColor(STATE_COLOR[chip.state]))} />
       {chip.name}
-      {badge && <span {...stylex.props(styles.badge)}>{badge}</span>}
-      {meta && !narrow && (
-        <span {...stylex.props(styles.meta, resolved !== undefined && styles.metaResolved)}>
-          {meta}
-        </span>
-      )}
+      {showFolder && <span {...stylex.props(styles.meta)}>{chip.folder}</span>}
     </span>
   );
 }
@@ -389,11 +377,13 @@ export function PileMascot({
 }
 
 export function PileDrawer({
+  state,
   drawerRef,
   countRef,
   at,
   open,
 }: {
+  state: DrawerState;
   drawerRef: Ref<HTMLSpanElement>;
   countRef: Ref<HTMLSpanElement>;
   at: Point;
@@ -406,7 +396,8 @@ export function PileDrawer({
       style={{ transform: `translate(${at.x}px, ${at.y}px) translate(-50%, -50%)` }}
       {...stylex.props(styles.drawer, !open && styles.drawerClosed)}
     >
-      Parked{" "}
+      <span {...stylex.props(styles.dot, styles.dotColor(STATE_COLOR[state]))} />
+      {STATE_LABEL[state]}
       <span ref={countRef} {...stylex.props(styles.drawerCount)}>
         0
       </span>
@@ -417,20 +408,20 @@ export function PileDrawer({
 export function PileFrame({
   stageRef,
   ready,
-  tidy,
-  parkedCount,
-  onParkCopy,
-  canParkCopy,
-  onParkCopyFocus,
+  sorted,
+  sortedCount,
+  onSortNext,
+  canSortNext,
+  onSortNextFocus,
   children,
 }: {
   stageRef: Ref<HTMLDivElement>;
   ready: boolean;
-  tidy: boolean;
-  parkedCount: number;
-  onParkCopy: () => void;
-  canParkCopy: boolean;
-  onParkCopyFocus: () => void;
+  sorted: boolean;
+  sortedCount: number;
+  onSortNext: () => void;
+  canSortNext: boolean;
+  onSortNextFocus: () => void;
   children: ReactNode;
 }) {
   return (
@@ -439,7 +430,7 @@ export function PileFrame({
         {children}
       </div>
       <div {...stylex.props(styles.caption, !ready && styles.stageHidden)}>
-        <p aria-hidden="true" {...stylex.props(styles.captionLine, tidy && styles.captionOff)}>
+        <p aria-hidden="true" {...stylex.props(styles.captionLine, sorted && styles.captionOff)}>
           <span {...stylex.props(styles.captionLead, styles.captionOwnLine)}>
             {PILE_COUNTS.total} skills in {PILE_COUNTS.folders} folders
           </span>
@@ -450,27 +441,25 @@ export function PileFrame({
             </span>
           ))}
         </p>
-        <p aria-hidden="true" {...stylex.props(styles.captionLine, !tidy && styles.captionOff)}>
+        <p aria-hidden="true" {...stylex.props(styles.captionLine, !sorted && styles.captionOff)}>
           <span {...stylex.props(styles.captionItem, styles.captionLead)}>
-            <span {...stylex.props(styles.dot, styles.dotColor(STATE_COLOR.ok))} />
-            {PILE_COUNTS.kept} kept
+            <span {...stylex.props(styles.dot, styles.dotColor(STATE_COLOR.described))} />
+            The model sees {PILE_COUNTS.described} of {PILE_COUNTS.total} with a description
           </span>
-          <span>{PILE_COUNTS.broken} fixed</span>
-          <span>{PILE_COUNTS.outdated} updated</span>
         </p>
         {/* Pointer users click a chip. This control is the keyboard path, so it shows on focus. */}
         <button
           type="button"
-          aria-disabled={!canParkCopy}
-          onClick={onParkCopy}
-          onFocus={onParkCopyFocus}
-          {...stylex.props(styles.parkCopy, !canParkCopy && styles.parkCopyDone)}
+          aria-disabled={!canSortNext}
+          onClick={onSortNext}
+          onFocus={onSortNextFocus}
+          {...stylex.props(styles.sortNext, !canSortNext && styles.sortNextDone)}
         >
-          Park a copy
+          Sort a skill
         </button>
       </div>
       <p {...stylex.props(styles.visuallyHidden)} aria-live="polite" aria-atomic="true">
-        {tidy ? TIDY_SUMMARY : `${MESSY_SUMMARY} ${parkedCount} parked.`}
+        {sorted ? SORTED_SUMMARY : `${MESSY_SUMMARY} ${sortedCount} sorted.`}
       </p>
     </div>
   );
@@ -518,7 +507,7 @@ const styles = stylex.create({
     textAlign: { default: "start", "@media (max-width: 600px)": "center" },
   },
   captionItem: { alignItems: "center", display: "inline-flex", gap: 6 },
-  parkCopy: {
+  sortNext: {
     backgroundColor: siteTokens.surface,
     borderColor: siteTokens.border,
     borderRadius: 999,
@@ -541,7 +530,7 @@ const styles = stylex.create({
     transform: { default: "none", "@media (max-width: 1080px)": "translateX(-50%)" },
     whiteSpace: "nowrap",
   },
-  parkCopyDone: { color: siteTokens.muted, cursor: "default" },
+  sortNextDone: { color: siteTokens.muted, cursor: "default" },
   frame: { textAlign: "center", width: "100%" },
   stage: {
     height: { default: 480, "@media (max-width: 600px)": 440 },
@@ -581,20 +570,11 @@ const styles = stylex.create({
     width: 7,
   },
   dotColor: (color: string) => ({ backgroundColor: color }),
-  badge: {
-    backgroundColor: "oklch(0.8 0.15 80 / .18)",
-    borderRadius: 999,
-    color: "oklch(0.8 0.15 80)",
-    fontSize: 10,
-    fontWeight: 650,
-    paddingInline: 6,
-  },
   meta: {
     color: siteTokens.muted,
     fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif",
     fontSize: 11,
   },
-  metaResolved: { color: "oklch(0.75 0.17 150)" },
   mascot: {
     backgroundColor: "transparent",
     borderRadius: 32,
@@ -631,6 +611,9 @@ const styles = stylex.create({
   },
   mascotSize: (size: number) => ({ width: size }),
   drawer: {
+    alignItems: "center",
+    display: "inline-flex",
+    gap: 6,
     backgroundColor: siteTokens.surface,
     borderColor: siteTokens.border,
     borderRadius: 999,

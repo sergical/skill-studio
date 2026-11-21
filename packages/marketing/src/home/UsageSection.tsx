@@ -40,7 +40,7 @@ const modes: ReadonlyArray<{
     id: "cli",
     label: "CLI",
     icon: Terminal,
-    blurb: "Check every skill from a terminal.",
+    blurb: "See what the model sees, from a terminal.",
     title: "zsh — ~/projects",
   },
   {
@@ -54,17 +54,29 @@ const modes: ReadonlyArray<{
 
 const scripts = {
   cli: [
+    // The same made-up library of 31 skills in every command. The three listing counts keep
+    // the measured ratio of 49 described, 107 name only and 129 hidden.
+    { text: "$ npx skill-studio@latest listing", typed: true, pause: 380 },
+    {
+      text: "claude-code global: Described 5, truncated 0, name only 12, omitted 0, hidden 14.",
+      tone: "muted",
+    },
+    { text: "  described  commit" },
+    { text: "  name only  writing-skills" },
+    { text: "  hidden     deploy-preview" },
+    { text: "  …", tone: "muted", pause: 520 },
+    { text: "$ npx skill-studio@latest sessions", typed: true, pause: 380 },
+    { text: "Listed in nearly every session, never used:", tone: "muted" },
+    { text: "  release-notes   name only 100  used 0" },
+    { text: "Possibly missed (a guess):", tone: "warn" },
+    { text: "  writing-skills  name only 100  missed 1", pause: 520 },
     { text: "$ npx skill-studio@latest diagnose", typed: true, pause: 380 },
-    { text: "Issues:", tone: "muted" },
-    { text: "  [error] broken link, pdf-tools: the folder it points at is gone", tone: "error" },
-    { text: "  [warning] header can be fixed, motion: name is missing", tone: "warn" },
-    { text: "  [warning] copies differ, writing-skills: 2 copies", tone: "warn", pause: 520 },
+    {
+      text: "  [error] broken link, pdf-tools: the folder it points at is gone",
+      tone: "error",
+      pause: 520,
+    },
     { text: "$ npx skill-studio@latest usage", typed: true, pause: 380 },
-    { text: "Not used (last 30 days):", tone: "muted" },
-    { text: "  release-notes   last used never  (0 uses all time)" },
-    { text: "  deploy-preview  last used never  (0 uses all time)" },
-    { text: "  pdf-tools       last used 2026-08-21  (4 uses all time)" },
-    { text: "  …", tone: "muted", pause: 260 },
     { text: "12 of 31 skills not used in 30 days", tone: "accent" },
   ],
   mcp: [
@@ -87,8 +99,8 @@ const scripts = {
 // picks its line, adds the server and runs a first check.
 const commands = {
   cli: {
-    text: "npx skill-studio@latest diagnose",
-    copy: "npx skill-studio@latest diagnose",
+    text: "npx skill-studio@latest listing",
+    copy: "npx skill-studio@latest listing",
     label: "Copy command",
     docs: CLI_DOCS_URL,
   },
