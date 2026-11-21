@@ -122,6 +122,34 @@ fn exercise(flow: &str, surface: Surface) {
             assert_eq!(result["data"]["rows"][0]["name"], "gamma");
         }
 
+        "Library table with a project" => {
+            let project = tempfile::tempdir().unwrap();
+            let skill = project.path().join(".agents/skills/delta");
+            std::fs::create_dir_all(&skill).unwrap();
+            std::fs::write(skill.join("SKILL.md"), Fixture::md("delta", "Project")).unwrap();
+            let path = project.path().to_str().unwrap();
+            let result = f.call(
+                &["library", "--all", "--project", path],
+                "library",
+                "library",
+                &json!({"all": true, "project_path": path}),
+            );
+            let names: Vec<&str> = result["data"]["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|row| row["name"].as_str())
+                .collect();
+            assert!(
+                names.contains(&"delta"),
+                "the project's skill is missing: {names:?}"
+            );
+            assert!(
+                names.contains(&"gamma"),
+                "the home skill is missing: {names:?}"
+            );
+        }
+
         "Usage history" => {
             for root in [
                 ".claude/projects/work",
@@ -452,6 +480,7 @@ macro_rules! executable_coverage {
 // Failure means a headless adapter loses evidence from the shared report.
 executable_coverage! {
     "Library table" => (cli_library_reports_shared_skill, mcp_library_reports_shared_skill),
+    "Library table with a project" => (cli_library_with_a_project_reports_its_skills_or_names_the_missing_one, mcp_library_with_a_project_reports_its_skills_or_names_the_missing_one),
     "Usage history" => (cli_usage_history_counts_uses_or_names_the_missing_evidence, mcp_usage_history_counts_uses_or_names_the_missing_evidence),
     "Invocation policy" => (cli_invocation_manual_sets_both_keys_or_names_the_auto_copy, mcp_invocation_manual_sets_both_keys_or_names_the_auto_copy),
     "Invocation check" => (cli_invocation_check_reports_mismatch_or_names_the_missing_policy, mcp_invocation_check_reports_mismatch_or_names_the_missing_policy),
