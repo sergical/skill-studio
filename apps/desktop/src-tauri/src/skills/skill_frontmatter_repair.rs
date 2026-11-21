@@ -1166,9 +1166,7 @@ mod tests {
                 expected
             );
 
-            store
-                .restore_with_lease(&home_guard(&skill), "repair", false)
-                .unwrap();
+            store.restore(&home_guard(&skill), "repair", false).unwrap();
 
             assert_eq!(
                 fs::read(skill.join("SKILL.md")).unwrap(),
@@ -1375,11 +1373,11 @@ mod tests {
         fs::write(skill.join("SKILL.md"), "external drift").unwrap();
         let lease = home_guard(&skill);
         assert!(store
-            .restore_with_lease(&lease, "repair-2", false)
+            .restore(&lease, "repair-2", false)
             .unwrap_err()
             .contains("has changed"));
         fs::write(skill.join("SKILL.md"), intent.proposed_content).unwrap();
-        store.restore_with_lease(&lease, "repair-2", false).unwrap();
+        store.restore(&lease, "repair-2", false).unwrap();
         assert_eq!(
             fs::read_to_string(skill.join("SKILL.md")).unwrap(),
             malformed()

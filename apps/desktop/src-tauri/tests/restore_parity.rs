@@ -217,7 +217,7 @@ fn desktop_restore(
     force: bool,
 ) -> Result<String, String> {
     let lease = WriteLease::with_lease_root(home.join(".leases")).try_acquire(home)?;
-    store.restore_with_lease(&lease, event_id, force)
+    store.restore(&lease, event_id, force)
 }
 
 /// Applies the one safe deterministic repair to `skill_md` through the

@@ -18,6 +18,7 @@ use super::skill_dto::{Deployment, LifecycleTarget, SkillEventDto};
 use super::skill_materialize;
 use super::skill_path_validation::validate_skill_dir_name;
 use super::skill_refresh::{self, SkillRefreshState, SkillSnapshot};
+use super::write_lease::{WriteLease, WriteLeaseGuard};
 use tauri::Manager;
 
 pub struct EventStoreState(
@@ -42,38 +43,33 @@ impl Drop for RecoveryReady {
 }
 
 impl EventStoreState {
-    /// Holds the command gate before publishing state. Recovery may wait for
-    /// another writer; commands wait on this same mutex until it finishes.
+    /// Recovery owns the store until it finishes. Commands wait on the outcome
+    /// before taking any lease or locking the published store.
     pub fn with_recovery(
         store: Option<EventStore>,
         recover: impl FnOnce(&EventStore) -> Result<(), String> + Send + 'static,
     ) -> Result<Self, String> {
-        let state = std::sync::Arc::new(Mutex::new(store));
+        let state = std::sync::Arc::new(Mutex::new(None));
         let worker_state = state.clone();
         let completed = std::sync::Arc::new(std::sync::OnceLock::new());
         let worker_completed = completed.clone();
-        let (started, ready) = std::sync::mpsc::sync_channel(0);
         std::thread::Builder::new()
             .name("skill-studio-recovery".into())
             .spawn(move || {
                 let _ready = RecoveryReady(worker_completed.clone());
-                if let Ok(guard) = worker_state.lock() {
-                    if started.send(()).is_err() {
-                        return;
+                let outcome = match store.as_ref().map_or(Ok(()), recover) {
+                    Ok(()) => StartupRecoveryOutcome::Completed,
+                    Err(error) => {
+                        eprintln!("[event_store] startup recovery failed: {error}");
+                        StartupRecoveryOutcome::Failed(error)
                     }
-                    let result = guard.as_ref().map_or(Ok(()), recover);
-                    let outcome = match result {
-                        Ok(()) => StartupRecoveryOutcome::Completed,
-                        Err(error) => {
-                            eprintln!("[event_store] startup recovery failed: {error}");
-                            StartupRecoveryOutcome::Failed(error)
-                        }
-                    };
+                };
+                if let Ok(mut published_store) = worker_state.lock() {
+                    *published_store = store;
                     let _ = worker_completed.set(outcome);
                 }
             })
             .map_err(|error| error.to_string())?;
-        ready.recv().map_err(|error| error.to_string())?;
         Ok(Self(state, completed))
     }
 
@@ -325,18 +321,19 @@ fn core_restore_event_at(
 /// Undoes one event against `store`, rooted at `home`/`data_root`. Dispatches
 /// by the kind that actually owns the event's inverse shape
 /// (`owning_restore_kind`): desktop-written kinds go through
-/// `EventStore::restore` under the desktop's own `write_lease`; every other
+/// `EventStore::restore` under the desktop's own write lease; every other
 /// kind goes through the core's `ops::restore_event`, which manages its own
-/// lease and must not be called while `write_lease` is held. Refuses an
+/// lease and must not be called while the desktop holds one. Refuses an
 /// `explode_shared_dir` restore while any of its skills are individually
 /// disabled (`restore_guard_for_explode`), and unregisters the materialized
 /// root once such a restore succeeds.
 ///
-/// Free of `tauri::AppHandle` so both the real command below and tests can
-/// call it directly against a tempdir-backed `EventStore` and `home`,
-/// mirroring the `_with_runtime` seam `park_with_runtime` established. `pub`
-/// (not `pub(crate)`) so `tests/undo_activity_history.rs` can drive it the
-/// same way `tests/park_parity.rs` drives `park_with_runtime`.
+/// The desktop lease is taken before the row is read, and held until the
+/// restore event is finished and the backup retention has run, so no read
+/// of the row and no write it leads to happens outside it.
+///
+/// Integration tests use this entry point with an isolated store. The
+/// desktop command takes the same lease before locking its shared store.
 pub fn restore_event_with_runtime(
     store: &EventStore,
     home: &Path,
@@ -344,6 +341,26 @@ pub fn restore_event_with_runtime(
     event_id: &str,
     force: bool,
 ) -> Result<(), String> {
+    let mutation = WriteLease::for_data_root(data_root).try_acquire(home)?;
+    let desktop_restored =
+        restore_desktop_event(store, home, data_root, event_id, force, &mutation)?;
+    drop(mutation);
+    if desktop_restored {
+        return Ok(());
+    }
+    core_restore_event_at(home, data_root, event_id, force)
+}
+
+// Returns false for a core-owned event. The caller releases both desktop
+// locks before calling core, which acquires its own write lease.
+fn restore_desktop_event(
+    store: &EventStore,
+    home: &Path,
+    data_root: &Path,
+    event_id: &str,
+    force: bool,
+    mutation: &WriteLeaseGuard,
+) -> Result<bool, String> {
     let target = store
         .get(event_id)?
         .ok_or_else(|| format!("Event {event_id} not found"))?;
@@ -358,11 +375,9 @@ pub fn restore_event_with_runtime(
                     .to_string(),
             );
         }
-        let write_lease = super::write_lease::WriteLease::default();
-        let guard = write_lease.try_acquire(home)?;
-        super::skill_independent_copy::restore_independent_copy(store, home, &target, &guard)?;
-        store.retain_backups(guard.as_exclusive_guard());
-        return Ok(());
+        super::skill_independent_copy::restore_independent_copy(store, home, &target, mutation)?;
+        store.retain_backups(mutation.as_exclusive_guard());
+        return Ok(true);
     }
 
     // A row with a `backup_dir` is dispatched by which root actually has its
@@ -378,22 +393,38 @@ pub fn restore_event_with_runtime(
         None => DESKTOP_OWNED_KINDS.contains(&owning_restore_kind(store, &target).as_str()),
     };
     if !desktop_owns {
-        // `ops::restore_event` manages its own lease; holding `write_lease`
-        // across this call would self-deadlock (see
-        // `core_restore_event_at`'s doc comment).
-        return core_restore_event_at(home, data_root, event_id, force);
+        return Ok(false);
     }
 
-    let write_lease = super::write_lease::WriteLease::default();
-    let retention_guard = write_lease.try_acquire(home)?;
-    store.restore_with_lease(&retention_guard, event_id, force)?;
-    store.retain_backups(retention_guard.as_exclusive_guard());
+    store.restore(mutation, event_id, force)?;
+    store.retain_backups(mutation.as_exclusive_guard());
     if target.kind == "explode_shared_dir" {
         if let Some(root) = target.payload.get("root").and_then(|v| v.as_str()) {
             store.unregister_materialized_root(Path::new(root))?;
         }
     }
-    Ok(())
+    Ok(true)
+}
+
+fn restore_event_with_state(
+    state: &EventStoreState,
+    home: &Path,
+    data_root: &Path,
+    event_id: &str,
+    force: bool,
+    acquire_lease: impl FnOnce() -> Result<WriteLeaseGuard, String>,
+) -> Result<(), String> {
+    // Match materialize, link repair and frontmatter repair: lease first.
+    let desktop_restored = {
+        let mutation = acquire_lease()?;
+        let guard = locked_store(state)?;
+        let store = guard.as_ref().ok_or("Event store is unavailable")?;
+        restore_desktop_event(store, home, data_root, event_id, force, &mutation)?
+    };
+    if desktop_restored {
+        return Ok(());
+    }
+    core_restore_event_at(home, data_root, event_id, force)
 }
 
 /// See [`restore_event_with_runtime`] for the dispatch this wraps.
@@ -409,10 +440,9 @@ pub async fn restore_skill_event(
         let event_store = app.state::<EventStoreState>();
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let data_root = super::core_runtime::data_root();
-        let guard = locked_store(&event_store)?;
-        let store = guard.as_ref().ok_or("Event store is unavailable")?;
-        restore_event_with_runtime(store, &home, &data_root, &event_id, force)?;
-        drop(guard);
+        restore_event_with_state(&event_store, &home, &data_root, &event_id, force, || {
+            WriteLease::for_data_root(&data_root).try_acquire(&home)
+        })?;
 
         skill_refresh::request_snapshot_rebuild(&app);
         Ok(())
@@ -532,17 +562,26 @@ pub async fn materialize_harness_root(
                 ));
             }
 
-            let guard = locked_store(&event_store)?;
-            let store = guard.as_ref().ok_or("Event store is unavailable")?;
-            skill_materialize::explode_shared_dir(store, &root_path, &harness)?;
-            store.retain_backups(retention_guard.as_exclusive_guard());
-            drop(guard);
+            materialize_root_under_lease(&event_store, &root_path, &harness, &retention_guard)?;
 
             skill_refresh::request_snapshot_rebuild(&app);
             Ok(())
         },
     )
     .await
+}
+
+fn materialize_root_under_lease(
+    state: &EventStoreState,
+    root: &Path,
+    harness: &str,
+    lease: &WriteLeaseGuard,
+) -> Result<(), String> {
+    let guard = locked_store(state)?;
+    let store = guard.as_ref().ok_or("Event store is unavailable")?;
+    skill_materialize::explode_shared_dir(store, root, harness)?;
+    store.retain_backups(lease.as_exclusive_guard());
+    Ok(())
 }
 
 /// Converts a whole harness root and turns off the exact selected deployment as one durable operation.
@@ -625,6 +664,7 @@ pub async fn materialize_harness_root_then_disable(
                     scope: &deployment.scope,
                     project_path: deployment.project_path.as_deref(),
                 },
+                &retention_guard,
             )?;
             store.retain_backups(retention_guard.as_exclusive_guard());
             drop(guard);
@@ -940,8 +980,8 @@ mod tests {
         .unwrap();
         recovery_entered.recv().unwrap();
         assert!(
-            state.0.try_lock().is_err(),
-            "recovery must own the command gate before state is published"
+            state.0.try_lock().is_ok_and(|store| store.is_none()),
+            "recovery must own the store without holding the command mutex"
         );
         let ready = state.recovery_ready();
         assert!(ready.get().is_none());
@@ -973,6 +1013,74 @@ mod tests {
             .err()
             .expect("failed recovery must keep store commands closed");
         assert!(error.contains("fixture recovery failed"), "{error}");
+    }
+
+    #[test]
+    fn undo_waits_for_materialize_and_holds_the_lease_through_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path();
+        let data_root = home.join("data");
+        let lease_root = data_root.join("leases");
+        let mut store = EventStore::open(&home.join("app-data")).unwrap();
+        let shared = home.join(".agents/skills");
+        fs::create_dir_all(&shared).unwrap();
+        let root = home.join("linked-skills");
+        symlink(&shared, &root).unwrap();
+        let removed_link = home.join("broken-link");
+        symlink(home.join("missing"), &removed_link).unwrap();
+        skill_materialize::repair_remove_link(&store, &removed_link, "fixture", "claude-code")
+            .unwrap();
+        let event_id = store.list(1, None).unwrap()[0].id.clone();
+        let (observed, history) = std::sync::mpsc::channel();
+        let (probe_root, probe_home) = (lease_root.clone(), home.to_path_buf());
+        store.observe_history = Some(Box::new(move |phase| {
+            if std::thread::current().name() == Some("undo-fixture") {
+                assert!(
+                    super::super::write_lease::current_thread_holds_home_lease()
+                        && super::super::write_lease::exclusive_lease_is_held(
+                            &probe_root,
+                            &probe_home
+                        ),
+                    "Undo must hold the fixture home's lease at history {phase}"
+                );
+                observed.send(phase.to_owned()).unwrap();
+            }
+        }));
+        let state = EventStoreState::with_recovery(Some(store), |_| Ok(())).unwrap();
+        state.recovery_ready().wait();
+
+        let materialize_lease = WriteLease::with_lease_root(lease_root)
+            .try_acquire(home)
+            .unwrap();
+        let (waiting, undo_at_lease) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let (state, data_root, event_id) = (&state, &data_root, &event_id);
+            let undo = std::thread::Builder::new()
+                .name("undo-fixture".into())
+                .spawn_scoped(scope, move || {
+                    restore_event_with_state(state, home, data_root, event_id, false, || {
+                        waiting.send(()).unwrap();
+                        WriteLease::for_data_root(data_root).try_acquire(home)
+                    })
+                })
+                .unwrap();
+            undo_at_lease.recv().unwrap();
+            materialize_root_under_lease(state, &root, "claude-code", &materialize_lease).unwrap();
+            drop(materialize_lease);
+            undo.join()
+                .unwrap()
+                .expect("Undo must finish after materialize");
+        });
+
+        let phases: Vec<_> = history.try_iter().collect();
+        assert_eq!(phases.first().map(String::as_str), Some("read"));
+        assert_eq!(phases.last().map(String::as_str), Some("finish"));
+        assert!(fs::symlink_metadata(removed_link).unwrap().is_symlink());
+        let guard = locked_store(&state).unwrap();
+        let rows = guard.as_ref().unwrap().list(50, Some("fixture")).unwrap();
+        assert!(rows
+            .iter()
+            .any(|row| row.kind == "restore" && row.status == "done"));
     }
 
     #[test]
