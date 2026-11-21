@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, ErrorKind};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use skill_studio_host::{copy_confined_entry, open_confined_child, open_confined_dir, ConfinedDir};
 
@@ -11,7 +11,7 @@ use super::skill_refresh::effective_project_paths;
 
 /// The files an Undo can change, bound before any of its filesystem writes.
 pub(super) struct UndoFiles {
-    paths: BTreeMap<PathBuf, UndoPath>,
+    paths: BTreeMap<PathBuf, (PathBuf, UndoPath)>,
 }
 
 impl UndoFiles {
@@ -19,6 +19,7 @@ impl UndoFiles {
         home: &Path,
         app_data: &Path,
         paths: impl IntoIterator<Item = &'a Path>,
+        linked_parents: &BTreeMap<PathBuf, PathBuf>,
     ) -> Result<Self, String> {
         let paths: Vec<_> = paths.into_iter().collect();
         let mut roots = skill_roots(home, &[]);
@@ -28,9 +29,8 @@ impl UndoFiles {
         {
             roots = skill_roots(home, &effective_project_paths(home)?);
         }
-        let mut bound = BTreeMap::new();
-        for path in paths {
-            let physical = roots
+        let approved = |path: &Path| {
+            roots
                 .iter()
                 .find_map(|root| {
                     let anchor = root.project_path.as_deref().unwrap_or(home);
@@ -44,15 +44,41 @@ impl UndoFiles {
                         app_data,
                     )
                 })
-                .ok_or_else(|| {
-                    format!(
-                        "Undo refused: {} is outside the backup and skill roots",
-                        path.display()
-                    )
-                })?;
-            let entry = UndoPath::bind(&physical)
-                .map_err(|error| format!("Undo refused: {}: {error}", path.display()))?;
-            bound.insert(path.to_path_buf(), entry);
+        };
+
+        let mut bound = BTreeMap::new();
+        for path in paths {
+            let refused = |reason| format!("Undo refused: {}: {reason}", path.display());
+            if path.components().any(|part| part == Component::ParentDir) {
+                return Err(refused("parent traversal is outside the approved roots"));
+            }
+            let (mut physical, root) =
+                approved(path).ok_or_else(|| refused("outside the backup and skill roots"))?;
+            let entry = match UndoPath::bind(&physical) {
+                Err(error) if error.kind() == ErrorKind::NotADirectory => {
+                    let parent = physical
+                        .parent()
+                        .ok_or_else(|| refused("path has no parent"))?;
+                    let real_parent = canonical_undo_parent(parent)
+                        .map_err(|e| format!("Undo refused: {}: {e}", path.display()))?;
+                    let leaf = physical
+                        .file_name()
+                        .ok_or_else(|| refused("path has no file name"))?;
+                    let resolved = real_parent.join(leaf);
+                    if approved(&real_parent).is_none()
+                        && !recorded_root_link(path, parent, &real_parent, &root, linked_parents)
+                    {
+                        return Err(refused(
+                            "directory link points outside the backup and skill roots",
+                        ));
+                    }
+                    physical = resolved;
+                    UndoPath::bind(&physical)
+                }
+                entry => entry,
+            }
+            .map_err(|error| format!("Undo refused: {}: {error}", path.display()))?;
+            bound.insert(path.to_path_buf(), (physical, entry));
         }
         Ok(Self { paths: bound })
     }
@@ -60,28 +86,60 @@ impl UndoFiles {
     pub(super) fn get(&self, path: &Path) -> Result<&UndoPath, String> {
         self.paths
             .get(path)
+            .map(|(_, entry)| entry)
             .ok_or_else(|| format!("Undo refused: {} has no bound directory", path.display()))
+    }
+    /// The directory selected at bind time for a restore's own inverse.
+    pub(super) fn bound_parent(&self, path: &Path) -> Option<&Path> {
+        self.paths.get(path)?.0.parent()
     }
 }
 
 // Resolve only the configured scope anchor, never the skill or backup root.
 // Recorded paths may use either spelling (for instance /var or /private/var).
-fn approved_path(path: &Path, root: &Path, anchor: &Path) -> Option<PathBuf> {
+fn approved_path(path: &Path, root: &Path, anchor: &Path) -> Option<(PathBuf, PathBuf)> {
     let physical_root = root
         .strip_prefix(anchor)
         .ok()
-        .and_then(|relative| anchor.canonicalize().ok().map(|base| base.join(relative)));
-    if path.starts_with(root) {
-        Some(
-            physical_root
-                .as_deref()
-                .unwrap_or(root)
-                .join(path.strip_prefix(root).ok()?),
-        )
-    } else if path.starts_with(physical_root.as_ref()?) {
-        Some(path.to_path_buf())
+        .and_then(|relative| anchor.canonicalize().ok().map(|base| base.join(relative)))
+        .unwrap_or_else(|| root.to_path_buf());
+    if let Ok(relative) = path.strip_prefix(root) {
+        Some((physical_root.join(relative), physical_root))
+    } else if path.starts_with(&physical_root) {
+        Some((path.to_path_buf(), physical_root))
     } else {
         None
+    }
+}
+
+// A recorded outside alias is valid only for a link in the root's own
+// directory chain. The part below the root must resolve without redirection.
+fn recorded_root_link(
+    path: &Path,
+    parent: &Path,
+    real_parent: &Path,
+    root: &Path,
+    linked_parents: &BTreeMap<PathBuf, PathBuf>,
+) -> bool {
+    if linked_parents.get(path).map(PathBuf::as_path) != Some(real_parent) {
+        return false;
+    }
+    let Ok(relative) = parent.strip_prefix(root) else {
+        // The inverse may replace the approved root entry itself.
+        return root.parent() == Some(parent);
+    };
+    root.canonicalize()
+        .is_ok_and(|real_root| real_root.join(relative) == real_parent)
+}
+
+/// Resolves the nearest existing Undo parent and keeps any missing suffix.
+pub(super) fn canonical_undo_parent(parent: &Path) -> io::Result<PathBuf> {
+    match parent.canonicalize() {
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            let ancestor = parent.parent().ok_or(error)?;
+            Ok(canonical_undo_parent(ancestor)?.join(parent.file_name().unwrap_or_default()))
+        }
+        result => result,
     }
 }
 

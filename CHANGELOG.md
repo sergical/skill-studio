@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
-- Desktop Undo confines file changes to approved skill and backup directories, even if a directory is replaced by a symlink.
+- Desktop Undo confines file changes to approved skill and backup directories. It follows a skills directory link when it leads to another approved root or matches the location recorded with the event.
 - CLI and MCP pack updates reject plans with more than 100 update steps across all scopes before running an owner tool.
 - Pack updates report each tool's own result when skills.sh and dotagents claim the same skill name in one scope.
 

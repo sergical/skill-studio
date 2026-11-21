@@ -23,6 +23,7 @@
 // recreating bytes cannot recreate the matching ownership metadata.
 // ============================================================================
 
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -35,8 +36,10 @@ use skill_studio_core::events::EventStatus as CoreEventStatus;
 use skill_studio_host::{open_confined_child, write_confined_file, ConfinedDir};
 
 use super::skill_md_write::{begin_skill_md_write_transaction, SkillMdWriteTransaction};
-use super::undo_files::{UndoFiles, UndoPath};
+use super::undo_files::{canonical_undo_parent, UndoFiles, UndoPath};
 use super::write_lease::WriteLeaseGuard;
+
+const UNDO_LINKED_PARENTS: &str = "undo_linked_parents";
 
 /// Opens (creating if absent) the event store DB at `db_path` and ensures
 /// its schema exists.
@@ -382,11 +385,46 @@ impl EventStore {
 
     /// Inserts a `pending` row for `id`.
     pub fn record(&self, id: &str, draft: &EventDraft) -> Result<(), String> {
+        self.record_with_bound_paths(id, draft, None)
+    }
+
+    fn record_with_bound_paths(
+        &self,
+        id: &str,
+        draft: &EventDraft,
+        files: Option<&UndoFiles>,
+    ) -> Result<(), String> {
         let ts = Utc::now().to_rfc3339();
         let payload_json = serde_json::to_string(&draft.payload)
             .map_err(|e| format!("Failed to serialize payload: {e}"))?;
-        let inverse_json = draft
-            .inverse
+        let mut inverse_value = draft.inverse.clone();
+        if let Some(json) = &mut inverse_value {
+            if let Ok(inverse) = serde_json::from_value::<InverseOp>(json.clone()) {
+                let parents: BTreeMap<_, _> = inverse
+                    .touched_paths()
+                    .into_iter()
+                    .filter_map(|path| {
+                        let parent = path.parent()?;
+                        let physical = match files {
+                            Some(files) => files.bound_parent(path)?.to_path_buf(),
+                            None => canonical_undo_parent(parent).ok()?,
+                        };
+                        (physical != parent).then_some((path, physical))
+                    })
+                    .collect();
+                if let Some(object) = json.as_object_mut() {
+                    object.remove(UNDO_LINKED_PARENTS);
+                    if !parents.is_empty() {
+                        object.insert(
+                            UNDO_LINKED_PARENTS.to_string(),
+                            serde_json::to_value(parents)
+                                .map_err(|e| format!("Failed to record Undo link parents: {e}"))?,
+                        );
+                    }
+                }
+            }
+        }
+        let inverse_json = inverse_value
             .as_ref()
             .map(serde_json::to_string)
             .transpose()
@@ -680,21 +718,21 @@ impl EventStore {
             .inverse
             .clone()
             .ok_or_else(|| format!("Event {target_id} has no inverse and cannot be restored"))?;
+        let linked_parents = inverse_value
+            .get(UNDO_LINKED_PARENTS)
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|e| format!("Failed to read Undo link parents: {e}"))?
+            .unwrap_or_default();
         let inverse: InverseOp = serde_json::from_value(inverse_value)
             .map_err(|e| format!("Failed to parse inverse for {target_id}: {e}"))?;
-
-        let mut paths = vec![inverse.destination()];
-        match &inverse {
-            InverseOp::MoveBack { from, .. } => paths.push(from),
-            InverseOp::UndistributeFromShared {
-                copies, symlinks, ..
-            } => {
-                paths.extend(copies.iter().map(PathBuf::as_path));
-                paths.extend(symlinks.iter().map(|(link, _)| link.as_path()));
-            }
-            _ => {}
-        }
-        let files = UndoFiles::bind(home, &self.app_data, paths)?;
+        let files = UndoFiles::bind(
+            home,
+            &self.app_data,
+            inverse.touched_paths(),
+            &linked_parents,
+        )?;
         let restore_id = allocate_id();
         let backup = self.bind_backup(&restore_id)?;
         let source = match &inverse {
@@ -805,7 +843,7 @@ impl EventStore {
             pre_fingerprint: current_fp,
             post_fingerprint: None,
         };
-        self.record(
+        self.record_with_bound_paths(
             restore_id,
             &EventDraft {
                 kind: "restore".to_string(),
@@ -821,6 +859,7 @@ impl EventStore {
                 backup_dir: Some(backup_dir),
                 restorable: true,
             },
+            Some(files),
         )?;
 
         // Phase 4: apply the target event's inverse.
@@ -1022,7 +1061,7 @@ impl EventStore {
             pre_fingerprint: fingerprint_path(shared_dir),
             post_fingerprint: None,
         };
-        self.record(
+        self.record_with_bound_paths(
             restore_id,
             &EventDraft {
                 kind: "restore".to_string(),
@@ -1038,6 +1077,7 @@ impl EventStore {
                 backup_dir: Some(backup_dir),
                 restorable: true,
             },
+            Some(files),
         )?;
 
         // Phase 4: put the shared dir back, delete the copies, recreate the
@@ -1493,6 +1533,21 @@ impl InverseOp {
             InverseOp::RestoreBackup { path, .. } => path,
             InverseOp::UndistributeFromShared { shared_dir, .. } => shared_dir,
         }
+    }
+
+    fn touched_paths(&self) -> Vec<&Path> {
+        let mut paths = vec![self.destination()];
+        match self {
+            Self::MoveBack { from, .. } => paths.push(from),
+            Self::UndistributeFromShared {
+                copies, symlinks, ..
+            } => {
+                paths.extend(copies.iter().map(PathBuf::as_path));
+                paths.extend(symlinks.iter().map(|(link, _)| link.as_path()));
+            }
+            _ => {}
+        }
+        paths
     }
 
     fn post_fingerprint(&self) -> Option<&String> {

@@ -452,8 +452,8 @@ fn a_desktop_written_repair_event_still_appears_in_history_and_still_undoes() {
 // old desktop-written row looks like today.
 #[test]
 fn a_legacy_move_aside_disable_row_undoes_through_the_desktop() {
-    let home = unique_temp_dir("undo_move_aside_disable");
-    std::fs::create_dir_all(&home).unwrap();
+    let fixture = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let home = fixture.path().to_path_buf();
     let data_root = data_root_for(&home);
     let skill = "iota-move-aside";
     let claude_dir = home.join(CLAUDE_ROOT_RELATIVE);
@@ -469,7 +469,7 @@ fn a_legacy_move_aside_disable_row_undoes_through_the_desktop() {
         from: moved_aside.clone(),
         to: original.clone(),
         pre_fingerprint: fingerprint_path(&original),
-        post_fingerprint: None,
+        post_fingerprint: Some("absent".into()),
     };
     store
         .record(
@@ -493,14 +493,11 @@ fn a_legacy_move_aside_disable_row_undoes_through_the_desktop() {
     let dto = dto_from_row(&store, &home, &data_root, row.clone());
     assert!(dto.restorable);
 
-    restore_event_with_runtime(&store, &home, &data_root, &row.id, false).unwrap();
-    assert!(
-        original.is_file(),
-        "undo must move the skill back from its disabled path"
-    );
+    assert!(row.inverse.unwrap().get("undo_linked_parents").is_none());
+    std::fs::write(&original, b"changed since the event").unwrap();
+    restore_event_with_runtime(&store, &home, &data_root, &row.id, true).unwrap();
+    assert_eq!(std::fs::read(original).unwrap(), b"disabled aside");
     assert!(std::fs::symlink_metadata(&moved_aside).is_err());
-
-    std::fs::remove_dir_all(&home).ok();
 }
 
 #[cfg(unix)]
@@ -1228,4 +1225,96 @@ fn reconcile_at_startup_interrupts_every_pending_row_and_leaves_done_rows_alone(
     );
 
     std::fs::remove_dir_all(&home).ok();
+}
+
+#[cfg(unix)]
+fn repair_link_then_undo(home: &Path, root: &Path) {
+    use std::fs;
+    use std::os::unix::fs::symlink;
+
+    fs::create_dir_all(root).unwrap();
+    let source = home.join(UNIVERSAL_ROOT_RELATIVE).join("original-skill");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    fs::write(&source, b"original skill bytes").unwrap();
+    let link = root.join("sample");
+    symlink(&source, &link).unwrap();
+    let data_root = data_root_for(home);
+    let store = desktop_store(home, &data_root);
+    repair_remove_link(&store, &link, "sample", "claude-code").unwrap();
+    assert!(fs::symlink_metadata(&link).is_err());
+    let row = store.list(1, None).unwrap().remove(0);
+    restore_event_with_runtime(&store, home, &data_root, &row.id, false).unwrap();
+    assert_eq!(fs::read_link(&link).unwrap(), source);
+    assert_eq!(fs::read(&link).unwrap(), b"original skill bytes");
+}
+
+#[cfg(unix)]
+#[test]
+fn undo_link_removal_through_a_whole_root_link() {
+    let home = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let root = home.path().join(CLAUDE_ROOT_RELATIVE);
+    let shared = home.path().join(UNIVERSAL_ROOT_RELATIVE);
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::create_dir(root.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(shared, &root).unwrap();
+    repair_link_then_undo(home.path(), &root);
+}
+
+#[cfg(unix)]
+#[test]
+fn undo_link_removal_through_a_dotfiles_link() {
+    for (directory, root) in [
+        (".agents", UNIVERSAL_ROOT_RELATIVE),
+        (".claude", CLAUDE_ROOT_RELATIVE),
+    ] {
+        let home = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let dotfiles = home.path().join("dotfiles");
+        std::fs::create_dir(&dotfiles).unwrap();
+        std::os::unix::fs::symlink(dotfiles, home.path().join(directory)).unwrap();
+        repair_link_then_undo(home.path(), &home.path().join(root));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn undo_restores_a_per_skill_link() {
+    let home = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    repair_link_then_undo(home.path(), &home.path().join(CLAUDE_ROOT_RELATIVE));
+}
+
+#[cfg(unix)]
+#[test]
+fn undo_restores_a_link_in_the_parked_root() {
+    let home = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    repair_link_then_undo(home.path(), &home.path().join(".agents/skills-parked"));
+}
+
+#[cfg(unix)]
+#[test]
+fn undo_restores_a_link_in_fork_storage() {
+    let home = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let root = skill_studio_core::scope::fork_storage_root(&home.path().join("app_data"));
+    repair_link_then_undo(home.path(), &root);
+}
+
+#[cfg(unix)]
+#[test]
+fn undo_restores_a_link_in_a_project_reached_through_a_symlink() {
+    use skill_studio_lib::skills::skill_fork_registry::{
+        write_fork_registry_with_lease_root, ForkRegistry,
+    };
+    let home = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let project = home.path().join("repo");
+    std::fs::create_dir(&project).unwrap();
+    let alias = home.path().join("alias");
+    std::os::unix::fs::symlink(project, &alias).unwrap();
+    let mut registry = ForkRegistry::default();
+    registry.projects.track([alias.clone()]);
+    write_fork_registry_with_lease_root(
+        home.path(),
+        &mut registry,
+        &data_root_for(home.path()).join("leases"),
+    )
+    .unwrap();
+    repair_link_then_undo(home.path(), &alias.join(CLAUDE_ROOT_RELATIVE));
 }
