@@ -146,20 +146,17 @@ pub(crate) fn compare(
 pub(crate) struct Move<'a> {
     pub scope: &'a RootScope,
     pub skill: &'a str,
+    /// The source it moves from, with `#ref` when its pack is pinned.
+    pub from: &'a str,
 }
 
-/// Records, before the skills move from `from` to `to`, that each one's
-/// original on `to` is `from`, replacing only an older record for `to`. A
-/// skill with a record of moving from `to` to `from` is moving back, so it
-/// gets no reverse record. Records for other sources stay, so a failed or
-/// undone move finds the one its lock row names. Returns true when every
-/// skill is moving back.
-pub(crate) fn record_moves(
-    rt: &Runtime,
-    from: &str,
-    to: &str,
-    moves: &[Move<'_>],
-) -> Result<bool, CoreError> {
+/// Records, before the skills move to `to`, that each one's original on `to`
+/// is its `from`, replacing only an older record for `to`. A skill with a
+/// record of moving from `to` to its `from` is moving back, so it gets no
+/// reverse record. Records for other sources stay, so a failed or undone
+/// move finds the one its lock row names. Returns true when every skill is
+/// moving back.
+pub(crate) fn record_moves(rt: &Runtime, to: &str, moves: &[Move<'_>]) -> Result<bool, CoreError> {
     let fs = rt.ports.fs.as_ref();
     let home = &rt.scope.home.lexical;
     let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope)?;
@@ -192,7 +189,7 @@ pub(crate) fn record_moves(
                 .to_string()
         };
         let moving_back = rows.iter().any(|row| {
-            same_source(&source_of(row, "source"), from)
+            same_source(&source_of(row, "source"), step.from)
                 && same_source(&source_of(row, "original"), to)
         });
         if moving_back {
@@ -200,7 +197,9 @@ pub(crate) fn record_moves(
         }
         all_back = false;
         rows.retain(|row| !same_source(&source_of(row, "source"), to));
-        rows.push(serde_json::json!({ "source": to, "original": from, "linked_at": linked_at }));
+        rows.push(
+            serde_json::json!({ "source": to, "original": step.from, "linked_at": linked_at }),
+        );
         scope.insert(step.skill.to_string(), serde_json::Value::Array(rows));
     }
     document.insert(
