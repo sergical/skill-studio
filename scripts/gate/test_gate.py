@@ -179,21 +179,29 @@ class GateTests(GitRepoFixture, unittest.TestCase):
         self.assertIn('no complete [owner.contract] text', self.risk()['needs_you'][0]['why'])
         self.assertEqual(self.risk(raise_to='stop', reason='Spends money')['needs_you'][-1]['ask'], 'Spends money')
 
+    def render_gate_comment(self, **kwargs):
+        jq = Path(gate.__file__).resolve().with_name('comment.jq')
+        return subprocess.check_output(['jq', '-r', '--arg', 'marker', '<!-- m -->', '-f', str(jq)],
+                                       input=json.dumps(self.risk(**kwargs)), text=True)
+
     def test_comment_says_the_decision_why_and_the_rule_to_change(self):
         self.cfg['owner'] = {'contract': {'ask': 'Change the API?', 'why': 'Clients break.'}}
         for i in range(12):
             self.write(f'contracts/{i:02}.json', '{}')
         self.write('contracts/(x)[y].json', '{}')
         self.commit()
-        risk = self.risk(raise_to='stop', reason='Spends money')
-        jq = Path(gate.__file__).resolve().with_name('comment.jq')
-        body = subprocess.run(['jq', '-r', '--arg', 'marker', '<!-- m -->', '-f', str(jq)], input=json.dumps(risk),
-                              text=True, capture_output=True, check=True).stdout
+        body = self.render_gate_comment(raise_to='stop', reason='Spends money')
         self.assertTrue(body.startswith('<!-- m -->\n## Needed from you and why\n\n**Decision:** Change the API?\n'
                                         '**Why you:** Clients break.\n**Change:** contracts\\/\\(x\\)\\[y\\]\\.json, contracts\\/00\\.json, '), body)
         self.assertIn(' and 3 more, matched by rule `contract` in `.gate/config.toml`.\n\n**Decision:** Spends money\n'
                       '**Why you:** An agent raised this PR to stop by hand.\n\nTo say yes, merge this PR.', body)
         self.assertNotIn('(x)[y]', body)
+
+    def test_comment_shows_filename_controls_on_one_line(self):
+        self.write('contracts/a\n\nFake approval\n\nb\r\t\x1b\u202e\u2028.json', '{}')
+        self.commit()
+        body = self.render_gate_comment()
+        self.assertIn('**Change:** contracts\\/a??Fake approval??b?????\\.json, matched by rule `contract`', body)
 
     def migrations(self):
         self.cfg['rules'].append({'id': 'database', 'paths': ['drizzle/**', 'drizzle.config.ts', 'schema.ts'], 'tier': 'stop'})
