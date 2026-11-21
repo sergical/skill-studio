@@ -2157,18 +2157,19 @@ fn update_all_runs_a_pinned_dotagents_skill_on_its_own_or_skips_the_new_ref() {
 
 /// `update_all_refuses_a_parked_dotagents_skill_after_an_install_or_runs_the_cli_for_it`:
 /// a parked skill that the earlier install would cover is still an error
-/// item, as it is for a single update. Fails when it reports success.
+/// item, as it is for a single update. Its live folder must stay absent.
 #[test]
 fn update_all_refuses_a_parked_dotagents_skill_after_an_install_or_runs_the_cli_for_it() {
     let home = unique_temp_dir("update_all_dotagents_parked");
     std::fs::create_dir_all(&home).unwrap();
     seed_installed_skill(&home, "delta", "v1");
-    seed_installed_skill(&home, "other", "v1");
     seed_dotagents_files(&home, DECLARED_TOML);
     let parked = home.join(".agents/skills-parked/other");
     std::fs::create_dir_all(&parked).unwrap();
     std::fs::write(parked.join("SKILL.md"), "parked").unwrap();
-    let spawner = Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2"));
+    // A scope-wide install recreates declared skills even when their live folders are absent.
+    let spawner =
+        Arc::new(FakeNpxUpdateSpawner::new(home.clone(), "v2").installing_new(&["other"]));
     let rt = runtime_with(&home, Arc::new(RealFs::new()), Some(spawner.clone()));
 
     let requests = vec![
@@ -2182,7 +2183,16 @@ fn update_all_refuses_a_parked_dotagents_skill_after_an_install_or_runs_the_cli_
     assert!(result.errors["other"].contains("is parked"));
     assert_eq!(spawner.recorded.lock().unwrap().len(), 1);
 
-    std::fs::remove_dir_all(&home).ok();
+    let live = dir_of(&home, "other");
+    let was_recreated = live.symlink_metadata().is_ok();
+    let parked_contents = std::fs::read_to_string(parked.join("SKILL.md")).unwrap();
+    std::fs::remove_dir_all(&home).unwrap();
+    assert!(
+        !was_recreated,
+        "dotagents recreated the parked skill at {}",
+        live.display()
+    );
+    assert_eq!(parked_contents, "parked");
 }
 
 const THREE_DECLARED_TOML: &str = "version = 1\n\n[[skills]]\nname = \"alpha\"\nsource = \"o/r\"\n\n[[skills]]\nname = \"beta\"\nsource = \"o/r\"\n\n[[skills]]\nname = \"gamma\"\nsource = \"o/r\"\n";
