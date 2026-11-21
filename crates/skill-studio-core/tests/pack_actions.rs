@@ -951,17 +951,42 @@ fn pack_switch_source_in_a_project_moves_the_project_lock_row_and_undo_restores_
     std::fs::remove_dir_all(&home).ok();
 }
 
-/// Given a project pack pinned to `release`, when it switches to a fork, then
-/// the recorded original keeps the pin, so `pack show --remote` reads the
-/// release branch; on failure the assert shows the original that was kept.
+/// Records each fetch's URL and ref, and answers with no skills.
+#[derive(Default)]
+struct RefRemote(std::sync::Mutex<Vec<(String, Option<String>)>>);
+
+impl PackRemote for RefRemote {
+    fn fetch(
+        &self,
+        url: &str,
+        git_ref: Option<&str>,
+        _: &dyn CancelToken,
+    ) -> Result<RemotePack, RemoteError> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((url.to_string(), git_ref.map(String::from)));
+        Ok(RemotePack {
+            commit: "c".to_string(),
+            skills: Vec::new(),
+        })
+    }
+}
+
+/// Given one source installed unpinned in the home and pinned to `release`
+/// in a project, when both switch to a fork, then each skill keeps its own
+/// original and pin, `pack show --remote` fetches `release` for the project,
+/// and a move back to the pinned original leaves no original; on failure the
+/// assert names the original or fetch that lost the pin.
 #[test]
-fn pack_switch_source_keeps_the_original_ref_pin() {
+fn pack_switch_source_keeps_each_scopes_ref_pin_and_a_move_back_matches_it() {
     let home = home("pack_switch_ref_pin");
+    installed_from_pack(&home, "alpha", "deadbeef");
     let project = home.join("proj");
-    write_skill(&project, "alpha");
+    write_skill(&project, "beta");
     std::fs::write(
         project.join("skills-lock.json"),
-        serde_json::to_vec(&serde_json::json!({"version": 1, "skills": {"alpha": {
+        serde_json::to_vec(&serde_json::json!({"version": 1, "skills": {"beta": {
             "source": "owner/pack", "sourceType": "github", "ref": "release", "computedHash": "x"
         }}}))
         .unwrap(),
@@ -974,28 +999,72 @@ fn pack_switch_source_keeps_the_original_ref_pin() {
         paths: vec![project.clone()],
     };
     let rt = runtime_in(&scope, &home, cli);
-    let request = PackSwitchSourceRequest {
-        project_path: Some(project.clone()),
-        ..switch("owner/pack", "me/fork", false)
-    };
 
-    let report = ops::pack_switch_source(&rt, &ctx(), &request).unwrap();
-
-    assert_eq!(states(&report), [("alpha".into(), "done")]);
-    let shown = ops::pack_show(
-        &rt,
-        &ctx(),
-        &PackShowRequest {
-            source: "me/fork".to_string(),
-            project_path: Some(project.clone()),
-            ..PackShowRequest::default()
-        },
-        None,
-    )
-    .unwrap();
+    let report =
+        ops::pack_switch_source(&rt, &ctx(), &switch("owner/pack", "me/fork", false)).unwrap();
     assert_eq!(
-        shown.packs[0].original.as_ref().map(|o| o.source.as_str()),
-        Some("owner/pack#release")
+        states(&report),
+        [("alpha".into(), "done"), ("beta".into(), "done")]
+    );
+
+    let show = |source: &str, project_path: Option<PathBuf>, remote: Option<&dyn PackRemote>| {
+        ops::pack_show(
+            &rt,
+            &ctx(),
+            &PackShowRequest {
+                source: source.to_string(),
+                project_path,
+                remote: remote.is_some(),
+            },
+            remote,
+        )
+        .unwrap()
+    };
+    let original = |shown: &skill_studio_core::pack::PackReport| {
+        shown.packs[0].original.as_ref().map(|o| o.source.clone())
+    };
+    assert_eq!(
+        original(&show("me/fork", Some(project.clone()), None)).as_deref(),
+        Some("owner/pack#release"),
+        "the project's original lost its pin"
+    );
+    let home_packs = show("me/fork", None, None);
+    let home_pack = home_packs
+        .packs
+        .iter()
+        .find(|pack| pack.scopes == [RootScope::Global])
+        .expect("the home's fork pack");
+    assert_eq!(
+        home_pack.original.as_ref().map(|o| o.source.as_str()),
+        Some("owner/pack"),
+        "the home's unpinned original took another scope's pin"
+    );
+
+    let remote = RefRemote::default();
+    show("me/fork", Some(project.clone()), Some(&remote));
+    assert!(
+        remote.0.lock().unwrap().contains(&(
+            "https://github.com/owner/pack.git".to_string(),
+            Some("release".to_string())
+        )),
+        "pack show --remote did not fetch the pinned original: {:?}",
+        remote.0.lock().unwrap()
+    );
+
+    let back = PackSwitchSourceRequest {
+        project_path: Some(project.clone()),
+        ..switch("me/fork", "owner/pack#release", false)
+    };
+    let back = ops::pack_switch_source(&rt, &ctx(), &back).unwrap();
+    assert_eq!(states(&back), [("beta".into(), "done")]);
+    assert!(
+        back.summary.contains("was their original"),
+        "{}",
+        back.summary
+    );
+    assert_eq!(
+        original(&show("owner/pack#release", Some(project.clone()), None)),
+        None
     );
     std::fs::remove_dir_all(&home).ok();
 }

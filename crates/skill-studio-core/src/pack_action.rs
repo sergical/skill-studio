@@ -404,7 +404,14 @@ pub fn pack_switch_source(
             ));
         }
         let mut steps = Vec::new();
+        // Each step's original, with its own pack's pin: one source can be
+        // pinned differently in the home and in each project.
+        let mut origins = Vec::new();
         for pack in &report.packs {
+            let origin = match &pack.ref_pin {
+                Some(git_ref) => format!("{}#{git_ref}", pack.source),
+                None => pack.source.clone(),
+            };
             for skill in &pack.skills {
                 if !req.skills.is_empty() && !req.skills.contains(&skill.name) {
                     continue;
@@ -425,29 +432,26 @@ pub fn pack_switch_source(
                     )),
                 };
                 steps.push(step(pack, skill, PackStepAction::SwitchSource, skip));
+                origins.push(origin.clone());
             }
         }
         require_node_for(rt, &steps)?;
         let moves: Vec<crate::pack_original::Move<'_>> = steps
             .iter()
-            .filter(|s| s.state == PackStepState::Planned)
-            .map(|s| crate::pack_original::Move {
+            .zip(&origins)
+            .filter(|(s, _)| s.state == PackStepState::Planned)
+            .map(|(s, from)| crate::pack_original::Move {
                 scope: &s.scope,
                 skill: &s.skill,
+                from,
             })
             .collect();
-        // Keep the original's pin, so `pack show --remote` reads the branch
-        // or tag the project installed, not the default branch.
-        let from = match &report.packs[0].ref_pin {
-            Some(git_ref) => format!("{}#{git_ref}", report.packs[0].source),
-            None => report.packs[0].source.clone(),
-        };
         let mut all_back = false;
         if !req.dry_run && !moves.is_empty() {
             // Recorded first, so a skill never sits on `to` without its
             // original. A record whose skill did not move stays stale: it
             // counts only while the lock row names `to`.
-            all_back = crate::pack_original::record_moves(rt, &from, &req.to, &moves)?;
+            all_back = crate::pack_original::record_moves(rt, &req.to, &moves)?;
         }
         drop(moves);
         if !req.dry_run {
@@ -464,9 +468,15 @@ pub fn pack_switch_source(
                     .map(|outcome| outcome.event_id)
             });
         }
-        let moved = steps
+        let mut moved_from: Vec<&str> = steps
             .iter()
-            .any(|s| matches!(s.state, PackStepState::Done { .. }));
+            .zip(&origins)
+            .filter(|(s, _)| matches!(s.state, PackStepState::Done { .. }))
+            .map(|(_, from)| from.as_str())
+            .collect();
+        moved_from.dedup();
+        let moved = !moved_from.is_empty();
+        let from = moved_from.join(" and ");
         let mut report = action_report(req.dry_run, PackStepAction::SwitchSource, steps);
         if moved && all_back {
             report.summary = format!(
