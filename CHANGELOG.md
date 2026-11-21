@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+## v0.4.1
+
+### Added
+
+- `outdated` and `library --source` (MCP `outdated` and `library`) now show a skill that a lock file lists but that has no folder on disk: `currency: "missing_on_disk"` in `outdated`, and `missing_on_disk: true` on the `library` row. Before, such a skill was absent from both answers, and an agent had to read the lock file by hand.
+- The MCP `library` tool takes `project_path`, with the same meaning as the CLI `library --project` flag. Before, an MCP agent saw only the home's skills.
+- Scan timings name four more steps (the folder walk, the content hash, the token count and the scan-memo stamp), so a slow scan shows where the time went.
+
+### Fixed
+
+- `pack update` reports a parked skill as skipped. Before, it reported the skill as failed with code `io`, so a correct run read as a failure.
+- Updating one dotagents skill no longer brings back a skill that an older version of Skill Studio parked. The parked copy keeps its bytes.
+- `pack switch-source` keeps the branch or tag each scope was pinned to as part of the pack's original, so `pack show <fork> --remote` compares with that ref, not the default branch.
+- A journal that a newer build wrote no longer makes an older build refuse every write. A plan status this build does not know is read as `unknown`: this build leaves that plan and its backups alone.
+- A scan on a home with no lock file yet now holds a real lock, so a write waits for it. Before, the write could run beside the scan. A read-only fixture home is still left unchanged.
+- Desktop: Undo holds the write lease from the read of the event to the finished history row, and takes its locks in the same order as other writes. Before, most restored files were written with no lease held, and Undo could be refused after a 3-second wait when another write ran.
+- Homepage: the benchmark bars no longer start again after reduced motion stops them.
+
 ## v0.4.0
 
 ### Added
