@@ -297,27 +297,32 @@ impl ScopeFs for RealFs {
     }
 
     fn fsops_open_dir(&self, path: &Path) -> io::Result<Option<Box<dyn DirHandle>>> {
-        let mut held = HeldDir(Dir::open_ambient_dir("/", ambient_authority())?);
-        for component in path.components() {
-            match component {
-                std::path::Component::RootDir => {}
-                std::path::Component::Normal(name) => held = held.open_dir_nofollow(name)?,
-                _ => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        format!("{} is not a plain absolute path", path.display()),
-                    ))
-                }
+        open_confined_dir(path).map(|dir| Some(Box::new(HeldDir(dir)) as Box<dyn DirHandle>))
+    }
+}
+
+/// Opens an absolute directory component by component, refusing every symlink.
+pub fn open_confined_dir(path: &Path) -> io::Result<Dir> {
+    if !path.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "expected an absolute directory",
+        ));
+    }
+    let mut dir = Dir::open_ambient_dir("/", ambient_authority())?;
+    for component in path.components() {
+        match component {
+            std::path::Component::RootDir => {}
+            std::path::Component::Normal(name) => dir = open_confined_child(&dir, name)?,
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "expected a plain absolute directory",
+                ))
             }
         }
-        if !path.has_root() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("{} is not an absolute path", path.display()),
-            ));
-        }
-        Ok(Some(Box::new(held)))
     }
+    Ok(dir)
 }
 
 /// [`DirHandle`] over one open folder. Every call takes one name and
@@ -355,21 +360,69 @@ fn read_capped_from(file: impl io::Read, what: &Path, max_bytes: u64) -> io::Res
     Ok(bytes)
 }
 
-impl HeldDir {
-    fn open_dir_nofollow(&self, name: &std::ffi::OsStr) -> io::Result<HeldDir> {
-        use rustix::fs::{openat, Mode, OFlags};
-        let name = one_name(name)?;
-        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-        match openat(&self.0, name, flags, Mode::empty()) {
-            Ok(fd) => Ok(HeldDir(Dir::from_std_file(fs::File::from(fd)))),
-            Err(e) if e == rustix::io::Errno::NOTDIR || e == rustix::io::Errno::LOOP => {
-                Err(io::Error::new(
-                    io::ErrorKind::NotADirectory,
-                    format!("{} is a link or a file, not a folder", name.display()),
-                ))
-            }
-            Err(e) => Err(e.into()),
+/// Opens one child directory relative to a bound directory, refusing links.
+pub fn open_confined_child(dir: &Dir, name: &std::ffi::OsStr) -> io::Result<Dir> {
+    use rustix::fs::{openat, Mode, OFlags};
+    let name = one_name(name)?;
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    match openat(dir, name, flags, Mode::empty()) {
+        Ok(fd) => Ok(Dir::from_std_file(fs::File::from(fd))),
+        Err(e) if e == rustix::io::Errno::NOTDIR || e == rustix::io::Errno::LOOP => {
+            Err(io::Error::new(
+                io::ErrorKind::NotADirectory,
+                format!("{} is a link or a file, not a folder", name.display()),
+            ))
         }
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Writes and syncs a new file inside a bound directory, refusing any existing entry.
+pub fn write_confined_file(dir: &Dir, name: &std::ffi::OsStr, bytes: &[u8]) -> io::Result<()> {
+    use std::io::Write as _;
+    let mut file = open_new_confined_file(dir, one_name(name)?)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
+fn open_new_confined_file(dir: &Dir, name: &std::ffi::OsStr) -> io::Result<cap_std::fs::File> {
+    dir.open_with(
+        name,
+        cap_std::fs::OpenOptions::new().write(true).create_new(true),
+    )
+}
+
+/// Copies an entry between bound directories, preserving literal symlinks and file modes.
+pub fn copy_confined_entry(
+    source: &Dir,
+    from: &std::ffi::OsStr,
+    destination: &Dir,
+    to: &std::ffi::OsStr,
+) -> io::Result<()> {
+    let from = one_name(from)?;
+    let to = one_name(to)?;
+    let metadata = source.symlink_metadata(from)?;
+    if metadata.is_symlink() {
+        destination.symlink_contents(source.read_link_contents(from)?, to)
+    } else if metadata.is_dir() {
+        let source = open_confined_child(source, from)?;
+        destination.create_dir(to)?;
+        let destination = open_confined_child(destination, to)?;
+        for entry in source.entries()? {
+            let name = entry?.file_name();
+            copy_confined_entry(&source, &name, &destination, &name)?;
+        }
+        Ok(())
+    } else if metadata.is_file() {
+        let mut input = source.open(from)?;
+        let mut output = open_new_confined_file(destination, to)?;
+        io::copy(&mut input, &mut output)?;
+        output.set_permissions(metadata.permissions())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "unsupported file type",
+        ))
     }
 }
 
@@ -406,7 +459,10 @@ impl DirHandle for HeldDir {
     }
 
     fn open_dir(&self, name: &str) -> io::Result<Box<dyn DirHandle>> {
-        Ok(Box::new(self.open_dir_nofollow(name.as_ref())?))
+        Ok(Box::new(HeldDir(open_confined_child(
+            &self.0,
+            name.as_ref(),
+        )?)))
     }
 
     fn read_file(&self, name: &str, max_bytes: u64) -> io::Result<(Vec<u8>, u32)> {

@@ -393,6 +393,7 @@ pub(crate) fn reconcile_connected_materialize_event_with_hook(
 /// Exact identity for converting one whole harness root and then disabling one deployment.
 #[derive(Clone, Copy)]
 pub struct ConvertThenDisableRequest<'a> {
+    pub home: &'a Path,
     pub root: &'a Path,
     pub shared_root: &'a Path,
     pub skill: &'a str,
@@ -471,6 +472,7 @@ pub(crate) fn convert_root_then_disable_with_hook(
         Err(disable_error) => {
             match rollback_unchanged_materialization(
                 store,
+                request.home,
                 request.root,
                 &materialize_event_id,
                 mutation,
@@ -493,6 +495,7 @@ pub(crate) fn convert_root_then_disable_with_hook(
 
 fn rollback_unchanged_materialization(
     store: &EventStore,
+    home: &Path,
     root: &Path,
     materialize_event_id: &str,
     mutation: &WriteLeaseGuard,
@@ -512,7 +515,7 @@ fn rollback_unchanged_materialization(
     if fingerprint_path(root) != expected {
         return Ok(false);
     }
-    store.restore(mutation, materialize_event_id, false)?;
+    store.restore(mutation, home, materialize_event_id, false)?;
     store.unregister_materialized_root(root)?;
     Ok(true)
 }
@@ -521,6 +524,7 @@ fn rollback_unchanged_materialization(
 pub fn reconcile_interrupted_convert_then_disable(
     store: &EventStore,
     event: &EventRow,
+    home: &Path,
     mutation: &WriteLeaseGuard,
 ) -> Result<(), String> {
     if event.kind != "materialize_then_disable" || event.status != "interrupted" {
@@ -599,6 +603,7 @@ pub fn reconcile_interrupted_convert_then_disable(
                 Err(error) => {
                     if rollback_unchanged_materialization(
                         store,
+                        home,
                         &root,
                         materialize_event_id,
                         mutation,
@@ -1020,7 +1025,7 @@ mod tests {
         let events = store.list(10, Some("find-bugs")).unwrap();
         assert_eq!(events[0].kind, "unlink_harness");
         store
-            .restore(&test_guard(&home), &events[0].id, false)
+            .restore(&test_guard(&home), &home, &events[0].id, false)
             .unwrap();
 
         let restored = root.join("find-bugs");
@@ -1107,6 +1112,7 @@ mod tests {
         let error = convert_root_then_disable_with_hook(
             &store,
             ConvertThenDisableRequest {
+                home: &home,
                 root: &root,
                 shared_root: &shared,
                 skill: "find-bugs",
@@ -1159,6 +1165,7 @@ mod tests {
         let crash = convert_root_then_disable_with_hook(
             &store,
             ConvertThenDisableRequest {
+                home: &home,
                 root: &root,
                 shared_root: &shared,
                 skill: "find-bugs",
@@ -1186,8 +1193,10 @@ mod tests {
             .unwrap()
             .pop()
             .unwrap();
-        reconcile_interrupted_convert_then_disable(&store, &event, &test_guard(&home)).unwrap();
-        reconcile_interrupted_convert_then_disable(&store, &event, &test_guard(&home)).unwrap();
+        reconcile_interrupted_convert_then_disable(&store, &event, &home, &test_guard(&home))
+            .unwrap();
+        reconcile_interrupted_convert_then_disable(&store, &event, &home, &test_guard(&home))
+            .unwrap();
 
         assert!(fs::symlink_metadata(&deployment_path).is_err());
         assert!(fs::symlink_metadata(root.join("write-docs")).is_ok());
@@ -1214,6 +1223,7 @@ mod tests {
         convert_root_then_disable_with_hook(
             &store,
             ConvertThenDisableRequest {
+                home: &home,
                 root: &root,
                 shared_root: &shared,
                 skill: "find-bugs",
@@ -1240,7 +1250,8 @@ mod tests {
             .pop()
             .unwrap();
 
-        reconcile_interrupted_convert_then_disable(&store, &event, &test_guard(&home)).unwrap();
+        reconcile_interrupted_convert_then_disable(&store, &event, &home, &test_guard(&home))
+            .unwrap();
 
         assert!(fs::symlink_metadata(&root)
             .unwrap()
@@ -1323,7 +1334,7 @@ mod tests {
         relink_harness(&store, &root, "find-bugs", "claude-code").unwrap();
         restore_guard_for_explode(&store, explode_event, &home).unwrap();
         store
-            .restore(&test_guard(&home), &explode_event.id, false)
+            .restore(&test_guard(&home), &home, &explode_event.id, false)
             .unwrap();
         assert!(fs::symlink_metadata(&root)
             .unwrap()
@@ -1382,7 +1393,7 @@ mod tests {
         // Undo restores the original (broken) link, same shape as
         // `unlink_harness`'s undo.
         store
-            .restore(&test_guard(&home), &events[0].id, false)
+            .restore(&test_guard(&home), &home, &events[0].id, false)
             .unwrap();
         assert_eq!(
             fs::read_link(&broken).unwrap(),
