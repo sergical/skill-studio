@@ -1140,7 +1140,7 @@ mod tests {
     fn undo_restores_the_original_bytes_for_each_new_kind() {
         for (kind, choice, original, expected) in sample_kinds() {
             let temp = tempfile::tempdir().unwrap();
-            let skill = temp.path().join("sample");
+            let skill = temp.path().join(".agents/skills/sample");
             fs::create_dir_all(&skill).unwrap();
             fs::write(skill.join("SKILL.md"), original).unwrap();
             let deployment = deployment(&skill, LifecycleOwnerKind::Manual);
@@ -1166,7 +1166,9 @@ mod tests {
                 expected
             );
 
-            store.restore(&home_guard(&skill), "repair", false).unwrap();
+            store
+                .restore(&home_guard(temp.path()), temp.path(), "repair", false)
+                .unwrap();
 
             assert_eq!(
                 fs::read(skill.join("SKILL.md")).unwrap(),
@@ -1330,7 +1332,7 @@ mod tests {
     #[test]
     fn atomic_failure_leaves_original_and_failed_event_is_undoable_with_drift_guard() {
         let temp = tempfile::tempdir().unwrap();
-        let skill = temp.path().join("sample");
+        let skill = temp.path().join(".agents/skills/sample");
         fs::create_dir_all(&skill).unwrap();
         fs::write(skill.join("SKILL.md"), malformed()).unwrap();
         let deployment = deployment(&skill, LifecycleOwnerKind::Manual);
@@ -1373,11 +1375,13 @@ mod tests {
         fs::write(skill.join("SKILL.md"), "external drift").unwrap();
         let lease = home_guard(&skill);
         assert!(store
-            .restore(&lease, "repair-2", false)
+            .restore(&lease, temp.path(), "repair-2", false)
             .unwrap_err()
             .contains("has changed"));
         fs::write(skill.join("SKILL.md"), intent.proposed_content).unwrap();
-        store.restore(&lease, "repair-2", false).unwrap();
+        store
+            .restore(&lease, temp.path(), "repair-2", false)
+            .unwrap();
         assert_eq!(
             fs::read_to_string(skill.join("SKILL.md")).unwrap(),
             malformed()

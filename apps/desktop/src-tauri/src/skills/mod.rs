@@ -59,6 +59,7 @@ pub mod skill_update_check;
 pub mod telemetry_commands;
 #[cfg(any(test, feature = "testing"))]
 pub mod test_support;
+mod undo_files;
 pub mod write_lease;
 
 pub use agents::*;

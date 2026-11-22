@@ -396,7 +396,7 @@ fn restore_desktop_event(
         return Ok(false);
     }
 
-    store.restore(mutation, event_id, force)?;
+    store.restore(mutation, home, event_id, force)?;
     store.retain_backups(mutation.as_exclusive_guard());
     if target.kind == "explode_shared_dir" {
         if let Some(root) = target.payload.get("root").and_then(|v| v.as_str()) {
@@ -655,6 +655,7 @@ pub async fn materialize_harness_root_then_disable(
             skill_materialize::convert_root_then_disable(
                 store,
                 skill_materialize::ConvertThenDisableRequest {
+                    home: &home,
                     root: &root_path,
                     shared_root: &universal_root,
                     skill: &installed_skill.name,
@@ -1024,12 +1025,13 @@ mod tests {
         let mut store = EventStore::open(&home.join("app-data")).unwrap();
         let shared = home.join(".agents/skills");
         fs::create_dir_all(&shared).unwrap();
-        let root = home.join("linked-skills");
+        fs::create_dir_all(home.join(".claude")).unwrap();
+        let root = home.join(".claude/skills");
         symlink(&shared, &root).unwrap();
-        let removed_link = home.join("broken-link");
+        fs::create_dir_all(home.join(".codex/skills")).unwrap();
+        let removed_link = home.join(".codex/skills/broken-link");
         symlink(home.join("missing"), &removed_link).unwrap();
-        skill_materialize::repair_remove_link(&store, &removed_link, "fixture", "claude-code")
-            .unwrap();
+        skill_materialize::repair_remove_link(&store, &removed_link, "fixture", "codex").unwrap();
         let event_id = store.list(1, None).unwrap()[0].id.clone();
         let (observed, history) = std::sync::mpsc::channel();
         let (probe_root, probe_home) = (lease_root.clone(), home.to_path_buf());

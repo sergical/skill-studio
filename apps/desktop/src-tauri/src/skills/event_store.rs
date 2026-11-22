@@ -23,8 +23,9 @@
 // recreating bytes cannot recreate the matching ownership metadata.
 // ============================================================================
 
-use std::fs::{self, File};
-use std::io::Write as _;
+use std::collections::BTreeMap;
+use std::ffi::OsStr;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
@@ -32,9 +33,13 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use skill_studio_core::events::EventStatus as CoreEventStatus;
+use skill_studio_host::{open_confined_child, write_confined_file, ConfinedDir};
 
 use super::skill_md_write::{begin_skill_md_write_transaction, SkillMdWriteTransaction};
+use super::undo_files::{canonical_undo_parent, UndoFiles, UndoPath};
 use super::write_lease::WriteLeaseGuard;
+
+const UNDO_LINKED_PARENTS: &str = "undo_linked_parents";
 
 /// Opens (creating if absent) the event store DB at `db_path` and ensures
 /// its schema exists.
@@ -311,38 +316,58 @@ impl EventStore {
         Ok(imported)
     }
 
-    fn backup_dir_for(&self, id: &str) -> PathBuf {
-        self.app_data.join("backups").join(id)
+    fn bind_backup(&self, id: &str) -> Result<UndoPath, String> {
+        if Path::new(id).file_name() != Some(OsStr::new(id)) {
+            return Err("Invalid backup event ID".into());
+        }
+        let app_data = self.app_data.canonicalize().map_err(|e| e.to_string())?;
+        let path = app_data.join("backups").join(id);
+        UndoPath::bind(&path).map_err(|e| format!("Could not bind backup {}: {e}", path.display()))
     }
 
-    /// Copies each existing top-level path under `paths` into
-    /// `<app_data>/backups/<id>/<n>-<basename>` and writes a fsynced
-    /// `manifest.json` mapping each original absolute path to its backup
-    /// location and content fingerprint. Paths that don't exist are
-    /// recorded with fingerprint `"absent"` and no bytes.
+    /// Copies each existing entry into its event backup, preserving its literal
+    /// symlinks and recording the original path and fingerprint in the manifest.
     pub fn backup_paths(&self, id: &str, paths: &[PathBuf]) -> Result<BackupManifest, String> {
-        let dir = self.backup_dir_for(id);
-        fs::create_dir_all(&dir)
-            .map_err(|e| format!("Failed to create backup dir {}: {e}", dir.display()))?;
+        Self::write_backup(id, paths, &self.bind_backup(id)?, |path, dir, name| {
+            let parent = path.parent().ok_or("Backup path has no parent")?;
+            let name_on_disk = path.file_name().ok_or("Backup path has no file name")?;
+            let physical = parent
+                .canonicalize()
+                .map_err(|e| e.to_string())?
+                .join(name_on_disk);
+            UndoPath::bind(&physical)
+                .and_then(|source| source.backup_to(dir, name))
+                .map_err(|e| format!("Failed to back up {}: {e}", path.display()))
+        })
+    }
 
+    fn write_backup(
+        id: &str,
+        paths: &[PathBuf],
+        backup: &UndoPath,
+        copy: impl Fn(&Path, &ConfinedDir, &str) -> Result<(), String>,
+    ) -> Result<BackupManifest, String> {
+        let root = backup
+            .parent(true)
+            .map_err(|e| format!("Failed to open backups: {e}"))?;
+        root.create_dir(id)
+            .map_err(|e| format!("Failed to create backup {id}: {e}"))?;
+        let dir = open_confined_child(&root, id.as_ref())
+            .map_err(|e| format!("Failed to open backup {id}: {e}"))?;
         let mut manifest = BackupManifest::default();
         for (i, path) in paths.iter().enumerate() {
             let fingerprint = fingerprint_path(path);
-            if fingerprint == "absent" {
-                manifest.entries.insert(
-                    path.to_string_lossy().into_owned(),
-                    BackupEntry {
-                        relative_path: String::new(),
-                        fingerprint,
-                    },
+            let relative_path = if fingerprint == "absent" {
+                String::new()
+            } else {
+                let basename = path.file_name().map_or_else(
+                    || format!("path-{i}"),
+                    |name| name.to_string_lossy().into_owned(),
                 );
-                continue;
-            }
-            let basename = path
-                .file_name()
-                .map_or_else(|| format!("path-{i}"), |n| n.to_string_lossy().into_owned());
-            let relative_path = format!("{i}-{basename}");
-            copy_recursive(path, &dir.join(&relative_path))?;
+                let relative = format!("{i}-{basename}");
+                copy(path, &dir, &relative)?;
+                relative
+            };
             manifest.entries.insert(
                 path.to_string_lossy().into_owned(),
                 BackupEntry {
@@ -351,32 +376,55 @@ impl EventStore {
                 },
             );
         }
-
         let json = serde_json::to_vec_pretty(&manifest)
             .map_err(|e| format!("Failed to serialize backup manifest: {e}"))?;
-        let manifest_path = dir.join("manifest.json");
-        let mut file = File::create(&manifest_path)
-            .map_err(|e| format!("Failed to write {}: {e}", manifest_path.display()))?;
-        file.write_all(&json)
-            .map_err(|e| format!("Failed to write {}: {e}", manifest_path.display()))?;
-        file.sync_all()
-            .map_err(|e| format!("Failed to fsync {}: {e}", manifest_path.display()))?;
+        write_confined_file(&dir, OsStr::new("manifest.json"), &json)
+            .map_err(|e| format!("Failed to write backup {id} manifest: {e}"))?;
         Ok(manifest)
-    }
-
-    fn read_manifest(backup_dir: &Path) -> Result<BackupManifest, String> {
-        let data = fs::read(backup_dir.join("manifest.json"))
-            .map_err(|e| format!("Failed to read manifest in {}: {e}", backup_dir.display()))?;
-        serde_json::from_slice(&data).map_err(|e| format!("Failed to parse manifest: {e}"))
     }
 
     /// Inserts a `pending` row for `id`.
     pub fn record(&self, id: &str, draft: &EventDraft) -> Result<(), String> {
+        self.record_with_bound_paths(id, draft, None)
+    }
+
+    fn record_with_bound_paths(
+        &self,
+        id: &str,
+        draft: &EventDraft,
+        files: Option<&UndoFiles>,
+    ) -> Result<(), String> {
         let ts = Utc::now().to_rfc3339();
         let payload_json = serde_json::to_string(&draft.payload)
             .map_err(|e| format!("Failed to serialize payload: {e}"))?;
-        let inverse_json = draft
-            .inverse
+        let mut inverse_value = draft.inverse.clone();
+        if let Some(json) = &mut inverse_value {
+            if let Ok(inverse) = serde_json::from_value::<InverseOp>(json.clone()) {
+                let parents: BTreeMap<_, _> = inverse
+                    .touched_paths()
+                    .into_iter()
+                    .filter_map(|path| {
+                        let parent = path.parent()?;
+                        let physical = match files {
+                            Some(files) => files.bound_parent(path)?.to_path_buf(),
+                            None => canonical_undo_parent(parent).ok()?,
+                        };
+                        (physical != parent).then_some((path, physical))
+                    })
+                    .collect();
+                if let Some(object) = json.as_object_mut() {
+                    object.remove(UNDO_LINKED_PARENTS);
+                    if !parents.is_empty() {
+                        object.insert(
+                            UNDO_LINKED_PARENTS.to_string(),
+                            serde_json::to_value(parents)
+                                .map_err(|e| format!("Failed to record Undo link parents: {e}"))?,
+                        );
+                    }
+                }
+            }
+        }
+        let inverse_json = inverse_value
             .as_ref()
             .map(serde_json::to_string)
             .transpose()
@@ -635,19 +683,21 @@ impl EventStore {
     /// Holding the proof for this whole call is what puts the drift check and
     /// the write under one lease: `apply_restore` compares the destination
     /// against the inverse's post-fingerprint and then writes it, and no
-    /// other writer can change the destination between the two.
+    /// other Skill Studio writer can change the destination between the two.
     pub fn restore(
         &self,
         lease: &WriteLeaseGuard,
+        home: &Path,
         target_id: &str,
         force: bool,
     ) -> Result<String, String> {
-        self.restore_with_skill_md_transaction_observer(lease, target_id, force, |_| {})
+        self.restore_with_skill_md_transaction_observer(lease, home, target_id, force, |_| {})
     }
 
     fn restore_with_skill_md_transaction_observer(
         &self,
         lease: &WriteLeaseGuard,
+        home: &Path,
         target_id: &str,
         force: bool,
         observe_transaction: impl FnOnce(Option<&SkillMdWriteTransaction<'_>>),
@@ -668,8 +718,30 @@ impl EventStore {
             .inverse
             .clone()
             .ok_or_else(|| format!("Event {target_id} has no inverse and cannot be restored"))?;
+        let linked_parents = inverse_value
+            .get(UNDO_LINKED_PARENTS)
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|e| format!("Failed to read Undo link parents: {e}"))?
+            .unwrap_or_default();
         let inverse: InverseOp = serde_json::from_value(inverse_value)
             .map_err(|e| format!("Failed to parse inverse for {target_id}: {e}"))?;
+        let files = UndoFiles::bind(
+            home,
+            &self.app_data,
+            inverse.touched_paths(),
+            &linked_parents,
+        )?;
+        let restore_id = allocate_id();
+        let backup = self.bind_backup(&restore_id)?;
+        let source = match &inverse {
+            InverseOp::RestoreBackup { path, .. } => Some(backup_source(&target, &backup, path)?),
+            InverseOp::UndistributeFromShared { shared_dir, .. } => {
+                Some(backup_source(&target, &backup, shared_dir)?)
+            }
+            _ => None,
+        };
 
         let skill_md_transaction =
             if inverse.destination().file_name() == Some(std::ffi::OsStr::new("SKILL.md")) {
@@ -679,7 +751,6 @@ impl EventStore {
             };
         observe_transaction(skill_md_transaction.as_ref());
 
-        let restore_id = allocate_id();
         let claimed = self
             .conn
             .execute(
@@ -691,7 +762,15 @@ impl EventStore {
             return Err(format!("Event {target_id} was already restored"));
         }
 
-        match self.apply_restore(&restore_id, &target, &inverse, force) {
+        match self.apply_restore(
+            &restore_id,
+            &target,
+            &inverse,
+            force,
+            &files,
+            &backup,
+            source.as_ref(),
+        ) {
             Ok(()) => Ok(restore_id),
             Err(e) => {
                 let _ = self.conn.execute(
@@ -703,12 +782,16 @@ impl EventStore {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn apply_restore(
         &self,
         restore_id: &str,
         target: &EventRow,
         inverse: &InverseOp,
         force: bool,
+        files: &UndoFiles,
+        backup: &UndoPath,
+        source: Option<&BackupSource>,
     ) -> Result<(), String> {
         // `distribute_from_shared`'s inverse touches several paths (the
         // shared dir plus every copy it created), not the single destination
@@ -730,6 +813,9 @@ impl EventStore {
                 copy_fingerprints,
                 symlinks,
                 force,
+                files,
+                backup,
+                source.ok_or("Distribution restore has no bound source backup")?,
             );
         }
 
@@ -746,7 +832,7 @@ impl EventStore {
 
         // Phase 2: preserve whatever currently sits at the destination
         // (drifted or not) under the restore event's own backup dir.
-        self.backup_paths(restore_id, std::slice::from_ref(&dest))?;
+        Self::backup_for_restore(restore_id, std::slice::from_ref(&dest), files, backup)?;
         let backup_dir = format!("backups/{restore_id}");
 
         // Phase 3: record the pending restore row, with a provisional
@@ -757,7 +843,7 @@ impl EventStore {
             pre_fingerprint: current_fp,
             post_fingerprint: None,
         };
-        self.record(
+        self.record_with_bound_paths(
             restore_id,
             &EventDraft {
                 kind: "restore".to_string(),
@@ -773,10 +859,11 @@ impl EventStore {
                 backup_dir: Some(backup_dir),
                 restorable: true,
             },
+            Some(files),
         )?;
 
         // Phase 4: apply the target event's inverse.
-        match self.apply_inverse_op(inverse, target.backup_dir.as_deref()) {
+        match Self::apply_inverse_op(inverse, files, source) {
             Ok(()) => {
                 let post_fp = fingerprint_path(&dest);
                 self.patch_inverse_post_fingerprint(restore_id, &post_fp)?;
@@ -888,76 +975,42 @@ impl EventStore {
         Ok(())
     }
 
-    /// Applies one inverse op to the filesystem. `source_backup_dir` is the
-    /// *original* event's backup dir, needed by `RestoreBackup` to find the
-    /// bytes it's putting back.
-    fn apply_inverse_op(
-        &self,
-        op: &InverseOp,
-        source_backup_dir: Option<&str>,
+    fn backup_for_restore(
+        id: &str,
+        paths: &[PathBuf],
+        files: &UndoFiles,
+        backup: &UndoPath,
     ) -> Result<(), String> {
-        match op {
-            InverseOp::RecreateSymlink { link, target, .. } => stage_replace_symlink(link, target),
-            InverseOp::RemoveSymlink { link, .. } => {
-                if let Ok(meta) = fs::symlink_metadata(link) {
-                    if meta.file_type().is_symlink() {
-                        fs::remove_file(link)
-                            .map_err(|e| format!("Failed to remove {}: {e}", link.display()))?;
-                    }
-                }
-                Ok(())
-            }
-            InverseOp::MoveBack { from, to, .. } => {
-                if fs::symlink_metadata(to).is_ok() {
-                    remove_path(to)?;
-                }
-                if let Some(parent) = to.parent() {
-                    fs::create_dir_all(parent)
-                        .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
-                }
-                fs::rename(from, to).map_err(|e| {
-                    format!(
-                        "Failed to move {} back to {}: {e}",
-                        from.display(),
-                        to.display()
-                    )
-                })
-            }
-            InverseOp::RestoreBackup { path, .. } => {
-                let backup_dir_rel = source_backup_dir
-                    .ok_or_else(|| "restore_backup has no source backup dir".to_string())?;
-                self.restore_from_backup(backup_dir_rel, path)
-            }
-            // Handled by `apply_restore_distribute` before `apply_inverse_op`
-            // is ever reached - see the "per-kind arm" note in `apply_restore`.
-            InverseOp::UndistributeFromShared { .. } => Ok(()),
-        }
+        Self::write_backup(id, paths, backup, |path, dir, name| {
+            files
+                .get(path)?
+                .backup_to(dir, name)
+                .map_err(|e| format!("Failed to back up {}: {e}", path.display()))
+        })?;
+        Ok(())
     }
 
-    /// Puts `path` back exactly as `backup_paths` found it under
-    /// `backup_dir_rel` (relative to `app_data`) - removing whatever
-    /// currently sits at `path` first, or leaving it absent if that's what
-    /// was backed up. Shared by the generic `RestoreBackup` inverse and
-    /// `apply_restore_distribute`'s shared-dir restore.
-    fn restore_from_backup(&self, backup_dir_rel: &str, path: &Path) -> Result<(), String> {
-        let backup_dir = self.app_data.join(backup_dir_rel);
-        let manifest = Self::read_manifest(&backup_dir)?;
-        let key = path.to_string_lossy().into_owned();
-        let entry = manifest
-            .entries
-            .get(&key)
-            .ok_or_else(|| format!("No backup entry for {}", path.display()))?;
-        if fs::symlink_metadata(path).is_ok() {
-            remove_path(path)?;
-        }
-        if entry.fingerprint == "absent" {
-            return Ok(());
-        }
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
-        }
-        copy_recursive(&backup_dir.join(&entry.relative_path), path)
+    fn apply_inverse_op(
+        op: &InverseOp,
+        files: &UndoFiles,
+        source: Option<&BackupSource>,
+    ) -> Result<(), String> {
+        let result = match op {
+            InverseOp::RecreateSymlink { link, target, .. } => {
+                files.get(link)?.symlink(target, true)
+            }
+            InverseOp::RemoveSymlink { link, .. } => files.get(link)?.remove(true),
+            InverseOp::MoveBack { from, to, .. } => files.get(from)?.move_to(files.get(to)?),
+            InverseOp::RestoreBackup { path, .. } => {
+                return source
+                    .ok_or("Restore has no bound source backup")?
+                    .restore_to(files.get(path)?, path);
+            }
+            InverseOp::UndistributeFromShared { .. } => {
+                return Err("Distribution restore requires its full set of paths".into())
+            }
+        };
+        result.map_err(|e| format!("Failed to undo {}: {e}", op.destination().display()))
     }
 
     /// The `UndistributeFromShared` arm of `apply_restore`: refuses (without
@@ -976,6 +1029,9 @@ impl EventStore {
         copy_fingerprints: &[String],
         symlinks: &[(PathBuf, PathBuf)],
         force: bool,
+        files: &UndoFiles,
+        backup: &UndoPath,
+        source: &BackupSource,
     ) -> Result<(), String> {
         if !force {
             for (path, expected) in copies.iter().zip(copy_fingerprints) {
@@ -993,7 +1049,7 @@ impl EventStore {
         // restore is about to touch.
         let mut backup_targets = vec![shared_dir.to_path_buf()];
         backup_targets.extend(copies.iter().cloned());
-        self.backup_paths(restore_id, &backup_targets)?;
+        Self::backup_for_restore(restore_id, &backup_targets, files, backup)?;
         let backup_dir = format!("backups/{restore_id}");
 
         // Phase 3: record the pending restore row. Its own inverse only
@@ -1005,7 +1061,7 @@ impl EventStore {
             pre_fingerprint: fingerprint_path(shared_dir),
             post_fingerprint: None,
         };
-        self.record(
+        self.record_with_bound_paths(
             restore_id,
             &EventDraft {
                 kind: "restore".to_string(),
@@ -1021,27 +1077,24 @@ impl EventStore {
                 backup_dir: Some(backup_dir),
                 restorable: true,
             },
+            Some(files),
         )?;
 
         // Phase 4: put the shared dir back, delete the copies, recreate the
         // removed symlinks.
         let apply: Result<(), String> = (|| {
-            let source_backup_dir = target
-                .backup_dir
-                .as_deref()
-                .ok_or_else(|| "distribute_from_shared event has no backup dir".to_string())?;
-            self.restore_from_backup(source_backup_dir, shared_dir)?;
+            source.restore_to(files.get(shared_dir)?, shared_dir)?;
             for copy in copies {
-                if fs::symlink_metadata(copy).is_ok() {
-                    remove_path(copy)?;
-                }
+                files
+                    .get(copy)?
+                    .remove(false)
+                    .map_err(|e| format!("Failed to remove {}: {e}", copy.display()))?;
             }
             for (link, link_target) in symlinks {
-                if let Some(parent) = link.parent() {
-                    fs::create_dir_all(parent)
-                        .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
-                }
-                create_symlink(link_target, link)?;
+                files
+                    .get(link)?
+                    .symlink(link_target, false)
+                    .map_err(|e| format!("Failed to recreate {}: {e}", link.display()))?;
             }
             Ok(())
         })();
@@ -1298,77 +1351,60 @@ fn hash_entry(path: &Path) -> std::io::Result<String> {
     skill_studio_host::hash_entry(path)
 }
 
-/// Copies `src` into `dest`, preserving regular files as bytes, directories
-/// recursively, and symlinks as the literal link (never following it).
-/// `pub(crate)`: Copy removal also uses it to stage and restore exact paths.
-pub(crate) fn copy_recursive(src: &Path, dest: &Path) -> Result<(), String> {
-    let meta =
-        fs::symlink_metadata(src).map_err(|e| format!("Failed to stat {}: {e}", src.display()))?;
-    let file_type = meta.file_type();
-    if file_type.is_symlink() {
-        let target = fs::read_link(src)
-            .map_err(|e| format!("Failed to read link {}: {e}", src.display()))?;
-        create_symlink(&target, dest)?;
-    } else if file_type.is_dir() {
-        fs::create_dir_all(dest)
-            .map_err(|e| format!("Failed to create {}: {e}", dest.display()))?;
-        for entry in
-            fs::read_dir(src).map_err(|e| format!("Failed to read dir {}: {e}", src.display()))?
-        {
-            let entry = entry.map_err(|e| format!("Failed to read dir entry: {e}"))?;
-            copy_recursive(&entry.path(), &dest.join(entry.file_name()))?;
+struct BackupSource {
+    directory: ConfinedDir,
+    entry: Option<String>,
+}
+
+impl BackupSource {
+    fn restore_to(&self, destination: &UndoPath, path: &Path) -> Result<(), String> {
+        destination
+            .restore_from(&self.directory, self.entry.as_deref())
+            .map_err(|e| format!("Failed to restore {} from backup: {e}", path.display()))
+    }
+}
+
+fn backup_source(event: &EventRow, backup: &UndoPath, path: &Path) -> Result<BackupSource, String> {
+    let backup_dir = event
+        .backup_dir
+        .as_deref()
+        .ok_or("Restore has no source backup dir")?;
+    let expected_dir = Path::new("backups").join(&event.id);
+    if Path::new(backup_dir) != expected_dir
+        || Path::new(&event.id).file_name() != Some(OsStr::new(&event.id))
+    {
+        return Err(format!(
+            "Undo refused: invalid source backup directory {backup_dir}"
+        ));
+    }
+    let directory = backup
+        .parent(false)
+        .and_then(|root| open_confined_child(&root, event.id.as_ref()))
+        .map_err(|e| format!("Undo refused: could not open source backup {backup_dir}: {e}"))?;
+    let data = directory
+        .read("manifest.json")
+        .map_err(|e| format!("Failed to read manifest in {backup_dir}: {e}"))?;
+    let mut manifest: BackupManifest =
+        serde_json::from_slice(&data).map_err(|e| format!("Failed to parse manifest: {e}"))?;
+    let entry = manifest
+        .entries
+        .remove(path.to_string_lossy().as_ref())
+        .ok_or_else(|| format!("No backup entry for {}", path.display()))?;
+    let name = (entry.fingerprint != "absent").then_some(entry.relative_path);
+    if let Some(name) = &name {
+        if Path::new(name).file_name() != Some(OsStr::new(name)) {
+            return Err(format!(
+                "Undo refused: backup entry {name} is outside its event directory"
+            ));
         }
-    } else {
-        fs::copy(src, dest).map_err(|e| {
-            format!(
-                "Failed to copy {} to {}: {e}",
-                src.display(),
-                dest.display()
-            )
-        })?;
+        directory
+            .symlink_metadata(name)
+            .map_err(|e| format!("Failed to find backup entry {name}: {e}"))?;
     }
-    Ok(())
-}
-
-fn create_symlink(target: &Path, link: &Path) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(target, link)
-            .map_err(|e| format!("Failed to symlink {}: {e}", link.display()))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (target, link);
-        Err("Symlinking is only supported on Unix".to_string())
-    }
-}
-
-fn remove_path(path: &Path) -> Result<(), String> {
-    let meta = fs::symlink_metadata(path)
-        .map_err(|e| format!("Failed to stat {}: {e}", path.display()))?;
-    if meta.file_type().is_dir() && !meta.file_type().is_symlink() {
-        fs::remove_dir_all(path).map_err(|e| format!("Failed to remove {}: {e}", path.display()))
-    } else {
-        fs::remove_file(path).map_err(|e| format!("Failed to remove {}: {e}", path.display()))
-    }
-}
-
-/// Creates `link -> target` at a temp name in `link`'s parent, only then
-/// removes whatever currently sits at `link`, then renames the temp link
-/// into place - a crash mid-sequence leaves either the original entry or
-/// the finished replacement, never neither.
-fn stage_replace_symlink(link: &Path, target: &Path) -> Result<(), String> {
-    let parent = link
-        .parent()
-        .ok_or_else(|| format!("{} has no parent directory", link.display()))?;
-    fs::create_dir_all(parent)
-        .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
-    let tmp = parent.join(format!(".skill-studio-restore-{}", allocate_id()));
-    create_symlink(target, &tmp)?;
-    if fs::symlink_metadata(link).is_ok() {
-        remove_path(link)?;
-    }
-    fs::rename(&tmp, link).map_err(|e| format!("Failed to move {} into place: {e}", link.display()))
+    Ok(BackupSource {
+        directory,
+        entry: name,
+    })
 }
 
 /// Manifest written alongside a backup: original absolute path -> where its
@@ -1497,6 +1533,21 @@ impl InverseOp {
             InverseOp::RestoreBackup { path, .. } => path,
             InverseOp::UndistributeFromShared { shared_dir, .. } => shared_dir,
         }
+    }
+
+    fn touched_paths(&self) -> Vec<&Path> {
+        let mut paths = vec![self.destination()];
+        match self {
+            Self::MoveBack { from, .. } => paths.push(from),
+            Self::UndistributeFromShared {
+                copies, symlinks, ..
+            } => {
+                paths.extend(copies.iter().map(PathBuf::as_path));
+                paths.extend(symlinks.iter().map(|(link, _)| link.as_path()));
+            }
+            _ => {}
+        }
+        paths
     }
 
     fn post_fingerprint(&self) -> Option<&String> {
@@ -1834,7 +1885,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let store = store(tmp.path());
 
-        let skill_dir = tmp.path().join("skills").join("my-skill");
+        let skill_dir = tmp.path().join(".agents/skills").join("my-skill");
         fs::create_dir_all(skill_dir.join("nested")).unwrap();
         fs::write(skill_dir.join("SKILL.md"), b"---\nname: my-skill\n---\n").unwrap();
         fs::write(skill_dir.join("nested/file.txt"), b"hello").unwrap();
@@ -1869,7 +1920,9 @@ mod tests {
 
         assert_eq!(fingerprint_path(&skill_dir), "absent");
 
-        store.restore(&mutation(tmp.path()), &id, false).unwrap();
+        store
+            .restore(&mutation(tmp.path()), tmp.path(), &id, false)
+            .unwrap();
         assert_eq!(fingerprint_path(&skill_dir), fp_before);
     }
 
@@ -1878,7 +1931,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let store = store(tmp.path());
 
-        let path = tmp.path().join("skills").join("beta");
+        let path = tmp.path().join(".agents/skills").join("beta");
         fs::create_dir_all(&path).unwrap();
         fs::write(path.join("SKILL.md"), b"beta").unwrap();
         let fp_before = fingerprint_path(&path);
@@ -1908,15 +1961,17 @@ mod tests {
         store.finish(&id, EventStatus::Done).unwrap();
 
         let lease = mutation(tmp.path());
-        let restore_id = store.restore(&lease, &id, false).unwrap();
+        let restore_id = store.restore(&lease, tmp.path(), &id, false).unwrap();
         assert_eq!(fingerprint_path(&path), fp_before);
 
-        let err = store.restore(&lease, &id, false).unwrap_err();
+        let err = store.restore(&lease, tmp.path(), &id, false).unwrap_err();
         assert!(err.contains("already restored"), "unexpected error: {err}");
 
         // Restore-of-restore: brings the path back to "absent", the state
         // right before the first restore ran.
-        store.restore(&lease, &restore_id, false).unwrap();
+        store
+            .restore(&lease, tmp.path(), &restore_id, false)
+            .unwrap();
         assert_eq!(fingerprint_path(&path), "absent");
     }
 
@@ -1924,7 +1979,7 @@ mod tests {
     fn repair_undo_and_redo_hold_skill_md_transaction_but_other_files_do_not() {
         let tmp = tempfile::tempdir().unwrap();
         let store = store(tmp.path());
-        let skill_md = tmp.path().join("skills/sample/SKILL.md");
+        let skill_md = tmp.path().join(".agents/skills/sample/SKILL.md");
         fs::create_dir_all(skill_md.parent().unwrap()).unwrap();
         fs::write(&skill_md, b"malformed frontmatter").unwrap();
         let malformed_fingerprint = fingerprint_path(&skill_md);
@@ -1956,10 +2011,16 @@ mod tests {
         let lease = mutation(tmp.path());
 
         let undo_id = store
-            .restore_with_skill_md_transaction_observer(&lease, &repair_id, false, |transaction| {
-                assert!(transaction.is_some());
-                assert!(exclusive_lease_is_held(&lease_root, tmp.path()));
-            })
+            .restore_with_skill_md_transaction_observer(
+                &lease,
+                tmp.path(),
+                &repair_id,
+                false,
+                |transaction| {
+                    assert!(transaction.is_some());
+                    assert!(exclusive_lease_is_held(&lease_root, tmp.path()));
+                },
+            )
             .unwrap();
         assert_eq!(fs::read(&skill_md).unwrap(), b"malformed frontmatter");
         assert_eq!(
@@ -1973,10 +2034,16 @@ mod tests {
         );
 
         let redo_id = store
-            .restore_with_skill_md_transaction_observer(&lease, &undo_id, false, |transaction| {
-                assert!(transaction.is_some());
-                assert!(exclusive_lease_is_held(&lease_root, tmp.path()));
-            })
+            .restore_with_skill_md_transaction_observer(
+                &lease,
+                tmp.path(),
+                &undo_id,
+                false,
+                |transaction| {
+                    assert!(transaction.is_some());
+                    assert!(exclusive_lease_is_held(&lease_root, tmp.path()));
+                },
+            )
             .unwrap();
         assert_eq!(fs::read(&skill_md).unwrap(), b"repaired frontmatter");
         assert_eq!(
@@ -1985,7 +2052,7 @@ mod tests {
         );
         assert_eq!(store.get(&redo_id).unwrap().unwrap().status, "done");
 
-        let ordinary_file = tmp.path().join("notes.md");
+        let ordinary_file = tmp.path().join(".agents/skills/sample/notes.md");
         fs::write(&ordinary_file, b"before").unwrap();
         let ordinary_before_fingerprint = fingerprint_path(&ordinary_file);
         let ordinary_id = allocate_id();
@@ -2015,6 +2082,7 @@ mod tests {
         store
             .restore_with_skill_md_transaction_observer(
                 &lease,
+                tmp.path(),
                 &ordinary_id,
                 false,
                 |transaction| {
@@ -2030,7 +2098,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let store = store(tmp.path());
 
-        let path = tmp.path().join("skills").join("gamma");
+        let path = tmp.path().join(".agents/skills").join("gamma");
         fs::create_dir_all(&path).unwrap();
         fs::write(path.join("SKILL.md"), b"gamma").unwrap();
 
@@ -2080,7 +2148,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let store = store(tmp.path());
 
-        let file = tmp.path().join("skills").join("delta").join("SKILL.md");
+        let file = tmp
+            .path()
+            .join(".agents/skills")
+            .join("delta")
+            .join("SKILL.md");
         fs::create_dir_all(file.parent().unwrap()).unwrap();
         fs::write(&file, b"original").unwrap();
         let fp_original = fingerprint_path(&file);
@@ -2116,18 +2188,20 @@ mod tests {
         let lease = WriteLease::with_lease_root(tmp.path().join("leases"))
             .try_acquire(tmp.path())
             .unwrap();
-        let err = store.restore(&lease, &id, false).unwrap_err();
+        let err = store.restore(&lease, tmp.path(), &id, false).unwrap_err();
         assert!(
             err.contains(&file.display().to_string()),
             "error should name the path: {err}"
         );
         assert_eq!(fs::read(&file).unwrap(), b"drifted-by-user");
 
-        let restore_id = store.restore(&lease, &id, true).unwrap();
+        let restore_id = store.restore(&lease, tmp.path(), &id, true).unwrap();
         assert_eq!(fs::read(&file).unwrap(), b"original");
 
         // The drifted bytes must be recoverable from the restore event's backup.
-        store.restore(&lease, &restore_id, false).unwrap();
+        store
+            .restore(&lease, tmp.path(), &restore_id, false)
+            .unwrap();
         assert_eq!(fs::read(&file).unwrap(), b"drifted-by-user");
     }
 }
