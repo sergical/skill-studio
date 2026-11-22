@@ -43,7 +43,7 @@ import { useHeroPointer } from "./useHeroPointer";
 
 const STUDY_URL = "https://arxiv.org/abs/2610.18522";
 
-function Hero({ theme }: { theme: SiteTheme }) {
+export function BaselineHero({ theme }: { theme: SiteTheme }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const layerRef = useRef<HTMLDivElement>(null);
   useHeroPointer({ root: rootRef, vars: layerRef });
@@ -141,6 +141,7 @@ function Calculator() {
                   options={AGENT_OPTIONS}
                   value={calc.agent}
                   onChange={calc.setAgent}
+                  equalWidth
                 />
               </div>
               <WindowControl calc={calc} />
@@ -188,7 +189,9 @@ function Calculator() {
 }
 
 export function BaselinePlus(props: VariantProps) {
-  return <ProtoPage {...props} hero={<Hero theme={props.theme} />} calculator={<Calculator />} />;
+  return (
+    <ProtoPage {...props} hero={<BaselineHero theme={props.theme} />} calculator={<Calculator />} />
+  );
 }
 
 const STACKED = "@media (max-width: 760px)";
@@ -264,7 +267,7 @@ const styles = stylex.create({
     paddingBottom: 22,
   },
   controlRow: { display: "flex", flexWrap: "wrap", gap: "16px 28px" },
-  agentField: { display: "flex", flexDirection: "column", gap: 8 },
+  agentField: { display: "flex", flex: 1, flexDirection: "column", gap: 8, minWidth: 0 },
   fieldLabel: { color: siteTokens.text, fontSize: 14, fontWeight: 600 },
   sliderRow: {
     alignItems: "start",

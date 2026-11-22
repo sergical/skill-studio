@@ -7,6 +7,9 @@
   display: flex;
   align-items: center;
   gap: 2px;
+  max-width: calc(100vw - 16px);
+  overflow-x: auto;
+  scrollbar-width: none;
   padding: 4px;
   border-radius: 999px;
   background: rgba(10, 10, 10, 0.82);
@@ -51,8 +54,10 @@
   position: relative; /* sits above the highlight */
   display: flex;
   align-items: center;
+  flex-shrink: 0;
   height: 28px;
   padding: 0 12px;
+  white-space: nowrap;
   border: 0;
   border-radius: 999px;
   background: transparent;

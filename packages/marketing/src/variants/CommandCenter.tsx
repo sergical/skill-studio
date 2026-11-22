@@ -136,11 +136,27 @@ function CopyAgentPromptButton() {
     <button
       type="button"
       onClick={() => copy(AGENT_SETUP_PROMPT)}
+      aria-label={copied ? "Copied. Paste it into your agent" : "Copy agent prompt"}
       {...stylex.props(styles.sourceLink)}
     >
-      {copied ? <Check aria-hidden="true" size={18} /> : <Copy aria-hidden="true" size={18} />}
-      <span aria-live="polite">
-        {copied ? "Copied. Paste it into your agent" : "Copy agent prompt"}
+      <span aria-hidden="true" {...stylex.props(styles.copyVisual)}>
+        <span {...stylex.props(styles.copyIconSlot)}>
+          <span {...stylex.props(styles.copyIconFace, !copied && styles.copyFaceOn)}>
+            <Copy size={18} />
+          </span>
+          <span {...stylex.props(styles.copyIconFace, copied && styles.copyFaceOn)}>
+            <Check size={18} />
+          </span>
+        </span>
+        <span {...stylex.props(styles.copyLabelSlot)}>
+          <span {...stylex.props(styles.copyLabelFace, !copied && styles.copyFaceOn)}>
+            Copy agent prompt
+          </span>
+          <span {...stylex.props(styles.copyLabelFace, copied && styles.copyFaceOn)}>Copied</span>
+        </span>
+      </span>
+      <span aria-live="polite" {...stylex.props(styles.visuallyHidden)}>
+        {copied ? "Copied. Paste it into your agent" : ""}
       </span>
     </button>
   );
@@ -462,17 +478,52 @@ const styles = stylex.create({
     display: "inline-flex",
     fontSize: 15,
     fontWeight: 620,
-    gap: 9,
     justifyContent: "center",
     minHeight: 54,
     paddingInline: 16,
+    position: "relative",
     textDecoration: "none",
     transition:
       "background-color 150ms ease-out, border-color 150ms ease-out, transform 150ms ease-out",
     ":hover": { backgroundColor: siteTokens.surface, borderColor: siteTokens.muted },
-    ":active": { transform: "scale(.96)" },
+    ":active": { transform: "scale(.97)" },
     "@media (max-width: 600px)": { minHeight: 48, width: "100%" },
   },
+  copyVisual: {
+    alignItems: "center",
+    display: "inline-flex",
+    gap: 9,
+  },
+  copyIconSlot: {
+    display: "inline-grid",
+    height: 18,
+    placeItems: "center",
+    width: 18,
+  },
+  copyLabelSlot: {
+    display: "inline-grid",
+    placeItems: "center start",
+  },
+  copyIconFace: {
+    gridArea: "1 / 1",
+    display: "flex",
+    opacity: 0,
+    transform: "scale(.92)",
+    transition:
+      "opacity 160ms cubic-bezier(0.32, 0.72, 0, 1), transform 160ms cubic-bezier(0.32, 0.72, 0, 1)",
+    "@media (prefers-reduced-motion: reduce)": {
+      transition: "opacity 120ms ease-out",
+      transform: "none",
+    },
+  },
+  copyLabelFace: {
+    gridArea: "1 / 1",
+    opacity: 0,
+    transition: "opacity 160ms cubic-bezier(0.32, 0.72, 0, 1)",
+    whiteSpace: "nowrap",
+    "@media (prefers-reduced-motion: reduce)": { transition: "opacity 120ms ease-out" },
+  },
+  copyFaceOn: { opacity: 1, transform: "none" },
   agentProof: {
     alignItems: "center",
     borderBottomColor: siteTokens.border,

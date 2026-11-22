@@ -28,6 +28,16 @@ export const HERO_SUBLINE =
 const TOUCH_DEVICE = "@media (hover: none) and (pointer: coarse)";
 const HOVER = "@media (hover: hover) and (pointer: fine)";
 const SETTLE = "cubic-bezier(0.32, 0.72, 0, 1)";
+const SPRINGY = "cubic-bezier(0.34, 1.4, 0.64, 1)";
+const checkPop = stylex.keyframes({
+  from: { opacity: 0, transform: "scale(0.55) rotate(-12deg)" },
+  "55%": { opacity: 1, transform: "scale(1.18) rotate(4deg)" },
+  to: { opacity: 1, transform: "scale(1) rotate(0deg)" },
+});
+const labelIn = stylex.keyframes({
+  from: { opacity: 0, transform: "translateY(4px)" },
+  to: { opacity: 1, transform: "translateY(0)" },
+});
 
 export function DownloadButton({
   theme,
@@ -75,11 +85,34 @@ export function CopyAgentPromptButton() {
     <button
       type="button"
       onClick={() => copy(AGENT_SETUP_PROMPT)}
-      {...stylex.props(styles.sourceLink)}
+      aria-label={copied ? "Copied. Paste it into your agent" : "Copy agent prompt"}
+      {...stylex.props(styles.sourceLink, copied && styles.sourceLinkCopied)}
     >
-      {copied ? <Check aria-hidden="true" size={18} /> : <Copy aria-hidden="true" size={18} />}
-      <span aria-live="polite">
-        {copied ? "Copied. Paste it into your agent" : "Copy agent prompt"}
+      <span aria-hidden="true" {...stylex.props(styles.copyVisual)}>
+        <span {...stylex.props(styles.copyIconSlot)}>
+          <span {...stylex.props(styles.copyIconFace, !copied && styles.copyFaceOn)}>
+            <Copy size={18} />
+          </span>
+          {/* Remount on each copy so the pop keyframe always plays (emil-css-animations). */}
+          {copied ? (
+            <span key="check" {...stylex.props(styles.copyIconFace, styles.copyCheckPop)}>
+              <Check size={18} />
+            </span>
+          ) : null}
+        </span>
+        <span {...stylex.props(styles.copyLabelSlot)}>
+          <span {...stylex.props(styles.copyLabelFace, !copied && styles.copyFaceOn)}>
+            Copy agent prompt
+          </span>
+          {copied ? (
+            <span key="copied" {...stylex.props(styles.copyLabelFace, styles.copyLabelPop)}>
+              Copied
+            </span>
+          ) : null}
+        </span>
+      </span>
+      <span aria-live="polite" {...stylex.props(styles.visuallyHidden)}>
+        {copied ? "Copied. Paste it into your agent" : ""}
       </span>
     </button>
   );
@@ -364,15 +397,85 @@ const styles = stylex.create({
     display: "inline-flex",
     fontSize: 15,
     fontWeight: 620,
-    gap: 9,
     justifyContent: "center",
     minHeight: 54,
     paddingInline: 16,
+    position: "relative",
     textDecoration: "none",
-    transition:
-      "background-color 150ms ease-out, border-color 150ms ease-out, transform 150ms ease-out",
+    transitionProperty: "background-color, border-color, color, transform",
+    transitionDuration: "180ms",
+    transitionTimingFunction: "ease-out",
     ":hover": { backgroundColor: siteTokens.surface, borderColor: siteTokens.muted },
-    ":active": { transform: "scale(.96)" },
+    // Press feedback stays at 0.97 — below that reads as exaggeration (emil-animations).
+    ":active": { transform: "scale(.97)" },
     "@media (max-width: 600px)": { minHeight: 48, width: "100%" },
+  },
+  sourceLinkCopied: {
+    borderColor: "oklch(0.72 0.14 150)",
+    color: "oklch(0.78 0.14 150)",
+  },
+  // Fixed slots so the idle → copied swap never changes the button width or wraps.
+  copyVisual: {
+    alignItems: "center",
+    display: "inline-flex",
+    gap: 9,
+  },
+  copyIconSlot: {
+    display: "inline-grid",
+    height: 18,
+    placeItems: "center",
+    width: 18,
+  },
+  copyLabelSlot: {
+    display: "inline-grid",
+    placeItems: "center start",
+  },
+  visuallyHidden: {
+    border: 0,
+    clipPath: "inset(50%)",
+    height: 1,
+    margin: -1,
+    overflow: "hidden",
+    padding: 0,
+    position: "absolute",
+    whiteSpace: "nowrap",
+    width: 1,
+  },
+  copyIconFace: {
+    gridArea: "1 / 1",
+    display: "flex",
+    opacity: 0,
+    transform: "scale(.92)",
+    transition: `opacity 160ms ${SETTLE}, transform 160ms ${SETTLE}`,
+    "@media (prefers-reduced-motion: reduce)": {
+      transition: "opacity 120ms ease-out",
+      transform: "none",
+    },
+  },
+  copyLabelFace: {
+    gridArea: "1 / 1",
+    opacity: 0,
+    transition: `opacity 160ms ${SETTLE}, transform 200ms ${SETTLE}`,
+    whiteSpace: "nowrap",
+    "@media (prefers-reduced-motion: reduce)": { transition: "opacity 120ms ease-out" },
+  },
+  copyFaceOn: { opacity: 1, transform: "none" },
+  copyCheckPop: {
+    opacity: 1,
+    transform: "none",
+    animationName: checkPop,
+    animationDuration: "420ms",
+    animationTimingFunction: SPRINGY,
+    animationFillMode: "both",
+    "@media (prefers-reduced-motion: reduce)": { animationName: "none", opacity: 1 },
+  },
+  copyLabelPop: {
+    opacity: 1,
+    transform: "none",
+    animationName: labelIn,
+    animationDuration: "280ms",
+    animationTimingFunction: SETTLE,
+    animationFillMode: "both",
+    "@media (prefers-reduced-motion: reduce)": { animationName: "none", opacity: 1 },
   },
 });

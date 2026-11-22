@@ -75,24 +75,35 @@ export function ProtoPage({
   onToggleTheme,
   hero,
   calculator,
+  product,
   display = false,
-}: VariantProps & { hero: ReactNode; calculator: ReactNode; display?: boolean }) {
+}: VariantProps & {
+  hero: ReactNode;
+  calculator: ReactNode;
+  /** A product section of the variant's own. It goes right under the hero, before Jobs. */
+  product?: ReactNode;
+  display?: boolean;
+}) {
   return (
     <div id="top" {...stylex.props(siteLayout.page, theme === "light" && lightSiteTheme)}>
       <SiteHeader page="home" sticky cta={<HeaderDownload />} />
       <main>
         {hero}
 
+        {product}
+
         <section id="jobs" {...stylex.props(siteLayout.container, styles.jobs, styles.anchor)}>
           <ProtoJobs display={display} />
         </section>
 
-        <section
-          id="product"
-          {...stylex.props(siteLayout.container, styles.product, styles.anchor)}
-        >
-          <ProductMock theme={theme} onToggleTheme={onToggleTheme} />
-        </section>
+        {!product && (
+          <section
+            id="product"
+            {...stylex.props(siteLayout.container, styles.product, styles.anchor)}
+          >
+            <ProductMock theme={theme} onToggleTheme={onToggleTheme} />
+          </section>
+        )}
 
         <AgentStrip />
 

@@ -22,12 +22,23 @@ export const DESCRIPTION = 240;
 // `- name: (file: r0/name/SKILL.md)` plus its newline, with Codex's short root alias.
 const CODEX_LINE = 66;
 
-export const CLAUDE_SHARE = 0.01;
+/** `skillListingBudgetFraction`: Claude Code's default, and the stops the calculator offers. */
+export const CLAUDE_DEFAULT_FRACTION = 0.01;
+// Claude Code accepts any fraction > 0 and ≤ 1 (100%). The calculator stops at 10%: above that
+// the listing usually costs more than it helps, and the page is teaching a budget, not a sink.
+export const CLAUDE_FRACTIONS = [0.001, 0.0025, 0.005, 0.01, 0.02, 0.05, 0.1];
+export const CLAUDE_DEFAULT_FRACTION_INDEX = CLAUDE_FRACTIONS.indexOf(CLAUDE_DEFAULT_FRACTION);
+// Codex sizes its list at 2% of the window. Only an explicit `skills.max_context_tokens`
+// replaces that, and Codex caps that setting, not the 2% default, at 10,000 tokens.
 export const CODEX_SHARE = 0.02;
+export const CODEX_MAX_CONTEXT_TOKENS = 10_000;
 
 export interface ClaudeEstimate {
   agent: "claude";
   total: number;
+  fraction: number;
+  /** The fraction of the window, in tokens. Claude Code counts the list in characters. */
+  budgetTokens: number;
   budget: number;
   needed: number;
   described: number;
@@ -37,6 +48,8 @@ export interface ClaudeEstimate {
 export interface CodexEstimate {
   agent: "codex";
   total: number;
+  /** The `skills.max_context_tokens` in use, or null for 2% of the window. */
+  override: number | null;
   budget: number;
   needed: number;
   full: number;
@@ -47,25 +60,38 @@ export interface CodexEstimate {
 }
 
 /** Claude Code lists every name first, then adds descriptions until its budget runs out. */
-export function estimateClaude(contextTokens: number, total: number): ClaudeEstimate {
-  const budget = Math.floor(contextTokens * CHARS_PER_TOKEN * CLAUDE_SHARE);
+export function estimateClaude(
+  contextTokens: number,
+  total: number,
+  fraction = CLAUDE_DEFAULT_FRACTION,
+): ClaudeEstimate {
+  const budgetTokens = contextTokens * fraction;
+  const budget = Math.max(1, Math.floor(budgetTokens * CHARS_PER_TOKEN));
+  const base = { agent: "claude" as const, total, fraction, budgetTokens, budget };
   const nameWidth = NAME + 2;
   const fullWidth = NAME + 4 + DESCRIPTION;
   const needed = total * fullWidth;
-  if (needed <= budget) {
-    return { agent: "claude", total, budget, needed, described: total, nameOnly: 0 };
-  }
+  if (needed <= budget) return { ...base, needed, described: total, nameOnly: 0 };
   const left = budget - total * nameWidth;
   const described = Math.max(0, Math.min(total, Math.floor(left / (fullWidth - nameWidth))));
-  return { agent: "claude", total, budget, needed, described, nameOnly: total - described };
+  return { ...base, needed, described, nameOnly: total - described };
+}
+
+export function codexBudget(contextTokens: number, override: number | null) {
+  if (override !== null) return Math.min(CODEX_MAX_CONTEXT_TOKENS, Math.max(1, override));
+  return Math.max(1, Math.floor(contextTokens * CODEX_SHARE));
 }
 
 /** Codex trims every description by the same amount, then leaves whole skills out. */
-export function estimateCodex(contextTokens: number, total: number): CodexEstimate {
-  const budget = Math.floor(contextTokens * CODEX_SHARE);
+export function estimateCodex(
+  contextTokens: number,
+  total: number,
+  override: number | null = null,
+): CodexEstimate {
+  const budget = codexBudget(contextTokens, override);
   const room = budget * CHARS_PER_TOKEN;
   const needed = Math.ceil((total * (CODEX_LINE + DESCRIPTION + 1)) / CHARS_PER_TOKEN);
-  const base = { agent: "codex" as const, total, budget, needed };
+  const base = { agent: "codex" as const, total, override, budget, needed };
   if (needed <= budget)
     return { ...base, full: total, shortened: 0, leftOut: 0, kept: DESCRIPTION };
   const share = Math.floor((room - total * CODEX_LINE) / total) - 1;
@@ -86,6 +112,7 @@ export function claudeSentence(result: ClaudeEstimate) {
 
 export function claudeFollowUp(result: ClaudeEstimate) {
   if (result.nameOnly === 0) return "The model can pick any of them from what you ask.";
+  if (result.described === 0) return "The model has to guess which to run from the name alone.";
   return `The other ${format(result.nameOnly)} show by name only, so the model has to guess from the name.`;
 }
 
@@ -101,6 +128,19 @@ export function codexFollowUp(result: CodexEstimate) {
   if (result.shortened > 0)
     return `Codex trims all ${format(result.total)} by the same amount, from ${format(DESCRIPTION)}.`;
   return "Codex runs out of room for names and paths, so the rest are not listed at all.";
+}
+
+const PERCENT = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 2 });
+export const formatPercent = (fraction: number) => PERCENT.format(fraction);
+
+export function claudeBudgetLine(result: ClaudeEstimate, windowLabel: string) {
+  return `${formatPercent(result.fraction)} of ${windowLabel} is ${format(Math.round(result.budgetTokens))} tokens, about ${format(result.budget)} characters.`;
+}
+
+export function codexBudgetLine(result: CodexEstimate, windowLabel: string) {
+  if (result.override === null)
+    return `${formatPercent(CODEX_SHARE)} of ${windowLabel} is ${format(result.budget)} tokens.`;
+  return `${format(result.budget)} tokens at any context window. Codex caps this setting at ${format(CODEX_MAX_CONTEXT_TOKENS)}.`;
 }
 
 export const CLAUDE_LINE = "Claude Code lists skills in 1% of the context window by default.";

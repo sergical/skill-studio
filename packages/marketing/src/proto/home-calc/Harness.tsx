@@ -1,5 +1,5 @@
 // PROTO(home-calc): the picker harness. One variant at a time, full size; the swap has no
-// animation and re-mounts the variant so its entrance runs again. Keys: 1–4, ←/→, R to replay.
+// animation and re-mounts the variant so its entrance runs again. Keys: 1–5, ←/→, R to replay.
 import {
   memo,
   startTransition,
@@ -26,15 +26,18 @@ import {
 import type { SiteTheme } from "../../SiteTheme.stylex";
 import { CommandCenter } from "../../variants/CommandCenter";
 import { BaselinePlus } from "./BaselinePlus";
+import { BaselinePlusPlus } from "./BaselinePlusPlus";
 import { Editorial } from "./Editorial";
 import { Kinetic } from "./Kinetic";
 import type { VariantProps } from "./ProtoPage";
 
+// New variants go last, so a shared ?v= link keeps pointing at the same variant.
 const VARIANTS: ReadonlyArray<{ name: string; Component: ComponentType<VariantProps> }> = [
   { name: "Current", Component: CommandCenter },
   { name: "Baseline Plus", Component: BaselinePlus },
   { name: "Kinetic", Component: Kinetic },
   { name: "Editorial", Component: Editorial },
+  { name: "Baseline Plus+", Component: BaselinePlusPlus },
 ];
 
 function initialVariant() {

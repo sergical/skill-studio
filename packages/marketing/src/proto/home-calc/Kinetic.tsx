@@ -17,13 +17,24 @@ import {
   ESTIMATE_NOTE,
   MAX_PROJECT_SKILLS,
   MAX_SKILLS,
+  claudeBudgetLine,
   claudeFollowUp,
   claudeSentence,
+  codexBudgetLine,
   codexFollowUp,
   codexSentence,
   format,
 } from "./budget";
-import { AGENT_OPTIONS, ProjectSkillsControl, SkillsControl, useCalculator } from "./calc-shared";
+import {
+  AGENT_OPTIONS,
+  ClaudeFractionControl,
+  CodexOverrideControl,
+  ProjectSkillsControl,
+  SkillsControl,
+  useCalculator,
+  type Agent,
+  type Calculator,
+} from "./calc-shared";
 import { Segmented, Slider } from "./controls";
 import {
   CopyAgentPromptButton,
@@ -135,7 +146,23 @@ const Dot = memo(function Dot({
   );
 });
 
-function Calculator() {
+function agentLineFor(agent: Agent, budgets: boolean) {
+  if (!budgets) return agent === "claude" ? CLAUDE_LINE : CODEX_LINE_COPY;
+  return agent === "claude"
+    ? "Claude Code lists skills in a share of the context window, set by skillListingBudgetFraction."
+    : "Codex lists skills in 2% of the context window, unless skills.max_context_tokens sets a number.";
+}
+
+// Claude Code counts its list in characters; with `budgets` the tag shows the fraction of the
+// window in tokens, so both agents read in the same unit.
+function budgetTagFor(calc: Calculator, budgets: boolean) {
+  if (calc.agent === "codex") return `${format(calc.codex.budget)} tokens`;
+  if (budgets) return `${format(Math.round(calc.claude.budgetTokens))} tokens`;
+  return `${format(calc.claude.budget)} characters`;
+}
+
+/** With `budgets`, the panel also sets Claude Code's fraction and Codex's token setting. */
+export function KineticCalculator({ budgets = false }: { budgets?: boolean }) {
   const calc = useCalculator();
   const reduced = useReducedMotion();
   const numberRef = useRef<HTMLSpanElement>(null);
@@ -165,12 +192,16 @@ function Calculator() {
     return index < calc.total - calc.codex.leftOut ? "nameOnly" : "leftOut";
   };
 
+  const windowLabel = CONTEXT_WINDOWS[calc.windowIndex].label;
+
   return (
     <>
       <h2 {...stylex.props(homeSectionStyles.title, styles.calcTitle)}>How many skills fit?</h2>
       <p {...stylex.props(styles.calcLede)}>
         Claude Code and Codex give the model a list of your skills, and the list has a size limit.
-        Slide the window and watch which skills keep their description.
+        {budgets
+          ? " Change the window or the setting and watch which skills keep their description."
+          : " Slide the window and watch which skills keep their description."}
       </p>
       <div {...stylex.props(styles.calc)}>
         <div {...stylex.props(styles.panel)}>
@@ -180,18 +211,33 @@ function Calculator() {
             value={calc.agent}
             onChange={calc.setAgent}
             sliding
+            equalWidth
           />
-          <p {...stylex.props(styles.agentLine)}>{isClaude ? CLAUDE_LINE : CODEX_LINE_COPY}</p>
+          <p {...stylex.props(styles.agentLine)}>{agentLineFor(calc.agent, budgets)}</p>
           <Slider
             label="Context window"
             value={calc.windowIndex}
-            valueText={CONTEXT_WINDOWS[calc.windowIndex].label}
+            valueText={windowLabel}
             min={0}
             max={CONTEXT_WINDOWS.length - 1}
             onChange={calc.setWindowIndex}
             springy
             marks={CONTEXT_WINDOWS.map((option) => option.label)}
           />
+          {budgets && (
+            <div {...stylex.props(styles.budgetSetting)}>
+              {isClaude ? (
+                <ClaudeFractionControl calc={calc} />
+              ) : (
+                <CodexOverrideControl calc={calc} />
+              )}
+              <p {...stylex.props(styles.budgetLine)}>
+                {isClaude
+                  ? claudeBudgetLine(calc.claude, windowLabel)
+                  : codexBudgetLine(calc.codex, windowLabel)}
+              </p>
+            </div>
+          )}
           <SkillsControl calc={calc} />
           <ProjectSkillsControl calc={calc} />
         </div>
@@ -211,9 +257,7 @@ function Calculator() {
             </span>
             <span {...stylex.props(styles.budgetTag)}>
               <AgentIcon agent={calc.agent} size={14} />
-              {isClaude
-                ? `${format(calc.claude.budget)} characters`
-                : `${format(calc.codex.budget)} tokens`}
+              {budgetTagFor(calc, budgets)}
             </span>
           </div>
           <div aria-hidden="true" {...stylex.props(styles.field)}>
@@ -262,7 +306,9 @@ function Calculator() {
 }
 
 export function Kinetic(props: VariantProps) {
-  return <ProtoPage {...props} hero={<Hero theme={props.theme} />} calculator={<Calculator />} />;
+  return (
+    <ProtoPage {...props} hero={<Hero theme={props.theme} />} calculator={<KineticCalculator />} />
+  );
 }
 
 const styles = stylex.create({
@@ -403,6 +449,15 @@ const styles = stylex.create({
     padding: 20,
   },
   agentLine: { color: siteTokens.muted, fontSize: 13, lineHeight: 1.5, margin: "-6px 0 0" },
+  budgetSetting: { display: "flex", flexDirection: "column", gap: 2 },
+  budgetLine: {
+    color: siteTokens.muted,
+    fontSize: 13,
+    fontVariantNumeric: "tabular-nums",
+    lineHeight: 1.5,
+    margin: 0,
+    minHeight: "3em",
+  },
   stage: {
     borderRadius: 16,
     boxShadow: `0 0 0 1px ${siteTokens.border}`,

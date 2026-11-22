@@ -66,6 +66,8 @@ export interface ThemeToggleOrigin {
 interface ProductMockProps {
   theme: SiteTheme;
   onToggleTheme: (origin: ThemeToggleOrigin) => void;
+  initialView?: ProductMockRootView;
+  xstyle?: stylex.StyleXStyles;
 }
 
 type Harness = AgentId | "universal";
@@ -2773,9 +2775,14 @@ const park = (skill: SkillRow): SkillRow => ({
   fix: "Unpark",
 });
 
-export function ProductMock({ theme, onToggleTheme }: ProductMockProps) {
+export function ProductMock({
+  theme,
+  onToggleTheme,
   // Opens on Sessions: it answers the headline, which skills each session saw and used.
-  const [activeView, setActiveView] = useState<ProductMockRootView>("sessions");
+  initialView = "sessions",
+  xstyle,
+}: ProductMockProps) {
+  const [activeView, setActiveView] = useState<ProductMockRootView>(initialView);
   const [detail, setDetail] = useState<DetailState | null>(null);
   const [installOpen, setInstallOpen] = useState(false);
   const [compareSkill, setCompareSkill] = useState<string | null>(null);
@@ -2814,7 +2821,7 @@ export function ProductMock({ theme, onToggleTheme }: ProductMockProps) {
     <div
       role="region"
       aria-label="Interactive Skill Studio product preview"
-      {...stylex.props(styles.window, theme === "light" && productDemoLightTheme)}
+      {...stylex.props(styles.window, theme === "light" && productDemoLightTheme, xstyle)}
     >
       <Sidebar
         activeView={activeView}

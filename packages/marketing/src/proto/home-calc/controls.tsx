@@ -36,6 +36,7 @@ export function Segmented<T extends string | number>({
   onChange,
   sliding = false,
   size = "regular",
+  equalWidth = false,
 }: {
   label: string;
   options: ReadonlyArray<Option<T>>;
@@ -43,6 +44,8 @@ export function Segmented<T extends string | number>({
   onChange: (value: T) => void;
   sliding?: boolean;
   size?: "regular" | "compact";
+  /** Give every option the same width (Claude Code / Codex agent switch). */
+  equalWidth?: boolean;
 }) {
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
   const highlight = useRef<HTMLSpanElement>(null);
@@ -82,7 +85,11 @@ export function Segmented<T extends string | number>({
       role="radiogroup"
       aria-label={label}
       onKeyDown={onKeyDown}
-      {...stylex.props(styles.group, size === "compact" && styles.groupCompact)}
+      {...stylex.props(
+        styles.group,
+        size === "compact" && styles.groupCompact,
+        equalWidth && styles.groupEqual,
+      )}
     >
       {sliding && (
         <span
@@ -105,6 +112,7 @@ export function Segmented<T extends string | number>({
           {...stylex.props(
             styles.option,
             size === "compact" && styles.optionCompact,
+            equalWidth && styles.optionEqual,
             i === index && (sliding ? styles.optionOnText : styles.optionOn),
           )}
         >
@@ -235,9 +243,9 @@ export function Slider({
           <span
             {...stylex.props(styles.fill, spring && styles.springy, styles.fillScale(position))}
           />
-          {marks?.map((mark, i) => (
+          {marks?.map((_, i) => (
             <span
-              key={mark}
+              key={i}
               aria-hidden="true"
               {...stylex.props(styles.tick, styles.tickAt((i / (marks.length - 1)) * 100))}
             />
@@ -254,15 +262,20 @@ export function Slider({
         </span>
       </div>
       {marks && (
+        // An empty mark is a tick without a label. The labelled stops must be evenly spaced,
+        // because the labels are spread across the row, not placed under their ticks.
         <div aria-hidden="true" {...stylex.props(styles.marks)}>
-          {marks.map((mark, i) => (
-            <span
-              key={mark}
-              {...stylex.props(styles.mark, i === Math.round(value - min) && styles.markOn)}
-            >
-              {mark}
-            </span>
-          ))}
+          {marks.map(
+            (mark, i) =>
+              mark && (
+                <span
+                  key={i}
+                  {...stylex.props(styles.mark, i === Math.round(value - min) && styles.markOn)}
+                >
+                  {mark}
+                </span>
+              ),
+          )}
         </div>
       )}
     </div>
@@ -318,6 +331,7 @@ const styles = stylex.create({
     padding: 3,
     position: "relative",
   },
+  groupEqual: { display: "flex", width: "100%" },
   groupCompact: { borderRadius: 9 },
   highlight: {
     backgroundColor: siteTokens.text,
@@ -361,6 +375,7 @@ const styles = stylex.create({
     minHeight: { default: 34, "@media (pointer: coarse)": 44 },
     paddingInline: 11,
   },
+  optionEqual: { flex: 1, minWidth: 0 },
   optionOn: {
     backgroundColor: siteTokens.text,
     color: siteTokens.background,
