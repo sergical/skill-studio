@@ -67,6 +67,9 @@ function devPrerender(): Plugin {
       order: "pre",
       async handler(html, ctx) {
         if (!ctx.server) return html;
+        // PROTO(home-calc): dev-only prototype page, never prerendered or built. Delete with src/proto/home-calc.
+        if (ctx.path.startsWith("/proto/")) return html;
+        // /PROTO(home-calc)
         const file = ctx.path.replace(/^\//, "").replace(/(^|\/)$/, "$1index.html");
         return (await loadPrerender(ctx.server)).renderSitePage(file, html);
       },

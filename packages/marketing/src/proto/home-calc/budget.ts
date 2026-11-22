@@ -1,0 +1,108 @@
+// PROTO(home-calc): throwaway listing budget estimate shared by the three calculator variants.
+// Same shape as listing-budget-model.ts on t3/skill-budget-calculator, reduced to what the
+// prototype shows: equal-length example skills, no model names, a context window only.
+
+export const CONTEXT_WINDOWS = [
+  { tokens: 128_000, label: "128K" },
+  { tokens: 200_000, label: "200K" },
+  { tokens: 400_000, label: "400K" },
+  { tokens: 1_000_000, label: "1M" },
+] as const;
+
+export const DEFAULT_WINDOW = 1;
+export const DEFAULT_SKILLS = 120;
+export const DEFAULT_PROJECT_SKILLS = 30;
+export const MIN_SKILLS = 10;
+export const MAX_SKILLS = 400;
+export const MAX_PROJECT_SKILLS = 100;
+
+const CHARS_PER_TOKEN = 4;
+const NAME = 20;
+export const DESCRIPTION = 240;
+// `- name: (file: r0/name/SKILL.md)` plus its newline, with Codex's short root alias.
+const CODEX_LINE = 66;
+
+export const CLAUDE_SHARE = 0.01;
+export const CODEX_SHARE = 0.02;
+
+export interface ClaudeEstimate {
+  agent: "claude";
+  total: number;
+  budget: number;
+  needed: number;
+  described: number;
+  nameOnly: number;
+}
+
+export interface CodexEstimate {
+  agent: "codex";
+  total: number;
+  budget: number;
+  needed: number;
+  full: number;
+  shortened: number;
+  leftOut: number;
+  /** Characters each shortened description keeps. */
+  kept: number;
+}
+
+/** Claude Code lists every name first, then adds descriptions until its budget runs out. */
+export function estimateClaude(contextTokens: number, total: number): ClaudeEstimate {
+  const budget = Math.floor(contextTokens * CHARS_PER_TOKEN * CLAUDE_SHARE);
+  const nameWidth = NAME + 2;
+  const fullWidth = NAME + 4 + DESCRIPTION;
+  const needed = total * fullWidth;
+  if (needed <= budget) {
+    return { agent: "claude", total, budget, needed, described: total, nameOnly: 0 };
+  }
+  const left = budget - total * nameWidth;
+  const described = Math.max(0, Math.min(total, Math.floor(left / (fullWidth - nameWidth))));
+  return { agent: "claude", total, budget, needed, described, nameOnly: total - described };
+}
+
+/** Codex trims every description by the same amount, then leaves whole skills out. */
+export function estimateCodex(contextTokens: number, total: number): CodexEstimate {
+  const budget = Math.floor(contextTokens * CODEX_SHARE);
+  const room = budget * CHARS_PER_TOKEN;
+  const needed = Math.ceil((total * (CODEX_LINE + DESCRIPTION + 1)) / CHARS_PER_TOKEN);
+  const base = { agent: "codex" as const, total, budget, needed };
+  if (needed <= budget)
+    return { ...base, full: total, shortened: 0, leftOut: 0, kept: DESCRIPTION };
+  const share = Math.floor((room - total * CODEX_LINE) / total) - 1;
+  if (share >= 1) return { ...base, full: 0, shortened: total, leftOut: 0, kept: share };
+  const listed = Math.min(total, Math.floor(room / CODEX_LINE));
+  return { ...base, full: 0, shortened: 0, leftOut: total - listed, kept: 0 };
+}
+
+const NUMBER = new Intl.NumberFormat("en-US");
+export const format = (value: number) => NUMBER.format(value);
+
+export function claudeSentence(result: ClaudeEstimate) {
+  if (result.nameOnly === 0) return `All ${format(result.total)} skills keep their description.`;
+  if (result.described === 0)
+    return `Every one of your ${format(result.total)} skills shows by name only.`;
+  return `${format(result.described)} of ${format(result.total)} skills keep their description.`;
+}
+
+export function claudeFollowUp(result: ClaudeEstimate) {
+  if (result.nameOnly === 0) return "The model can pick any of them from what you ask.";
+  return `The other ${format(result.nameOnly)} show by name only, so the model has to guess from the name.`;
+}
+
+export function codexSentence(result: CodexEstimate) {
+  if (result.full === result.total) return `All ${format(result.total)} descriptions fit.`;
+  if (result.shortened > 0)
+    return `Every description is cut to about ${format(result.kept)} characters.`;
+  return `${format(result.leftOut)} of ${format(result.total)} skills are left out of the list.`;
+}
+
+export function codexFollowUp(result: CodexEstimate) {
+  if (result.full === result.total) return "Codex lists each skill in full.";
+  if (result.shortened > 0)
+    return `Codex trims all ${format(result.total)} by the same amount, from ${format(DESCRIPTION)}.`;
+  return "Codex runs out of room for names and paths, so the rest are not listed at all.";
+}
+
+export const CLAUDE_LINE = "Claude Code lists skills in 1% of the context window by default.";
+export const CODEX_LINE_COPY = "Codex lists skills in 2% of the context window.";
+export const ESTIMATE_NOTE = `Estimated with a short name and a ${format(DESCRIPTION)}-character description per skill. Skill Studio measures your real list.`;
