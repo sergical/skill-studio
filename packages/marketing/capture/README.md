@@ -11,9 +11,7 @@ npm run remotion:render -w @skill-studio/marketing
 
 The capture command requires `agent-browser`. Set `SKILL_STUDIO_CAPTURE_URL` to use another capture page URL. The desktop Vite server keeps port 1420, so when the `.localhost` URL returns 502, use `http://localhost:1420/@fs<repo>/packages/marketing/capture/index.html`. The mock has no saved agent choice, so the script clicks Continue on the first-run screen. It records real controls at 1040×1000 and 800×1000. Remotion uses separate camera paths for desktop and phone playback.
 
-Both commands do every feature. To do only some, set `WALKTHROUGH_ONLY` to a comma list, for example `WALKTHROUGH_ONLY=sessions,listing`. The features are `sessions`, `listing`, `map`, `repair`, `install` and `activity`.
-
-The Sessions and Model listing scenes change two things in the dev fixture, in `capture/main.tsx`: the session prompts, and the listing budget and its labels. The fixture's own values read as test data in a video.
+Both commands do every feature. To do only some, set `WALKTHROUGH_ONLY` to a comma list, for example `WALKTHROUGH_ONLY=map,repair`. The features are `map`, `repair`, `install` and `activity`.
 
 After an app UI change, capture again and check the actions, states, and camera crops before rendering. `capture/public/remotion/current` contains source frames and is used only by Remotion. `public/walkthrough/current` contains the delivered MP4s and posters.
 

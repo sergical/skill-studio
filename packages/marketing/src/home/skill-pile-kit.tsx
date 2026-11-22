@@ -15,7 +15,7 @@ export const ACTIVE_PILE_SLOTS = new Map(ACTIVE_PILE_CHIPS.map((chip, slot) => [
 const SETTLE = "cubic-bezier(0.32, 0.72, 0, 1)";
 
 const MESSY_SUMMARY = `${PILE_COUNTS.total} skills across ${PILE_COUNTS.folders} folders`;
-const SORTED_SUMMARY = `${PILE_COUNTS.active} skills kept · ${PILE_COUNTS.parked} unused skills parked`;
+const SORTED_SUMMARY = `${PILE_COUNTS.active} skills kept · ${PILE_COUNTS.parked} skills parked`;
 
 export interface Point {
   x: number;

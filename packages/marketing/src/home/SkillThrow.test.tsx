@@ -111,7 +111,7 @@ describe("intro", () => {
     await act(async () => {});
     expect(animate).not.toHaveBeenCalled();
     expect(second.container.querySelector('[aria-live="polite"]')?.textContent).toContain(
-      `${PILE_COUNTS.parked} unused skills parked`,
+      `${PILE_COUNTS.parked} skills parked`,
     );
     expect(screen.getByRole("button", { name: "Make a mess again" })).toBeTruthy();
   });

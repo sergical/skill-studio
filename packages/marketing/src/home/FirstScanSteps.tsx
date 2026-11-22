@@ -32,12 +32,12 @@ const FOLDER_ROWS = [
   { path: "~/work/design-system", source: "history" },
 ] as const;
 
-// The same made-up library as the hero pile, so the page shows one set of numbers.
+// An example scan with the same library size as the hero pile.
 const SCAN_ROWS = [
-  { label: "skills found", value: PILE_COUNTS.total, color: siteTokens.text },
-  { label: "broken skills", value: 3, color: siteTokens.text },
-  { label: "different copies", value: 8, color: siteTokens.text },
-  { label: "updates available", value: 4, color: siteTokens.text },
+  { label: "skills found", value: PILE_COUNTS.total },
+  { label: "broken skills", value: 3 },
+  { label: "different copies", value: 8 },
+  { label: "updates available", value: 4 },
 ];
 
 function Step({
@@ -112,7 +112,7 @@ function ScanRows() {
       <ul {...stylex.props(styles.rows)}>
         {SCAN_ROWS.map((row) => (
           <li key={row.label} {...stylex.props(styles.row)}>
-            <span {...stylex.props(styles.dot, styles.dotColor(row.color))} />
+            <span {...stylex.props(styles.dot)} />
             <span {...stylex.props(styles.scanValue)}>{row.value}</span>
             <span {...stylex.props(styles.rowLabel)}>{row.label}</span>
           </li>
@@ -295,8 +295,7 @@ const styles = stylex.create({
     width: 28,
   },
   switchThumb: { backgroundColor: siteTokens.accentText, borderRadius: 999, height: 12, width: 12 },
-  dot: { borderRadius: 999, flexShrink: 0, height: 7, width: 7 },
-  dotColor: (color: string) => ({ backgroundColor: color }),
+  dot: { backgroundColor: siteTokens.text, borderRadius: 999, flexShrink: 0, height: 7, width: 7 },
   scanValue: {
     fontVariantNumeric: "tabular-nums",
     fontWeight: 640,

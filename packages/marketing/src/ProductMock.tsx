@@ -2739,7 +2739,6 @@ const park = (skill: SkillRow): SkillRow => ({
 });
 
 export function ProductMock({ theme, onToggleTheme }: ProductMockProps) {
-  // Opens on Sessions: it answers the headline, which skills each session saw and used.
   const [activeView, setActiveView] = useState<ProductMockRootView>("home");
   const [detail, setDetail] = useState<DetailState | null>(null);
   const [installOpen, setInstallOpen] = useState(false);

@@ -11,7 +11,7 @@ import {
 
 import type { SiteTheme } from "../SiteTheme.stylex";
 
-type WalkthroughFeature = "sessions" | "listing" | "map" | "repair" | "install" | "activity";
+type WalkthroughFeature = "map" | "repair" | "install" | "activity";
 type WalkthroughFormat = "desktop" | "mobile";
 
 // A type alias, not an interface: Remotion needs props assignable to `Record<string, unknown>`,
@@ -375,79 +375,7 @@ function ActivityStory({ format, theme }: StoryProps) {
   );
 }
 
-// One still, read from top to bottom: the words, the findings, then the sessions. The camera
-// starts below the page header.
-function SessionsStory({ format, theme }: StoryProps) {
-  const mobile = format === "mobile";
-  return (
-    <ProductCamera
-      format={format}
-      theme={theme}
-      assets={[{ frame: 0, name: `sessions-${theme}-findings` }]}
-      camera={
-        mobile
-          ? [
-              { frame: 0, centerX: 512, centerY: 330, cropWidth: 520 },
-              { frame: 45, centerX: 512, centerY: 330, cropWidth: 520 },
-              { frame: 90, centerX: 512, centerY: 560, cropWidth: 520 },
-              { frame: 150, centerX: 512, centerY: 560, cropWidth: 520 },
-              { frame: 195, centerX: 512, centerY: 740, cropWidth: 520 },
-            ]
-          : [
-              { frame: 0, centerX: 640, centerY: 290, cropWidth: 800 },
-              { frame: 45, centerX: 640, centerY: 290, cropWidth: 800 },
-              { frame: 90, centerX: 640, centerY: 470, cropWidth: 800 },
-              { frame: 150, centerX: 640, centerY: 470, cropWidth: 800 },
-              { frame: 195, centerX: 640, centerY: 775, cropWidth: 800 },
-            ]
-      }
-    />
-  );
-}
-
-// A budget appears in the field, the pointer clicks Compare, then the camera goes down to the
-// first skills that change.
-function ListingStory({ format, theme }: StoryProps) {
-  const mobile = format === "mobile";
-  return (
-    <ProductCamera
-      format={format}
-      theme={theme}
-      assets={[
-        { frame: 0, name: `listing-${theme}-now` },
-        { frame: 60, name: `listing-${theme}-typed` },
-        { frame: 120, name: `listing-${theme}-compare` },
-      ]}
-      camera={
-        mobile
-          ? [
-              { frame: 0, centerX: 512, centerY: 320, cropWidth: 520 },
-              { frame: 165, centerX: 512, centerY: 320, cropWidth: 520 },
-              { frame: 210, centerX: 512, centerY: 740, cropWidth: 520 },
-            ]
-          : [
-              { frame: 0, centerX: 640, centerY: 290, cropWidth: 800 },
-              { frame: 165, centerX: 640, centerY: 290, cropWidth: 800 },
-              { frame: 210, centerX: 640, centerY: 700, cropWidth: 800 },
-            ]
-      }
-      pointers={[
-        {
-          from: 86,
-          startX: mobile ? 560 : 820,
-          startY: mobile ? 420 : 330,
-          to: 115,
-          x: mobile ? 302 : 742,
-          y: mobile ? 204 : 148,
-        },
-      ]}
-    />
-  );
-}
-
 export function ProductWalkthrough({ feature, format, theme }: ProductWalkthroughProps) {
-  if (feature === "sessions") return <SessionsStory format={format} theme={theme} />;
-  if (feature === "listing") return <ListingStory format={format} theme={theme} />;
   if (feature === "map") return <MapStory format={format} theme={theme} />;
   if (feature === "repair") return <RepairStory format={format} theme={theme} />;
   if (feature === "install") return <InstallStory format={format} theme={theme} />;
