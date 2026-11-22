@@ -210,11 +210,11 @@
   }
 
   .docs-page-copy {
-    min-width: 155px;
+    width: 157px;
   }
 
   .docs-agent-trigger {
-    min-width: 120px;
+    width: 120px;
     justify-content: space-between;
   }
 
@@ -224,21 +224,24 @@
 
   @media (max-width: 860px) {
     .docs-page-actions {
-      gap: 4px;
+      column-gap: 0;
     }
 
     .docs-page-actions .docs-action {
       font-size: 12px;
-      padding-inline: 6px;
+      padding-inline: 4px;
     }
 
     .docs-page-copy {
-      min-width: 143px;
+      width: 148px;
     }
 
-    [data-docs-agent-menu],
-    .docs-agent-trigger {
+    [data-docs-agent-menu] {
       min-width: 91px;
+    }
+
+    .docs-agent-trigger {
+      width: 91px;
     }
   }
 

@@ -89,7 +89,6 @@ export function setupDocsSearch() {
       event.metaKey ||
       event.ctrlKey ||
       event.altKey ||
-      event.shiftKey ||
       !(event.target instanceof Element) ||
       event.target.closest("input, textarea, select, [contenteditable], [role=menu]")
     ) {

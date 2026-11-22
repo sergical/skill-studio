@@ -49,7 +49,7 @@ function DocsAgentMenu({ markdownPath }: DocsAgentMenuProps) {
     <>
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger className="docs-action docs-agent-trigger" aria-label="Open in">
-          <span>{feedback || "Open in…"}</span>
+          <span>{feedback === "Prompt copied" ? "Copied" : feedback || "Open in…"}</span>
           <ChevronDown size={14} aria-hidden="true" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" sideOffset={6} className={`docs-agent-menu ${colors}`}>

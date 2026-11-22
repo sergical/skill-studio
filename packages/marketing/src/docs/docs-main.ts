@@ -50,7 +50,8 @@ async function copyCode(button: HTMLElement) {
   } catch {
     // Clipboard access can be blocked. Selecting the code still lets the reader copy it.
     window.getSelection()?.selectAllChildren(code);
-    showCopyLabel(button, "Selected");
+    const shortcut = /Mac|iPhone|iPad/.test(navigator.userAgent) ? "⌘C" : "Ctrl+C";
+    showCopyLabel(button, shortcut);
   }
 }
 
@@ -64,7 +65,7 @@ async function copyPage(button: HTMLElement, url: string) {
     await navigator.clipboard.write([new ClipboardItem({ "text/plain": markdown })]);
     showCopyLabel(button, "Copied", "copied");
   } catch {
-    showCopyLabel(button, "Copy failed");
+    showCopyLabel(button, "Use View Markdown");
   }
 }
 
