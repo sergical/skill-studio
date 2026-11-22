@@ -127,9 +127,56 @@ struct IndexedContext {
     #[serde(default)]
     claude_records: BTreeMap<String, Vec<SkillInvocation>>,
     #[serde(default)]
+    codex_transcript: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    codex_fork: Option<Box<IndexedCodexFork>>,
+}
+
+/// Parsed parent history remains available if the original rollout disappears.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct IndexedCodexFork {
+    parent_session: String,
     inherited_lines: u64,
-    #[serde(default)]
-    history_start_ordinal: Option<u64>,
+    history_start_ordinal: u64,
+    transcript: TranscriptContext,
+    uses: Vec<SkillInvocation>,
+}
+
+impl IndexedCodexFork {
+    fn from_session_meta(line: &str) -> Option<Self> {
+        let record: serde_json::Value = serde_json::from_str(line).ok()?;
+        if record["type"].as_str()? != "session_meta" {
+            return None;
+        }
+        let payload = &record["payload"];
+        let parent_session = payload["forked_from_id"]
+            .as_str()
+            .filter(|id| !id.is_empty())?;
+        let history_start_ordinal = payload["subagent_history_start_ordinal"].as_u64()?;
+        Some(Self {
+            parent_session: parent_session.to_owned(),
+            // The fork header is ordinal 0. The parent copy starts on the next line.
+            inherited_lines: history_start_ordinal.saturating_sub(1),
+            history_start_ordinal,
+            transcript: TranscriptContext::default(),
+            uses: Vec::new(),
+        })
+    }
+
+    fn take_inherited_line(&mut self, line: &str) -> bool {
+        if self.inherited_lines == 0 {
+            return false;
+        }
+        let ordinal = serde_json::from_str::<serde_json::Value>(line)
+            .ok()
+            .and_then(|record| record["ordinal"].as_u64());
+        if ordinal.is_some_and(|ordinal| ordinal >= self.history_start_ordinal) {
+            self.inherited_lines = 0;
+            return false;
+        }
+        self.inherited_lines -= 1;
+        true
+    }
 }
 
 /// How many bytes of a transcript's already-parsed tail are kept for
@@ -489,35 +536,22 @@ fn parse_codex_uses_with_file(
     context: &mut IndexedContext,
     invalid: &mut usize,
 ) -> Vec<SkillInvocation> {
+    context.codex_transcript = true;
     let mut uses = Vec::new();
     for line in text.lines() {
-        if let Some(start) = context
-            .history_start_ordinal
-            .filter(|_| context.inherited_lines > 0)
-        {
-            let ordinal = serde_json::from_str::<serde_json::Value>(line)
-                .ok()
-                .and_then(|record| record.get("ordinal")?.as_u64());
-            if ordinal.is_some_and(|ordinal| ordinal >= start) {
-                context.inherited_lines = 0;
-            } else {
-                context.inherited_lines -= 1;
+        if let Some(fork) = &mut context.codex_fork {
+            if fork.take_inherited_line(line) {
+                let mut inherited = parse_codex_uses_checked(line, &mut fork.transcript, invalid);
+                for use_ in &mut inherited {
+                    use_.session = Some(fork.parent_session.clone());
+                    use_.use_session.clone_from(&use_.session);
+                }
+                fork.uses.extend(inherited);
                 continue;
             }
         }
         if context.transcript.session.is_none() && line.contains("session_meta") {
-            context.history_start_ordinal = serde_json::from_str::<serde_json::Value>(line)
-                .ok()
-                .and_then(|record| {
-                    record
-                        .get("payload")?
-                        .get("subagent_history_start_ordinal")?
-                        .as_u64()
-                });
-            // The header is ordinal 0, so the copied parent history is the next start - 1 lines.
-            context.inherited_lines = context
-                .history_start_ordinal
-                .map_or(0, |start| start.saturating_sub(1));
+            context.codex_fork = IndexedCodexFork::from_session_meta(line).map(Box::new);
         }
         uses.extend(parse_codex_uses_checked(
             line,
@@ -1467,6 +1501,16 @@ impl SkillInvocationIndex {
             let size = meta.len();
             let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
 
+            // Older caches discarded inherited uses. Replay those Codex rollouts once.
+            if source.harness == AgentId::CODEX
+                && self
+                    .files
+                    .get(&path)
+                    .is_some_and(|entry| !entry.context.codex_transcript)
+            {
+                self.files.remove(&path);
+            }
+
             if is_zstd(&path) {
                 let file = TranscriptFile {
                     home,
@@ -1793,7 +1837,8 @@ impl SkillInvocationIndex {
         skill_heatmap(self.all_uses(), filter, now)
     }
 
-    /// File uses plus database uses. A database row id (`"<table>:<id>"`)
+    /// File uses plus database uses, with the best available copy of missing
+    /// Codex parent history. A database row id (`"<table>:<id>"`)
     /// that appears in more than one database (`opencode-next.db` rows get
     /// copied into `opencode.db`) counts once: databases are visited in
     /// path order and the first one to have a row wins.
@@ -1825,7 +1870,36 @@ impl SkillInvocationIndex {
             .values()
             .flat_map(|t| t.uses.iter())
             .chain(claude_uses)
+            .chain(self.orphaned_codex_uses())
             .chain(database_uses)
+    }
+
+    fn orphaned_codex_uses(&self) -> impl Iterator<Item = &SkillInvocation> {
+        let mut by_parent: BTreeMap<&str, &[SkillInvocation]> = BTreeMap::new();
+        for fork in self
+            .files
+            .values()
+            .filter_map(|entry| entry.context.codex_fork.as_deref())
+        {
+            // Sibling forks copy prefixes of the same parent history. Use the
+            // copy with the most parsed skill uses so siblings count it once.
+            let uses = by_parent.entry(&fork.parent_session).or_default();
+            if fork.uses.len() > uses.len() {
+                *uses = &fork.uses;
+            }
+        }
+        if !by_parent.is_empty() {
+            for entry in self
+                .files
+                .values()
+                .filter(|entry| entry.context.codex_transcript)
+            {
+                if let Some(session) = entry.context.transcript.session.as_deref() {
+                    by_parent.remove(session);
+                }
+            }
+        }
+        by_parent.into_values().flatten()
     }
 }
 

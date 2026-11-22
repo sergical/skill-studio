@@ -84,6 +84,83 @@ fn usage_compressed_codex_history_includes_live_and_archived_sessions() {
     assert_eq!(data["rows"][0]["recent_uses"], 1, "{data}");
     assert!(data["rows"][0].get("sessions").is_none(), "{data}");
 }
+/// Flow: report a Codex fork with and without its parent rollout.
+/// Expect two uses in both cases. Failure: deleting the parent loses its use.
+#[test]
+fn usage_keeps_codex_fork_history_after_removing_parent_and_reloading_cache() {
+    let dir = fixture();
+    let root = dir.path().join(".codex/sessions");
+    fs::create_dir_all(&root).unwrap();
+    let parent_header = serde_json::json!({
+        "type": "session_meta", "ordinal": 0,
+        "payload": {"id": "parent", "cwd": "/parent-project"}
+    });
+    let parent_use = serde_json::json!({
+        "type": "response_item", "ordinal": 1, "timestamp": "2026-09-29T12:00:00Z",
+        "payload": {"type": "message", "role": "user", "content": [{
+            "type": "input_text", "text": "<skill>\n<name>gamma</name>\n<path>/u/.agents/skills/gamma/SKILL.md</path>"
+        }]}
+    });
+    let parent = root.join("parent.jsonl");
+    fs::write(&parent, format!("{parent_header}\n{parent_use}\n")).unwrap();
+    let child_header = serde_json::json!({
+        "type": "session_meta", "ordinal": 0,
+        "payload": {
+            "id": "child", "cwd": "/child-project", "forked_from_id": "parent",
+            "subagent_history_start_ordinal": 3
+        }
+    });
+    let mut copied_header = parent_header;
+    copied_header["ordinal"] = 1.into();
+    let mut copied_use = parent_use.clone();
+    copied_use["ordinal"] = 2.into();
+    let mut child_use = parent_use;
+    child_use["ordinal"] = 3.into();
+    child_use["timestamp"] = "2026-09-29T13:00:00Z".into();
+    fs::write(
+        root.join("child.jsonl"),
+        format!("{child_header}\n{copied_header}\n{copied_use}\n{child_use}\n"),
+    )
+    .unwrap();
+
+    let inventory = scan(dir.path());
+    let now = "2026-09-30T12:00:00Z".parse().unwrap();
+    let cache = dir.path().join("usage-cache.json");
+    let mut usage = SkillUsage::default();
+    let with_parent = usage.report(dir.path(), &inventory, 30, now);
+    assert_eq!(
+        with_parent.rows[0].recent_uses, 2,
+        "the copy must not add a use"
+    );
+    usage.save_cache(&cache).unwrap();
+
+    fs::remove_file(&parent).unwrap();
+    let restored = SkillUsage::load_read_only(Some(&cache)).report(dir.path(), &inventory, 30, now);
+    assert_eq!(
+        restored.rows[0].recent_uses, 2,
+        "the cached fork must supply its parent's use"
+    );
+    let fresh = SkillUsage::default().report(dir.path(), &inventory, 30, now);
+    assert_eq!(fresh, with_parent);
+    assert_eq!(restored, fresh);
+
+    let mut old: serde_json::Value = serde_json::from_slice(&fs::read(&cache).unwrap()).unwrap();
+    for entry in old["files"].as_object_mut().unwrap().values_mut() {
+        let context = entry["context"].as_object_mut().unwrap();
+        context.remove("codex_transcript");
+        if context.remove("codex_fork").is_some() {
+            context.insert("inherited_lines".into(), 0.into());
+            context.insert("history_start_ordinal".into(), 3.into());
+        }
+    }
+    fs::write(&cache, serde_json::to_vec(&old).unwrap()).unwrap();
+    let rebuilt = SkillUsage::load_read_only(Some(&cache)).report(dir.path(), &inventory, 30, now);
+    assert_eq!(
+        rebuilt, fresh,
+        "legacy caches must recover discarded fork history"
+    );
+}
+
 /// Flow: report Claude user, Skill tool and direct reads in separate sessions.
 /// Expect three uses and one of each trigger. Failure: the report loses trigger evidence.
 #[test]
