@@ -3,6 +3,7 @@
 use std::io;
 
 use skill_studio_core::error::ErrorCode;
+use skill_studio_core::ports::{OpIoCause, OpOutcome};
 
 /// A fixed code for a failed command or operation.
 #[derive(Clone, Copy, Debug)]
@@ -24,49 +25,55 @@ pub enum CommandFailure {
 }
 
 impl CommandFailure {
-    /// Classifies an I/O error using its OS code or error kind.
-    pub fn from_io(error: &io::Error) -> Self {
-        if error.raw_os_error().is_some_and(is_file_limit) {
+    fn from_io_cause(cause: OpIoCause) -> Self {
+        if cause.raw_os_error.is_some_and(is_file_limit) {
             return Self::TooManyOpenFiles;
         }
-        match error.kind() {
+        match cause.kind {
             io::ErrorKind::PermissionDenied => Self::PermissionDenied,
             io::ErrorKind::NotFound => Self::NotFound,
             io::ErrorKind::TimedOut => Self::TimedOut,
-            _ => match Self::from_legacy(&error.to_string()) {
-                Self::Unknown => Self::OtherIo,
-                failure => failure,
-            },
+            _ => Self::OtherIo,
         }
     }
 
-    /// Classifies a legacy string using only Rust's terminal OS error number.
+    /// Classifies a legacy string using its last well-formed OS error number.
     pub fn from_legacy(error: &str) -> Self {
         let errno = error
-            .strip_suffix(')')
-            .and_then(|text| text.rsplit_once(" (os error "))
-            .and_then(|(_, number)| number.parse::<i32>().ok());
-        match errno {
-            Some(errno) if is_file_limit(errno) => Self::TooManyOpenFiles,
-            Some(errno) => match io::Error::from_raw_os_error(errno).kind() {
-                io::ErrorKind::PermissionDenied => Self::PermissionDenied,
-                io::ErrorKind::NotFound => Self::NotFound,
-                io::ErrorKind::TimedOut => Self::TimedOut,
-                _ => Self::OtherIo,
-            },
-            None => Self::Unknown,
-        }
+            .rmatch_indices("(os error ")
+            .find_map(|(offset, prefix)| {
+                let (number, _) = error[offset + prefix.len()..].split_once(')')?;
+                number.parse::<i32>().ok()
+            });
+        errno.map_or(Self::Unknown, |errno| {
+            Self::from_io_cause(OpIoCause::from(&io::Error::from_raw_os_error(errno)))
+        })
     }
 
     /// Keeps the core code, specializing I/O when an OS cause survived.
     pub fn from_core(code: ErrorCode, cause: Option<&io::Error>, message: &str) -> Self {
         if code == ErrorCode::Io {
-            let failure = cause.map_or_else(|| Self::from_legacy(message), Self::from_io);
+            let failure = cause.map_or_else(
+                || Self::from_legacy(message),
+                |error| Self::from_io_cause(OpIoCause::from(error)),
+            );
             if !matches!(failure, Self::Unknown) {
                 return failure;
             }
         }
         Self::Core(code)
+    }
+
+    /// Classifies a shared operation failure from its code and typed I/O cause.
+    pub(super) fn from_op_outcome(outcome: &OpOutcome) -> Option<Self> {
+        match *outcome {
+            OpOutcome::Ok => None,
+            OpOutcome::Err {
+                code: ErrorCode::Io,
+                io_cause: Some(cause),
+            } => Some(Self::from_io_cause(cause)),
+            OpOutcome::Err { code, .. } => Some(Self::Core(code)),
+        }
     }
 
     /// Stable text suitable for a Sentry tag.

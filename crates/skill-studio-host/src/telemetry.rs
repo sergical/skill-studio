@@ -585,11 +585,8 @@ impl Telemetry for SentryTelemetry {
         }
         clamp_spans_to_transaction(&mut spans, timestamp);
 
-        let error_code = match &record.outcome {
-            OpOutcome::Err { code } => Some(code.as_str()),
-            OpOutcome::Ok => None,
-        };
-        let tags = outcome_tags(self.surface, ok, error_code);
+        let failure = CommandFailure::from_op_outcome(&record.outcome);
+        let tags = outcome_tags(self.surface, ok, failure.map(CommandFailure::as_str));
 
         let mut contexts = Map::new();
         contexts.insert(
@@ -621,17 +618,8 @@ impl Telemetry for SentryTelemetry {
 
         if let Some(client) = Hub::current().client() {
             // A desktop command owns its issue. Headless operations are their own roots.
-            if let (None, OpOutcome::Err { code }) = (command, record.outcome) {
-                let failure = CommandFailure::Core(code);
-                if failure.opens_issue() {
-                    capture_command_failure(
-                        &client,
-                        &op,
-                        self.surface,
-                        failure,
-                        &transaction.contexts,
-                    );
-                }
+            if let (None, Some(failure)) = (command, failure.filter(|code| code.opens_issue())) {
+                capture_command_failure(&client, &op, self.surface, failure, &transaction.contexts);
             }
             let mut envelope = Envelope::new();
             envelope.add_item(transaction);
@@ -901,6 +889,7 @@ mod tests {
             correlation_id: CorrelationId("c-fail".into()),
             outcome: OpOutcome::Err {
                 code: ErrorCode::InvalidRequest,
+                io_cause: None,
             },
             timing: OpTiming {
                 op: "install".to_string(),
@@ -1991,25 +1980,42 @@ mod tests {
     }
 
     #[test]
-    fn a_file_limit_failure_sends_one_issue_linked_to_the_command_without_the_path() {
+    fn a_core_file_limit_failure_sends_one_issue_linked_to_the_operation_without_the_path() {
         use sentry::protocol::EnvelopeItem;
 
         const PRIVATE_PATH: &str = "/Users/alice/.agents/skills/private-skill/SKILL.md";
-        let error = std::io::Error::other(format!(
-            "{PRIVATE_PATH}: {}",
-            std::io::Error::from_raw_os_error(rustix::io::Errno::MFILE.raw_os_error())
-        ));
+        let home = tempfile::tempdir().expect("fixture home");
         let mut options = ClientOptions::default();
         options.release = Some("skill-studio@9.9.9".into());
         let envelopes = sentry::test::with_captured_envelopes_options(
             || {
-                record_command(
-                    Surface::Desktop,
-                    "skill_listing",
-                    CommandSpan::start(Trigger::User, None),
-                    80,
-                    Some(CommandFailure::from_io(&error)),
+                let mut ports = crate::default_ports(
+                    home.path().join("leases"),
+                    Arc::new(skill_studio_core::harness::HarnessCatalog::builtin()),
                 );
+                ports.telemetry = port(Surface::Cli, "9.9.9");
+                let runtime = skill_studio_core::ports::Runtime::new(
+                    &skill_studio_core::RuntimeScope::fixture(home.path()),
+                    ports,
+                )
+                .expect("fixture runtime");
+                let ctx = skill_studio_core::ports::OpContext::uncancellable(CorrelationId(
+                    "c-file-limit".into(),
+                ));
+                let error = runtime
+                    .run(Operation::Listing, &ctx, || {
+                        Err::<(), _>(skill_studio_core::error::CoreError::io(
+                            PRIVATE_PATH,
+                            std::io::Error::other(skill_studio_core::fsops::FsOpsError::Io {
+                                path: PRIVATE_PATH.into(),
+                                source: std::io::Error::from_raw_os_error(
+                                    rustix::io::Errno::MFILE.raw_os_error(),
+                                ),
+                            }),
+                        ))
+                    })
+                    .expect_err("listing failed");
+                assert_eq!(error.code, ErrorCode::Io);
             },
             options,
         );
@@ -2023,13 +2029,13 @@ mod tests {
             .collect();
         assert_eq!(events.len(), 1, "expected one issue event");
         let event = events[0];
-        assert_eq!(event.tags["command"], "command.skill_listing");
+        assert_eq!(event.tags["command"], "skill.listing");
         assert_eq!(event.tags["error_code"], "too_many_open_files");
-        assert_eq!(event.tags["surface"], "desktop");
+        assert_eq!(event.tags["surface"], "cli");
         assert_eq!(event.release.as_deref(), Some("skill-studio@9.9.9"));
         assert_eq!(
             &*event.fingerprint,
-            ["command.skill_listing", "too_many_open_files"]
+            ["skill.listing", "too_many_open_files"]
         );
         let transaction = envelopes
             .iter()
@@ -2038,9 +2044,18 @@ mod tests {
                 EnvelopeItem::Transaction(transaction) => Some(transaction),
                 _ => None,
             })
-            .expect("command transaction");
+            .expect("operation transaction");
         assert_eq!(event.contexts["trace"], transaction.contexts["trace"]);
         assert_eq!(transaction.tags["error_code"], "too_many_open_files");
+        let listing_error = format!(
+            "io: {} ({PRIVATE_PATH})",
+            std::io::Error::from_raw_os_error(rustix::io::Errno::MFILE.raw_os_error()),
+        );
+        assert_eq!(
+            CommandFailure::from_legacy(&listing_error).as_str(),
+            "too_many_open_files"
+        );
+
         for envelope in envelopes {
             let mut bytes = Vec::new();
             envelope.to_writer(&mut bytes).expect("serialize envelope");

@@ -8795,7 +8795,13 @@ mod tests {
             assert_eq!(records.len(), 1, "exactly one op record per install call");
             let record = &records[0];
             assert_eq!(record.operation, Operation::Install);
-            assert_eq!(record.outcome, OpOutcome::Err { code: err.code });
+            assert_eq!(
+                record.outcome,
+                OpOutcome::Err {
+                    code: err.code,
+                    io_cause: None,
+                }
+            );
             assert!(
                 record.timing.steps.is_empty(),
                 "a call that fails before recording a step must file no steps"
