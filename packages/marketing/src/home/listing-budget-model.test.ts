@@ -19,16 +19,15 @@ it("matches fixed listing vectors from the released CLI and Rust allocators", ()
   }
   expect(codexListingBudget(null, null)).toEqual({ limit: 8_000, unit: "characters" });
   expect(codexListingBudget(272_000, 14_000)).toEqual({ limit: 10_000, unit: "tokens" });
-  expect(claudeBudgetChars(1_000_000, 3, undefined, 150_000)).toBe(100_000);
-  expect(claudeBudgetChars(1_000_000, 3, 1, 150_000)).toBe(30_000);
+  expect(claudeBudgetChars(1_000_000, 3, 0.35)).toBe(10_500);
+  expect(claudeBudgetChars(1_000_000, 3, 1)).toBe(30_000);
 
-  // listing_visibility.rs: fixed lines survive, and usage order can skip a
-  // long line and then use the remaining room on a shorter one.
-  const claudeLine = (fullWidth: number, score = 0, fixed = false) => ({
+  // listing_visibility.rs: usage order can skip a long line and then use the
+  // remaining room on a shorter one.
+  const claudeLine = (fullWidth: number, score = 0) => ({
     nameWidth: 5,
     fullWidth,
     score,
-    fixed,
   });
   for (const { lines, budget, kept } of [
     { lines: [claudeLine(20), claudeLine(30)], budget: 51, kept: [true, true] },
@@ -37,7 +36,6 @@ it("matches fixed listing vectors from the released CLI and Rust allocators", ()
       budget: 60,
       kept: [false, true, true],
     },
-    { lines: [claudeLine(50, 0, true), claudeLine(40, 9)], budget: 10, kept: [true, false] },
   ]) {
     expect(allocateClaudeDescriptions(lines, budget)).toEqual(kept);
   }

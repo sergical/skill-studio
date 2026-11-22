@@ -32,6 +32,8 @@ export function BudgetSlider({
   const position = ((value - min) / (max - min)) ** (1 / curve);
   const round = (next: number) =>
     Math.min(max, Math.max(min, Number((Math.round(next / step) * step).toFixed(4))));
+  const valueAt = (proportion: number) =>
+    round(min + (max - min) * Math.max(0, Math.min(1, proportion)) ** curve);
   const update = (next: number) => {
     if (next !== value) onChange(next);
   };
@@ -40,8 +42,7 @@ export function BudgetSlider({
 
   function pointerValue(clientX: number) {
     const { left, width } = bounds.current;
-    const proportion = Math.max(0, Math.min(1, (clientX - left) / width));
-    return round(min + (max - min) * proportion ** curve);
+    return valueAt((clientX - left) / width);
   }
 
   function startDrag(event: PointerEvent<HTMLDivElement>) {
@@ -72,20 +73,23 @@ export function BudgetSlider({
   }
 
   function changeByKey(event: KeyboardEvent<HTMLDivElement>) {
-    const values = new Map([
-      ["ArrowRight", value + step],
-      ["ArrowUp", value + step],
-      ["ArrowLeft", value - step],
-      ["ArrowDown", value - step],
-      ["PageUp", value + step * 10],
-      ["PageDown", value - step * 10],
-      ["Home", min],
-      ["End", max],
+    const steps = new Map([
+      ["ArrowRight", 1],
+      ["ArrowUp", 1],
+      ["ArrowLeft", -1],
+      ["ArrowDown", -1],
+      ["PageUp", 10],
+      ["PageDown", -10],
     ]);
-    const next = values.get(event.key);
-    if (next === undefined) return;
+    const offset = steps.get(event.key);
+    if (offset === undefined && event.key !== "Home" && event.key !== "End") return;
     event.preventDefault();
-    update(round(next));
+    if (offset === undefined) {
+      update(event.key === "Home" ? min : max);
+      return;
+    }
+    const next = curve === 1 ? round(value + offset * step) : valueAt(position + offset / 100);
+    update(next === value ? round(value + Math.sign(offset) * step) : next);
   }
 
   return (
@@ -163,7 +167,9 @@ const styles = stylex.create({
   position: (position: number) => ({ transform: `translateX(${position * 100}%)` }),
   thumb: {
     backgroundColor: siteTokens.surface,
-    border: `2px solid ${siteTokens.accent}`,
+    borderColor: siteTokens.accent,
+    borderStyle: "solid",
+    borderWidth: 2,
     borderRadius: "50%",
     height: 18,
     left: -9,

@@ -29,7 +29,6 @@ interface ClaudeLine {
   nameWidth: number;
   fullWidth: number;
   score: number;
-  fixed?: boolean;
 }
 
 interface CodexLine {
@@ -77,19 +76,10 @@ const CODEX_ALIAS_INTRO =
 
 const encoder = new TextEncoder();
 
-/** Mirrors claude_budget. A configured fraction bypasses the cached experiment floor. */
-export function claudeBudgetChars(
-  tokens: number,
-  charsPerToken: number,
-  percent?: number,
-  experimentFloor = 0,
-) {
-  const base = Math.floor(tokens * charsPerToken * ((percent ?? CLAUDE_DEFAULT_PERCENT) / 100));
-  return Math.max(
-    1,
-    base,
-    percent === undefined ? Math.min(experimentFloor, CLAUDE_EXPERIMENT_CAP) : 0,
-  );
+/** Mirrors claude_budget for a share chosen in the calculator. */
+export function claudeBudgetChars(tokens: number, charsPerToken: number, percent: number) {
+  const hundredths = Math.round(percent * 100);
+  return Math.max(1, Math.floor((tokens * charsPerToken * hundredths) / 10_000));
 }
 
 /** Mirrors codex_budget. The cap applies to the user override. */
@@ -106,15 +96,13 @@ export function allocateClaudeDescriptions(lines: readonly ClaudeLine[], budget:
   const joins = Math.max(0, lines.length - 1);
   const full = lines.reduce((sum, line) => sum + line.fullWidth, joins);
   if (full <= budget) return lines.map(() => true);
-  let left =
-    budget -
-    lines.reduce((sum, line) => sum + (line.fixed ? line.fullWidth : line.nameWidth), joins);
-  const kept = lines.map((line) => !!line.fixed);
+  let left = budget - lines.reduce((sum, line) => sum + line.nameWidth, joins);
+  const kept = lines.map(() => false);
   const order = lines.map((_, index) => index).sort((a, b) => lines[b].score - lines[a].score);
   for (const index of order) {
     const line = lines[index];
     const gain = line.fullWidth - line.nameWidth;
-    if (!line.fixed && gain <= left) {
+    if (gain <= left) {
       kept[index] = true;
       left -= gain;
     }
