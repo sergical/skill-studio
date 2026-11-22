@@ -68,6 +68,7 @@ async function callWorker({
   const pending: Promise<unknown>[] = [];
   const env: Env = {
     SKILLS_SH_API_KEY: API_KEY,
+    SENTRY_ENVIRONMENT: "staging",
     RATE_LIMITER: { limit: async () => ({ success: true }) },
     SENTRY_DSN: "https://examplePublicKey@o0.ingest.sentry.io/0",
   };
@@ -114,6 +115,7 @@ describe("Worker tracing", () => {
     const payload = await callWorker();
 
     expect(payload).toContain("skills.sh answered 503");
+    expect(payload).toContain('"environment":"staging"');
     expect(payload).toContain("Skills proxy request failed");
     expect(payload).toMatch(/"type":"log"/);
     for (const detail of [...CALLER_DETAILS, API_KEY]) {

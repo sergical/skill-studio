@@ -321,7 +321,8 @@ in milliseconds. Filter by the route category and HTTP status. The sample
 count is request volume and p95 is the proxy response time. A 5xx response
 adds one `Skills proxy request failed` log with the same dimensions and
 duration. The metrics and logs exclude URLs, queries, client headers and
-upstream error text. The local Node proxy writes its structured terminal
+upstream error text. A staging Worker can set `SENTRY_ENVIRONMENT` to
+separate its events from the default production environment. The local Node proxy writes its structured terminal
 log. The marketing site uses its browser SDK for Web Vitals and errors,
 and already uploads its Vite source maps from Workers Builds.
 [Cloudflare logs](https://docs.sentry.io/platforms/javascript/guides/cloudflare/logs/) ·

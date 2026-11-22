@@ -28,6 +28,7 @@ export interface Env {
   SKILLS_SH_API_KEY: string;
   RATE_LIMITER: RateLimiter;
   SENTRY_DSN?: string;
+  SENTRY_ENVIRONMENT?: string;
 }
 
 /** The Workers fetch handler's third argument - its `waitUntil` schedules the
@@ -104,7 +105,7 @@ const handler = {
 function sentryOptionsFor(env: Env): CloudflareOptions {
   return {
     dsn: env.SENTRY_DSN,
-    environment: "production",
+    environment: env.SENTRY_ENVIRONMENT ?? "production",
     tracesSampleRate: 0,
     dataCollection: {
       userInfo: false,
