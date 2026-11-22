@@ -10,10 +10,14 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use skill_studio_core::error::CoreError;
 use skill_studio_core::harness::HarnessCatalog;
-use skill_studio_core::ops::{Outcome, ResultEnvelope};
-use skill_studio_core::ports::Runtime;
+use skill_studio_core::ops::{Operation, Outcome, ResultEnvelope};
+use skill_studio_core::ports::{OpContext, Runtime};
 use skill_studio_core::{OpStatus, RuntimeScope};
+use skill_studio_host::telemetry::CommandFailure;
+
+use crate::timing_log::CommandError;
 
 /// `$XDG_DATA_HOME/skill-studio`, or `~/.local/share/skill-studio` when
 /// `XDG_DATA_HOME` is unset, matching the CLI's default so the CLI, MCP, and
@@ -180,19 +184,39 @@ pub fn build_runtime_detect() -> Result<Runtime, String> {
     Ok(runtime)
 }
 
-/// Unwraps a `ResultEnvelope` into the plain `Result<T, String>` every
-/// Tauri command returns. The envelope's `scope`/`timing`/`correlation_id`
-/// fields are dropped here: `skill-api.ts`'s `parkSkill`/`unparkSkill` both
-/// discard the command's return value already, so nothing downstream reads
-/// them, and every other desktop command already returns `Result<T, String>`
-/// bare.
-pub fn to_command_result<T: Outcome>(envelope: ResultEnvelope<T>) -> Result<T, String> {
+/// Keeps the core code until the timed command sends its fixed telemetry fields.
+pub(crate) fn finish_core_command<T: Outcome>(
+    operation: Operation,
+    rt: &Runtime,
+    ctx: &OpContext,
+    result: Result<T, CoreError>,
+) -> Result<T, CommandError> {
+    let failure = result
+        .as_ref()
+        .err()
+        .map(|error| CommandFailure::from_core(error.code, error.source.as_ref(), &error.message));
+    unwrap_command_envelope(
+        ResultEnvelope::from_result(operation, &rt.scope, ctx, result),
+        failure,
+    )
+}
+
+fn unwrap_command_envelope<T: Outcome>(
+    envelope: ResultEnvelope<T>,
+    failure: Option<CommandFailure>,
+) -> Result<T, CommandError> {
     match envelope.data {
         Some(data) if envelope.status != OpStatus::Error => Ok(data),
-        _ => Err(envelope
-            .errors
-            .first()
-            .map_or_else(|| "operation failed".to_string(), ToString::to_string)),
+        _ => {
+            let Some(error) = envelope.errors.first() else {
+                return Err(CommandError::from("operation failed".to_string()));
+            };
+            Err(CommandError {
+                message: error.to_string(),
+                failure: failure
+                    .unwrap_or_else(|| CommandFailure::from_core(error.code, None, &error.message)),
+            })
+        }
     }
 }
 

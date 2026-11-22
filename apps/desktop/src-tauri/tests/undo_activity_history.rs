@@ -29,7 +29,7 @@ use skill_studio_core::dto::{
 };
 use skill_studio_core::harness::HarnessCatalog;
 use skill_studio_core::identity::{CorrelationId, DeploymentId, RootKind, RootScope, SkillName};
-use skill_studio_core::ops::{self, Operation, ResultEnvelope};
+use skill_studio_core::ops::{self};
 use skill_studio_core::ports::{
     CancelToken, OpContext, Ports, ProcessOutput, ProcessSpawner, ProcessSpec, Runtime,
 };
@@ -42,7 +42,6 @@ use skill_studio_host::{FileLease, RealFs, SqliteHistoryOpener};
 use skill_studio_lib::open_event_store_at;
 use skill_studio_lib::skills::core_runtime::{
     build_runtime_write_at_with_search_dirs, history_db_path, process_path_search_dirs,
-    to_command_result,
 };
 use skill_studio_lib::skills::event_commands::{dto_from_row, restore_event_with_runtime};
 use skill_studio_lib::skills::event_store::{
@@ -371,13 +370,7 @@ fn park_unpark_and_install_each_appear_in_history_and_park_undo_restores_the_ski
             deployment_id: parked_deployment_id,
         },
     );
-    let unpark_outcome = to_command_result(ResultEnvelope::from_result(
-        Operation::Unpark,
-        &rt.scope,
-        &unpark_ctx,
-        unpark_result,
-    ))
-    .unwrap();
+    let unpark_outcome = unpark_result.unwrap();
     assert!(
         home.join(UNIVERSAL_ROOT_RELATIVE).join(park_skill).exists(),
         "unparking (park's own Undo) must restore the skill onto the universal root"

@@ -104,6 +104,15 @@ impl BackgroundState {
         work: impl FnOnce() -> Result<T, String>,
         publish: impl Fn(&BackgroundStatus),
     ) -> Result<T, String> {
+        self.run_with_typed_error(worker, work, publish)
+    }
+
+    fn run_with_typed_error<T, E: std::fmt::Display>(
+        &self,
+        worker: BackgroundWorker,
+        work: impl FnOnce() -> Result<T, E>,
+        publish: impl Fn(&BackgroundStatus),
+    ) -> Result<T, E> {
         publish(&self.change(worker, |task| {
             task.in_flight = task.in_flight.saturating_add(1);
             task.last_started_at = Some(chrono::Utc::now().to_rfc3339());
@@ -115,7 +124,7 @@ impl BackgroundState {
             error: Some("background work panicked".into()),
         };
         let result = work();
-        completion.error = result.as_ref().err().cloned();
+        completion.error = result.as_ref().err().map(ToString::to_string);
         result
     }
 }
@@ -140,12 +149,12 @@ pub(super) fn state() -> &'static BackgroundState {
     STATE.get_or_init(BackgroundState::default)
 }
 
-pub(crate) fn run<T>(
+pub(crate) fn run<T, E: std::fmt::Display>(
     app: &tauri::AppHandle,
     worker: BackgroundWorker,
-    work: impl FnOnce() -> Result<T, String>,
-) -> Result<T, String> {
-    state().run(worker, work, |status| {
+    work: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    state().run_with_typed_error(worker, work, |status| {
         let _ = app.emit(BACKGROUND_EVENT, status);
     })
 }

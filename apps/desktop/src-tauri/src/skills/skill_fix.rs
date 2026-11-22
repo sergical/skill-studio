@@ -11,7 +11,7 @@
 
 use skill_studio_core::dto::{FixSkillOutcome, FixSkillRequest};
 use skill_studio_core::identity::{CorrelationId, SkillName};
-use skill_studio_core::ops::{self, Operation, ResultEnvelope};
+use skill_studio_core::ops::{self, Operation};
 use skill_studio_core::ports::OpContext;
 use tauri::Manager;
 
@@ -23,7 +23,7 @@ pub async fn fix_skill(
     skill: String,
     app: tauri::AppHandle,
 ) -> Result<FixSkillOutcome, String> {
-    crate::timing_log::time_command_blocking(&app, trace, "fix_skill", move || {
+    crate::timing_log::time_core_command_blocking(&app, trace, "fix_skill", move || {
         let rt = super::core_runtime::build_runtime_write()?;
         let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
         let result = ops::fix_skill(
@@ -33,8 +33,7 @@ pub async fn fix_skill(
                 skill: SkillName(skill),
             },
         );
-        let envelope = ResultEnvelope::from_result(Operation::FixSkill, &rt.scope, &ctx, result);
-        super::core_runtime::to_command_result(envelope)
+        super::core_runtime::finish_core_command(Operation::FixSkill, &rt, &ctx, result)
     })
     .await
 }

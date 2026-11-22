@@ -7,6 +7,7 @@
 use std::path::Path;
 
 use skill_studio_core::dto::InstallFile;
+use skill_studio_core::error::ErrorCode;
 use skill_studio_core::identity::{RootScope, SkillName};
 use skill_studio_core::lock_file;
 use skill_studio_core::ops;
@@ -76,7 +77,7 @@ pub(crate) fn update_split_skill(
     fetch: &dyn UpstreamFetch,
     lookup: &dyn CommitLookup,
     tree: &dyn TreeLookup,
-) -> Result<SplitCopiesOutcome, String> {
+) -> Result<SplitCopiesOutcome, crate::timing_log::CommandError> {
     let source = source_from_lock(home, name)?;
     // Read before the files, so a commit that lands in between leaves the
     // update offered again rather than hidden.
@@ -100,15 +101,19 @@ pub(crate) fn update_split_skill(
             lock_folder_hash,
         },
     )
-    .map_err(|e| e.message)
+    .map_err(crate::timing_log::CommandError::from)
 }
 
 /// `Ok` when every live copy updated, otherwise the plain sentence the
 /// toast shows: how many copies updated and why each other one was left.
-pub(crate) fn split_update_result(name: &str, outcome: &SplitCopiesOutcome) -> Result<(), String> {
+pub(crate) fn split_update_result(
+    name: &str,
+    outcome: &SplitCopiesOutcome,
+) -> Result<(), crate::timing_log::CommandError> {
     if outcome.updated.is_empty() && outcome.refused.is_empty() {
-        return Err(format!(
-            "No copies of {name} are live to update. Each one is parked or turned off."
+        return Err(crate::timing_log::CommandError::with_code(
+            ErrorCode::AmbiguousTarget,
+            format!("No copies of {name} are live to update. Each one is parked or turned off."),
         ));
     }
     if outcome.refused.is_empty() {
@@ -119,11 +124,14 @@ pub(crate) fn split_update_result(name: &str, outcome: &SplitCopiesOutcome) -> R
         .iter()
         .map(|(path, reason)| format!("{}: {reason}", path.display()))
         .collect();
-    Err(format!(
-        "Updated {} of {} copies of {name}. Left alone - {}",
-        outcome.updated.len(),
-        outcome.updated.len() + outcome.refused.len(),
-        left.join("; ")
+    Err(crate::timing_log::CommandError::with_code(
+        outcome.copy_error_code.unwrap_or(ErrorCode::DriftConflict),
+        format!(
+            "Updated {} of {} copies of {name}. Left alone - {}",
+            outcome.updated.len(),
+            outcome.updated.len() + outcome.refused.len(),
+            left.join("; ")
+        ),
     ))
 }
 
@@ -319,7 +327,21 @@ mod tests {
 
         assert!(body(&edited).contains("Edit."));
         assert!(body(&home.join(".claude/skills/gamma")).contains("Body at v2"));
-        let message = split_update_result("gamma", &outcome).unwrap_err();
+        let result = split_update_result("gamma", &outcome);
+        let envelopes = sentry::test::with_captured_envelopes(|| {
+            use crate::timing_log::CommandOutcome;
+            use skill_studio_host::telemetry::{record_command, CommandSpan, Surface, Trigger};
+
+            record_command(
+                Surface::Desktop,
+                "update_skill",
+                CommandSpan::start(Trigger::User, None),
+                10,
+                result.failure(),
+            );
+        });
+        assert!(envelopes.iter().all(|envelope| envelope.event().is_none()));
+        let message = result.unwrap_err().message;
         assert!(message.contains("Updated 2 of 3"), "{message}");
         assert!(message.contains(".pi/agent/skills/gamma"), "{message}");
         assert!(message.contains("changes of its own"), "{message}");
@@ -343,7 +365,7 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(err.contains("network down"), "{err}");
+        assert!(err.message.contains("network down"), "{err}");
         for dir in [".claude/skills", ".codex/skills", ".pi/agent/skills"] {
             assert!(body(&home.join(dir).join("gamma")).contains("Body at v1"));
         }
@@ -443,7 +465,7 @@ mod tests {
         )
         .unwrap();
 
-        let message = split_update_result("gamma", &outcome).unwrap_err();
+        let message = split_update_result("gamma", &outcome).unwrap_err().message;
         assert!(message.contains("No copies of gamma are live"), "{message}");
     }
 

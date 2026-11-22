@@ -432,7 +432,7 @@ fn reconcile_affected(
 /// `require_trusted_dotagents_source` pre-check produced, built from
 /// `ops::install`'s own answer instead of a duplicate local check.
 fn terminal_for_result(
-    result: Result<skill_install::InstallAdapterOutcome, String>,
+    result: Result<skill_install::InstallAdapterOutcome, crate::timing_log::CommandError>,
 ) -> (
     AddSkillOperationPhase,
     String,
@@ -457,9 +457,9 @@ fn terminal_for_result(
         ),
         Err(error) => (
             AddSkillOperationPhase::Failed,
-            error.clone(),
+            error.message.clone(),
             None,
-            Some(error),
+            Some(error.message),
             None,
         ),
     }

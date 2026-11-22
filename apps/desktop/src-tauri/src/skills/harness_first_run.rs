@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use skill_studio_core::dto::HarnessesRequest;
 use skill_studio_core::harness::HarnessReport;
 use skill_studio_core::identity::CorrelationId;
-use skill_studio_core::ops::{self, Operation, ResultEnvelope};
+use skill_studio_core::ops::{self, Operation};
 use skill_studio_core::ports::OpContext;
 use tauri::Manager;
 
@@ -56,9 +56,10 @@ pub async fn detect_harnesses(
         &app,
         trace,
         "detect_harnesses",
-        detect_with_runtime(super::core_runtime::build_runtime_detect),
+        detect_harnesses_with_runtime(super::core_runtime::build_runtime_detect),
     )
     .await
+    .map_err(String::from)
 }
 
 /// The command body, kept apart so the test that pins the probes to
@@ -69,12 +70,19 @@ pub async fn detect_harnesses(
 pub async fn detect_with_runtime(
     build_runtime: impl FnOnce() -> Result<skill_studio_core::ports::Runtime, String> + Send + 'static,
 ) -> Result<HarnessReport, String> {
+    detect_harnesses_with_runtime(build_runtime)
+        .await
+        .map_err(String::from)
+}
+
+async fn detect_harnesses_with_runtime(
+    build_runtime: impl FnOnce() -> Result<skill_studio_core::ports::Runtime, String> + Send + 'static,
+) -> Result<HarnessReport, crate::timing_log::CommandError> {
     let joined = crate::timing_log::spawn_blocking_in_span(move || {
         let rt = build_runtime()?;
         let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
         let result = ops::harnesses(&rt, &ctx, &HarnessesRequest {});
-        let envelope = ResultEnvelope::from_result(Operation::Harnesses, &rt.scope, &ctx, result);
-        super::core_runtime::to_command_result(envelope)
+        super::core_runtime::finish_core_command(Operation::Harnesses, &rt, &ctx, result)
     })
     .await;
     crate::timing_log::join_result_to_err("detect_harnesses", joined)

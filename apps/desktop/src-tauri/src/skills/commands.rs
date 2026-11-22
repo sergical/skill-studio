@@ -22,7 +22,7 @@ use super::skill_update_check;
 use serde::{Deserialize, Serialize};
 use skill_studio_core::dto::{RemoveOutcome, RemoveRequest};
 use skill_studio_core::identity::{CorrelationId, DeploymentId};
-use skill_studio_core::ops::{self, Operation, ResultEnvelope};
+use skill_studio_core::ops::{self, Operation};
 use skill_studio_core::ports::OpContext;
 use tauri::{Emitter, Manager};
 
@@ -146,7 +146,7 @@ pub async fn get_installed_skills(
     app: tauri::AppHandle,
 ) -> Result<Vec<InstalledSkill>, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(
+    crate::timing_log::time_core_command_blocking(
         &timing_app,
         trace,
         "get_installed_skills",
@@ -1633,6 +1633,7 @@ pub async fn remove_skill(
         ),
     )
     .await
+    .map_err(String::from)
 }
 
 /// The command body, kept apart so the test that pins `ops::remove` to
@@ -1656,23 +1657,31 @@ pub(crate) async fn remove_with_runtime(
     build_runtime: impl FnOnce(&DeploymentId) -> Result<skill_studio_core::ports::Runtime, String>
         + Send
         + 'static,
-) -> Result<RemoveOutcome, String> {
+) -> Result<RemoveOutcome, crate::timing_log::CommandError> {
     if target.deployment_id.is_none() && target.owner_id.is_none() {
-        return Err("Remove requires a deployment id".to_string());
+        return Err(crate::timing_log::CommandError::with_code(
+            skill_studio_core::error::ErrorCode::InvalidRequest,
+            "Remove requires a deployment id",
+        ));
     }
     let joined = crate::timing_log::spawn_blocking_in_span(move || {
         let deployment_id = if let Some(raw) = target.deployment_id.as_deref() {
-            DeploymentId::parse(raw).map_err(|e| e.message)?
+            DeploymentId::parse(raw)?
         } else {
             let snapshot = resolve_snapshot()?;
-            let (_, deployment) = resolve_lifecycle_target(&snapshot, &target, "Remove")?;
-            DeploymentId::parse(&deployment.id).map_err(|e| e.message)?
+            let (_, deployment) =
+                resolve_lifecycle_target(&snapshot, &target, "Remove").map_err(|message| {
+                    crate::timing_log::CommandError::with_code(
+                        skill_studio_core::error::ErrorCode::AmbiguousTarget,
+                        message,
+                    )
+                })?;
+            DeploymentId::parse(&deployment.id)?
         };
         let rt = build_runtime(&deployment_id)?;
         let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
         let result = ops::remove(&rt, &ctx, &RemoveRequest { deployment_id });
-        let envelope = ResultEnvelope::from_result(Operation::Remove, &rt.scope, &ctx, result);
-        super::core_runtime::to_command_result(envelope)
+        super::core_runtime::finish_core_command(Operation::Remove, &rt, &ctx, result)
     })
     .await;
     crate::timing_log::join_result_to_err("remove_skill", joined)
@@ -2149,10 +2158,16 @@ pub async fn update_skill(
     app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, trace, "update_skill", move || {
+    crate::timing_log::time_core_command_blocking(&timing_app, trace, "update_skill", move || {
         let refresh_state = app.state::<SkillRefreshState>();
         let snapshot = rebuild_fresh_lifecycle_snapshot(&app, &refresh_state)?;
-        let (skill, deployment) = resolve_lifecycle_target(&snapshot, &target, "Update")?;
+        let (skill, deployment) =
+            resolve_lifecycle_target(&snapshot, &target, "Update").map_err(|message| {
+                crate::timing_log::CommandError::with_code(
+                    skill_studio_core::error::ErrorCode::AmbiguousTarget,
+                    message,
+                )
+            })?;
         let app_data = app
             .path()
             .app_data_dir()
@@ -2165,7 +2180,13 @@ pub async fn update_skill(
             super::skill_split_update::check_split_deployment(
                 &deployment.scope,
                 deployment.destination,
-            )?;
+            )
+            .map_err(|message| {
+                crate::timing_log::CommandError::with_code(
+                    skill_studio_core::error::ErrorCode::Unsupported,
+                    message,
+                )
+            })?;
             return update_split_copies_command(
                 &app,
                 &refresh_state,
@@ -2178,13 +2199,12 @@ pub async fn update_skill(
         }
         let req = build_update_request(&app_data, &snapshot, &skill, &deployment)?;
         let result = skill_studio_core::ops::update(&rt, &ctx, &req);
-        let envelope = skill_studio_core::ops::ResultEnvelope::from_result(
+        let outcome = super::core_runtime::finish_core_command(
             skill_studio_core::ops::Operation::Update,
-            &rt.scope,
+            &rt,
             &ctx,
             result,
-        );
-        let outcome = super::core_runtime::to_command_result(envelope)?;
+        )?;
 
         clear_outdated_state_and_emit(
             &app,
@@ -2193,7 +2213,7 @@ pub async fn update_skill(
             deployment.owner_id.as_deref(),
             &skill_refresh::snapshot_owner_ids(&snapshot.skills),
         );
-        serde_json::to_value(outcome).map_err(|e| e.to_string())
+        Ok(serde_json::to_value(outcome).map_err(|e| e.to_string())?)
     })
     .await
 }
@@ -2210,7 +2230,7 @@ fn update_split_copies_command(
     ctx: &skill_studio_core::ports::OpContext,
     skill: &InstalledSkill,
     deployment: &super::skill_dto::Deployment,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, crate::timing_log::CommandError> {
     let home = dirs::home_dir().ok_or("Could not find home directory")?;
     let (fetch, lookup) = super::skill_install::resolve_fetch_and_lookup(app)?;
     let gh_bin = super::skill_update_check::resolve_gh_binary()

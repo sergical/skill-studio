@@ -17,11 +17,14 @@ use skill_studio_core::dto::{
     DiscardOutcome, DiscardRequest, ParkCheck, ParkCheckRequest, ParkOutcome, ParkRequest,
     UnparkOutcome, UnparkRequest,
 };
+use skill_studio_core::error::ErrorCode;
 use skill_studio_core::identity::{CorrelationId, DeploymentId};
-use skill_studio_core::ops::{self, Operation, ResultEnvelope};
+use skill_studio_core::ops::{self, Operation};
 use skill_studio_core::ports::OpContext;
 
 use tauri::Manager;
+
+use crate::timing_log::CommandError;
 
 use super::skill_dto::{BulkTargetResult, LifecycleTarget};
 use super::skill_refresh::{self, SkillRefreshState};
@@ -29,12 +32,14 @@ use super::skill_refresh::{self, SkillRefreshState};
 fn deployment_id_from_target(
     target: &LifecycleTarget,
     action: &str,
-) -> Result<DeploymentId, String> {
-    let raw = target
-        .deployment_id
-        .as_deref()
-        .ok_or_else(|| format!("{action} requires a copy id"))?;
-    DeploymentId::parse(raw).map_err(|e| e.message)
+) -> Result<DeploymentId, CommandError> {
+    let raw = target.deployment_id.as_deref().ok_or_else(|| {
+        CommandError::with_code(
+            ErrorCode::InvalidRequest,
+            format!("{action} requires a copy id"),
+        )
+    })?;
+    DeploymentId::parse(raw).map_err(CommandError::from)
 }
 
 /// The skill folder names `ids` were derived for, each once, in first-seen
@@ -79,11 +84,18 @@ pub fn park_with_runtime(
     data_root: &Path,
     deployment_id: DeploymentId,
 ) -> Result<ParkOutcome, String> {
+    park_with_command_error(home, data_root, deployment_id).map_err(String::from)
+}
+
+fn park_with_command_error(
+    home: &Path,
+    data_root: &Path,
+    deployment_id: DeploymentId,
+) -> Result<ParkOutcome, CommandError> {
     let rt = super::core_runtime::build_runtime_write_at(home, data_root)?;
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let result = ops::park(&rt, &ctx, &ParkRequest { deployment_id });
-    let envelope = ResultEnvelope::from_result(Operation::Park, &rt.scope, &ctx, result);
-    super::core_runtime::to_command_result(envelope)
+    super::core_runtime::finish_core_command(Operation::Park, &rt, &ctx, result)
 }
 
 #[tauri::command]
@@ -93,11 +105,12 @@ pub async fn park_skill(
     app: tauri::AppHandle,
 ) -> Result<ParkOutcome, String> {
     let state_app = app.clone();
-    crate::timing_log::time_command_blocking(&app, trace, "park_skill", move || {
+    crate::timing_log::time_core_command_blocking(&app, trace, "park_skill", move || {
         let deployment_id = deployment_id_from_target(&target, "Park")?;
         let home = dirs::home_dir().ok_or("Could not find home directory")?;
         let names = skill_names_for_deployments([&deployment_id]);
-        let outcome = park_with_runtime(&home, &super::core_runtime::data_root(), deployment_id)?;
+        let outcome =
+            park_with_command_error(&home, &super::core_runtime::data_root(), deployment_id)?;
         emit_snapshot_for_names(&state_app, "park_skill", names);
         Ok(outcome)
     })
@@ -112,11 +125,11 @@ pub async fn park_check(
     target: LifecycleTarget,
     app: tauri::AppHandle,
 ) -> Result<ParkCheck, String> {
-    crate::timing_log::time_command_blocking(&app, trace, "park_check", move || {
+    crate::timing_log::time_core_command_blocking(&app, trace, "park_check", move || {
         let deployment_id = deployment_id_from_target(&target, "Park check")?;
         let rt = super::core_runtime::build_runtime_write()?;
         let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
-        ops::park_check(&rt, &ctx, &ParkCheckRequest { deployment_id }).map_err(|e| e.message)
+        ops::park_check(&rt, &ctx, &ParkCheckRequest { deployment_id }).map_err(CommandError::from)
     })
     .await
 }
@@ -131,7 +144,7 @@ pub async fn discard_skill_copy(
     app: tauri::AppHandle,
 ) -> Result<DiscardOutcome, String> {
     let state_app = app.clone();
-    crate::timing_log::time_command_blocking(&app, trace, "discard_skill_copy", move || {
+    crate::timing_log::time_core_command_blocking(&app, trace, "discard_skill_copy", move || {
         let deployment_id = deployment_id_from_target(&target, "Delete copy")?;
         let keep_deployment_id = deployment_id_from_target(&keep, "Keep copy")?;
         let names = skill_names_for_deployments([&deployment_id]);
@@ -145,8 +158,8 @@ pub async fn discard_skill_copy(
                 keep_deployment_id,
             },
         );
-        let envelope = ResultEnvelope::from_result(Operation::Remove, &rt.scope, &ctx, result);
-        let outcome = super::core_runtime::to_command_result(envelope)?;
+        let outcome =
+            super::core_runtime::finish_core_command(Operation::Remove, &rt, &ctx, result)?;
         emit_snapshot_for_names(&state_app, "discard_skill_copy", names);
         Ok(outcome)
     })
@@ -162,17 +175,21 @@ pub async fn unlist_parked_dotagents(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let state_app = app.clone();
-    crate::timing_log::time_command_blocking(&app, trace, "unlist_parked_dotagents", move || {
-        let deployment_id = deployment_id_from_target(&target, "Stop dotagents installing it")?;
-        let names = skill_names_for_deployments([&deployment_id]);
-        let rt = super::core_runtime::build_runtime_write()?;
-        let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
-        let result = ops::unlist_parked_dotagents(&rt, &ctx, &deployment_id);
-        let envelope = ResultEnvelope::from_result(Operation::Remove, &rt.scope, &ctx, result);
-        super::core_runtime::to_command_result(envelope)?;
-        emit_snapshot_for_names(&state_app, "unlist_parked_dotagents", names);
-        Ok(())
-    })
+    crate::timing_log::time_core_command_blocking(
+        &app,
+        trace,
+        "unlist_parked_dotagents",
+        move || {
+            let deployment_id = deployment_id_from_target(&target, "Stop dotagents installing it")?;
+            let names = skill_names_for_deployments([&deployment_id]);
+            let rt = super::core_runtime::build_runtime_write()?;
+            let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+            let result = ops::unlist_parked_dotagents(&rt, &ctx, &deployment_id);
+            super::core_runtime::finish_core_command(Operation::Remove, &rt, &ctx, result)?;
+            emit_snapshot_for_names(&state_app, "unlist_parked_dotagents", names);
+            Ok(())
+        },
+    )
     .await
 }
 
@@ -183,14 +200,14 @@ pub async fn unpark_skill(
     app: tauri::AppHandle,
 ) -> Result<UnparkOutcome, String> {
     let state_app = app.clone();
-    crate::timing_log::time_command_blocking(&app, trace, "unpark_skill", move || {
+    crate::timing_log::time_core_command_blocking(&app, trace, "unpark_skill", move || {
         let deployment_id = deployment_id_from_target(&target, "Unpark")?;
         let names = skill_names_for_deployments([&deployment_id]);
         let rt = super::core_runtime::build_runtime_write()?;
         let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
         let result = ops::unpark(&rt, &ctx, &UnparkRequest { deployment_id });
-        let envelope = ResultEnvelope::from_result(Operation::Unpark, &rt.scope, &ctx, result);
-        let outcome = super::core_runtime::to_command_result(envelope)?;
+        let outcome =
+            super::core_runtime::finish_core_command(Operation::Unpark, &rt, &ctx, result)?;
         emit_snapshot_for_names(&state_app, "unpark_skill", names);
         Ok(outcome)
     })
@@ -211,8 +228,9 @@ pub async fn park_skills(
     crate::timing_log::time_command_blocking(&app, trace, "park_skills", move || {
         let results = run_batch("Park", &targets, |rt, ctx, deployment_id| {
             let result = ops::park(rt, ctx, &ParkRequest { deployment_id });
-            let envelope = ResultEnvelope::from_result(Operation::Park, &rt.scope, ctx, result);
-            super::core_runtime::to_command_result(envelope).map(|_| ())
+            super::core_runtime::finish_core_command(Operation::Park, rt, ctx, result)
+                .map(|_| ())
+                .map_err(String::from)
         })?;
         emit_snapshot_for_names(&state_app, "park_skills", written_names(&targets, &results));
         Ok(results)
@@ -230,8 +248,9 @@ pub async fn unpark_skills(
     crate::timing_log::time_command_blocking(&app, trace, "unpark_skills", move || {
         let results = run_batch("Unpark", &targets, |rt, ctx, deployment_id| {
             let result = ops::unpark(rt, ctx, &UnparkRequest { deployment_id });
-            let envelope = ResultEnvelope::from_result(Operation::Unpark, &rt.scope, ctx, result);
-            super::core_runtime::to_command_result(envelope).map(|_| ())
+            super::core_runtime::finish_core_command(Operation::Unpark, rt, ctx, result)
+                .map(|_| ())
+                .map_err(String::from)
         })?;
         emit_snapshot_for_names(
             &state_app,

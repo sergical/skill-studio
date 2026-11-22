@@ -13,7 +13,7 @@ use skill_studio_core::dto::{
     AgentOffCheck, AgentOffOutcome, AgentOffRequest, SplitCopy, SplitOutcome, SplitRequest,
 };
 use skill_studio_core::identity::{AgentId, CorrelationId, DeploymentId, ProjectRef, RootScope};
-use skill_studio_core::ops::{self, Operation, ResultEnvelope};
+use skill_studio_core::ops::{self, Operation};
 use skill_studio_core::ports::OpContext;
 
 use super::skill_dto::LifecycleTarget;
@@ -34,7 +34,7 @@ pub async fn split_skill(
     app: tauri::AppHandle,
 ) -> Result<SplitOutcome, String> {
     let state_app = app.clone();
-    crate::timing_log::time_command_blocking(&app, trace, "split_skill", move || {
+    crate::timing_log::time_core_command_blocking(&app, trace, "split_skill", move || {
         let raw = target
             .deployment_id
             .as_deref()
@@ -52,8 +52,8 @@ pub async fn split_skill(
                 harnesses,
             },
         );
-        let envelope = ResultEnvelope::from_result(Operation::Split, &rt.scope, &ctx, result);
-        let outcome = super::core_runtime::to_command_result(envelope)?;
+        let outcome =
+            super::core_runtime::finish_core_command(Operation::Split, &rt, &ctx, result)?;
         emit_snapshot_for_names(&state_app, "split_skill", names);
         Ok(outcome)
     })
@@ -116,15 +116,18 @@ pub async fn turn_off_for_agent(
     app: tauri::AppHandle,
 ) -> Result<AgentOffOutcome, String> {
     let state_app = app.clone();
-    crate::timing_log::time_command_blocking(&app, trace, "turn_off_for_agent", move || {
+    crate::timing_log::time_core_command_blocking(&app, trace, "turn_off_for_agent", move || {
         let request = agent_off_request(&target, &agent)?;
         let names = skill_names_for_deployments([&request.deployment_id]);
         let rt = super::core_runtime::build_runtime_write()?;
         let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
         let result = skill_studio_core::ops_agent_off::turn_off_for_agent(&rt, &ctx, &request);
-        let envelope =
-            ResultEnvelope::from_result(Operation::TurnOffForAgent, &rt.scope, &ctx, result);
-        let outcome = super::core_runtime::to_command_result(envelope)?;
+        let outcome = super::core_runtime::finish_core_command(
+            Operation::TurnOffForAgent,
+            &rt,
+            &ctx,
+            result,
+        )?;
         emit_snapshot_for_names(&state_app, "turn_off_for_agent", names);
         Ok(outcome)
     })

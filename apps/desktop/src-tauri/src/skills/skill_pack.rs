@@ -10,18 +10,20 @@
 
 use skill_studio_core::error::CoreError;
 use skill_studio_core::identity::CorrelationId;
-use skill_studio_core::ops::{self, Operation, Outcome, ResultEnvelope};
+use skill_studio_core::ops::{self, Operation, Outcome};
 use skill_studio_core::pack::{PackListRequest, PackRemote, PackReport};
 use skill_studio_core::pack_action::{
     PackActionReport, PackAddRequest, PackRemoveRequest, PackStepState, PackUpdateRequest,
 };
 use skill_studio_core::ports::{OpContext, Runtime};
 
+use crate::timing_log::CommandError;
+
 fn run_pack_op<T: Outcome>(
     operation: Operation,
     git: bool,
     call: impl FnOnce(&Runtime, &OpContext, Option<&dyn PackRemote>) -> Result<T, CoreError>,
-) -> Result<T, String> {
+) -> Result<T, CommandError> {
     let rt = super::core_runtime::build_runtime_write()?;
     run_pack_op_on(&rt, operation, git, call)
 }
@@ -31,7 +33,7 @@ fn run_pack_op_on<T: Outcome>(
     operation: Operation,
     git: bool,
     call: impl FnOnce(&Runtime, &OpContext, Option<&dyn PackRemote>) -> Result<T, CoreError>,
-) -> Result<T, String> {
+) -> Result<T, CommandError> {
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let remote = rt
         .ports
@@ -40,9 +42,7 @@ fn run_pack_op_on<T: Outcome>(
         .filter(|_| git)
         .map(skill_studio_host::GitPackRemote::new);
     let result = call(rt, &ctx, remote.as_ref().map(|r| r as &dyn PackRemote));
-    super::core_runtime::to_command_result(ResultEnvelope::from_result(
-        operation, &rt.scope, &ctx, result,
-    ))
+    super::core_runtime::finish_core_command(operation, rt, &ctx, result)
 }
 
 /// The skills a real run changed, for the targeted snapshot rebuild.
@@ -62,10 +62,10 @@ async fn pack_action(
     app: tauri::AppHandle,
     trace: crate::timing_log::IpcTrace,
     command: &'static str,
-    run: impl FnOnce() -> Result<PackActionReport, String> + Send + 'static,
+    run: impl FnOnce() -> Result<PackActionReport, CommandError> + Send + 'static,
 ) -> Result<PackActionReport, String> {
     let state_app = app.clone();
-    crate::timing_log::time_command_blocking(&app, trace, command, move || {
+    crate::timing_log::time_core_command_blocking(&app, trace, command, move || {
         let report = run()?;
         if !report.dry_run {
             super::skill_park::emit_snapshot_for_names(
@@ -86,7 +86,7 @@ pub async fn pack_list(
     request: PackListRequest,
     app: tauri::AppHandle,
 ) -> Result<PackReport, String> {
-    crate::timing_log::time_command_blocking(&app, trace, "pack_list", move || {
+    crate::timing_log::time_core_command_blocking(&app, trace, "pack_list", move || {
         run_pack_op(Operation::PackList, request.remote, |rt, ctx, remote| {
             ops::pack_list(rt, ctx, &request, remote)
         })
@@ -150,7 +150,7 @@ pub async fn pack_export(
     request: skill_studio_core::pack_export::PackExportRequest,
     app: tauri::AppHandle,
 ) -> Result<skill_studio_core::pack_export::PackExportReport, String> {
-    crate::timing_log::time_command_blocking(&app, trace, "pack_export", move || {
+    crate::timing_log::time_core_command_blocking(&app, trace, "pack_export", move || {
         run_pack_op(Operation::PackExport, false, |rt, ctx, _| {
             ops::pack_export(rt, ctx, &request)
         })
@@ -192,7 +192,7 @@ mod tests {
         })
         .expect_err("a plan without Node");
 
-        assert_eq!(shown, NODE_MISSING);
+        assert_eq!(shown.message, NODE_MISSING);
     }
 
     /// Pack on the selection bar, through the same runtime and error
@@ -242,6 +242,6 @@ mod tests {
         );
         assert!(request.dir.join("README.md").is_file());
         let shown = export().expect_err("the folder now holds the pack");
-        assert!(shown.contains("not empty"), "{shown}");
+        assert!(shown.message.contains("not empty"), "{shown:?}");
     }
 }

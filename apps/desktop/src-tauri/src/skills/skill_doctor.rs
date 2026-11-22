@@ -12,7 +12,7 @@
 
 use skill_studio_core::dto::{DoctorReport, DoctorRequest};
 use skill_studio_core::identity::CorrelationId;
-use skill_studio_core::ops::{self, Operation, ResultEnvelope};
+use skill_studio_core::ops::{self, Operation};
 use skill_studio_core::ports::{OpContext, Runtime};
 
 /// Event emitted on the main window once the startup doctor pass finishes
@@ -22,11 +22,10 @@ pub const DOCTOR_EVENT: &str = "skills://doctor";
 
 /// The shared body: build a correlation id, run `ops::doctor`, and unwrap
 /// its envelope the way every other desktop command does.
-pub(crate) fn run_doctor(rt: &Runtime) -> Result<DoctorReport, String> {
+pub(crate) fn run_doctor(rt: &Runtime) -> Result<DoctorReport, crate::timing_log::CommandError> {
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
     let result = ops::doctor(rt, &ctx, &DoctorRequest {});
-    let envelope = ResultEnvelope::from_result(Operation::Doctor, &rt.scope, &ctx, result);
-    super::core_runtime::to_command_result(envelope)
+    super::core_runtime::finish_core_command(Operation::Doctor, rt, &ctx, result)
 }
 
 #[cfg(test)]

@@ -7,7 +7,7 @@
 // ============================================================================
 
 use skill_studio_core::identity::CorrelationId;
-use skill_studio_core::ops::{Operation, ResultEnvelope};
+use skill_studio_core::ops::Operation;
 use skill_studio_core::ports::OpContext;
 use skill_studio_core::skill_sessions::{self, SkillSessionsReport, SkillSessionsRequest};
 
@@ -18,13 +18,11 @@ pub async fn skill_sessions(
     request: SkillSessionsRequest,
     app: tauri::AppHandle,
 ) -> Result<SkillSessionsReport, String> {
-    crate::timing_log::time_command_blocking(&app, trace, "skill_sessions", move || {
+    crate::timing_log::time_core_command_blocking(&app, trace, "skill_sessions", move || {
         let rt = super::core_runtime::build_runtime_write()?;
         let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
         let result = skill_sessions::skill_sessions(&rt, &ctx, &request);
-        let envelope =
-            ResultEnvelope::from_result(Operation::SkillSessions, &rt.scope, &ctx, result);
-        super::core_runtime::to_command_result(envelope)
+        super::core_runtime::finish_core_command(Operation::SkillSessions, &rt, &ctx, result)
     })
     .await
 }

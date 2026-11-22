@@ -139,11 +139,11 @@ impl WriteLease {
     /// Acquires a shared lease over `home` and `projects` for a rebuild, so a
     /// write and the scan exclude each other while scans do not block each
     /// other. Takes no lease when this thread already holds one over the home.
-    pub fn acquire_scan_lease(
+    pub(crate) fn acquire_scan_lease(
         &self,
         home: &Path,
         projects: &[std::path::PathBuf],
-    ) -> Result<ScanLeaseGuard, String> {
+    ) -> Result<ScanLeaseGuard, crate::timing_log::CommandError> {
         let history = if std::env::var_os("SKILL_STUDIO_FIXTURE").is_some() {
             home.join(".history")
         } else {
@@ -168,8 +168,7 @@ impl WriteLease {
         scan_wait_probe::notify(&home.canonicalize().unwrap_or_else(|_| home.to_path_buf()));
         let handle = self
             .lease
-            .acquire(&keys, LeaseMode::Shared, self.scan_wait)
-            .map_err(|e| e.message)?;
+            .acquire(&keys, LeaseMode::Shared, self.scan_wait)?;
         HELD_ON_THIS_THREAD.with(|held| held.set(held.get() + 1));
         Ok(ScanLeaseGuard {
             handle: Some(handle),
