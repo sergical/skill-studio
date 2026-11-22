@@ -410,6 +410,9 @@ importers:
       '@skill-studio/lib':
         specifier: workspace:*
         version: link:../lib
+      '@skill-studio/ui':
+        specifier: workspace:*
+        version: link:../ui
       '@stylexjs/stylex':
         specifier: 0.19.1
         version: 0.19.1
