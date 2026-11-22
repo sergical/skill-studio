@@ -45,10 +45,11 @@ use crate::lock_file;
 use crate::ops_install;
 use crate::ownership;
 use crate::ports::{
-    acquire_shared, Clock, DirEntryFacts, ExclusiveGuard, FileKind, HistoryAccess, OpContext,
-    PlanStatus, ProcessSpec, Runtime, ScopeFs, ScopedPath, ScopedReads,
+    acquire_shared, Clock, DirEntryFacts, ExclusiveGuard, FileKind, HistoryAccess, LeaseHandle,
+    LeaseKey, LeaseMode, OpContext, PlanStatus, ProcessSpec, Runtime, ScopeFs, ScopedPath,
+    ScopedReads,
 };
-use crate::scope::{EffectiveScope, NormalizedScope};
+use crate::scope::{EffectiveScope, NormalizedScope, PhysicalRoot};
 use crate::view::ViewList;
 use crate::SCHEMA_VERSION;
 
@@ -535,12 +536,7 @@ pub fn scan(rt: &Runtime, ctx: &OpContext, req: &ScanRequest) -> Result<Inventor
 
 /// Reads every installed-skill root for a CLI or MCP usage report.
 pub fn scan_for_usage(rt: &Runtime, ctx: &OpContext) -> Result<Inventory, CoreError> {
-    rt.run(Operation::SkillUsage, ctx, || {
-        ctx.checkpoint()?;
-        let _folder_guard = rt.ports.history.guard_read_data_folder()?;
-        let _guard = acquire_shared(rt.ports.leases.as_ref(), &rt.scope)?;
-        scan_inner(rt, ctx, &ScanRequest::default())
-    })
+    rt.run(Operation::SkillUsage, ctx, || scan_for_report(rt, ctx))
 }
 
 fn scan_body(rt: &Runtime, ctx: &OpContext, req: &ScanRequest) -> Result<Inventory, CoreError> {
@@ -548,6 +544,75 @@ fn scan_body(rt: &Runtime, ctx: &OpContext, req: &ScanRequest) -> Result<Invento
     let _folder_guard = rt.ports.history.guard_read_data_folder()?;
     let _guard = acquire_shared(rt.ports.leases.as_ref(), &rt.scope)?;
     scan_inner(rt, ctx, req)
+}
+
+/// Reads report data with a shared lease on each root only while scanning it.
+pub(crate) fn scan_for_report(rt: &Runtime, ctx: &OpContext) -> Result<Inventory, CoreError> {
+    let _folder_guard = rt.ports.history.guard_read_data_folder()?;
+    scan_inventory(rt, ctx, &ScanRequest::default(), ScanMode::Report)
+}
+
+/// Reads listing metadata for the home and only the requested project.
+pub(crate) fn scan_for_listing(
+    rt: &Runtime,
+    ctx: &OpContext,
+    scopes: &[RootScope],
+) -> Result<Inventory, CoreError> {
+    let mut selected = rt.clone();
+    selected
+        .scope
+        .projects
+        .retain(|p| scopes.contains(&RootScope::Project(ProjectRef(p.lexical.clone()))));
+    scan_inventory(&selected, ctx, &ScanRequest::default(), ScanMode::Listing)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScanMode {
+    Full,
+    Report,
+    Listing,
+}
+
+impl ScanMode {
+    fn read_lease(
+        self,
+        rt: &Runtime,
+        root: &PhysicalRoot,
+    ) -> Result<Option<Box<dyn LeaseHandle>>, CoreError> {
+        if self == Self::Full {
+            return Ok(None);
+        }
+        rt.ports
+            .leases
+            .acquire(
+                &[LeaseKey {
+                    canonical_root: root.canonical.clone(),
+                }],
+                LeaseMode::Shared,
+                rt.scope.raw.read_timeout(),
+            )
+            .map(Some)
+    }
+
+    fn skill_read(self, rt: &Runtime) -> SkillRead<'_> {
+        match self {
+            Self::Listing => SkillRead::Metadata,
+            Self::Full | Self::Report => SkillRead::Folder(rt.ports.scan_memo.as_deref()),
+        }
+    }
+}
+
+fn project_ledger(
+    fs: &dyn ScopeFs,
+    home: &Path,
+    project: &PhysicalRoot,
+) -> ownership::ScopeLedgers {
+    ownership::read_scope_ledgers(
+        fs,
+        &project.lexical.join(".agents"),
+        &crate::dotagents_ledger::dotagents_dir(home, Some(&project.lexical)),
+        Some(&lock_file::project_lock_file_path(&project.lexical)),
+    )
 }
 
 /// The scan walk itself, without acquiring a lease.
@@ -561,6 +626,16 @@ pub(crate) fn scan_inner(
     ctx: &OpContext,
     req: &ScanRequest,
 ) -> Result<Inventory, CoreError> {
+    scan_inventory(rt, ctx, req, ScanMode::Full)
+}
+
+fn scan_inventory(
+    rt: &Runtime,
+    ctx: &OpContext,
+    req: &ScanRequest,
+    mode: ScanMode,
+) -> Result<Inventory, CoreError> {
+    ctx.checkpoint()?;
     let budget = rt.scope.raw.scan_budget();
     let start = rt.ports.clock.monotonic();
     let clock = rt.ports.clock.as_ref();
@@ -568,6 +643,7 @@ pub(crate) fn scan_inner(
     let fs = rt.ports.fs.as_ref();
     let home = &rt.scope.home.lexical;
 
+    let home_lease = mode.read_lease(rt, &rt.scope.home)?;
     let step_start = clock.monotonic();
     let disable_sources = DisableSources::read(
         fs,
@@ -593,17 +669,13 @@ pub(crate) fn scan_inner(
             None,
         ),
     );
-    for project in &rt.scope.projects {
-        let project_lock_path = lock_file::project_lock_file_path(&project.lexical);
-        scope_ledgers.insert(
-            RootScope::Project(ProjectRef(project.lexical.clone())),
-            ownership::read_scope_ledgers(
-                fs,
-                &project.lexical.join(".agents"),
-                &crate::dotagents_ledger::dotagents_dir(home, Some(&project.lexical)),
-                Some(&project_lock_path),
-            ),
-        );
+    if mode == ScanMode::Full {
+        for project in &rt.scope.projects {
+            scope_ledgers.insert(
+                RootScope::Project(ProjectRef(project.lexical.clone())),
+                project_ledger(fs, home, project),
+            );
+        }
     }
     let home_registry = ownership::read_home_registry(fs, home);
     op_steps.push(crate::timing::step(clock, "ledgers_read", step_start));
@@ -621,6 +693,7 @@ pub(crate) fn scan_inner(
         start,
         budget,
         timings: &timings,
+        skill_read: mode.skill_read(rt),
     };
     let mut accum = ScanAccum {
         skills: BTreeMap::new(),
@@ -655,11 +728,42 @@ pub(crate) fn scan_inner(
     for target in &global_plugin_targets {
         scan_one_plugin_target(&sc, target, &mut accum)?;
     }
-    for target in &project_targets {
-        scan_one_target(&sc, target, &mut accum)?;
-    }
-    for target in &project_plugin_targets {
-        scan_one_plugin_target(&sc, target, &mut accum)?;
+    drop(home_lease);
+    if mode == ScanMode::Full {
+        for target in &project_targets {
+            scan_one_target(&sc, target, &mut accum)?;
+        }
+        for target in &project_plugin_targets {
+            scan_one_plugin_target(&sc, target, &mut accum)?;
+        }
+    } else {
+        // One project lease at a time. A writer can never be waiting
+        // on another root held by this scan when we take the next lease.
+        let mut project_ledgers = HashMap::new();
+        for project in &rt.scope.projects {
+            ctx.checkpoint()?;
+            let _lease = mode.read_lease(rt, project)?;
+            let scope = RootScope::Project(ProjectRef(project.lexical.clone()));
+            let ledger = HashMap::from([(scope.clone(), project_ledger(fs, home, project))]);
+            let project_scan = ScanCtx {
+                scope_ledgers: &ledger,
+                ..sc
+            };
+            for target in project_targets
+                .iter()
+                .filter(|target| target.scope == scope)
+            {
+                scan_one_target(&project_scan, target, &mut accum)?;
+            }
+            for target in project_plugin_targets
+                .iter()
+                .filter(|target| target.scope == scope)
+            {
+                scan_one_plugin_target(&project_scan, target, &mut accum)?;
+            }
+            project_ledgers.extend(ledger);
+        }
+        scope_ledgers.extend(project_ledgers);
     }
     op_steps.push(crate::timing::step(clock, "roots_walk", step_start));
     // These are cumulative sub-times already counted inside
@@ -732,6 +836,7 @@ pub(crate) fn scan_inner(
     // through an explicit `~/.claude/skills/<name>` link, never the shared
     // root directly (`reads_universal_root: Support::No` in `harness.rs`).
     let step_start = clock.monotonic();
+    let _home_lease = mode.read_lease(rt, &rt.scope.home)?;
     let claude_skills_dir = rt.scope.global_root_path(Path::new(".claude/skills"));
     for skill in skills.values_mut() {
         for deployment in &mut skill.deployments {
@@ -775,6 +880,7 @@ pub(crate) fn scan_inner(
         step_start,
     ));
 
+    drop(_home_lease);
     let mut lock_only = Vec::new();
     for (scope, ledger) in &scope_ledgers {
         let names: std::collections::BTreeSet<_> = ledger
@@ -989,6 +1095,7 @@ struct ScanCtx<'a> {
     start: Duration,
     budget: Duration,
     timings: &'a ScanTimings,
+    skill_read: SkillRead<'a>,
 }
 
 /// Per-section durations accumulated across every [`scan_one_target`] and
@@ -1095,7 +1202,7 @@ fn scan_one_target(
                     fs: sc.fs,
                     ctx: sc.ctx,
                     clock: sc.rt.ports.clock.as_ref(),
-                    memo: sc.rt.ports.scan_memo.as_deref(),
+                    skill_read: sc.skill_read,
                     scope: &sc.rt.scope,
                     home: sc.home,
                     disable_sources: sc.disable_sources,
@@ -1162,7 +1269,7 @@ fn scan_move_aside_dir(
                 fs: sc.fs,
                 ctx: sc.ctx,
                 clock: sc.rt.ports.clock.as_ref(),
-                memo: sc.rt.ports.scan_memo.as_deref(),
+                skill_read: sc.skill_read,
                 scope: &sc.rt.scope,
                 home: sc.home,
                 disable_sources: sc.disable_sources,
@@ -1225,7 +1332,7 @@ fn scan_one_plugin_target(
             sc.fs,
             sc.ctx,
             sc.rt.ports.clock.as_ref(),
-            sc.rt.ports.scan_memo.as_deref(),
+            sc.skill_read,
             &plugin_skill.skill_dir,
             &plugin_skill.name,
             sc.timings,
@@ -1245,7 +1352,7 @@ fn scan_one_plugin_target(
                         accum.observations.push(observation);
                     }
                 }
-                let content_fingerprint = Some(facts.content_fingerprint.clone());
+                let content_fingerprint = sc.skill_read.fingerprint(&facts);
                 // Matches the desktop's plugin-cache loop: `is_symlink`
                 // is checked, but a plugin skill is never resolved
                 // through it, so the link facts otherwise stay at their
@@ -1393,7 +1500,7 @@ struct EntryContext<'a> {
     fs: &'a dyn ScopeFs,
     ctx: &'a OpContext,
     clock: &'a dyn Clock,
-    memo: Option<&'a crate::scan_memo::ScanMemo>,
+    skill_read: SkillRead<'a>,
     scope: &'a NormalizedScope,
     home: &'a Path,
     disable_sources: &'a DisableSources,
@@ -1516,7 +1623,7 @@ fn process_entries(
             (
                 cached.description.clone(),
                 cached.violations.clone(),
-                Some(cached.facts.content_fingerprint.clone()),
+                cx.skill_read.fingerprint(&cached.facts),
                 Box::new(cached.facts.clone()),
             )
         } else {
@@ -1524,7 +1631,7 @@ fn process_entries(
                 cx.fs,
                 cx.ctx,
                 cx.clock,
-                cx.memo,
+                cx.skill_read,
                 &skill_dir,
                 &entry.name,
                 cx.timings,
@@ -1558,7 +1665,7 @@ fn process_entries(
                     (
                         description,
                         violations,
-                        Some(facts.content_fingerprint.clone()),
+                        cx.skill_read.fingerprint(&facts),
                         facts,
                     )
                 }
@@ -1860,6 +1967,21 @@ enum SkillMdRead {
     Unreadable(String),
 }
 
+#[derive(Clone, Copy)]
+enum SkillRead<'a> {
+    Metadata,
+    Folder(Option<&'a crate::scan_memo::ScanMemo>),
+}
+
+impl SkillRead<'_> {
+    fn fingerprint(self, facts: &ContentFacts) -> Option<Fingerprint> {
+        match self {
+            Self::Metadata => None,
+            Self::Folder(_) => Some(facts.content_fingerprint.clone()),
+        }
+    }
+}
+
 /// Reads and validates `<skill_dir>/SKILL.md`. See [`SkillMdRead`] for what
 /// each outcome means to the caller.
 /// [`read_skill_md_from_disk`], or the result `memo` kept for `skill_dir`
@@ -1868,13 +1990,13 @@ fn read_skill_md(
     fs: &dyn ScopeFs,
     ctx: &OpContext,
     clock: &dyn Clock,
-    memo: Option<&crate::scan_memo::ScanMemo>,
+    mode: SkillRead<'_>,
     skill_dir: &Path,
     name: &str,
     timings: &ScanTimings,
 ) -> Result<SkillMdRead, CoreError> {
-    let Some(memo) = memo else {
-        return read_skill_md_from_disk(fs, ctx, clock, skill_dir, name, timings);
+    let SkillRead::Folder(Some(memo)) = mode else {
+        return read_skill_md_from_disk(fs, ctx, clock, skill_dir, name, timings, mode);
     };
     let now = clock.now();
     let stamp_start = clock.monotonic();
@@ -1884,7 +2006,7 @@ fn read_skill_md(
         clock.monotonic().saturating_sub(stamp_start),
     );
     let Some(stamp) = stamp else {
-        return read_skill_md_from_disk(fs, ctx, clock, skill_dir, name, timings);
+        return read_skill_md_from_disk(fs, ctx, clock, skill_dir, name, timings, mode);
     };
     if let Some(kept) = memo.get(skill_dir, name, &stamp, now) {
         return Ok(SkillMdRead::Found {
@@ -1898,7 +2020,7 @@ fn read_skill_md(
     // failed call is not kept: the failure may be gone on the next scan
     // (too many open files, for example) while the stamp stays the same.
     let watched = crate::scan_memo::FailureWatch::new(fs);
-    let read = read_skill_md_from_disk(&watched, ctx, clock, skill_dir, name, timings)?;
+    let read = read_skill_md_from_disk(&watched, ctx, clock, skill_dir, name, timings, mode)?;
     if watched.failed() {
         return Ok(read);
     }
@@ -1932,6 +2054,7 @@ fn read_skill_md_from_disk(
     skill_dir: &Path,
     name: &str,
     timings: &ScanTimings,
+    mode: SkillRead<'_>,
 ) -> Result<SkillMdRead, CoreError> {
     let skill_md = skill_dir.join("SKILL.md");
     let read_start = clock.monotonic();
@@ -1959,9 +2082,16 @@ fn read_skill_md_from_disk(
     );
     let violations = frontmatter::validate_skill(name, &parsed, content.lines().count());
     let description = parsed.as_frontmatter().and_then(|f| f.description.clone());
-    let facts = compute_content_facts(
-        fs, ctx, clock, timings, skill_dir, &bytes, truncated, &parsed,
-    )?;
+    let facts = match mode {
+        SkillRead::Metadata => ContentFacts {
+            frontmatter: parsed.as_frontmatter().cloned(),
+            frontmatter_fields: frontmatter::frontmatter_fields(&content),
+            ..ContentFacts::default()
+        },
+        SkillRead::Folder(_) => compute_content_facts(
+            fs, ctx, clock, timings, skill_dir, &bytes, truncated, &parsed,
+        )?,
+    };
     Ok(SkillMdRead::Found {
         description,
         violations,
