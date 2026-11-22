@@ -18,10 +18,15 @@ use skill_studio_core::timing::StepTiming;
 
 mod command_failure;
 mod command_span;
+mod structured_logs;
 mod webview;
 pub use command_failure::CommandFailure;
 pub use command_span::{
     sampled_at, CommandSpan, TraceParent, Trigger, BACKGROUND_SAMPLE_RATE, USER_SAMPLE_RATE,
+};
+pub use structured_logs::{
+    record_desktop_data_folder, record_desktop_startup, record_desktop_update_check,
+    record_refresh_start,
 };
 pub use webview::{WebviewBundle, WebviewItem, WebviewTelemetry, WEBVIEW_ERROR_CAP};
 
@@ -169,6 +174,21 @@ fn client_options(
     options.max_breadcrumbs = 0;
     options.shutdown_timeout = SHUTDOWN_FLUSH;
     options.before_send = Some(Arc::new(move |event| Some(redact_event(event, surface))));
+    let log_consent = consent.clone();
+    options.before_send_log = Some(Arc::new(move |mut log| {
+        if !log_consent.enabled() {
+            return None;
+        }
+        log.attributes.retain(|key, _| !key.starts_with("user."));
+        if let Some(span) = CommandSpan::current() {
+            log.trace_id = Some(span.trace_id);
+            log.attributes.insert(
+                "sentry.trace.parent_span_id".into(),
+                span.span_id.to_string().into(),
+            );
+        }
+        Some(log)
+    }));
     options.transport = Some(Arc::new(ConsentTransportFactory { consent }));
     options.sample_rate(1.0)
 }
@@ -498,6 +518,15 @@ fn capture_command_failure(
     contexts: &Map<String, Context>,
 ) {
     let code = failure.as_str();
+    if let Some(Context::Trace(trace)) = contexts.get("trace") {
+        CommandSpan {
+            trace_id: trace.trace_id,
+            span_id: trace.span_id,
+            parent_span_id: trace.parent_span_id,
+            sampled: true,
+        }
+        .enter(|| structured_logs::record_failure_log(surface, name, code));
+    }
     let mut tags = outcome_tags(surface, false, Some(code));
     tags.insert("command".to_string(), name.to_string());
     let event = Event {
@@ -653,6 +682,9 @@ pub fn record_command(
 ) {
     let issue = failure.filter(|failure| failure.opens_issue());
     let ok = failure.is_none();
+    if command.starts_with("snapshot_refresh.") {
+        span.enter(|| structured_logs::record_refresh_finish(command, elapsed_ms, ok));
+    }
     if !span.sampled {
         return;
     }
