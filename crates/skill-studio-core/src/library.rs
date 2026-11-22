@@ -10,6 +10,7 @@ use crate::identity::{RootKind, RootScope};
 use crate::ops::{OpStatus, Outcome};
 use crate::ops_invocation::{deployment_invocation, InvocationMode};
 use crate::ports::{OpContext, Runtime};
+use crate::view::ViewList;
 use crate::CoreError;
 
 /// Window and row selection for the library table.
@@ -133,7 +134,7 @@ impl From<CopyStatus> for LibraryCopyStatus {
 }
 
 impl Outcome for LibraryReport {
-    const LISTS: &'static [&'static str] = &["/rows"];
+    const LISTS: &'static [ViewList<'static>] = &[ViewList::new("/rows", &["/name"])];
 
     fn status(&self) -> OpStatus {
         if self.partial {

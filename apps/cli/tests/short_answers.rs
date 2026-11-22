@@ -183,12 +183,6 @@ fn library_views_page_project_and_count_the_same_on_the_cli_and_mcp() {
             vec!["--limit", "1"],
             json!({"limit": 1}),
             json!(["alpha"]),
-            json!({"list": "/rows", "total": 3, "returned": 1, "next_cursor": "1"}),
-        ),
-        (
-            vec!["--limit", "1", "--cursor", "2"],
-            json!({"limit": 1, "cursor": "2"}),
-            json!(["gamma"]),
             json!({"list": "/rows", "total": 3, "returned": 1}),
         ),
         (
@@ -215,12 +209,242 @@ fn library_views_page_project_and_count_the_same_on_the_cli_and_mcp() {
                 .map(|row| row["name"].clone())
                 .collect();
             assert_eq!(json!(names), rows, "{surface} {args:?}: {envelope}");
-            assert_eq!(envelope["page"], page, "{surface} {args:?}: {envelope}");
+            let mut actual_page = envelope["page"].clone();
+            if args[0] == "--limit" {
+                assert!(actual_page
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("next_cursor")
+                    .and_then(|cursor| cursor.as_str().map(str::to_owned))
+                    .is_some());
+            }
+            assert_eq!(actual_page, page, "{surface} {args:?}: {envelope}");
         }
         assert_eq!(cli["data"], mcp["data"], "{args:?}");
         if args[0] == "--fields" {
             assert_eq!(cli["data"]["rows"][0], json!({"name": "alpha"}));
         }
+    }
+}
+
+/// A continuation must return every skill once, or tell the caller to restart.
+#[test]
+fn library_cursor_rejects_changed_filters_and_rows_on_the_cli_and_mcp() {
+    for surface in ["cli", "mcp"] {
+        let home = tempfile::tempdir().unwrap();
+        let skills = home.path().join(".agents/skills");
+        for name in ["bravo", "charlie", "delta"] {
+            write_skill(&skills, name, "Body.");
+        }
+        let call = |cursor: Option<&str>, manual: bool| {
+            if surface == "cli" {
+                let mut args = vec!["library", "--limit", "1"];
+                if let Some(cursor) = cursor {
+                    args.extend(["--cursor", cursor]);
+                }
+                if manual {
+                    args.extend(["--source", "manual"]);
+                }
+                headless::cli(home.path(), &args)
+            } else {
+                let mut args = json!({"limit": 1});
+                if let Some(cursor) = cursor {
+                    args["cursor"] = json!(cursor);
+                }
+                if manual {
+                    args["source"] = json!("manual");
+                }
+                headless::mcp_envelope(&headless::mcp(home.path(), "library", &args))
+            }
+        };
+
+        let first = call(None, false);
+        let first_cursor = first["page"]["next_cursor"].as_str().unwrap();
+        let second = call(Some(first_cursor), false);
+        let third = call(second["page"]["next_cursor"].as_str(), false);
+        assert_eq!(
+            [&first, &second, &third].map(|page| page["data"]["rows"][0]["name"].as_str()),
+            [Some("bravo"), Some("charlie"), Some("delta")],
+            "{surface}"
+        );
+        assert!(third["page"]["next_cursor"].is_null(), "{surface}");
+
+        let assert_restart = |envelope: serde_json::Value, case: &str| {
+            assert_eq!(
+                envelope["errors"][0]["code"], "invalid_request",
+                "{surface} {case}: expected invalid_request, got {envelope}"
+            );
+            assert!(
+                envelope["errors"][0]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("without a cursor"),
+                "{surface} {case}"
+            );
+        };
+
+        // All three rows are manual, so the filter changes the request alone.
+        let filtered = call(None, true);
+        assert_eq!(first["data"], filtered["data"], "{surface}");
+        assert_eq!(filtered["page"]["total"], 3, "{surface}");
+        assert_restart(call(Some(first_cursor), true), "changed filter");
+        let project = home.path().join("empty-project");
+        std::fs::create_dir(&project).unwrap();
+        let new_scope = if surface == "cli" {
+            headless::cli(
+                home.path(),
+                &[
+                    "library",
+                    "--limit",
+                    "1",
+                    "--cursor",
+                    first_cursor,
+                    "--project",
+                    project.to_str().unwrap(),
+                ],
+            )
+        } else {
+            headless::mcp_envelope(&headless::mcp(
+                home.path(),
+                "library",
+                &json!({"limit": 1, "cursor": first_cursor, "project_path": project}),
+            ))
+        };
+        assert_eq!(
+            new_scope["scope"]["projects"],
+            json!([project]),
+            "{surface}"
+        );
+        assert_restart(new_scope, "changed scope");
+
+        let changed_offset = first_cursor.replacen("@1@", "@2@", 1);
+        assert_ne!(changed_offset, first_cursor);
+        assert_restart(call(Some(&changed_offset), false), "edited offset");
+
+        write_skill(&skills, "alpha", "Body.");
+        std::fs::remove_dir_all(skills.join("delta")).unwrap();
+        assert_eq!(call(None, false)["page"]["total"], 3, "{surface}");
+        assert_restart(call(Some(first_cursor), false), "changed rows");
+        assert_restart(call(Some("1"), false), "legacy cursor");
+    }
+}
+
+#[test]
+fn scan_cursor_survives_changed_deployment_details() {
+    assert_skill_cursor_survives_row_updates("scan", "scan", "skills", "name", "description");
+}
+
+#[test]
+fn usage_cursor_survives_changed_counts_and_dates() {
+    assert_skill_cursor_survives_row_updates(
+        "usage",
+        "skill_usage",
+        "rows",
+        "skill",
+        "recent_uses",
+    );
+}
+
+#[test]
+fn library_cursor_survives_changed_use_counts() {
+    assert_skill_cursor_survives_row_updates("library", "library", "rows", "name", "uses");
+}
+
+fn assert_skill_cursor_survives_row_updates(
+    command: &str,
+    tool: &str,
+    list: &str,
+    name_key: &str,
+    changed_key: &str,
+) {
+    for surface in ["cli", "mcp"] {
+        let home = tempfile::tempdir().unwrap();
+        let skills = home.path().join(".agents/skills");
+        for name in ["bravo", "charlie", "delta"] {
+            write_skill(&skills, name, "Body.");
+        }
+        let transcript = home.path().join(".claude/projects/-work/session.jsonl");
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        let mut uses = [
+            ("bravo", 2),
+            ("bravo", 3),
+            ("bravo", 4),
+            ("bravo", 5),
+            ("charlie", 6),
+            ("charlie", 7),
+            ("delta", 8),
+        ]
+        .map(|(skill, day)| claude_skill_line(skill, &noon_ago(day)))
+        .join("\n");
+        uses.push('\n');
+        std::fs::write(&transcript, &uses).unwrap();
+
+        let call = |limit: &str, cursor: Option<&str>| {
+            if surface == "cli" {
+                let mut args = vec![command, "--limit", limit];
+                if let Some(cursor) = cursor {
+                    args.extend(["--cursor", cursor]);
+                }
+                headless::cli(home.path(), &args)
+            } else {
+                let mut args = json!({"limit": limit.parse::<usize>().unwrap()});
+                if let Some(cursor) = cursor {
+                    args["cursor"] = json!(cursor);
+                }
+                headless::mcp_envelope(&headless::mcp(home.path(), tool, &args))
+            }
+        };
+        let first = call("1", None);
+        let cursor = first["page"]["next_cursor"].as_str().unwrap();
+        let assert_pages = |next: &serde_json::Value| {
+            assert_eq!(
+                next["status"], "ok",
+                "{surface} {command}: {}",
+                next["errors"]
+            );
+            let names: Vec<_> = [&first, next]
+                .iter()
+                .flat_map(|page| {
+                    page["data"][list]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|row| row[name_key].as_str().unwrap())
+                })
+                .collect();
+            assert_eq!(names, ["bravo", "charlie", "delta"], "{surface} {command}");
+            assert!(next["page"]["next_cursor"].is_null(), "{surface} {command}");
+        };
+        let before = call("2", Some(cursor));
+        assert_pages(&before);
+
+        std::fs::write(
+            skills.join("charlie/SKILL.md"),
+            "---\nname: charlie\ndescription: Edited skill.\nmetadata:\n  a: one\n  z: two\n---\nBody.",
+        ).unwrap();
+        uses.push_str(&claude_skill_line("charlie", &noon_ago(1)));
+        uses.push('\n');
+        std::fs::write(&transcript, uses).unwrap();
+
+        let after = call("2", Some(cursor));
+        assert_pages(&after);
+        assert_ne!(
+            before["data"][list][0][changed_key], after["data"][list][0][changed_key],
+            "{surface} {command}: fixture must change {changed_key}"
+        );
+        if command == "usage" {
+            assert_ne!(
+                before["data"][list][0]["last_used"],
+                after["data"][list][0]["last_used"]
+            );
+        }
+
+        write_skill(&skills, "alpha", "Body.");
+        let inserted = call("2", Some(cursor));
+        assert_eq!(
+            inserted["errors"][0]["code"], "invalid_request",
+            "{surface} {command}: {inserted}"
+        );
     }
 }
 
