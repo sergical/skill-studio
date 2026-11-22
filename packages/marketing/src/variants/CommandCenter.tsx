@@ -8,6 +8,7 @@ import { lightSiteTheme, siteTokens, type SiteTheme } from "../SiteTheme.stylex"
 import { FaqSection } from "../home/FaqSection";
 import { homeSectionStyles } from "../home/HomeSection.stylex";
 import { CleanupOverview } from "../home/CleanupOverview";
+import { ListingBudgetCalculator } from "../home/ListingBudgetCalculator";
 import { RepairProof } from "../home/RepairProof";
 import { SkillThrow } from "../home/SkillThrow";
 import { TrustSetupSection } from "../home/TrustSetupSection";
@@ -77,6 +78,13 @@ export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
           {...stylex.props(siteLayout.container, styles.jobs, styles.anchor)}
         >
           <CleanupOverview theme={theme} />
+        </section>
+        <section
+          id="listing"
+          aria-label="Skill budget calculator"
+          {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}
+        >
+          <ListingBudgetCalculator theme={theme} />
         </section>
         <section
           id="how-it-works"
