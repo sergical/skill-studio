@@ -144,6 +144,48 @@ function withCommandMessage<T>(call: Promise<T>): Promise<T> {
   });
 }
 
+interface ReportRead<T> {
+  data?: T;
+  error?: string;
+  refreshing: boolean;
+}
+
+// Listing and Sessions both scan skills. Keep at most one of their reads in flight.
+let reportReadQueue = Promise.resolve();
+
+function refreshReport<T>(
+  previous: ReportRead<T> | undefined,
+  read: () => Promise<T>,
+  publish: (entry: ReportRead<T>) => void,
+): void {
+  if (previous?.refreshing) return;
+  publish({ data: previous?.data, refreshing: true });
+  reportReadQueue = reportReadQueue.then(async () => {
+    try {
+      publish({ data: await read(), refreshing: false });
+    } catch (error) {
+      publish({ data: previous?.data, error: invokeErrorMessage(error), refreshing: false });
+    }
+  });
+}
+
+/** Cache key for a listing scope and optional budget comparison. */
+export function listingReportKey(request: ListingRequest): string {
+  return JSON.stringify([
+    request.project_path,
+    request.claude_budget_fraction,
+    request.claude_context_window_tokens,
+    request.codex_max_context_tokens,
+    request.claude_transcript,
+    request.codex_transcript,
+  ]);
+}
+
+/** Cache key for a session scope and sample size. */
+export function sessionsReportKey(request: SkillSessionsRequest): string {
+  return JSON.stringify([request.project_path, request.sessions]);
+}
+
 interface AppState {
   harnessDetection: HarnessDetectionState;
   setHarnessDetection: (update: Partial<HarnessDetectionState>) => void;
@@ -263,9 +305,13 @@ interface AppState {
 
   // === Model listing ===
   /** Per-skill listing state for each agent, from the core's `listing`. Reads only. */
+  listingReports: Record<string, ReportRead<ListingReport>>;
   readListing: (request: ListingRequest) => Promise<ListingReport>;
+  refreshListing: (request: ListingRequest) => void;
   /** Per-session listing states and uses, rolled up per skill. Reads only. */
+  sessionsReports: Record<string, ReportRead<SkillSessionsReport>>;
   readSkillSessions: (request: SkillSessionsRequest) => Promise<SkillSessionsReport>;
+  refreshSkillSessions: (request: SkillSessionsRequest) => void;
 
   // === Add-skill Sheet ===
   addSkillSheet: { open: boolean; prefill?: string };
@@ -548,8 +594,26 @@ export const useAppStore = create<AppState>((set, get) => ({
   checkSkillUpdates: checkSkillUpdatesNow,
 
   listPacks: (remote) => withCommandMessage(packList(remote)),
+  listingReports: {},
   readListing: (request) => withCommandMessage(skillListing(request)),
+  refreshListing: (request) => {
+    const key = listingReportKey(request);
+    refreshReport(
+      get().listingReports[key],
+      () => get().readListing(request),
+      (entry) => set((state) => ({ listingReports: { ...state.listingReports, [key]: entry } })),
+    );
+  },
+  sessionsReports: {},
   readSkillSessions: (request) => withCommandMessage(skillSessions(request)),
+  refreshSkillSessions: (request) => {
+    const key = sessionsReportKey(request);
+    refreshReport(
+      get().sessionsReports[key],
+      () => get().readSkillSessions(request),
+      (entry) => set((state) => ({ sessionsReports: { ...state.sessionsReports, [key]: entry } })),
+    );
+  },
   runPackAction: (intent, dryRun) =>
     withCommandMessage(packActionCall(intent, dryRun, get().harnessDetection.choice?.kept ?? [])),
   exportPack: (request) => withCommandMessage(packExport(request)),

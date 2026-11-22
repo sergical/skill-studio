@@ -6,14 +6,12 @@ use std::path::{Path, PathBuf};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::dto::{Inventory, ScanRequest};
+use crate::dto::Inventory;
 use crate::error::{CoreError, ErrorCode};
 use crate::identity::{ProjectRef, RootKind, RootScope};
 use crate::lock_file::{self, LocalEdits, SkillLockFile};
 use crate::ops::{OpStatus, Operation, Outcome};
-use crate::ports::{
-    acquire_shared, CancelToken, FileKind, OpContext, Runtime, ScopeFs, ScopedReads,
-};
+use crate::ports::{CancelToken, FileKind, OpContext, Runtime, ScopeFs, ScopedReads};
 use crate::view::ViewList;
 
 /// `agent_home_roots` key for the folder that holds the skills CLI's global
@@ -390,10 +388,7 @@ pub(crate) fn build(
 }
 
 pub(crate) fn scan(rt: &Runtime, ctx: &OpContext) -> Result<Inventory, CoreError> {
-    ctx.checkpoint()?;
-    let _folder_guard = rt.ports.history.guard_read_data_folder()?;
-    let _guard = acquire_shared(rt.ports.leases.as_ref(), &rt.scope)?;
-    crate::ops::scan_inner(rt, ctx, &ScanRequest::default())
+    crate::ops::scan_for_report(rt, ctx)
 }
 
 /// What makes two spellings of one source the same pack. A remote git

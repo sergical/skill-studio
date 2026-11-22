@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::dto::ScanRequest;
 use crate::error::{CoreError, ErrorCode};
 use crate::identity::{AgentId, ProjectRef, RootScope};
 use crate::listing_cost::{
@@ -256,8 +255,7 @@ pub fn listing(
     rt.run(Operation::Listing, ctx, || {
         let scopes = listing_scopes(rt, req)?;
         let _folder_guard = rt.ports.history.guard_read_data_folder()?;
-        let _guard = crate::ports::acquire_shared(rt.ports.leases.as_ref(), &rt.scope)?;
-        let inventory = crate::ops::scan_inner(rt, ctx, &ScanRequest::default())?;
+        let inventory = crate::ops::scan_for_listing(rt, ctx, &scopes)?;
         listing_rows(rt, ctx, &inventory, &scopes, req)
     })
 }

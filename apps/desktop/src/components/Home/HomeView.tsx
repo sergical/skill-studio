@@ -8,7 +8,7 @@
 
 import { useState } from "react";
 import { RefreshCw } from "lucide-react";
-import { Button } from "@skill-studio/ui";
+import { Button, RefreshIndicator } from "@skill-studio/ui";
 import { formatTokens, homeInvocationCounts, homePromptCost } from "@skill-studio/lib";
 import type {
   HealthIssue,
@@ -37,6 +37,7 @@ import { useHomeRowCursor } from "./useHomeRowCursor";
 interface HomeViewProps {
   snapshot: SkillSnapshot | undefined;
   isLoading: boolean;
+  usageRefreshing?: boolean;
   onSelectSkill: (name: string, deploymentPath?: string) => void;
   /** Whether Home is the view on screen right now - `false` while it's kept mounted but hidden
    * behind an open skill's page, so its window-level keyboard shortcuts stay off. */
@@ -221,6 +222,7 @@ function HomeStatTiles({
 function InvocationCostCard({
   inv,
   cost,
+  usageRefreshing,
   filter,
   onLearnMoreInvoke,
   onLearnMoreCost,
@@ -230,6 +232,7 @@ function InvocationCostCard({
 }: {
   inv: ReturnType<typeof homeInvocationCounts>;
   cost: ReturnType<typeof homePromptCost>;
+  usageRefreshing: boolean;
   filter: HomeFilter | null;
   onLearnMoreInvoke: () => void;
   onLearnMoreCost: () => void;
@@ -312,8 +315,14 @@ function InvocationCostCard({
             Tokens of name and description the model reads every turn. Only skills the model may
             invoke count; user-only skills cost nothing until you run them.
           </InfoPopover>
+          <RefreshIndicator active={usageRefreshing} label="Refreshing usage" />
         </span>
-        <div className="flex h-7 gap-0.5" role="group" aria-label="Prompt cost">
+        <div
+          className={`flex h-7 gap-0.5 ${usageRefreshing ? "opacity-50" : ""}`}
+          role="group"
+          aria-label="Prompt cost"
+          aria-busy={usageRefreshing}
+        >
           {cost.totalTokens === 0 ? (
             <span
               className="inline-flex items-center gap-1 overflow-hidden rounded-xs bg-bg-tertiary px-2.5 text-small whitespace-nowrap text-text-secondary"
@@ -361,7 +370,13 @@ function InvocationCostCard({
  * grouped inbox list - the columns any of these three surfaces would
  * otherwise leave the user to reconstruct by hand.
  */
-export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeViewProps) {
+export function HomeView({
+  snapshot,
+  isLoading,
+  usageRefreshing = false,
+  onSelectSkill,
+  active,
+}: HomeViewProps) {
   const setActiveView = useAppStore((state) => state.setActiveView);
   const replaceSkillListFilter = useAppStore((state) => state.replaceSkillListFilter);
 
@@ -478,6 +493,7 @@ export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeVie
       <InvocationCostCard
         inv={inv}
         cost={cost}
+        usageRefreshing={usageRefreshing}
         filter={filter}
         onLearnMoreInvoke={() => setActiveView({ kind: "learn", section: "invoke" })}
         onLearnMoreCost={() => setActiveView({ kind: "learn", section: "cost" })}

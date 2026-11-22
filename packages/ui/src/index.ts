@@ -115,6 +115,7 @@ export {
   CollapsiblePanel,
   CollapsibleContent,
 } from "./components/collapsible";
+export { RefreshIndicator } from "./components/refresh-indicator";
 export { Progress } from "./components/progress";
 export { Kbd } from "./components/kbd";
 

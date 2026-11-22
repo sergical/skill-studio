@@ -14,16 +14,10 @@ import type {
   SessionSummary,
   SkillSessionFlag,
   SkillSessionRollup,
-  SkillSessionsReport,
 } from "@skill-studio/lib";
 import { PageShell } from "../Shell/PageShell";
 import { SelectControl } from "../ui/SelectControl";
-import { useAppStore } from "../../store/appStore";
-
-/** The answer for one session count; a different count means loading. */
-type Load =
-  | { kind: "ready"; count: string; report: SkillSessionsReport }
-  | { kind: "error"; count: string; message: string };
+import { sessionsReportKey, useAppStore } from "../../store/appStore";
 
 type ListedAs = SessionSummary["used"][number]["listed_as"];
 
@@ -231,30 +225,17 @@ function SessionRow({ session }: { session: SessionSummary }) {
 export function SessionsView() {
   const [harness, setHarness] = useState("claude-code");
   const [count, setCount] = useState("100");
-  const [answer, setAnswer] = useState<Load | null>(null);
   const [onlyFindings, setOnlyFindings] = useState(true);
-  const readSkillSessions = useAppStore((s) => s.readSkillSessions);
+  const refreshSkillSessions = useAppStore((s) => s.refreshSkillSessions);
 
+  const load = useAppStore(
+    (s) => s.sessionsReports[sessionsReportKey({ project_path: null, sessions: Number(count) })],
+  );
   useEffect(() => {
-    let live = true;
-    readSkillSessions({ project_path: null, sessions: Number(count) })
-      .then((report) => live && setAnswer({ kind: "ready", count, report }))
-      .catch(
-        (err) =>
-          live &&
-          setAnswer({
-            kind: "error",
-            count,
-            message: err instanceof Error ? err.message : String(err),
-          }),
-      );
-    return () => {
-      live = false;
-    };
-  }, [readSkillSessions, count]);
+    refreshSkillSessions({ project_path: null, sessions: Number(count) });
+  }, [refreshSkillSessions, count]);
 
-  const load = answer?.count === count ? answer : null;
-  const report = load?.kind === "ready" ? load.report : null;
+  const report = load?.data;
   const agent = report?.agents.find((a) => a.harness === harness) ?? null;
   const skills = report?.skills.filter((s) => s.harness === harness) ?? [];
   const sessions = report?.sessions.filter((s) => s.harness === harness) ?? [];
@@ -269,6 +250,7 @@ export function SessionsView() {
   return (
     <PageShell
       title="Sessions"
+      refreshing={load?.refreshing ?? true}
       subtitle="Which skills your agents saw in each session, which they used, and which they may have missed."
       actions={
         <>
@@ -289,14 +271,13 @@ export function SessionsView() {
     >
       <div className="flex flex-col gap-5">
         <Glossary />
-        {load === null ? (
-          <p className="m-0 text-small text-text-secondary">Reading session history…</p>
-        ) : load.kind === "error" ? (
+        {load?.error && (
           <p role="alert" className="m-0 text-small text-destructive-text">
-            {load.message}
+            {load.error}
           </p>
-        ) : !agent ? (
-          <p className="m-0 text-small text-text-secondary">No data for this agent.</p>
+        )}
+        {!agent ? (
+          report && <p className="m-0 text-small text-text-secondary">No data for this agent.</p>
         ) : (
           <>
             <AgentSummary agent={agent} />

@@ -74,6 +74,10 @@ function App() {
     error: snapshotError,
     requestRescan,
   } = useSkillSnapshot();
+  const usageRefreshing =
+    backgroundStatus?.tasks.some(
+      (task) => task.running && (task.worker === "scan" || task.worker === "invocations"),
+    ) ?? isLoading;
   const resolvedTheme = useAppStore((state) => state.resolvedTheme);
   const activeView = useAppStore((state) => state.activeView);
   const openSkill = useAppStore((state) => state.openSkill);
@@ -169,6 +173,7 @@ function App() {
       list = (
         <HomeView
           snapshot={snapshot}
+          usageRefreshing={usageRefreshing}
           isLoading={isLoading}
           onSelectSkill={onSelectSkill}
           active={isShown}
@@ -199,6 +204,7 @@ function App() {
       list = (
         <SkillActivityView
           isLoading={isLoading}
+          usageRefreshing={usageRefreshing}
           error={snapshotError}
           onRetry={() => void requestRescan().catch(() => {})}
           snapshot={snapshot}

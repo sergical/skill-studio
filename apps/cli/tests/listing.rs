@@ -341,3 +341,53 @@ fn codex_session_comparison_reads_only_rollouts_in_this_homes_session_folders() 
         .unwrap()
         .contains("in this home"));
 }
+
+#[cfg(unix)]
+#[test]
+fn listing_and_sessions_read_a_large_home_under_the_desktop_file_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    for index in 0..450 {
+        skill(
+            home,
+            ".claude/skills",
+            &format!("skill-{index}"),
+            "A coding skill",
+        );
+    }
+    // Fixture reads share existing locks but never create them.
+    let leases = home.join(".skill-studio/leases");
+    std::fs::create_dir_all(&leases).unwrap();
+    let seed_lease = |root: &std::path::Path| {
+        let root = root.canonicalize().unwrap();
+        let key = skill_studio_core::identity::sha256_hex(root.to_string_lossy().as_bytes());
+        std::fs::File::create(leases.join(format!("{key}.lock"))).unwrap();
+    };
+    seed_lease(home);
+
+    let mut project_args = Vec::new();
+    for index in 0..180 {
+        let path = home.join(format!("projects/project-{index}"));
+        std::fs::create_dir_all(&path).unwrap();
+        seed_lease(&path);
+        project_args.push("--project".into());
+        project_args.push(path.into_os_string());
+    }
+
+    for report in ["listing", "sessions"] {
+        // Finder's 256 descriptors less 80 already open in the desktop app.
+        let output = test_home::command("/bin/sh", home)
+            .args(["-c", "ulimit -n 176 && exec \"$@\"", "file-budget"])
+            .args([env!("CARGO_BIN_EXE_skill-studio"), report, "--fixture"])
+            .arg(home)
+            .env("SKILL_STUDIO_FIXTURE", home)
+            .args(project_args.iter())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{report} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}

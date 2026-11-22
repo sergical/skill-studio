@@ -15,7 +15,7 @@ use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::dto::{Inventory, ScanRequest};
+use crate::dto::Inventory;
 use crate::error::CoreError;
 use crate::identity::{AgentId, RootKind, RootScope};
 use crate::listing_visibility::{
@@ -285,8 +285,7 @@ pub fn skill_sessions(
         let scopes = listing_scopes(rt, &listing_req)?;
         let scope = scopes.last().cloned().unwrap_or(RootScope::Global);
         let _folder_guard = rt.ports.history.guard_read_data_folder()?;
-        let _guard = crate::ports::acquire_shared(rt.ports.leases.as_ref(), &rt.scope)?;
-        let inventory = crate::ops::scan_inner(rt, ctx, &ScanRequest::default())?;
+        let inventory = crate::ops::scan_for_listing(rt, ctx, &scopes)?;
         let report = listing_rows(
             rt,
             ctx,
