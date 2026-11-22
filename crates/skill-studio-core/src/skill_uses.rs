@@ -38,8 +38,9 @@ pub fn history_start(now: DateTime<Utc>) -> DateTime<Utc> {
     now - chrono::Duration::days(i64::from(HISTORY_DAYS))
 }
 
-fn contains_marker(text: &str, marker: &str) -> bool {
-    memchr::memmem::find(text.as_bytes(), marker.as_bytes()).is_some()
+/// Finds an ASCII transcript marker without decoding the rest of the record.
+pub(crate) fn contains_marker(text: impl AsRef<[u8]>, marker: &str) -> bool {
+    memchr::memmem::find(text.as_ref(), marker.as_bytes()).is_some()
 }
 
 fn checked_history_line(

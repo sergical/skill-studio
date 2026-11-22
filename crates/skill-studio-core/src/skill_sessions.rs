@@ -25,9 +25,10 @@ use crate::listing_visibility::{
 use crate::ops::Operation;
 use crate::ports::{FileKind, OpContext, Runtime};
 use crate::skill_uses::{
-    history_start, parse_claude_code_uses, parse_codex_uses, SkillInvocation, SkillTrigger,
-    TranscriptContext,
+    contains_marker, history_start, parse_claude_code_uses, parse_codex_uses, SkillInvocation,
+    SkillTrigger, TranscriptContext,
 };
+use crate::timing::{op_timing, step};
 
 /// Sessions read per agent when the request does not say.
 pub const DEFAULT_SESSIONS: usize = 100;
@@ -274,6 +275,8 @@ pub fn skill_sessions(
     req: &SkillSessionsRequest,
 ) -> Result<SkillSessionsReport, CoreError> {
     rt.run(Operation::SkillSessions, ctx, || {
+        let clock = rt.ports.clock.as_ref();
+        let started = clock.monotonic();
         let limit = req
             .sessions
             .unwrap_or(DEFAULT_SESSIONS)
@@ -286,6 +289,10 @@ pub fn skill_sessions(
         let scope = scopes.last().cloned().unwrap_or(RootScope::Global);
         let _folder_guard = rt.ports.history.guard_read_data_folder()?;
         let inventory = crate::ops::scan_for_listing(rt, ctx, &scopes)?;
+        let mut steps = ctx
+            .take_timing()
+            .map_or_else(Vec::new, |timing| timing.steps);
+        let listing_started = clock.monotonic();
         let report = listing_rows(
             rt,
             ctx,
@@ -293,7 +300,8 @@ pub fn skill_sessions(
             std::slice::from_ref(&scope),
             &listing_req,
         )?;
-        let since = history_start(rt.ports.clock.now());
+        steps.push(step(clock, "listing_prediction", listing_started));
+        let since = history_start(clock.now());
         let mut agents = Vec::new();
         let mut skills = Vec::new();
         let mut all_sessions = Vec::new();
@@ -301,15 +309,18 @@ pub fn skill_sessions(
             ctx.checkpoint()?;
             let row = report.listings.iter().find(|r| r.harness == facts.id);
             let corpus = corpus(rt, &inventory, facts, &scope, row)?;
+            let transcripts_started = clock.monotonic();
             let (records, sessions) = match facts.id.as_str() {
-                AgentId::CLAUDE_CODE => (
-                    SessionRecords::ListingAndUses,
-                    read_claude_sessions(rt, ctx, &scope, since, limit)?,
-                ),
-                AgentId::CODEX => (
-                    SessionRecords::ListingAndUses,
-                    read_codex_sessions(rt, ctx, &scope, since, limit)?,
-                ),
+                AgentId::CLAUDE_CODE => {
+                    let sessions = read_claude_sessions(rt, ctx, &scope, since, limit)?;
+                    steps.push(step(clock, "claude_transcripts", transcripts_started));
+                    (SessionRecords::ListingAndUses, sessions)
+                }
+                AgentId::CODEX => {
+                    let sessions = read_codex_sessions(rt, ctx, &scope, since, limit)?;
+                    steps.push(step(clock, "codex_transcripts", transcripts_started));
+                    (SessionRecords::ListingAndUses, sessions)
+                }
                 _ => (SessionRecords::UsesOnly, Vec::new()),
             };
             let built = build_agent(
@@ -326,6 +337,7 @@ pub fn skill_sessions(
         }
         // Findings first, so the first page of a paged answer holds them.
         skills.sort_by_key(|s| s.flags.first().copied().map_or(1, |_| 0));
+        ctx.record_timing(op_timing(clock, "skill_sessions", started, steps));
         Ok(SkillSessionsReport {
             skills,
             sessions: all_sessions,
@@ -401,24 +413,30 @@ pub struct ClaudeSessionParser {
 impl ClaudeSessionParser {
     /// Reads one transcript line.
     pub fn line(&mut self, line: &str) {
+        self.line_bytes(line.as_bytes());
+    }
+
+    fn line_bytes(&mut self, line: &[u8]) {
         use crate::skill_uses::claude_code::{COMMAND_MARKER, SKILL_MD_MARKER, SKILL_TOOL_MARKER};
-        // The use parser validates every line it gets; give it only lines
-        // that can hold a use.
-        if [SKILL_TOOL_MARKER, COMMAND_MARKER, SKILL_MD_MARKER]
+        let possible_use = [SKILL_TOOL_MARKER, COMMAND_MARKER, SKILL_MD_MARKER]
             .iter()
-            .any(|m| line.contains(m))
-        {
-            self.session.uses.extend(parse_claude_code_uses(line));
-        }
+            .any(|marker| contains_marker(line, marker));
         let session = &mut self.session;
-        let wanted = (session.at.is_none() && line.contains("\"timestamp\""))
-            || line.contains("\"skill_listing\"")
-            || (session.prompt.is_none() && line.contains("\"user\""))
-            || (session.model.is_none() && line.contains("\"model\""));
+        let wanted = (session.at.is_none() && contains_marker(line, "\"timestamp\""))
+            || contains_marker(line, "\"skill_listing\"")
+            || (session.prompt.is_none() && contains_marker(line, "\"user\""))
+            || (session.model.is_none() && contains_marker(line, "\"model\""));
+        if !possible_use && !wanted {
+            return;
+        }
+        let line = String::from_utf8_lossy(line);
+        if possible_use {
+            session.uses.extend(parse_claude_code_uses(&line));
+        }
         if !wanted {
             return;
         }
-        let Ok(row) = serde_json::from_str::<serde_json::Value>(line) else {
+        let Ok(row) = serde_json::from_str::<serde_json::Value>(&line) else {
             return;
         };
         if session.at.is_none() {
@@ -541,30 +559,39 @@ pub struct CodexSessionParser {
 impl CodexSessionParser {
     /// Reads one rollout line.
     pub fn line(&mut self, line: &str) {
+        self.line_bytes(line.as_bytes());
+    }
+
+    fn line_bytes(&mut self, line: &[u8]) {
         use crate::skill_uses::codex::{
             SESSION_META_MARKER, SKILLS_NAMESPACE_MARKER, SKILL_BLOCK_MARKER, SKILL_MD_MARKER,
         };
-        if [
+        let possible_use = [
             SESSION_META_MARKER,
             SKILL_BLOCK_MARKER,
             SKILL_MD_MARKER,
             SKILLS_NAMESPACE_MARKER,
         ]
         .iter()
-        .any(|m| line.contains(m))
-        {
-            let uses = parse_codex_uses(line, &mut self.context);
-            self.session.uses.extend(uses);
-        }
+        .any(|marker| contains_marker(line, marker));
         let session = &mut self.session;
-        let wanted = (session.id.is_none() && line.contains("\"session_meta\""))
-            || (session.model.is_none() && line.contains("\"turn_context\""))
-            || (session.listing.is_none() && line.contains("<skills_instructions>"))
-            || (session.prompt.is_none() && line.contains("\"user_message\""));
+        let wanted = (session.id.is_none() && contains_marker(line, "\"session_meta\""))
+            || (session.model.is_none() && contains_marker(line, "\"turn_context\""))
+            || (session.listing.is_none() && contains_marker(line, "<skills_instructions>"))
+            || (session.prompt.is_none() && contains_marker(line, "\"user_message\""));
+        if !possible_use && !wanted {
+            return;
+        }
+        let line = String::from_utf8_lossy(line);
+        if possible_use {
+            session
+                .uses
+                .extend(parse_codex_uses(&line, &mut self.context));
+        }
         if !wanted {
             return;
         }
-        let Ok(row) = serde_json::from_str::<serde_json::Value>(line) else {
+        let Ok(row) = serde_json::from_str::<serde_json::Value>(&line) else {
             return;
         };
         let payload = &row["payload"];
@@ -661,7 +688,7 @@ pub(crate) fn newest(
 
 /// Streams a transcript's lines to `each`, so a large transcript is not
 /// held in memory. Returns false when the file cannot be opened.
-fn read_lines(rt: &Runtime, path: &Path, mut each: impl FnMut(&str)) -> bool {
+fn read_lines(rt: &Runtime, path: &Path, mut each: impl FnMut(&[u8])) -> bool {
     use std::io::{BufRead, Read};
     let Ok(file) = rt.ports.fs.open_file(path) else {
         return false;
@@ -680,6 +707,13 @@ fn read_lines(rt: &Runtime, path: &Path, mut each: impl FnMut(&str)) -> bool {
             None => (chunk, chunk.len()),
         };
         let complete = ends > part.len();
+        // Most lines fit in the reader's buffer. Borrow those directly and
+        // only copy lines that span multiple reads.
+        if complete && line.is_empty() && !skipping {
+            each(part);
+            reader.consume(ends);
+            continue;
+        }
         if !skipping {
             if line.len() + part.len() > MAX_LINE_BYTES {
                 skipping = true;
@@ -691,14 +725,14 @@ fn read_lines(rt: &Runtime, path: &Path, mut each: impl FnMut(&str)) -> bool {
         reader.consume(ends);
         if complete {
             if !skipping {
-                each(&String::from_utf8_lossy(&line));
+                each(&line);
             }
             line.clear();
             skipping = false;
         }
     }
     if !skipping && !line.is_empty() {
-        each(&String::from_utf8_lossy(&line));
+        each(&line);
     }
     true
 }
@@ -730,7 +764,7 @@ fn read_claude_sessions(
     for path in newest(files, since, limit) {
         ctx.checkpoint()?;
         let mut parser = ClaudeSessionParser::default();
-        if read_lines(rt, &path, |line| parser.line(line)) {
+        if read_lines(rt, &path, |line| parser.line_bytes(line)) {
             let mut session = parser.finish();
             session.transcript = path;
             out.push(session);
@@ -802,7 +836,7 @@ fn read_codex_sessions(
         }
         ctx.checkpoint()?;
         let mut parser = CodexSessionParser::default();
-        if !read_lines(rt, &path, |line| parser.line(line)) {
+        if !read_lines(rt, &path, |line| parser.line_bytes(line)) {
             continue;
         }
         let mut session = parser.finish();
