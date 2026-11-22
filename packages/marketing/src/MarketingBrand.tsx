@@ -25,31 +25,6 @@ export function LogoLockup({ href, compact = false }: LogoLockupProps) {
   );
 }
 
-interface ArrowProps {
-  inverse?: boolean;
-}
-
-export function Arrow({ inverse = false }: ArrowProps) {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 16 16"
-      width="16"
-      height="16"
-      {...stylex.props(brandStyles.arrow, inverse && brandStyles.inverse)}
-    >
-      <path
-        d="M3 8h9M8.5 4.5 12 8l-3.5 3.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
 const brandStyles = stylex.create({
   lockup: {
     alignItems: "center",
@@ -57,9 +32,6 @@ const brandStyles = stylex.create({
     display: "inline-flex",
     gap: 9,
     textDecoration: "none",
-  },
-  inverse: {
-    color: paletteVars.darkText,
   },
   logo: {
     display: "block",
@@ -88,8 +60,5 @@ const brandStyles = stylex.create({
   },
   compactWordmark: {
     fontSize: 14,
-  },
-  arrow: {
-    flexShrink: 0,
   },
 });

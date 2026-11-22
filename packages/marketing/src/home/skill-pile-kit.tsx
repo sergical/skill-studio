@@ -7,8 +7,9 @@
 import { useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import * as stylex from "@stylexjs/stylex";
 
+import { productDemoTokens } from "../ProductDemoTokens.stylex";
 import { siteTokens } from "../SiteTheme.stylex";
-import { ACTIVE_PILE_CHIPS, PILE, type PileChip } from "./skill-pile-data";
+import { ACTIVE_PILE_CHIPS, PILE, PILE_CLEANUP, type PileChip } from "./skill-pile-data";
 
 /** Maps each active skill to its place in the sorted list. */
 export const ACTIVE_PILE_SLOTS = new Map(ACTIVE_PILE_CHIPS.map((chip, slot) => [chip.id, slot]));
@@ -59,11 +60,7 @@ export function slotPose(g: Geometry, slot: number): Pose {
   const perColumn = Math.ceil(ACTIVE_PILE_CHIPS.length / 2);
   const column = slot < perColumn ? 0 : 1;
   const row = slot % perColumn;
-  if (g.narrow) {
-    const top = g.mascot.y + g.mascotSize / 2 + 18;
-    const step = Math.min(32, (g.drawer.y - 32 - top) / (perColumn - 1));
-    return { x: column === 0 ? 0 : g.w / 2 + 4, y: top + row * step, ax: 0 };
-  }
+  if (g.narrow) return { x: column === 0 ? 0 : g.w / 2 + 4, y: 128 + row * 32, ax: 0 };
   if (g.stacked) {
     const top = g.mascot.y + g.mascotSize / 2 + 22;
     const step = Math.min(34, (g.drawer.y - 22 - top) / perColumn);
@@ -281,13 +278,14 @@ export function PileChipView({
 }) {
   // In the sorted list the folder is noise: the list answers which skills, not where.
   const showFolder = !narrow && !(sorted && chip.inUse);
+  const status = sorted ? "fine" : chip.status;
   return (
     <span
       ref={chipRef}
       aria-hidden="true"
       {...stylex.props(styles.chip, narrow && styles.chipNarrow)}
     >
-      <span {...stylex.props(styles.dot, sorted && styles.dotActive)} />
+      <span {...stylex.props(styles.dot, styles[status])} />
       {chip.name}
       {showFolder && <span {...stylex.props(styles.meta)}>{chip.folder}</span>}
     </span>
@@ -340,19 +338,6 @@ export function PileMascot({
   );
 }
 
-/** The parked folder receives unused skills as the mascot sorts the pile. */
-export function PileDrawer({ at, open }: { at: Point; open: boolean }) {
-  return (
-    <span
-      aria-hidden="true"
-      style={{ transform: `translate(${at.x}px, ${at.y}px) translate(-50%, -50%)` }}
-      {...stylex.props(styles.drawer, !open && styles.drawerClosed)}
-    >
-      Parked
-    </span>
-  );
-}
-
 /** Gives the skill pile a caption and announces when the mascot finishes sorting. */
 export function PileFrame({
   stageRef,
@@ -370,25 +355,28 @@ export function PileFrame({
       <div ref={stageRef} {...stylex.props(styles.stage, !ready && styles.stageHidden)}>
         {children}
       </div>
-      <p aria-live="polite" {...stylex.props(styles.visuallyHidden)}>
-        {sorted ? "Skills sorted and parked." : ""}
+      <p aria-live="polite" {...stylex.props(styles.cleanupResult)}>
+        {sorted &&
+          `${PILE_CLEANUP.parked} parked · ${PILE_CLEANUP.fixed} fixed · ${PILE_CLEANUP.updated} updated`}
       </p>
     </div>
   );
 }
 
 const styles = stylex.create({
-  visuallyHidden: {
-    clipPath: "inset(50%)",
-    height: 1,
-    overflow: "hidden",
-    position: "absolute",
-    whiteSpace: "nowrap",
-    width: 1,
+  cleanupResult: {
+    color: siteTokens.text,
+    fontSize: 12,
+    fontVariantNumeric: "tabular-nums",
+    lineHeight: 1.5,
+    margin: "14px 0 0",
+    minHeight: 18,
+    paddingInline: 12,
+    textAlign: { default: "left", "@media (max-width: 1080px)": "center" },
   },
   frame: { textAlign: "center", width: "100%" },
   stage: {
-    height: { default: 480, "@media (max-width: 600px)": 360 },
+    height: { default: 480, "@media (max-width: 600px)": 440 },
     position: "relative",
     width: "100%",
   },
@@ -421,10 +409,15 @@ const styles = stylex.create({
     borderRadius: 999,
     flexShrink: 0,
     height: 7,
-    backgroundColor: siteTokens.muted,
+    transition: {
+      default: "background-color 240ms ease-out 360ms",
+      "@media (prefers-reduced-motion: reduce)": "none",
+    },
     width: 7,
   },
-  dotActive: { backgroundColor: "oklch(0.75 0.17 150)" },
+  fine: { backgroundColor: "oklch(0.696 0.149 162.48)" },
+  warning: { backgroundColor: productDemoTokens.warning },
+  broken: { backgroundColor: productDemoTokens.danger },
   meta: {
     color: siteTokens.muted,
     fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif",
@@ -465,30 +458,4 @@ const styles = stylex.create({
     "@media (prefers-reduced-motion: reduce)": { transition: "none" },
   },
   mascotSize: (size: number) => ({ width: size }),
-  drawer: {
-    alignItems: "center",
-    display: "inline-flex",
-    gap: 6,
-    backgroundColor: siteTokens.surface,
-    borderColor: siteTokens.border,
-    borderRadius: 999,
-    borderStyle: "dashed",
-    borderWidth: 1,
-    color: siteTokens.muted,
-    fontSize: 12,
-    left: 0,
-    opacity: 1,
-    paddingBlock: 6,
-    paddingInline: 14,
-    pointerEvents: "none",
-    position: "absolute",
-    top: 0,
-    transition: {
-      default: "opacity 200ms ease-out",
-      "@media (prefers-reduced-motion: reduce)": "none",
-    },
-    whiteSpace: "nowrap",
-    zIndex: 2,
-  },
-  drawerClosed: { opacity: 0 },
 });

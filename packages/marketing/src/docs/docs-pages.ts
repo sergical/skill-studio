@@ -28,7 +28,7 @@ export const DOCS_PAGES: DocsPageEntry[] = [
     navLabel: "Get started",
     title: "Get started with Skill Studio",
     description:
-      "Install Skill Studio, then find, fix and park your agent skills. Every change can be undone.",
+      "Install Skill Studio, scan your agents’ home and project folders, and find skills to fix, update, or park.",
     markdown: fillAgentSetup(getStartedMarkdown),
   },
   {

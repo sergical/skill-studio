@@ -15,8 +15,8 @@ type SitePage = "home" | "docs" | "other";
 
 interface SiteHeaderProps {
   page: SitePage;
-  /** The homepage has its own toggle inside the product demo. */
   showThemeToggle?: boolean;
+  onToggleTheme?: (origin: { x: number; y: number }) => void;
   /** Keeps the header, and its call to action, on screen while the page scrolls. */
   sticky?: boolean;
   cta?: ReactNode;
@@ -25,6 +25,7 @@ interface SiteHeaderProps {
 export function SiteHeader({
   page,
   showThemeToggle = false,
+  onToggleTheme,
   sticky = false,
   cta,
 }: SiteHeaderProps) {
@@ -58,7 +59,7 @@ export function SiteHeader({
         >
           <GitHubMark />
         </a>
-        {showThemeToggle && <ThemeToggle />}
+        {showThemeToggle && <ThemeToggle onToggleTheme={onToggleTheme} />}
         {cta}
       </div>
     </header>
@@ -77,11 +78,15 @@ function GitHubMark() {
 
 // The page markup is prerendered without knowing the theme, so both icons ship and
 // marketing-site.css shows the one that matches <html data-site-theme>.
-function ThemeToggle() {
+function ThemeToggle({ onToggleTheme }: Pick<SiteHeaderProps, "onToggleTheme">) {
   return (
     <button
       type="button"
       data-theme-toggle=""
+      onClick={(event) => {
+        const box = event.currentTarget.getBoundingClientRect();
+        onToggleTheme?.({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
+      }}
       aria-label="Switch between light and dark theme"
       {...stylex.props(styles.themeToggle)}
     >

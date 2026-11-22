@@ -5,11 +5,14 @@
 // The sorted scene keeps the skills in use and parks the rest.
 // ============================================================================
 
+export type PileSkillStatus = "fine" | "warning" | "broken";
+
 export interface PileChip {
   id: string;
   name: string;
   folder: string;
   inUse: boolean;
+  status: PileSkillStatus;
 }
 
 const FOLDERS = [
@@ -97,13 +100,20 @@ function seededRandom(seed: number) {
 function buildPile(): PileChip[] {
   const random = seededRandom(455);
   const pick = <T>(items: ReadonlyArray<T>) => items[Math.floor(random() * items.length)];
-  const entries: Array<Pick<PileChip, "name" | "folder" | "inUse">> = [
-    ...IN_USE.map((name) => ({
+  type PileEntry = Omit<PileChip, "id">;
+  const entries = [
+    ...IN_USE.map<PileEntry>((name, index) => ({
       name,
       inUse: true,
+      status: index < 4 ? "broken" : index < 7 ? "warning" : "fine",
       folder: pick(FOLDERS.slice(0, 3)),
     })),
-    ...UNUSED.map((name) => ({ name, inUse: false, folder: pick(FOLDERS) })),
+    ...UNUSED.map<PileEntry>((name, index) => ({
+      name,
+      inUse: false,
+      folder: pick(FOLDERS),
+      status: index % 7 === 0 ? "broken" : index % 3 === 0 ? "warning" : "fine",
+    })),
   ];
   const originals = [...entries];
   for (let index = 0; index < COPY_COUNT; index += 1) {
@@ -113,6 +123,7 @@ function buildPile(): PileChip[] {
       name: original.name,
       folder,
       inUse: false,
+      status: original.status,
     });
   }
   // Shuffle so skills in use are spread through the pile.
@@ -130,3 +141,10 @@ function buildPile(): PileChip[] {
 export const PILE = buildPile();
 /** The skills the mascot keeps in the active list. */
 export const ACTIVE_PILE_CHIPS = PILE.filter((chip) => chip.inUse);
+
+/** The actions shown in the mascot’s cleanup. */
+export const PILE_CLEANUP = {
+  parked: PILE.length - ACTIVE_PILE_CHIPS.length,
+  fixed: ACTIVE_PILE_CHIPS.filter((chip) => chip.status === "broken").length,
+  updated: ACTIVE_PILE_CHIPS.filter((chip) => chip.status === "warning").length,
+};

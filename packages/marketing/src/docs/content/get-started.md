@@ -19,8 +19,10 @@ The app reads the skill folders of Claude Code, Codex, OpenCode, Cursor, pi and 
 
 - The agents that load it.
 - Its scope: global, or a project.
-- When an agent last used it, or "Never used".
+- When an agent last used it in the available history. The 30-day view shows skills with no recorded use in that window.
 - Any problem, for example a broken link or bad frontmatter.
+
+For a shared global skill installed through skills.sh, **Fork** keeps your edits in a separate copy. Use **Pull upstream** to review and bring in changes from the original.
 
 ## Fix a broken skill
 
@@ -37,7 +39,7 @@ To use the skill again, select **Unpark**.
 
 ## Undo
 
-Each change goes into a history.
+Activity history supports undo for installs, updates, removes, and repairs. Restore can refuse if a later edit changed the skill or its backup has expired.
 
 1. Open **Activity**.
 2. Find the change in **History**.
@@ -57,11 +59,9 @@ Choose an install method before you install. The skills.sh method uses `npx skil
 
 ## Privacy
 
-- You do not need an account.
-- Skill Studio runs on your Mac.
-- It goes online only to browse and install skills, check for updates and send crash reports. Skill browsing goes through the Skill Studio server. Update checks go to GitHub.
-- It sends anonymous crash reports. They do not include skill names, files or paths.
-- To turn crash reports off, open **Settings**, then **Telemetry**. You can also turn them off on the first screen.
+- You can scan without an account. Scanning reads skill files. Fixing, installing, updating, parking, and removing write to skill folders. Project changes can show up in Git.
+- The Skill Store, public install-count lookups, installs, updates, and update checks use the network. Skill update checks, copying from GitHub, and pulling upstream changes need a signed-in GitHub CLI (`gh`).
+- Crash and timing reports are on by default in desktop setup. To turn them off, open **Settings**, find **Telemetry**, and switch off **Send crash and performance data**.
 
 ## Connect your agent
 

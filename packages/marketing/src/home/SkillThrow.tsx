@@ -12,7 +12,6 @@ import { PILE } from "./skill-pile-data";
 import {
   ACTIVE_PILE_SLOTS,
   PileChipView,
-  PileDrawer,
   PileFrame,
   PileMascot,
   fly,
@@ -937,7 +936,6 @@ export function SkillThrow() {
             }}
           />
         ))}
-        {g && <PileDrawer at={g.drawer} open={collectedCount > 0} />}
         <PileMascot
           mascotRef={mascotRef}
           size={g?.mascotSize ?? 132}
