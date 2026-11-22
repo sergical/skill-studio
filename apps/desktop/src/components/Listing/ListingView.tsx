@@ -7,7 +7,7 @@
 // file (or chezmoi source) to paste it into.
 // ============================================================================
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Copy } from "lucide-react";
 import { Button, Input } from "@skill-studio/ui";
 import { deploymentLabelFromAgentId } from "@skill-studio/lib";
@@ -21,7 +21,7 @@ import type {
 } from "@skill-studio/lib";
 import { PageShell } from "../Shell/PageShell";
 import { SelectControl } from "../ui/SelectControl";
-import { useAppStore } from "../../store/appStore";
+import { listingReportKey, useAppStore } from "../../store/appStore";
 
 const STATE_LABEL = {
   described: "Described",
@@ -41,11 +41,6 @@ const STATE_CLASS = {
 
 const GRID = "[grid-template-columns:minmax(0,1fr)_96px_96px_96px_64px] gap-x-3 px-3";
 const GLOBAL = "global";
-
-type Load =
-  | { kind: "loading" }
-  | { kind: "ready"; now: ListingReport; tried: ListingReport | null }
-  | { kind: "error"; message: string };
 
 const hasDescription = (state: ListingState | undefined) =>
   state === "described" || state === "truncated";
@@ -226,35 +221,36 @@ export function ListingView({ snapshot }: ListingViewProps) {
   const [tryRequest, setTryRequest] = useState<Partial<ListingRequest> | null>(null);
   const [onlyChanges, setOnlyChanges] = useState(false);
   const [showHidden, setShowHidden] = useState(false);
-  const [load, setLoad] = useState<Load>({ kind: "loading" });
-  const readListing = useAppStore((s) => s.readListing);
-
-  useEffect(() => {
-    let live = true;
-    const base: ListingRequest = {
+  const refreshListing = useAppStore((s) => s.refreshListing);
+  const base = useMemo<ListingRequest>(
+    () => ({
       project_path: scope === GLOBAL ? null : scope,
       claude_budget_fraction: null,
       claude_context_window_tokens: null,
       codex_max_context_tokens: null,
       claude_transcript: null,
       codex_transcript: null,
-    };
-    Promise.all([readListing(base), tryRequest ? readListing({ ...base, ...tryRequest }) : null])
-      .then(([now, tried]) => live && setLoad({ kind: "ready", now, tried }))
-      .catch(
-        (err) =>
-          live &&
-          setLoad({ kind: "error", message: err instanceof Error ? err.message : String(err) }),
-      );
-    return () => {
-      live = false;
-    };
-  }, [readListing, scope, tryRequest]);
+    }),
+    [scope],
+  );
+  const comparison = useMemo(() => tryRequest && { ...base, ...tryRequest }, [base, tryRequest]);
+  const current = useAppStore((s) => s.listingReports[listingReportKey(base)]);
+  const compared = useAppStore((s) =>
+    comparison ? s.listingReports[listingReportKey(comparison)] : undefined,
+  );
 
-  const pick = (report: ListingReport | null) =>
+  useEffect(() => refreshListing(base), [base, refreshListing]);
+  useEffect(() => {
+    if (comparison) refreshListing(comparison);
+  }, [comparison, refreshListing]);
+
+  const pick = (report: ListingReport | undefined) =>
     report?.listings.find((r) => r.harness === harness && scopeKey(r) === scope) ?? null;
-  const row = load.kind === "ready" ? pick(load.now) : null;
-  const tried = load.kind === "ready" ? pick(load.tried) : null;
+  const row = pick(current?.data);
+  const tried = pick(compared?.data);
+  const refreshing =
+    (current?.refreshing ?? true) || (comparison !== null && (compared?.refreshing ?? true));
+  const error = compared?.error ?? current?.error;
   const triedByKey = new Map(tried?.entries.map((e) => [entryKey(e), e]) ?? []);
   const changes = row?.entries.filter((e) => differs(e, triedByKey.get(entryKey(e)))) ?? [];
   const gained = changes.filter(
@@ -267,13 +263,12 @@ export function ListingView({ snapshot }: ListingViewProps) {
   const shown = (onlyChanges && tried ? changes : (row?.entries ?? [])).filter(
     (e) => showHidden || e.state !== "hidden",
   );
-  const harnesses =
-    load.kind === "ready"
-      ? [...new Set(load.now.listings.map((r) => r.harness))].map((id) => ({
-          value: id,
-          label: deploymentLabelFromAgentId(id),
-        }))
-      : [{ value: harness, label: deploymentLabelFromAgentId(harness) }];
+  const harnesses = current?.data
+    ? [...new Set(current.data.listings.map((r) => r.harness))].map((id) => ({
+        value: id,
+        label: deploymentLabelFromAgentId(id),
+      }))
+    : [{ value: harness, label: deploymentLabelFromAgentId(harness) }];
   const scopes = [
     { value: GLOBAL, label: "Global sessions" },
     ...(snapshot?.projects ?? []).map((p) => ({ value: p, label: p })),
@@ -287,6 +282,7 @@ export function ListingView({ snapshot }: ListingViewProps) {
   return (
     <PageShell
       title="Model listing"
+      refreshing={refreshing}
       subtitle="What each agent shows the model about your skills, and what changes at another budget."
       actions={
         <>
@@ -304,14 +300,15 @@ export function ListingView({ snapshot }: ListingViewProps) {
         </>
       }
     >
-      {load.kind === "loading" ? (
-        <p className="m-0 text-small text-text-secondary">Reading the listing…</p>
-      ) : load.kind === "error" ? (
+      {error && (
         <p role="alert" className="m-0 text-small text-destructive-text">
-          {load.message}
+          {error}
         </p>
-      ) : !row ? (
-        <p className="m-0 text-small text-text-secondary">No listing for this agent and scope.</p>
+      )}
+      {!row ? (
+        current?.data && (
+          <p className="m-0 text-small text-text-secondary">No listing for this agent and scope.</p>
+        )
       ) : (
         <div className="flex flex-col gap-4">
           <Summary row={row} />

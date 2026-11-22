@@ -6,13 +6,15 @@
 
 import type { ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
-import { Button } from "@skill-studio/ui";
+import { Button, RefreshIndicator } from "@skill-studio/ui";
 
 interface PageShellProps {
   title: string;
   /** Parent crumb, shown before the title as "Skills ›". Clicking it runs `onClick`. */
   parent?: { label: string; onClick: () => void };
   subtitle?: string;
+  /** Reserve a header slot for the refresh status, including while idle. */
+  refreshing?: boolean;
   /** Right side of the header: buttons or a few filter menus. Controls inside are 28px tall. */
   actions?: ReactNode;
   /** Thin row under the header, for a filter bar too wide for `actions`. Controls inside are 28px tall. */
@@ -50,6 +52,7 @@ export function PageShell({
   title,
   parent,
   subtitle,
+  refreshing,
   actions,
   toolbar,
   children,
@@ -81,6 +84,9 @@ export function PageShell({
               <h1 className="m-0 flex shrink-0">
                 <RootCrumb label={title} />
               </h1>
+            )}
+            {refreshing !== undefined && (
+              <RefreshIndicator active={refreshing} label={`Refreshing ${title.toLowerCase()}`} />
             )}
             {subtitle && (
               <span className="min-w-0 truncate pl-1 text-small text-text-tertiary">

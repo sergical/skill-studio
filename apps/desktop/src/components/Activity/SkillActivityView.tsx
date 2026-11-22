@@ -20,6 +20,7 @@ import { useAppStore } from "../../store/appStore";
 
 interface SkillActivityViewProps extends FirstScanStateProps {
   snapshot: SkillSnapshot | undefined;
+  usageRefreshing?: boolean;
   onSelectSkill: (name: string) => void;
 }
 
@@ -39,6 +40,7 @@ export function SkillActivityView({
   snapshot,
   onSelectSkill,
   isLoading,
+  usageRefreshing = isLoading,
   error,
   onRetry,
 }: SkillActivityViewProps) {
@@ -57,7 +59,7 @@ export function SkillActivityView({
 
   if (!snapshot) {
     return (
-      <PageShell title="Activity">
+      <PageShell title="Activity" refreshing={usageRefreshing}>
         <FirstScanState isLoading={isLoading} error={error} onRetry={onRetry} />
       </PageShell>
     );
@@ -66,6 +68,7 @@ export function SkillActivityView({
   return (
     <PageShell
       title="Activity"
+      refreshing={usageRefreshing}
       subtitle="From every agent turned on in Settings"
       actions={
         <ActivityFilters
@@ -79,15 +82,20 @@ export function SkillActivityView({
         />
       }
     >
-      {!snapshot || !hasAnyInvocations ? (
+      {!hasAnyInvocations ? (
         <>
-          <p className="text-wrap-pretty text-body text-text-tertiary">
-            No skill uses recorded yet.
-          </p>
+          {!usageRefreshing && (
+            <p className="text-wrap-pretty text-body text-text-tertiary">
+              No skill uses recorded yet.
+            </p>
+          )}
           <SkillHistorySection />
         </>
       ) : (
-        <div className="@container">
+        <div
+          className={`@container ${usageRefreshing ? "opacity-50" : ""}`}
+          aria-busy={usageRefreshing}
+        >
           {/* Narrow: one column, the details panel between the heatmap and the lists. Wide: the
               panel spans both rows of the right column, so its grid area (the sticky containing
               block) reaches the page bottom. The `1fr` row takes any extra height the panel
