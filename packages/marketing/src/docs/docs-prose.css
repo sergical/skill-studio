@@ -1,6 +1,6 @@
 /* Markdown output has no StyleX classes, so the docs typography lives here. It sits in the
    reset layer (declared first in each page head) so any StyleX rule still wins over it.
-   The --docs-* colours come from the article's StyleX styles in docs-page-styles.ts. */
+   The --docs-* colours come from docs-page-styles.ts. */
 @layer reset {
   .docs-prose {
     color: var(--docs-text);
@@ -75,6 +75,60 @@
     border: 1px solid var(--docs-border);
     border-radius: 6px;
     padding: 1px 6px;
+  }
+
+  .docs-prose table {
+    border-collapse: collapse;
+    width: 100%;
+  }
+
+  .docs-prose :is(th, td) {
+    border-bottom: 1px solid var(--docs-border);
+    padding: 8px 12px 8px 0;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .docs-nav-toggle.docs-copy {
+    align-self: start;
+    display: none;
+    margin: 0;
+    min-height: 44px;
+  }
+
+  @media (max-width: 860px) {
+    .docs-nav-toggle.docs-copy:not([hidden]) {
+      display: inline-flex;
+    }
+
+    .docs-nav-toggle[aria-expanded="false"]:not([hidden]) + .docs-links {
+      display: none;
+    }
+
+    .docs-links {
+      max-height: 40vh;
+      overflow-y: auto;
+    }
+  }
+
+  .docs-page-actions {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .docs-page-actions .docs-copy {
+    justify-content: center;
+    margin: 0;
+    min-height: 44px;
+    min-width: 156px;
+  }
+
+  [data-copy-page][hidden],
+  [data-docs-headings][hidden] {
+    display: none;
   }
 
   /* The Copy button gets its own grid column, so no code line can sit under it. */

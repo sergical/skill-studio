@@ -9,19 +9,21 @@ import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { DocsPage } from "../docs/DocsPage";
-import { agentSetupLlmsLines } from "../docs/agent-setup-markdown";
 import { DOCS_PAGES, type DocsPageEntry } from "../docs/docs-pages";
 import { NotFoundPage } from "../docs/NotFoundPage";
 import { MarketingSite } from "../MarketingSite";
 import { themeBootScript } from "../site-theme";
+
+import { DOCS_TEMPLATE } from "./site-templates";
 
 const SITE_ORIGIN = "https://useskillstudio.com";
 const OG_IMAGE_ALT =
   "Skill Studio: Tidy up your agent skills. The app icon in a messy pile of skills.";
 
 interface SiteRoute {
-  /** The HTML template, relative to the package root and to dist. */
+  /** Output path relative to dist. */
   file: string;
+  template: string;
   /** Written to dist next to the page: the plain markdown copy of a docs page. */
   markdownFile?: string;
   markdown?: string;
@@ -37,13 +39,14 @@ function routeKind(file: string): RouteKind | undefined {
 }
 
 export const SITE_ROUTES: SiteRoute[] = [
-  { file: "index.html" },
+  { file: "index.html", template: "index.html" },
   ...DOCS_PAGES.map((page) => ({
     file: `${page.path.slice(1)}index.html`,
+    template: DOCS_TEMPLATE,
     markdownFile: page.markdownPath,
     markdown: page.markdown,
   })),
-  { file: "404.html" },
+  { file: "404.html", template: "404.html" },
 ];
 
 function escapeAttribute(text: string): string {
@@ -137,26 +140,34 @@ export function renderSitePage(file: string, template: string): string {
 }
 
 export function renderLlmsText(): string {
-  const links = DOCS_PAGES.map(
-    (page) => `- [${page.navLabel}](${SITE_ORIGIN}/${page.markdownPath}): ${page.description}`,
-  );
+  const first = ["/docs/", "/docs/agent-setup/", "/docs/requirements/"];
+  const pages = [
+    ...first.map((path) => DOCS_PAGES.find((page) => page.path === path)),
+    ...DOCS_PAGES.filter((page) => !first.includes(page.path)),
+  ];
+  const links = pages.map((page) => {
+    if (!page) throw new Error("llms.txt is missing a starting page");
+    return `- [${page.navLabel}](${SITE_ORIGIN}/${page.markdownPath}): ${page.description}`;
+  });
   return [
     "# Skill Studio",
     "",
-    "> A free macOS app, CLI and MCP server that finds broken, duplicate and unused agent skills across Claude Code, Codex, Cursor, OpenCode, pi and Grok Build. Fix or park them, with undo.",
+    "> A macOS app, CLI and MCP server for finding and managing agent skills.",
     "",
     "## Docs",
     "",
     ...links,
     "",
-    "## Set up the MCP server",
-    "",
-    ...agentSetupLlmsLines(),
-    "",
-    "## Links",
-    "",
-    `- [Homepage](${SITE_ORIGIN}/)`,
-    "- [Source code](https://github.com/sergical/skill-studio)",
+  ].join("\n");
+}
+
+export function renderSitemap(): string {
+  const paths = ["/", ...DOCS_PAGES.map((page) => page.path)];
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    ...paths.map((path) => `  <url><loc>${SITE_ORIGIN}${path}</loc></url>`),
+    "</urlset>",
     "",
   ].join("\n");
 }

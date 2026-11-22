@@ -40,3 +40,12 @@ const docsMarked = new Marked({
 export function renderDocsMarkdown(markdown: string): string {
   return docsMarked.parse(markdown, { async: false });
 }
+
+// Use the Markdown lexer so lines inside code examples never become search terms.
+export function docsSearchHeadings(markdown: string): string {
+  return docsMarked
+    .lexer(markdown)
+    .filter((token) => token.type === "heading")
+    .map((token) => token.raw.trim().replace(/^#+\s*/, ""))
+    .join(" ");
+}

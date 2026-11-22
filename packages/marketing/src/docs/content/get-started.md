@@ -1,6 +1,8 @@
-# Get started
+# Start here
 
-Skill Studio shows every agent skill on your Mac in one list. Use it to find broken, duplicate and unused skills, then fix or park them. You can undo each change.
+You'll have a first report of the skills and problems Skill Studio found in the supported agents' home and project folders.
+
+Choose the Mac app for a visual list, the CLI for terminal output, or MCP to ask your agent. See [Requirements and install](/docs/requirements/) for your choice.
 
 ## Install
 
@@ -13,65 +15,38 @@ Skill Studio shows every agent skill on your Mac in one list. Use it to find bro
 
 Skill Studio needs macOS 13 or later. It runs on Apple Silicon and Intel Macs.
 
-## First look
+## Desktop
 
-The app reads the skill folders of Claude Code, Codex, OpenCode, Cursor, pi and Grok Build, and the shared `.agents/skills` folder. It shows each skill once, with:
+1. On first run, keep the agents you want to scan. Leave **Find my projects from agent history** on to include discovered projects.
+2. Select **Continue**, then open **Home** and look under **Broken** and **Warnings**.
+3. Open **Skills** to see the inventory, even when Home shows no problems.
 
-- The agents that load it.
-- Its scope: global, or a project.
-- When an agent last used it, or "Never used".
-- Any problem, for example a broken link or bad frontmatter.
+## CLI
 
-## Fix a broken skill
+Run this with Node.js 18 or later. The first run downloads the npm package.
 
-A skill with a problem shows a warning. Select the skill, then select **Fix**. Skill Studio repairs what it can, for example a broken link or bad frontmatter. If it cannot fix a problem, it shows the path to the file, so you can fix it yourself.
+```sh
+npx -y skill-studio@latest diagnose
+```
 
-## Park and unpark
+On a clean Mac with no skills installed, the output is:
 
-Park a skill to hide it from every agent. Skill Studio does not delete it.
+```text
+No skills found.
+No issues.
+```
 
-1. Select the skill.
-2. Select **Park**.
+On a Mac with a broken link, the report includes a line like this. The path is an example.
 
-To use the skill again, select **Unpark**.
+```text
+Issues:
+  [error] broken link, example-missing: /Users/example/.claude/skills/example-missing links to a missing target
+```
 
-## Undo
+Exit code 1 means the scan completed and found issues. Read the findings before changing anything.
 
-Each change goes into a history.
+## MCP
 
-1. Open **Activity**.
-2. Find the change in **History**.
-3. Select **Restore**.
+[Set up the server](/docs/agent-setup/) and restart your client. Ask it to run Skill Studio's `diagnose` tool and show the findings without applying fixes. A clean tool result has an empty `data.issues` list.
 
-To undo a park, select **Unpark**.
-
-## Install from skills.sh
-
-You can browse and install thousands of skills from skills.sh.
-
-1. Select **Add skill**.
-2. Select **Browse skills.sh**.
-3. Find a skill, then install it.
-
-Choose an install method before you install. The skills.sh method uses `npx skills` and tracks the install in its lock file. The dotagents method uses dotagents and tracks the install in `agents.toml`. You can also install a local copy.
-
-## Privacy
-
-- You do not need an account.
-- Skill Studio runs on your Mac.
-- It goes online only to browse and install skills, check for updates and send crash reports. Skill browsing goes through the Skill Studio server. Update checks go to GitHub.
-- It sends anonymous crash reports. They do not include skill names, files or paths.
-- To turn crash reports off, open **Settings**, then **Telemetry**. You can also turn them off on the first screen.
-
-## Connect your agent
-
-Let your agent check and tidy its own skills. Copy this prompt into it:
-
-<!-- setup-prompt -->
-
-To add the server by hand, or from the app, see [MCP server](/docs/mcp/).
-
-## Next steps
-
-- [Use the CLI](/docs/cli/) to check and fix skills from the terminal.
-- [Connect the MCP server](/docs/mcp/) so your agent can tidy its own skills.
+The scan leaves skill files alone. If a skill is missing from the report, check [Troubleshooting](/docs/troubleshooting/). To act on a finding, use [Clean up and undo](/docs/cleanup/).

@@ -16,7 +16,12 @@ import { PAGE_TEMPLATES } from "./site-templates";
 const SITE_ORIGIN = "https://useskillstudio.com";
 
 function renderRoute(file: string): string {
-  const template = readFileSync(fileURLToPath(new URL(`../../${file}`, import.meta.url)), "utf8");
+  const route = SITE_ROUTES.find((entry) => entry.file === file);
+  if (!route) throw new Error(`Missing route for ${file}`);
+  const template = readFileSync(
+    fileURLToPath(new URL(`../../${route.template}`, import.meta.url)),
+    "utf8",
+  );
   return renderSitePage(file, template);
 }
 
@@ -26,8 +31,10 @@ function rootMarkup(html: string): string {
 }
 
 describe("renderSitePage", () => {
-  it("has a prerender route for every template Vite builds, and no extra routes", () => {
-    expect(SITE_ROUTES.map((route) => route.file).sort()).toEqual([...PAGE_TEMPLATES].sort());
+  it("has a prerender route for every template Vite builds, and no extra templates", () => {
+    expect([...new Set(SITE_ROUTES.map((route) => route.template))].sort()).toEqual(
+      [...PAGE_TEMPLATES].sort(),
+    );
   });
 
   it.each(SITE_ROUTES.map((route) => route.file))(
