@@ -290,6 +290,8 @@ The shared guard proposed in #531 was not built; #531 was also closed. Before yo
 
 ## Reference docs
 
+- [Machine requirements](docs/capabilities.md) lists what each feature needs
+  and what users see when a requirement is missing.
 - [Agent skill conventions](docs/agent-skill-conventions.md) covers roots,
   including cross-harness reads and plugin caches, invocation and provenance.
   The core owns [agent IDs and lifecycle ownership](crates/skill-studio-core/src/identity.rs).

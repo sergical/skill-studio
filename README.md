@@ -37,6 +37,9 @@ core.
 
 ## Install
 
+See [machine requirements](docs/capabilities.md) for the tools, accounts, and
+network access each feature needs.
+
 ### macOS app
 
 Download the DMG for
