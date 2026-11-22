@@ -15,7 +15,7 @@ import { BenchmarkSection } from "../home/BenchmarkSection";
 import { FaqSection } from "../home/FaqSection";
 import { homeSectionStyles } from "../home/HomeSection.stylex";
 import { JobsSection } from "../home/JobsSection";
-import { ListingTiers } from "../home/ListingTiers";
+import { ListingBudgetSection } from "../home/ListingBudgetSection";
 import { FirstScanSteps } from "../home/FirstScanSteps";
 import { SkillThrow } from "../home/SkillThrow";
 import { UsageSection } from "../home/UsageSection";
@@ -156,10 +156,11 @@ export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
           <TopDither theme={theme} />
           <section {...stylex.props(siteLayout.container, styles.hero)}>
             <div {...stylex.props(styles.copy)}>
-              <h1 {...stylex.props(styles.title)}>See which skills your agent reads.</h1>
+              <h1 {...stylex.props(styles.title)}>Get your agent skills under control.</h1>
               <p {...stylex.props(styles.lede)}>
-                Your agent lists some skills for its model with a description, some by name only and
-                some not at all. Skill Studio shows which, for each session, and which skills ran.
+                Skill Studio finds the skills scattered across your agents and projects. See what’s
+                broken, duplicated or out of date. Park skills you no longer use and bring them back
+                any time.
               </p>
               <div {...stylex.props(styles.actions)}>
                 <DownloadButton theme={theme} />
@@ -209,17 +210,6 @@ export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
               </span>
             </div>
           </div>
-          <p {...stylex.props(styles.agentProofNote)}>
-            Claude Code and Codex record the skill list of each session. The other agents record
-            only the skills they used.
-          </p>
-        </section>
-
-        <section
-          id="listing"
-          {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}
-        >
-          <ListingTiers />
         </section>
 
         <section
@@ -234,6 +224,13 @@ export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
           {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}
         >
           <FirstScanSteps />
+        </section>
+
+        <section
+          id="listing"
+          {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}
+        >
+          <ListingBudgetSection />
         </section>
 
         <section {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}>
@@ -276,10 +273,10 @@ export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
             {...stylex.props(styles.closingMascot)}
           />
           <h2 id="download-title" {...stylex.props(styles.closingTitle)}>
-            See which skills your agent reads.
+            See what’s installed.
           </h2>
           <p {...stylex.props(styles.closingCopy)}>
-            See what each session listed and used. Park the skills that never run. Undo any time.
+            Find skills across your agents, fix what’s broken, and park what you no longer use.
           </p>
           <DownloadButton theme={theme} inFinale />
           <TrustLine />
@@ -501,14 +498,6 @@ const styles = stylex.create({
     // The marquee fills the row, so the row must fill the strip.
     width: { default: "auto", "@media (max-width: 860px)": "100%" },
     "@media (max-width: 600px)": { gap: 18 },
-  },
-  agentProofNote: {
-    color: siteTokens.muted,
-    fontSize: 13,
-    lineHeight: 1.5,
-    margin: 0,
-    textAlign: "center",
-    textWrap: "balance",
   },
   agentProofLabel: {
     color: siteTokens.muted,

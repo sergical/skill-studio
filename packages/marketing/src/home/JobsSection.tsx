@@ -53,7 +53,7 @@ const jobs: ReadonlyArray<Job> = [
         text: "Find the session file and the skill list in it. Claude Code and Codex record the list. The other agents do not.",
         code: "grep -l skill_listing ~/.claude/projects/*/*.jsonl",
       },
-      { text: "Read the list. Check if the skill has a description there, or only a name." },
+      { text: "Read the list. Check how much of the skill’s description the agent included." },
       {
         text: "Check that the skill is in a folder this agent reads. Claude Code does not read .agents/skills.",
       },
@@ -66,8 +66,8 @@ const jobs: ReadonlyArray<Job> = [
       "Each agent writes its sessions in a different format, and none of them tells you why it skipped a skill.",
     studioStep: "Open Sessions.",
     studioNotes: [
-      "Sessions shows what each session listed and used: each skill described, by name only, or not listed. It marks a skill as possibly missed. That mark is a guess from your first prompt.",
-      "Then fix the cause. Raise the budget in Model listing, reword the description, or make the skills you only type manual-only. For a broken skill, click Fix.",
+      "Sessions shows the skills the agent listed and used. When a skill matches the first prompt but didn’t run, Skill Studio can flag it as a possible miss.",
+      "If the list is full, park skills you no longer use. For a broken skill, click Fix.",
     ],
     command: "skill-studio sessions",
   },
@@ -88,7 +88,7 @@ const jobs: ReadonlyArray<Job> = [
       "Each listed skill takes space in the list, used or not. That space is what other skills need to keep a description.",
     studioStep: "Click Park on the skills you do not need.",
     studioNotes: [
-      "Sessions already lists each skill that was listed in nearly every session and never used. On one machine, that was 119 skills.",
+      "Sessions shows skills that appeared in nearly every session and never ran.",
       "A parked skill leaves your agents' lists. Nothing is deleted, and Unpark brings it back.",
     ],
     command: "skill-studio usage",
@@ -97,7 +97,7 @@ const jobs: ReadonlyArray<Job> = [
     id: "budget",
     icon: ListTree,
     label: "Your skills do not fit the list",
-    blurb: "Try another budget first.",
+    blurb: "See which descriptions were cut.",
     byHand: [
       {
         text: "Find the listing budget of each agent. Claude Code and Codex each take a share of the context window, and each has its own setting.",
@@ -110,10 +110,11 @@ const jobs: ReadonlyArray<Job> = [
       },
     ],
     byHandRepeat: "for each agent",
-    byHandCost: "No agent tells you which descriptions it cut, or which it would cut next.",
+    byHandCost:
+      "When the list fills up, agents shorten or drop descriptions. With less detail, the model has a harder time choosing the right skill.",
     studioStep: "Type a budget in Model listing.",
     studioNotes: [
-      "Model listing already shows each skill as described, name only or hidden. Compare marks each skill that gains or loses a description at the new budget.",
+      "Model listing shows what fits and why some skills are hidden, for example because they’re manual-only. Compare shows how changing the budget affects descriptions. Park unused skills to make room.",
       "Skill Studio does not write agent settings. It gives you the line and the file to put it in.",
     ],
     command: "skill-studio listing --claude-fraction 0.02",

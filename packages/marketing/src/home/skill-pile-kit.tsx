@@ -8,29 +8,14 @@ import { useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "rea
 import * as stylex from "@stylexjs/stylex";
 
 import { siteTokens } from "../SiteTheme.stylex";
-import {
-  DESCRIBED_CHIPS,
-  PILE,
-  PILE_COUNTS,
-  STATE_COLOR,
-  STATE_LABEL,
-  isDescribed,
-  type DrawerState,
-  type PileChip,
-  type PileState,
-} from "./skill-pile-data";
+import { ACTIVE_PILE_CHIPS, PILE, PILE_COUNTS, type PileChip } from "./skill-pile-data";
 
-export const DESCRIBED_SLOT = new Map(DESCRIBED_CHIPS.map((chip, slot) => [chip.id, slot]));
+/** Maps each active skill to its place in the sorted list. */
+export const ACTIVE_PILE_SLOTS = new Map(ACTIVE_PILE_CHIPS.map((chip, slot) => [chip.id, slot]));
 const SETTLE = "cubic-bezier(0.32, 0.72, 0, 1)";
 
-const MESSY_SUMMARY = `${PILE_COUNTS.total} skills in ${PILE_COUNTS.folders} folders.`;
-const SORTED_SUMMARY = `Sorted. The model sees ${PILE_COUNTS.described} of ${PILE_COUNTS.total} skills with a description, ${PILE_COUNTS.nameOnly} by name only, and ${PILE_COUNTS.hidden} not at all.`;
-
-const LEGEND = [
-  ["described", `${PILE_COUNTS.described} described`],
-  ["name-only", `${PILE_COUNTS.nameOnly} name only`],
-  ["hidden", `${PILE_COUNTS.hidden} hidden`],
-] satisfies ReadonlyArray<[PileState, string]>;
+const MESSY_SUMMARY = `${PILE_COUNTS.total} skills across ${PILE_COUNTS.folders} folders`;
+const SORTED_SUMMARY = `${PILE_COUNTS.active} skills kept · ${PILE_COUNTS.parked} unused skills parked`;
 
 export interface Point {
   x: number;
@@ -49,13 +34,11 @@ export interface Geometry {
   w: number;
   h: number;
   narrow: boolean;
-  // Mascot on top, drawers at the bottom: for a stage alone in a centred column.
+  // Mascot on top, parking at the bottom: for a stage alone in a centred column.
   stacked: boolean;
   mascotSize: number;
   mascot: Point;
-  // The top drawer. The heap and the sorted list keep clear of it.
   drawer: Point;
-  drawers: Record<DrawerState, Point>;
 }
 
 export interface StageSize {
@@ -63,8 +46,6 @@ export interface StageSize {
   h: number;
   centered: boolean;
 }
-
-const DRAWER_STEP = 36;
 
 export function geometry({ w, h, centered }: StageSize): Geometry {
   const narrow = w < 520;
@@ -74,15 +55,11 @@ export function geometry({ w, h, centered }: StageSize): Geometry {
   const drawer = stacked
     ? { x: w / 2, y: h - 18 }
     : { x: mascot.x, y: mascot.y + mascotSize / 2 + 34 };
-  // Side by side under a stacked stage, one under the other beside a wide one.
-  const drawers = stacked
-    ? { "name-only": { x: w / 2 - 54, y: drawer.y }, hidden: { x: w / 2 + 63, y: drawer.y } }
-    : { "name-only": drawer, hidden: { x: drawer.x, y: drawer.y + DRAWER_STEP } };
-  return { w, h, narrow, stacked, mascotSize, mascot, drawer, drawers };
+  return { w, h, narrow, stacked, mascotSize, mascot, drawer };
 }
 
 export function slotPose(g: Geometry, slot: number): Pose {
-  const perColumn = Math.ceil(DESCRIBED_CHIPS.length / 2);
+  const perColumn = Math.ceil(ACTIVE_PILE_CHIPS.length / 2);
   const column = slot < perColumn ? 0 : 1;
   const row = slot % perColumn;
   if (g.narrow) return { x: column === 0 ? 0 : g.w / 2 + 4, y: 128 + row * 32, ax: 0 };
@@ -263,20 +240,10 @@ export function fly(
   );
 }
 
-// A short shove on the separate `translate` property, so it adds to a running flight.
-export function pulse(element: HTMLElement | null, amount = 1.08) {
-  element?.animate([{ scale: "1" }, { scale: String(amount) }, { scale: "1" }], {
-    duration: 200,
-    easing: "ease-out",
-  });
-}
-
 export function usePileStage() {
   const stageRef = useRef<HTMLDivElement>(null);
   const chipRefs = useRef<Array<HTMLSpanElement | null>>([]);
   const mascotRef = useRef<HTMLButtonElement>(null);
-  const drawerRefs = useRef<Partial<Record<DrawerState, HTMLSpanElement | null>>>({});
-  const countRefs = useRef<Partial<Record<DrawerState, HTMLSpanElement | null>>>({});
   const [size, setSize] = useState<StageSize | null>(null);
 
   useLayoutEffect(() => {
@@ -297,11 +264,7 @@ export function usePileStage() {
     return () => observer.disconnect();
   }, []);
 
-  return { stageRef, chipRefs, mascotRef, drawerRefs, countRefs, size };
-}
-
-export function setCount(element: HTMLSpanElement | null | undefined, value: number) {
-  if (element) element.textContent = String(value);
+  return { stageRef, chipRefs, mascotRef, size };
 }
 
 export function PileChipView({
@@ -316,14 +279,14 @@ export function PileChipView({
   chipRef: Ref<HTMLSpanElement>;
 }) {
   // In the sorted list the folder is noise: the list answers which skills, not where.
-  const showFolder = !narrow && !(sorted && isDescribed(chip));
+  const showFolder = !narrow && !(sorted && chip.inUse);
   return (
     <span
       ref={chipRef}
       aria-hidden="true"
       {...stylex.props(styles.chip, narrow && styles.chipNarrow)}
     >
-      <span {...stylex.props(styles.dot, styles.dotColor(STATE_COLOR[chip.state]))} />
+      <span {...stylex.props(styles.dot, sorted && styles.dotActive)} />
       {chip.name}
       {showFolder && <span {...stylex.props(styles.meta)}>{chip.folder}</span>}
     </span>
@@ -376,52 +339,29 @@ export function PileMascot({
   );
 }
 
-export function PileDrawer({
-  state,
-  drawerRef,
-  countRef,
-  at,
-  open,
-}: {
-  state: DrawerState;
-  drawerRef: Ref<HTMLSpanElement>;
-  countRef: Ref<HTMLSpanElement>;
-  at: Point;
-  open: boolean;
-}) {
+/** The parked folder receives unused skills as the mascot sorts the pile. */
+export function PileDrawer({ at, open }: { at: Point; open: boolean }) {
   return (
     <span
-      ref={drawerRef}
       aria-hidden="true"
       style={{ transform: `translate(${at.x}px, ${at.y}px) translate(-50%, -50%)` }}
       {...stylex.props(styles.drawer, !open && styles.drawerClosed)}
     >
-      <span {...stylex.props(styles.dot, styles.dotColor(STATE_COLOR[state]))} />
-      {STATE_LABEL[state]}
-      <span ref={countRef} {...stylex.props(styles.drawerCount)}>
-        0
-      </span>
+      Parked
     </span>
   );
 }
 
+/** Gives the skill pile a caption and announces when the mascot finishes sorting. */
 export function PileFrame({
   stageRef,
   ready,
   sorted,
-  sortedCount,
-  onSortNext,
-  canSortNext,
-  onSortNextFocus,
   children,
 }: {
   stageRef: Ref<HTMLDivElement>;
   ready: boolean;
   sorted: boolean;
-  sortedCount: number;
-  onSortNext: () => void;
-  canSortNext: boolean;
-  onSortNextFocus: () => void;
   children: ReactNode;
 }) {
   return (
@@ -429,37 +369,8 @@ export function PileFrame({
       <div ref={stageRef} {...stylex.props(styles.stage, !ready && styles.stageHidden)}>
         {children}
       </div>
-      <div {...stylex.props(styles.caption, !ready && styles.stageHidden)}>
-        <p aria-hidden="true" {...stylex.props(styles.captionLine, sorted && styles.captionOff)}>
-          <span {...stylex.props(styles.captionLead, styles.captionOwnLine)}>
-            {PILE_COUNTS.total} skills in {PILE_COUNTS.folders} folders
-          </span>
-          {LEGEND.map(([state, label]) => (
-            <span key={state} {...stylex.props(styles.captionItem)}>
-              <span {...stylex.props(styles.dot, styles.dotColor(STATE_COLOR[state]))} />
-              {label}
-            </span>
-          ))}
-        </p>
-        <p aria-hidden="true" {...stylex.props(styles.captionLine, !sorted && styles.captionOff)}>
-          <span {...stylex.props(styles.captionItem, styles.captionLead)}>
-            <span {...stylex.props(styles.dot, styles.dotColor(STATE_COLOR.described))} />
-            The model sees {PILE_COUNTS.described} of {PILE_COUNTS.total} with a description
-          </span>
-        </p>
-        {/* Pointer users click a chip. This control is the keyboard path, so it shows on focus. */}
-        <button
-          type="button"
-          aria-disabled={!canSortNext}
-          onClick={onSortNext}
-          onFocus={onSortNextFocus}
-          {...stylex.props(styles.sortNext, !canSortNext && styles.sortNextDone)}
-        >
-          Sort a skill
-        </button>
-      </div>
-      <p {...stylex.props(styles.visuallyHidden)} aria-live="polite" aria-atomic="true">
-        {sorted ? SORTED_SUMMARY : `${MESSY_SUMMARY} ${sortedCount} sorted.`}
+      <p aria-live="polite" {...stylex.props(styles.caption, !ready && styles.stageHidden)}>
+        {sorted ? SORTED_SUMMARY : MESSY_SUMMARY}
       </p>
     </div>
   );
@@ -467,70 +378,14 @@ export function PileFrame({
 
 const styles = stylex.create({
   caption: {
-    display: "grid",
-    marginTop: 14,
-    position: "relative",
-  },
-  // Both lines share one grid cell, so the frame keeps its height when they swap.
-  captionLine: {
-    alignItems: "center",
-    alignSelf: "start",
-    color: siteTokens.muted,
-    display: "flex",
-    flexWrap: "wrap",
-    fontSize: 12,
-    fontVariantNumeric: "tabular-nums",
-    gap: "4px 14px",
-    gridArea: "1 / 1",
-    justifyContent: { default: "flex-start", "@media (max-width: 1080px)": "center" },
-    lineHeight: 1.5,
-    margin: 0,
-    // Lines the caption dots up with the dots in the chips above.
-    paddingInline: 12,
-    transition: {
-      default: "opacity 240ms ease-out 420ms",
-      "@media (prefers-reduced-motion: reduce)": "none",
-    },
-    whiteSpace: "nowrap",
-  },
-  captionOff: {
-    opacity: 0,
-    transition: {
-      default: "opacity 160ms ease-out",
-      "@media (prefers-reduced-motion: reduce)": "none",
-    },
-  },
-  captionLead: { color: siteTokens.text, fontWeight: 560 },
-  // On a phone the legend does not fit beside the total, so the total takes the first line.
-  captionOwnLine: {
-    flexBasis: { default: "auto", "@media (max-width: 600px)": "100%" },
-    textAlign: { default: "start", "@media (max-width: 600px)": "center" },
-  },
-  captionItem: { alignItems: "center", display: "inline-flex", gap: 6 },
-  sortNext: {
-    backgroundColor: siteTokens.surface,
-    borderColor: siteTokens.border,
-    borderRadius: 999,
-    borderStyle: "solid",
-    borderWidth: 1,
     color: siteTokens.text,
-    cursor: "pointer",
-    fontFamily: "inherit",
     fontSize: 12,
-    fontWeight: 600,
-    height: 30,
-    left: { default: 0, "@media (max-width: 1080px)": "50%" },
-    opacity: { default: 0, ":focus-visible": 1 },
-    outline: { default: "none", ":focus-visible": `2px solid ${siteTokens.text}` },
-    outlineOffset: 2,
+    fontWeight: 560,
+    lineHeight: 1.5,
+    margin: "14px 0 0",
+    textAlign: { default: "left", "@media (max-width: 1080px)": "center" },
     paddingInline: 12,
-    pointerEvents: { default: "none", ":focus-visible": "auto" },
-    position: "absolute",
-    top: "calc(100% + 8px)",
-    transform: { default: "none", "@media (max-width: 1080px)": "translateX(-50%)" },
-    whiteSpace: "nowrap",
   },
-  sortNextDone: { color: siteTokens.muted, cursor: "default" },
   frame: { textAlign: "center", width: "100%" },
   stage: {
     height: { default: 480, "@media (max-width: 600px)": 440 },
@@ -566,10 +421,10 @@ const styles = stylex.create({
     borderRadius: 999,
     flexShrink: 0,
     height: 7,
-    transition: "background-color 240ms ease-out 360ms",
+    backgroundColor: siteTokens.muted,
     width: 7,
   },
-  dotColor: (color: string) => ({ backgroundColor: color }),
+  dotActive: { backgroundColor: "oklch(0.75 0.17 150)" },
   meta: {
     color: siteTokens.muted,
     fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif",
@@ -628,26 +483,12 @@ const styles = stylex.create({
     pointerEvents: "none",
     position: "absolute",
     top: 0,
-    transition: "opacity 200ms ease-out",
+    transition: {
+      default: "opacity 200ms ease-out",
+      "@media (prefers-reduced-motion: reduce)": "none",
+    },
     whiteSpace: "nowrap",
     zIndex: 2,
   },
   drawerClosed: { opacity: 0 },
-  drawerCount: {
-    color: siteTokens.text,
-    display: "inline-block",
-    fontVariantNumeric: "tabular-nums",
-    fontWeight: 640,
-    minWidth: "2ch",
-    textAlign: "left",
-  },
-  visuallyHidden: {
-    clip: "rect(0 0 0 0)",
-    clipPath: "inset(50%)",
-    height: 1,
-    overflow: "hidden",
-    position: "absolute",
-    whiteSpace: "nowrap",
-    width: 1,
-  },
 });

@@ -1,7 +1,7 @@
 // ============================================================================
 // Skill Studio - First scan steps
 // The desktop app's first run as three steps: pick agents, find folders, scan
-// and see what the model sees. It answers "how does it know where my skills
+// and review the skills it finds. It answers "how does it know where my skills
 // are" before download.
 // ============================================================================
 import type { ReactNode } from "react";
@@ -11,7 +11,7 @@ import { Check, FolderOpen, History } from "lucide-react";
 import { AgentIcon, type AgentId } from "../AgentIcon";
 import { siteTokens } from "../SiteTheme.stylex";
 import { homeSectionStyles } from "./HomeSection.stylex";
-import { PILE_COUNTS, STATE_COLOR } from "./skill-pile-data";
+import { PILE_COUNTS } from "./skill-pile-data";
 
 // Row states and wording match apps/desktop FirstRunScreen.
 const AGENT_ROWS = [
@@ -35,13 +35,9 @@ const FOLDER_ROWS = [
 // The same made-up library as the hero pile, so the page shows one set of numbers.
 const SCAN_ROWS = [
   { label: "skills found", value: PILE_COUNTS.total, color: siteTokens.text },
-  {
-    label: "listed with a description",
-    value: PILE_COUNTS.described,
-    color: STATE_COLOR.described,
-  },
-  { label: "listed by name only", value: PILE_COUNTS.nameOnly, color: STATE_COLOR["name-only"] },
-  { label: "hidden from the model", value: PILE_COUNTS.hidden, color: STATE_COLOR.hidden },
+  { label: "broken skills", value: 3, color: siteTokens.text },
+  { label: "different copies", value: 8, color: siteTokens.text },
+  { label: "updates available", value: 4, color: siteTokens.text },
 ];
 
 function Step({
@@ -164,8 +160,8 @@ export function FirstScanSteps() {
           </Step>
           <Step
             number={3}
-            title="It shows what the model sees."
-            copy="Each skill shows as described, name only or hidden, for each agent. Park the skills you do not use, and fix the broken ones."
+            title="Review your skills."
+            copy="See what is installed, what needs fixing, and which skills have updates. Park skills you no longer use."
           >
             <ScanRows />
           </Step>

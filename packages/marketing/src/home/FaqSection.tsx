@@ -17,9 +17,9 @@ const questions: ReadonlyArray<{ question: string; answer: ReactNode }> = [
       <>
         Claude Code, Codex, OpenCode, pi, Cursor and Grok Build, plus the shared{" "}
         <Code>.agents</Code> folder. It finds skills globally and in the projects you work in.
-        Sessions shows what each session listed only for Claude Code and Codex, because only they
-        record it. For the other four agents, Activity shows the skills they used, and Sessions
-        shows the current listing prediction.
+        Claude Code and Codex record the skill list for each session. The other agents record only
+        the skills they used. Skill Studio shows those uses in Activity and predicts their current
+        skill list in Sessions.
       </>
     ),
   },

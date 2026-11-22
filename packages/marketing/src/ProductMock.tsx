@@ -1785,9 +1785,7 @@ function ActivityScreen({ onOpenSkill }: { onOpenSkill: (skill: SkillRow) => voi
 
 type ListingState = "Described" | "Name only";
 
-// Measured on one machine: Claude Code at a 1% listing budget. The rows below are a sample.
-const LISTING_TOTALS = { described: 49, nameOnly: 107, hidden: 129 };
-const LISTED_TOTAL = LISTING_TOTALS.described + LISTING_TOTALS.nameOnly;
+// Fictional Claude Code library for the interactive budget comparison.
 const CURRENT_BUDGET_PERCENT = 1;
 
 // `fitsAt` is the smallest budget, in percent, at which the skill keeps its description.
@@ -1796,12 +1794,12 @@ const listingRows = [
   { name: "agent-browser", fitsAt: 0.4, uses: 35 },
   { name: "release-notes", fitsAt: 0.6, uses: 20 },
   { name: "code-review", fitsAt: 0.9, uses: 14 },
-  { name: "sentry-cli", fitsAt: 1.3, uses: 11 },
-  { name: "emil-interaction-details", fitsAt: 1.6, uses: 2 },
-  { name: "motion", fitsAt: 1.9, uses: 2 },
-  { name: "sql-review", fitsAt: 2.5, uses: 0 },
-  { name: "tailwind", fitsAt: 3, uses: 0 },
-  { name: "theme-factory", fitsAt: 4, uses: 0 },
+  { name: "sentry-cli", fitsAt: 0.91, uses: 11 },
+  { name: "emil-interaction-details", fitsAt: 0.92, uses: 2 },
+  { name: "motion", fitsAt: 0.93, uses: 2 },
+  { name: "sql-review", fitsAt: 0.95, uses: 0 },
+  { name: "tailwind", fitsAt: 0.96, uses: 0 },
+  { name: "theme-factory", fitsAt: 1, uses: 0 },
 ] satisfies ReadonlyArray<{ name: string; fitsAt: number; uses: number }>;
 
 const hiddenListingRows = [
@@ -1843,17 +1841,18 @@ function ListingScreen() {
       <PageHeader
         title="Model listing"
         subtitle="What each agent shows the model about your skills"
-        actions={<span {...stylex.props(styles.headerNote)}>Claude Code · Global sessions</span>}
+        actions={<span {...stylex.props(styles.headerNote)}>Claude Code · Example</span>}
       />
       <div {...stylex.props(styles.view)}>
         <section {...stylex.props(styles.page)}>
           <div {...stylex.props(styles.listingSummary)}>
             <p {...stylex.props(styles.listingLead)}>
-              {LISTING_TOTALS.described} of {LISTED_TOTAL} listed skills keep a description.{" "}
-              {LISTING_TOTALS.nameOnly} show a name only. {LISTING_TOTALS.hidden} are hidden.
+              All {listingRows.length} listed skills fit with full descriptions.
             </p>
             <p {...stylex.props(styles.listingNote)}>
-              Budget: {CURRENT_BUDGET_PERCENT}% of the context window.
+              The budget is {CURRENT_BUDGET_PERCENT}% of the context window. If skills exceed it,
+              the agent can shorten or drop descriptions. The model gets less detail to choose from.
+              Park unused skills to make room.
             </p>
           </div>
           <div {...stylex.props(styles.listingSummary)}>
@@ -1871,7 +1870,7 @@ function ListingScreen() {
                 <input
                   id="mock-listing-budget"
                   inputMode="decimal"
-                  placeholder="2 (percent)"
+                  placeholder="0.95 (percent)"
                   value={budgetText}
                   onChange={(event) => setBudgetText(event.target.value)}
                   {...stylex.props(styles.input)}
@@ -1952,19 +1951,13 @@ function ListingScreen() {
                   </li>
                 ))}
             </ul>
-            <p {...stylex.props(styles.listingMore)}>
-              {LISTED_TOTAL - listingRows.length} more listed skills
-              {showHidden &&
-                ` and ${LISTING_TOTALS.hidden - hiddenListingRows.length} more hidden skills`}
-              .
-            </p>
             <button
               type="button"
               aria-pressed={showHidden}
               onClick={() => setShowHidden((shown) => !shown)}
               {...stylex.props(styles.showMore, styles.hitArea)}
             >
-              {showHidden ? "Hide hidden skills" : `Show ${LISTING_TOTALS.hidden} hidden skills`}
+              {showHidden ? "Hide hidden skills" : "Show hidden skills"}
             </button>
           </div>
         </section>
@@ -1982,30 +1975,17 @@ const sessionFindings = [
     count: 1,
     advice:
       "A guess: a short first prompt matched the skill's description, and the session used no skill. If the guess is right, reword the description so it names the task, or make sure the skill keeps its description.",
-    rows: [
-      ["emil-interaction-details", "Sessions: name only in 100, used in 2, possibly missed in 1."],
-    ],
-  },
-  {
-    title: "Used while listed by name only",
-    count: 2,
-    advice:
-      "The model found these from the name alone. Raise the listing budget on Model listing, or shorten other descriptions, so they keep a description.",
-    rows: [
-      ["sentry-cli", "Sessions: name only in 100, used in 11."],
-      ["motion", "Sessions: name only in 100, used in 2."],
-    ],
+    rows: [["emil-interaction-details", "Listed in 10 sessions, used in 2, possibly missed in 1."]],
   },
   {
     title: "Listed in nearly every session, never used",
-    // Measured on one machine.
-    count: 119,
+    count: 3,
     advice:
       "Each one takes listing space that other skills need. Park the skill, turn off its plugin, or in Claude Code set skillOverrides to user-invocable-only so you can still type it.",
     rows: [
-      ["theme-factory", "Sessions: name only in 100."],
-      ["tailwind", "Sessions: name only in 100."],
-      ["sql-review", "Sessions: name only in 100."],
+      ["theme-factory", "Listed in 10 sessions."],
+      ["tailwind", "Listed in 10 sessions."],
+      ["sql-review", "Listed in 10 sessions."],
     ],
   },
 ] satisfies ReadonlyArray<{
@@ -2018,14 +1998,13 @@ const sessionFindings = [
 const sessionRows = [
   {
     prompt: "tooltips feel slow",
-    meta: `Nov 18, 2026, 2:14 PM in acme-web. Listed ${LISTED_TOTAL}: ${LISTING_TOTALS.described} described, ${LISTING_TOTALS.nameOnly} name only.`,
-    finding:
-      "Possibly missed (guess): emil-interaction-details, name only. Matched tooltips, slow.",
+    meta: `Nov 18, 2026, 2:14 PM in acme-web. Listed ${listingRows.length} skills with full descriptions.`,
+    finding: "Possibly missed (guess): emil-interaction-details. Matched tooltips, slow.",
   },
   {
     prompt: "why does checkout throw in production",
-    meta: `Nov 17, 2026, 10:02 AM in acme-api. Listed ${LISTED_TOTAL}: ${LISTING_TOTALS.described} described, ${LISTING_TOTALS.nameOnly} name only.`,
-    finding: "Used: sentry-cli (name only)",
+    meta: `Nov 17, 2026, 10:02 AM in acme-api. Listed ${listingRows.length} skills with full descriptions.`,
+    finding: "Used: sentry-cli",
   },
 ] satisfies ReadonlyArray<{ prompt: string; meta: string; finding: string }>;
 
@@ -2072,20 +2051,6 @@ function SessionsScreen() {
       />
       <div {...stylex.props(styles.view)}>
         <section {...stylex.props(styles.page)}>
-          <section aria-label="What the words mean" {...stylex.props(styles.settingCard)}>
-            <p {...stylex.props(styles.settingText)}>
-              <span {...stylex.props(styles.glossaryTerm)}>Described</span>: the model sees the
-              skill's name and description, so it can pick the skill from what you ask.
-            </p>
-            <p {...stylex.props(styles.settingText)}>
-              <span {...stylex.props(styles.glossaryTerm)}>Name only</span>: the model sees only the
-              name and must guess from it. The skill can still run.
-            </p>
-            <p {...stylex.props(styles.settingText)}>
-              <span {...stylex.props(styles.glossaryTerm)}>Not listed</span>: the model does not see
-              the skill. It can still read the SKILL.md file if it knows the path.
-            </p>
-          </section>
           {agent === "cursor" ? (
             <div {...stylex.props(styles.listingSummary)}>
               <p {...stylex.props(styles.listingLead)}>This agent does not record its listing.</p>
@@ -2775,7 +2740,7 @@ const park = (skill: SkillRow): SkillRow => ({
 
 export function ProductMock({ theme, onToggleTheme }: ProductMockProps) {
   // Opens on Sessions: it answers the headline, which skills each session saw and used.
-  const [activeView, setActiveView] = useState<ProductMockRootView>("sessions");
+  const [activeView, setActiveView] = useState<ProductMockRootView>("home");
   const [detail, setDetail] = useState<DetailState | null>(null);
   const [installOpen, setInstallOpen] = useState(false);
   const [compareSkill, setCompareSkill] = useState<string | null>(null);
@@ -3784,7 +3749,6 @@ const styles = stylex.create({
     scrollbarWidth: "thin",
   },
   code: { color: tokens.text, fontFamily: monoStack, fontSize: 12, overflowWrap: "anywhere" },
-  glossaryTerm: { color: tokens.text },
   plainList: { listStyle: "none", margin: 0, padding: 0 },
   listingGrid: {
     alignItems: "center",

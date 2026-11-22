@@ -1,27 +1,16 @@
 // ============================================================================
 // Skill Studio - Skill throw
-// The homepage hero pile is physical. Grab a skill and throw it: it tumbles,
-// knocks its neighbours and lands on the heap. Throw it at the mascot and the
-// mascot sorts it by what the model sees: a described skill joins the list, a
-// name-only or hidden skill goes to its drawer. A click pops a name-only or
-// hidden skill into its drawer. A click on the mascot sorts everything, and so
-// does the mascot itself when the visitor leaves the pile alone. The pour and
-// the first sort play once per session.
+// The homepage hero piles up skills from different folders. The mascot keeps
+// the skills in use and parks the rest. Drag skills to throw them, or click the
+// mascot to switch between the pile and the sorted list.
 // One rAF loop runs damped springs and sleeps when nothing moves.
 // ============================================================================
 import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
 
 import { useReducedMotion } from "../use-reduced-motion";
+import { PILE } from "./skill-pile-data";
 import {
-  DRAWER_STATES,
-  PILE,
-  PILE_COUNTS,
-  STATE_COLOR,
-  type DrawerState,
-  type PileState,
-} from "./skill-pile-data";
-import {
-  DESCRIBED_SLOT,
+  ACTIVE_PILE_SLOTS,
   PileChipView,
   PileDrawer,
   PileFrame,
@@ -34,10 +23,8 @@ import {
   lerpPose,
   place,
   poseTransform,
-  pulse,
   rand,
   rotatedHalf,
-  setCount,
   setStyle,
   settleAnimations,
   slotPose,
@@ -150,9 +137,6 @@ const clamp = (value: number, min: number, max: number) => Math.min(max, Math.ma
 const wrapAngle = (degrees: number) => ((((degrees + 180) % 360) + 360) % 360) - 180;
 const jitter = (scale: number) => (Math.random() - 0.5) * scale;
 const clock = () => performance.now();
-const isDrawerState = (state: PileState): state is DrawerState => state !== "described";
-const poppable = (index: number) => isDrawerState(PILE[index].state);
-
 // Damped spring, integrated in 240 Hz substeps so a slow frame cannot blow it up.
 function spring(x: number, v: number, target: number, hz: number, zeta: number, dt: number) {
   const w = 2 * Math.PI * hz;
@@ -188,40 +172,23 @@ function releaseVelocity(samples: Hold["samples"], now: number): Point {
   };
 }
 
-const drawerPose = (g: Geometry, state: DrawerState): Pose => ({
-  ...g.drawers[state],
-  r: 0,
-  s: 0.5,
-  o: 0,
-});
-const targetPose = (g: Geometry, index: number) => {
-  const chip = PILE[index];
-  return isDrawerState(chip.state)
-    ? drawerPose(g, chip.state)
-    : slotPose(g, DESCRIBED_SLOT.get(chip.id) ?? 0);
+const targetPose = (g: Geometry, index: number): Pose => {
+  const slot = ACTIVE_PILE_SLOTS.get(PILE[index].id);
+  return slot === undefined ? { ...g.drawer, r: 0, s: 0.5, o: 0 } : slotPose(g, slot);
 };
-type DrawerCounts = Record<DrawerState, number>;
-const emptyDrawers = () => ({ "name-only": 0, hidden: 0 }) satisfies DrawerCounts;
-const FULL_DRAWERS = {
-  "name-only": PILE_COUNTS.nameOnly,
-  hidden: PILE_COUNTS.hidden,
-} satisfies DrawerCounts;
 
+/** Animates a growing skill pile and the result of parking unused skills. */
 export function SkillThrow() {
   const reduced = useReducedMotion();
-  const { stageRef, chipRefs, mascotRef, drawerRefs, countRefs, size } = usePileStage();
-  const fxRef = useRef<HTMLDivElement>(null);
+  const { stageRef, chipRefs, mascotRef, size } = usePileStage();
   const [collectedCount, setCollectedCount] = useState(0);
   const [ready, setReady] = useState(false);
-  const [drawerTotal, setDrawerTotal] = useState(0);
-  const [unsortedDrawerChips, setUnsortedDrawerChips] = useState(PILE_COUNTS.notDescribed);
   const bodies = useRef<Body[]>([]);
   const mascot = useRef({ s: 1, vs: 0, r: 0, vr: 0, lean: 0, open: false, awake: false });
   const geo = useRef<Geometry | null>(null);
   const heap = useRef<Pose[]>([]);
   const seen = useRef(false);
   const collected = useRef(new Set<number>());
-  const drawers = useRef(emptyDrawers());
   const hold = useRef<Hold | null>(null);
   const frameId = useRef(0);
   const lastTime = useRef(0);
@@ -235,23 +202,7 @@ export function SkillThrow() {
 
   const markCollected = (index: number) => {
     collected.current.add(index);
-    setUnsortedDrawerChips(
-      PILE.filter((chip, index) => isDrawerState(chip.state) && !collected.current.has(index))
-        .length,
-    );
     setCollectedCount(collected.current.size);
-  };
-
-  // Writes the drawer counts to the page: `counts` replaces them, and no argument shows them.
-  const showDrawers = (counts?: DrawerCounts) => {
-    if (counts) drawers.current = { ...counts };
-    for (const state of DRAWER_STATES) setCount(countRefs.current[state], drawers.current[state]);
-    setDrawerTotal(drawers.current["name-only"] + drawers.current.hidden);
-  };
-
-  const fillDrawer = (state: DrawerState) => {
-    drawers.current[state] += 1;
-    showDrawers();
   };
 
   const wakeBody = (index: number) => {
@@ -278,11 +229,8 @@ export function SkillThrow() {
   };
 
   // Sends a chip to its place in the list or to its drawer. With `via`, it goes through the
-  // mascot. With `pop`, it swells in place first.
-  const sendAway = (
-    index: number,
-    { delay = 0, via, pop = false }: { delay?: number; via?: Point; pop?: boolean } = {},
-  ) => {
+  // mascot.
+  const sendAway = (index: number, { delay = 0, via }: { delay?: number; via?: Point } = {}) => {
     const g = geo.current;
     const body = bodies.current[index];
     if (!g || !body || collected.current.has(index)) return;
@@ -290,32 +238,16 @@ export function SkillThrow() {
     body.awake = false;
     markCollected(index);
     const element = chipRefs.current[index];
-    const { state } = PILE[index];
-    const keep = !isDrawerState(state);
+    const keep = PILE[index].inUse;
     const from: Pose = { x: body.x, y: body.y, r: body.r, s: body.s };
     const to = targetPose(g, index);
-    setStyle(element, { zIndex: keep || pop ? "2" : "" });
+    setStyle(element, { zIndex: keep ? "2" : "" });
     const arc = frame(
       { ...lerpPose(from, to, 0.5), y: Math.min(from.y, to.y) - (keep ? 40 : 70), r: 0 },
-      { offset: pop ? 0.55 : 0.45 },
+      { offset: 0.45 },
     );
-    const path = via
-      ? [frame({ ...via, r: 0, s: 0.5 }, { offset: 0.35 })]
-      : pop
-        ? [frame({ ...from, y: from.y - 12, s: body.s * 1.22 }, { offset: 0.18 }), arc]
-        : [arc];
-    fly(
-      element,
-      path,
-      to,
-      { duration: via ? 560 : pop ? 620 : keep ? 640 : 540, delay },
-      isDrawerState(state)
-        ? () => {
-            fillDrawer(state);
-            pulse(drawerRefs.current[state] ?? null, 1.06);
-          }
-        : undefined,
-    );
+    const path = via ? [frame({ ...via, r: 0, s: 0.5 }, { offset: 0.35 })] : [arc];
+    fly(element, path, to, { duration: via ? 560 : keep ? 640 : 540, delay });
   };
 
   const catchChip = (index: number) => {
@@ -328,110 +260,6 @@ export function SkillThrow() {
     mascot.current.vr += clamp(body.vx * 0.08, -160, 160);
     sendAway(index, { via: g.mascot });
     tick();
-  };
-
-  const burst = (at: Point, color: string) => {
-    const layer = fxRef.current;
-    if (!layer) return;
-    const ring = document.createElement("span");
-    Object.assign(ring.style, {
-      border: `2px solid ${color}`,
-      borderRadius: "50%",
-      height: "64px",
-      left: `${at.x - 32}px`,
-      position: "absolute",
-      top: `${at.y - 32}px`,
-      width: "64px",
-    });
-    layer.append(ring);
-    ring
-      .animate(
-        [
-          { scale: "0.25", opacity: 0.9 },
-          { scale: "1.6", opacity: 0 },
-        ],
-        {
-          duration: 320,
-          easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
-        },
-      )
-      // A cancelled animation rejects `finished`; that is not a failure, so both outcomes clean up.
-      .finished.then(
-        () => ring.remove(),
-        () => ring.remove(),
-      );
-  };
-
-  const shockwave = (at: Point, self: number) => {
-    bodies.current.forEach((body, index) => {
-      if (index === self || body.mode !== "rest") return;
-      const dx = body.x - at.x;
-      const dy = body.y - at.y;
-      const distance = Math.hypot(dx, dy);
-      if (distance > 140 || distance === 0) return;
-      const impulse = (1 - distance / 140) * 950;
-      wakeBody(index);
-      body.vx += (dx / distance) * impulse;
-      body.vy += (dy / distance) * impulse;
-      body.vr += (Math.random() - 0.5) * impulse * 0.5;
-    });
-  };
-
-  const hop = (index: number) => {
-    const body = bodies.current[index];
-    if (!body) return;
-    wakeBody(index);
-    setStyle(chipRefs.current[index], { zIndex: "2" });
-    body.mode = "flying";
-    body.grounded = false;
-    body.knocks = 0;
-    body.vx = jitter(180);
-    body.vy = -720;
-    body.vr = Math.sign(jitter(1)) * 360;
-    body.vq -= 6;
-    tick();
-  };
-
-  const popChip = (index: number) => {
-    const body = bodies.current[index];
-    if (!body) return;
-    if (!poppable(index)) {
-      hop(index);
-      return;
-    }
-    const at = { x: body.x, y: body.y };
-    burst(at, STATE_COLOR[PILE[index].state]);
-    shockwave(at, index);
-    hitStop(50);
-    sendAway(index, { pop: true });
-    tick();
-  };
-
-  const sortChip = (index: number) => {
-    const g = geo.current;
-    const body = bodies.current[index];
-    if (!g || !body || collected.current.has(index)) return;
-    if (reduced) {
-      const { state } = PILE[index];
-      if (!isDrawerState(state)) return;
-      body.mode = "gone";
-      markCollected(index);
-      place(chipRefs.current[index], drawerPose(g, state));
-      fillDrawer(state);
-      return;
-    }
-    popChip(index);
-  };
-
-  const sortNext = () => {
-    stopAutoTidy();
-    const index = PILE.findIndex(
-      (chip, index) =>
-        isDrawerState(chip.state) &&
-        !collected.current.has(index) &&
-        bodies.current[index]?.mode !== "gone",
-    );
-    if (index >= 0) sortChip(index);
   };
 
   const heapTopAt = (g: Geometry, body: Body, self: number) => {
@@ -722,7 +550,6 @@ export function SkillThrow() {
       place(element, collected.current.has(index) ? targetPose(g, index) : heap.current[index]);
     });
     place(mascotRef.current, g.mascot);
-    showDrawers();
   };
 
   // Skills pile up the way they do on a real machine: a few at first, then whole folders.
@@ -786,9 +613,7 @@ export function SkillThrow() {
 
   const messUp = () => {
     collected.current.clear();
-    setUnsortedDrawerChips(PILE_COUNTS.notDescribed);
     setCollectedCount(0);
-    showDrawers(emptyDrawers());
     resetBodies();
     bodies.current.forEach((body) => {
       body.mode = "gone";
@@ -816,13 +641,9 @@ export function SkillThrow() {
     if (!g) return;
     if (sorted) {
       collected.current.clear();
-      setUnsortedDrawerChips(PILE_COUNTS.notDescribed);
-      drawers.current = emptyDrawers();
       setCollectedCount(0);
     } else {
       PILE.forEach((_, index) => collected.current.add(index));
-      drawers.current = { ...FULL_DRAWERS };
-      setUnsortedDrawerChips(0);
       setCollectedCount(PILE.length);
     }
     // Sorted chips leave the physics, so the pointer cannot push them back into the pile.
@@ -911,8 +732,7 @@ export function SkillThrow() {
     const index = chipIndexAt(event.target);
     const body = bodies.current[index];
     const point = stagePoint(event);
-    if (index < 0 || !body || body.mode === "gone" || !point || hold.current) return;
-    stopAutoTidy();
+    if (reduced || index < 0 || !body || body.mode === "gone" || !point || hold.current) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     const cos = Math.cos(body.r * RAD);
@@ -968,6 +788,7 @@ export function SkillThrow() {
     state.target = point;
     if (state.moved) return;
     if (Math.hypot(point.x - state.start.x, point.y - state.start.y) < DRAG_THRESHOLD) return;
+    stopAutoTidy();
     state.moved = true;
     if (bodies.current[state.index].mode !== "held") grab(state.index);
   };
@@ -984,7 +805,6 @@ export function SkillThrow() {
     if (!state.moved) {
       if (body.mode === "held") body.mode = "flying";
       if (cancelled) return;
-      sortChip(state.index);
       return;
     }
     const pointer = cancelled ? { x: 0, y: 0 } : releaseVelocity(state.samples, time);
@@ -1100,15 +920,7 @@ export function SkillThrow() {
         if (!hold.current) repel(null);
       }}
     >
-      <PileFrame
-        stageRef={stageRef}
-        ready={ready}
-        sorted={sorted}
-        sortedCount={drawerTotal}
-        onSortNext={sortNext}
-        canSortNext={ready && unsortedDrawerChips > 0}
-        onSortNextFocus={stopAutoTidy}
-      >
+      <PileFrame stageRef={stageRef} ready={ready} sorted={sorted}>
         {PILE.map((chip, index) => (
           <PileChipView
             key={chip.id}
@@ -1118,41 +930,20 @@ export function SkillThrow() {
             chipRef={(element) => {
               chipRefs.current[index] = element;
               setStyle(element, {
-                cursor: sorted ? "" : "grab",
-                pointerEvents: sorted ? "" : "auto",
-                touchAction: "none",
+                cursor: sorted || reduced ? "" : "grab",
+                pointerEvents: sorted || reduced ? "" : "auto",
+                touchAction: reduced ? "" : "none",
               });
             }}
           />
         ))}
-        {g &&
-          DRAWER_STATES.map((state) => (
-            <PileDrawer
-              key={state}
-              state={state}
-              drawerRef={(element) => {
-                drawerRefs.current[state] = element;
-              }}
-              countRef={(element) => {
-                countRefs.current[state] = element;
-                // A drawer that mounts after a sort still shows its count.
-                setCount(element, drawers.current[state]);
-              }}
-              at={g.drawers[state]}
-              open={collectedCount > 0}
-            />
-          ))}
+        {g && <PileDrawer at={g.drawer} open={collectedCount > 0} />}
         <PileMascot
           mascotRef={mascotRef}
           size={g?.mascotSize ?? 132}
           label={sorted ? "Make a mess again" : "Sort the skills"}
           pressed={sorted}
           onClick={onMascotClick}
-        />
-        <div
-          ref={fxRef}
-          aria-hidden="true"
-          style={{ inset: 0, pointerEvents: "none", position: "absolute", zIndex: 4 }}
         />
       </PileFrame>
     </div>
