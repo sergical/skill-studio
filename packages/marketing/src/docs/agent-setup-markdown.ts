@@ -1,7 +1,7 @@
 // ============================================================================
 // Skill Studio - Agent setup markdown
 // Fills the setup placeholders in the docs markdown from the shared agent
-// setup list, so the docs page, its .md copy and llms.txt show the same
+// setup list, so the docs page, and its .md copy show the same
 // commands the desktop app runs.
 // ============================================================================
 
@@ -58,16 +58,4 @@ export function fillAgentSetup(markdown: string): string {
     .replace(SETUP_PROMPT_PLACEHOLDER, fence("text", AGENT_SETUP_PROMPT))
     .replace(AGENT_SETUPS_PLACEHOLDER, agentSetupMarkdown())
     .replaceAll(SERVER_COMMAND_PLACEHOLDER, MCP_SERVER_COMMAND_LINE);
-}
-
-/** The llms.txt lines that tell an agent how to add the server to itself. */
-export function agentSetupLlmsLines(): string[] {
-  return [
-    `Add a stdio MCP server named \`skill-studio\` that runs \`${MCP_SERVER_COMMAND_LINE}\`. Per agent:`,
-    "",
-    ...AGENT_SETUPS.map((setup) => {
-      const how = setup.command ?? setup.installLink?.url ?? `edit ${setup.configFile?.path}`;
-      return `- ${setup.name}: \`${how}\``;
-    }),
-  ];
 }

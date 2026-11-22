@@ -1,18 +1,51 @@
-// ============================================================================
-// Skill Studio - Docs pages
-// One entry per docs page: its URL, nav label, meta text and markdown source
-// ============================================================================
-
-import cliMarkdown from "./content/cli.md?raw";
-import getStartedMarkdown from "./content/get-started.md?raw";
-import mcpMarkdown from "./content/mcp.md?raw";
 import { fillAgentSetup } from "./agent-setup-markdown";
 
+const markdownFiles = import.meta.glob<string>("./content/*.md", {
+  eager: true,
+  query: "?raw",
+  import: "default",
+});
+
+const docsNavigation = {
+  Start: [
+    ["get-started", "Start here", "Choose a surface and scan your skills."],
+    ["requirements", "Requirements and install", "Check what your Mac needs for each job."],
+  ],
+  Jobs: [
+    ["inventory", "See every skill", "Find skills, sources, agents and copies."],
+    ["cleanup", "Clean up and undo", "Diagnose, repair, park, remove and restore skills."],
+    ["install-pack", "Install a pack", "Add skills from a Git repository."],
+    ["update", "Update skills and packs", "Check for changes and update installed skills."],
+    [
+      "one-agent",
+      "Turn a skill on or off for one agent",
+      "Change one agent’s copy and keep the others active.",
+    ],
+    ["fork", "Fork and pull upstream", "Keep local edits and bring in changes from the source."],
+    ["export-pack", "Export a pack", "Copy selected skills into a shareable folder."],
+  ],
+  Agents: [
+    ["agent-setup", "Set up with an agent", "Connect the MCP server and run your first check."],
+    ["usage", "Check skill usage", "Read the available history from the last 30 days."],
+    ["listing", "Check listing budgets", "See which descriptions fit in the model’s skill list."],
+  ],
+  Reference: [
+    ["cli", "CLI", "Find terminal commands and options."],
+    ["mcp", "MCP server", "Find server setup and tools."],
+  ],
+  Help: [
+    ["privacy", "Privacy and telemetry", "See what stays on your Mac and what goes online."],
+    [
+      "troubleshooting",
+      "Troubleshooting",
+      "Recover from common scan, install and startup failures.",
+    ],
+  ],
+} as const;
+
 export interface DocsPageEntry {
-  slug: "get-started" | "cli" | "mcp";
-  /** The page URL, with a trailing slash. */
+  slug: string;
   path: string;
-  /** Where the prerender writes the plain markdown copy, relative to dist. */
   markdownPath: string;
   navLabel: string;
   title: string;
@@ -20,35 +53,21 @@ export interface DocsPageEntry {
   markdown: string;
 }
 
-export const DOCS_PAGES: DocsPageEntry[] = [
-  {
-    slug: "get-started",
-    path: "/docs/",
-    markdownPath: "docs/index.md",
-    navLabel: "Get started",
-    title: "Get started with Skill Studio",
-    description:
-      "Install Skill Studio, then find, fix and park your agent skills. Every change can be undone.",
-    markdown: fillAgentSetup(getStartedMarkdown),
-  },
-  {
-    slug: "cli",
-    path: "/docs/cli/",
-    markdownPath: "docs/cli.md",
-    navLabel: "CLI",
-    title: "Skill Studio CLI",
-    description:
-      "Check, fix, park and update agent skills from the terminal with npx skill-studio.",
-    markdown: fillAgentSetup(cliMarkdown),
-  },
-  {
-    slug: "mcp",
-    path: "/docs/mcp/",
-    markdownPath: "docs/mcp.md",
-    navLabel: "MCP server",
-    title: "Skill Studio MCP server",
-    description:
-      "Connect Skill Studio to Claude Code, Codex, Cursor, OpenCode, pi, Grok Build or any MCP client, so your agent can tidy its own skills.",
-    markdown: fillAgentSetup(mcpMarkdown),
-  },
-];
+export const DOCS_GROUPS = Object.entries(docsNavigation).map(([group, entries]) => ({
+  group,
+  pages: entries.map(([slug, navLabel, description]): DocsPageEntry => {
+    const source = markdownFiles[`./content/${slug}.md`];
+    if (!source) throw new Error(`Docs navigation has no Markdown source for ${slug}`);
+    return {
+      slug,
+      path: slug === "get-started" ? "/docs/" : `/docs/${slug}/`,
+      markdownPath: slug === "get-started" ? "docs/index.md" : `docs/${slug}.md`,
+      navLabel,
+      title: `${navLabel} | Skill Studio`,
+      description,
+      markdown: fillAgentSetup(source),
+    };
+  }),
+}));
+
+export const DOCS_PAGES = DOCS_GROUPS.flatMap(({ pages }) => pages);

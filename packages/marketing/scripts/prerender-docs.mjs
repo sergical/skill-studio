@@ -1,7 +1,7 @@
 // Runs after both Vite builds. Fills every built HTML page with its prerendered markup and
 // meta tags, writes the markdown copy of each docs page and llms.txt, then removes the
 // server build, which the site does not serve.
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -9,13 +9,21 @@ const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 const distDir = join(packageRoot, "dist");
 const serverDir = join(packageRoot, "dist-ssr");
 
-const { SITE_ROUTES, renderLlmsText, renderSitePage } = await import(
+const { SITE_ROUTES, renderLlmsText, renderSitePage, renderSitemap } = await import(
   pathToFileURL(join(serverDir, "site-prerender.js")).href
 );
 
+const templates = new Map();
+for (const { template } of SITE_ROUTES) {
+  if (!templates.has(template)) {
+    templates.set(template, await readFile(join(distDir, template), "utf8"));
+  }
+}
+
 for (const route of SITE_ROUTES) {
   const htmlPath = join(distDir, route.file);
-  const template = await readFile(htmlPath, "utf8");
+  const template = templates.get(route.template);
+  await mkdir(dirname(htmlPath), { recursive: true });
   await writeFile(htmlPath, renderSitePage(route.file, template));
 
   if (route.markdownFile) {
@@ -25,7 +33,11 @@ for (const route of SITE_ROUTES) {
   }
 }
 
-await writeFile(join(distDir, "llms.txt"), renderLlmsText());
+const llmsText = renderLlmsText();
+const markdownLinks = [...llmsText.matchAll(/\]\(https:\/\/useskillstudio\.com\/([^\s)]+)\)/g)];
+await Promise.all(markdownLinks.map(([, path]) => access(join(distDir, path))));
+await writeFile(join(distDir, "llms.txt"), llmsText);
+await writeFile(join(distDir, "sitemap.xml"), renderSitemap());
 await rm(serverDir, { recursive: true, force: true });
 
 process.stdout.write(`Prerendered ${SITE_ROUTES.length} pages into dist\n`);

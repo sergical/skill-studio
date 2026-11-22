@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { sentryVitePlugin } from "@sentry/vite-plugin";
 import stylex from "@stylexjs/unplugin";
@@ -32,18 +33,31 @@ function devPrerender(): Plugin {
       // The build writes the docs markdown copies and llms.txt to dist; serve them from source here.
       server.middlewares.use(async (req, res, next) => {
         const path = req.url?.split("?")[0].replace(/^\//, "");
-        if (path !== "llms.txt" && !(path?.startsWith("docs/") && path.endsWith(".md")))
+        if (!path || (path !== "llms.txt" && path !== "docs.md" && !path.startsWith("docs/"))) {
           return next();
+        }
         try {
           const prerender = await loadPrerender(server);
           if (path === "llms.txt") {
             res.setHeader("Content-Type", "text/plain; charset=utf-8");
             return res.end(prerender.renderLlmsText());
           }
-          const route = prerender.SITE_ROUTES.find((entry) => entry.markdownFile === path);
-          if (!route?.markdown) return next();
-          res.setHeader("Content-Type", "text/markdown; charset=utf-8");
-          res.end(route.markdown);
+          const markdownPath = path === "docs.md" ? "docs/index.md" : path;
+          const file = path.endsWith("/") ? `${path}index.html` : path;
+          const route = prerender.SITE_ROUTES.find(
+            (entry) => entry.markdownFile === markdownPath || entry.file === file,
+          );
+          if (!route) return next();
+          if (route.markdownFile === markdownPath) {
+            res.setHeader("Content-Type", "text/markdown; charset=utf-8");
+            return res.end(route.markdown);
+          }
+          // New docs URLs share the same shell. Pass the requested URL through
+          // transformIndexHtml so its metadata and assets are resolved normally.
+          const template = await readFile(new URL(route.template, import.meta.url), "utf8");
+          const html = await server.transformIndexHtml(`/${route.file}`, template);
+          res.setHeader("Content-Type", "text/html; charset=utf-8");
+          res.end(html);
         } catch (error) {
           next(error);
         }
