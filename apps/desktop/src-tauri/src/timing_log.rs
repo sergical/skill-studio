@@ -80,6 +80,7 @@ impl<T, E: std::fmt::Display + 'static> CommandOutcome for Result<T, E> {
 
     fn failure(&self) -> Option<CommandFailure> {
         self.as_ref().err().map(|error| {
+            // Async and background wrappers also accept typed command errors.
             (error as &dyn std::any::Any)
                 .downcast_ref::<CommandError>()
                 .map_or_else(
@@ -282,6 +283,8 @@ impl From<String> for CommandError {
     fn from(message: String) -> Self {
         let failure = if message == crate::skills::skill_process::PROCESS_CANCELLED_MESSAGE {
             CommandFailure::Core(ErrorCode::Cancelled)
+        } else if message.starts_with(crate::skills::write_lease::WRITE_LEASE_BUSY_PREFIX) {
+            CommandFailure::Core(ErrorCode::ScopeBusy)
         } else {
             CommandFailure::from_legacy(&message)
         };

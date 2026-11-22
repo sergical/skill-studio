@@ -19,6 +19,9 @@ use tauri::Manager;
 use skill_studio_core::events::{EventDraft, EventKind, EventStatus};
 use skill_studio_core::identity::{CorrelationId, DeploymentId, SkillName};
 use skill_studio_core::ports::{MutationSession, OpContext, Runtime};
+use skill_studio_core::ErrorCode;
+
+use crate::timing_log::CommandError;
 
 use super::skill_dto::{Deployment, DisabledBy, LifecycleTarget};
 use super::skill_ownership::LifecycleOwnerKind;
@@ -141,65 +144,70 @@ fn restore_moved_deployment_for(
     rt: &Runtime,
     deployment: &Deployment,
     deployment_id: &str,
-) -> Result<(PathBuf, String), String> {
+) -> Result<(PathBuf, String), CommandError> {
     if deployment.disabled_by != Some(DisabledBy::StudioMoved) {
-        return Err(format!(
-            "\"{}\" was not moved aside by Skill Studio",
-            deployment.path
+        return Err(CommandError::with_code(
+            ErrorCode::StaleProposal,
+            format!(
+                "\"{}\" was not moved aside by Skill Studio",
+                deployment.path
+            ),
         ));
     }
-    refuse_registry_copy_restore(deployment)?;
-    let parsed = super::skill_deployment::parse_deployment_id(deployment_id)
-        .ok_or_else(|| format!("Not a copy id: {deployment_id}"))?;
+    refuse_registry_copy_restore(deployment)
+        .map_err(|message| CommandError::with_code(ErrorCode::Unsupported, message))?;
+    let parsed = super::skill_deployment::parse_deployment_id(deployment_id).ok_or_else(|| {
+        CommandError::with_code(
+            ErrorCode::InvalidRequest,
+            format!("Not a copy id: {deployment_id}"),
+        )
+    })?;
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
-    let mut session = MutationSession::begin_for(rt, &ctx, &[SkillName(parsed.name.clone())])
-        .map_err(|e| e.message)?;
-    let id = DeploymentId::parse(deployment_id).map_err(|e| e.message)?;
-    let fresh = session.resolve_exact(&id).map_err(|e| e.message)?;
+    let mut session = MutationSession::begin_for(rt, &ctx, &[SkillName(parsed.name.clone())])?;
+    let id = DeploymentId::parse(deployment_id)?;
+    let fresh = session.resolve_exact(&id)?;
     if fresh.path != Path::new(&deployment.path)
         || fresh.disabled_by != Some(skill_studio_core::harness::DisabledBy::StudioMoved)
         || fresh.owner_kind == skill_studio_core::identity::LifecycleOwnerKind::Copy
     {
-        return Err("The moved copy changed; refresh and try again".to_string());
+        return Err(CommandError::with_code(
+            ErrorCode::StaleProposal,
+            "The moved copy changed; refresh and try again",
+        ));
     }
     let path_buf = PathBuf::from(&deployment.path);
     let event_id = rt.ports.ids.next_event_id();
-    session
-        .store
-        .record(
-            &session.guard,
-            &event_id,
-            &EventDraft {
-                kind: EventKind::MoveAsideRestore,
-                skill: SkillName(parsed.name.clone()),
-                harness: fresh.harness.clone(),
-                scope: Some(parsed.scope.clone()),
-                project_path: parsed.project_path.as_ref().map(PathBuf::from),
-                payload: serde_json::json!({
-                    "deployment_id": deployment_id,
-                    "from": path_buf,
-                    "to": path_buf.parent().and_then(Path::parent)
-                        .and_then(|root| path_buf.file_name().map(|name| root.join(name))),
-                }),
-                inverse: None,
-                backup_dir: None,
-            },
-        )
-        .map_err(|e| e.message)?;
+    session.store.record(
+        &session.guard,
+        &event_id,
+        &EventDraft {
+            kind: EventKind::MoveAsideRestore,
+            skill: SkillName(parsed.name.clone()),
+            harness: fresh.harness.clone(),
+            scope: Some(parsed.scope.clone()),
+            project_path: parsed.project_path.as_ref().map(PathBuf::from),
+            payload: serde_json::json!({
+                "deployment_id": deployment_id,
+                "from": path_buf,
+                "to": path_buf.parent().and_then(Path::parent)
+                    .and_then(|root| path_buf.file_name().map(|name| root.join(name))),
+            }),
+            inverse: None,
+            backup_dir: None,
+        },
+    )?;
     let new_path = match restore_deployment_at(&path_buf) {
         Ok(path) => path,
         Err(error) => {
             session
                 .store
-                .finish(&session.guard, &event_id, EventStatus::Failed, None)
-                .map_err(|e| e.message)?;
-            return Err(error);
+                .finish(&session.guard, &event_id, EventStatus::Failed, None)?;
+            return Err(error.into());
         }
     };
     session
         .store
-        .finish(&session.guard, &event_id, EventStatus::Done, None)
-        .map_err(|e| e.message)?;
+        .finish(&session.guard, &event_id, EventStatus::Done, None)?;
     session.finish(rt, &ctx);
     let new_id = super::skill_deployment::deployment_id(
         &parsed.name,
@@ -231,7 +239,7 @@ pub async fn restore_moved_deployment(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(
+    crate::timing_log::time_core_command_blocking(
         &timing_app,
         trace,
         "restore_moved_deployment",
@@ -329,8 +337,11 @@ mod tests {
         .unwrap();
         let err = restore_moved_deployment_for(&rt, &copy, "dep:v1/project/claude-code/find-bugs")
             .unwrap_err();
-        assert!(err.contains("/home/.claude/skills/find-bugs"), "{err}");
-        assert!(err.contains("fork registry"), "{err}");
+        assert!(
+            err.message.contains("/home/.claude/skills/find-bugs"),
+            "{err}"
+        );
+        assert!(err.message.contains("fork registry"), "{err}");
     }
 
     #[test]
@@ -369,7 +380,11 @@ mod tests {
         };
         let guard = acquire_exclusive(rt.ports.leases.as_ref(), &rt.scope).unwrap();
         let error = restore_moved_deployment_for(&rt, &deployment, found.id.as_str()).unwrap_err();
-        assert!(error.contains("another process holds the lease"), "{error}");
+        assert!(
+            error.message.contains("another process holds the lease"),
+            "{error}"
+        );
+        assert_eq!(error.failure.as_str(), "scope_busy");
         assert!(path.join("SKILL.md").is_file());
         let store = rt
             .ports

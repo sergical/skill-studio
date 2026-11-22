@@ -2086,23 +2086,59 @@ mod tests {
     /// the op's parent is the root. Catches: an op or a root that starts
     /// its own trace, which splits one click into unrelated traces.
     #[test]
-    fn a_webview_command_and_its_op_share_one_trace_with_the_op_under_the_root() {
+    fn a_failed_webview_command_owns_one_issue_on_the_operation_trace() {
         let webview =
             TraceParent::from_sentry_trace("4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-1")
                 .expect("well-formed header");
         let span = CommandSpan::start(Trigger::User, Some(webview));
         let envelopes = sentry::test::with_captured_envelopes(|| {
-            span.enter(|| telemetry().record(three_step_record("scan")));
-            record_command(Surface::Desktop, "install_skill", span, 80, None);
+            let mut operation = three_step_record("scan");
+            operation.outcome = OpOutcome::Err {
+                code: ErrorCode::Io,
+                io_cause: None,
+            };
+            span.enter(|| telemetry().record(operation));
+            record_command(
+                Surface::Desktop,
+                "install_skill",
+                span,
+                80,
+                Some(CommandFailure::Core(ErrorCode::Io)),
+            );
         });
-        assert_eq!(envelopes.len(), 2, "one op transaction, one command root");
-        let op = transaction_from(&envelopes[0]);
-        let root = transaction_from(&envelopes[1]);
+        let mut transactions = envelopes
+            .iter()
+            .flat_map(Envelope::items)
+            .filter_map(|item| {
+                if let EnvelopeItem::Transaction(transaction) = item {
+                    Some(transaction.as_ref())
+                } else {
+                    None
+                }
+            });
+        let op = transactions.next().expect("operation transaction");
+        let root = transactions.next().expect("command transaction");
+        assert!(transactions.next().is_none());
         assert_eq!(op.name.as_deref(), Some("skill.scan"));
         assert_eq!(root.name.as_deref(), Some("command.install_skill"));
 
-        let op_trace = trace_context(&op);
-        let root_trace = trace_context(&root);
+        let mut issues = envelopes
+            .iter()
+            .flat_map(Envelope::items)
+            .filter_map(|item| {
+                if let EnvelopeItem::Event(event) = item {
+                    Some(event.as_ref())
+                } else {
+                    None
+                }
+            });
+        let issue = issues.next().expect("command issue event");
+        assert!(issues.next().is_none(), "one issue for the whole command");
+        assert_eq!(issue.tags["command"], "command.install_skill");
+        assert_eq!(issue.contexts["trace"], root.contexts["trace"]);
+
+        let op_trace = trace_context(op);
+        let root_trace = trace_context(root);
         assert_eq!(root_trace.trace_id, webview.trace_id);
         assert_eq!(op_trace.trace_id, webview.trace_id);
         assert_eq!(root_trace.parent_span_id, Some(webview.span_id));

@@ -18,11 +18,13 @@ use skill_studio_core::ports::OpContext;
 
 use super::skill_dto::LifecycleTarget;
 use super::skill_park::{emit_snapshot_for_names, skill_names_for_deployments};
+use crate::timing_log::CommandError;
+use skill_studio_core::ErrorCode;
 
-fn parse_harnesses(harnesses: &[String]) -> Result<Vec<AgentId>, String> {
+fn parse_harnesses(harnesses: &[String]) -> Result<Vec<AgentId>, CommandError> {
     harnesses
         .iter()
-        .map(|raw| AgentId::parse_harness(raw).map_err(|e| e.message))
+        .map(|raw| AgentId::parse_harness(raw).map_err(CommandError::from))
         .collect()
 }
 
@@ -35,11 +37,10 @@ pub async fn split_skill(
 ) -> Result<SplitOutcome, String> {
     let state_app = app.clone();
     crate::timing_log::time_core_command_blocking(&app, trace, "split_skill", move || {
-        let raw = target
-            .deployment_id
-            .as_deref()
-            .ok_or("Split requires a copy id")?;
-        let deployment_id = DeploymentId::parse(raw).map_err(|e| e.message)?;
+        let raw = target.deployment_id.as_deref().ok_or_else(|| {
+            CommandError::with_code(ErrorCode::InvalidRequest, "Split requires a copy id")
+        })?;
+        let deployment_id = DeploymentId::parse(raw)?;
         let harnesses = parse_harnesses(&harnesses)?;
         let names = skill_names_for_deployments([&deployment_id]);
         let rt = super::core_runtime::build_runtime_write()?;
@@ -71,7 +72,7 @@ pub async fn split_skill_targets(
     harnesses: Vec<String>,
     app: tauri::AppHandle,
 ) -> Result<Vec<SplitCopy>, String> {
-    crate::timing_log::time_command_blocking(&app, trace, "split_skill_targets", move || {
+    crate::timing_log::time_core_command_blocking(&app, trace, "split_skill_targets", move || {
         let harnesses = parse_harnesses(&harnesses)?;
         let rt = super::core_runtime::build_runtime_write()?;
         let scope = match project_path {
@@ -83,7 +84,10 @@ pub async fn split_skill_targets(
             .map(|harness| {
                 let root = skill_studio_core::ops_split::split_target_root(&rt, &scope, &harness)
                     .ok_or_else(|| {
-                    format!("Split cannot write a copy for {}", harness.as_str())
+                    CommandError::with_code(
+                        ErrorCode::Unsupported,
+                        format!("Split cannot write a copy for {}", harness.as_str()),
+                    )
                 })?;
                 Ok(SplitCopy {
                     harness,
@@ -95,14 +99,19 @@ pub async fn split_skill_targets(
     .await
 }
 
-fn agent_off_request(target: &LifecycleTarget, agent: &str) -> Result<AgentOffRequest, String> {
-    let raw = target
-        .deployment_id
-        .as_deref()
-        .ok_or("Turn off for one agent requires a copy id")?;
+fn agent_off_request(
+    target: &LifecycleTarget,
+    agent: &str,
+) -> Result<AgentOffRequest, CommandError> {
+    let raw = target.deployment_id.as_deref().ok_or_else(|| {
+        CommandError::with_code(
+            ErrorCode::InvalidRequest,
+            "Turn off for one agent requires a copy id",
+        )
+    })?;
     Ok(AgentOffRequest {
-        deployment_id: DeploymentId::parse(raw).map_err(|e| e.message)?,
-        agent: AgentId::parse_harness(agent).map_err(|e| e.message)?,
+        deployment_id: DeploymentId::parse(raw)?,
+        agent: AgentId::parse_harness(agent)?,
     })
 }
 
@@ -143,11 +152,12 @@ pub async fn turn_off_check(
     agent: String,
     app: tauri::AppHandle,
 ) -> Result<AgentOffCheck, String> {
-    crate::timing_log::time_command_blocking(&app, trace, "turn_off_check", move || {
+    crate::timing_log::time_core_command_blocking(&app, trace, "turn_off_check", move || {
         let request = agent_off_request(&target, &agent)?;
         let rt = super::core_runtime::build_runtime_write()?;
         let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
-        skill_studio_core::ops_agent_off::turn_off_check(&rt, &ctx, &request).map_err(|e| e.message)
+        skill_studio_core::ops_agent_off::turn_off_check(&rt, &ctx, &request)
+            .map_err(CommandError::from)
     })
     .await
 }

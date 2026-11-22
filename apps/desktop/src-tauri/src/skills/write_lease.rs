@@ -59,6 +59,9 @@ impl Drop for ScanLeaseGuard {
 /// finish instead of failing the write with "in progress".
 const SCAN_WAIT: Duration = Duration::from_secs(3);
 
+/// Prefix carried by the older commands that return a string when the lease is busy.
+pub(crate) const WRITE_LEASE_BUSY_PREFIX: &str = "Another write is in progress (pid ";
+
 /// Holds the write lease until dropped, releasing it.
 pub struct WriteLeaseGuard(ExclusiveGuard);
 
@@ -214,7 +217,7 @@ impl WriteLease {
             })
             .map_err(|e| match e.busy {
                 Some(busy) => format!(
-                    "Another write is in progress (pid {}, held for {:?})",
+                    "{WRITE_LEASE_BUSY_PREFIX}{}, held for {:?})",
                     busy.pid, busy.age
                 ),
                 None => e.message,
@@ -316,8 +319,14 @@ mod tests {
 
         let lease = WriteLease::with_lease_root(lease_root);
         let first = lease.try_acquire(&root).unwrap();
-        let second = lease.try_acquire(&root);
-        assert!(second.err().unwrap().contains("Another write"));
+        let second = lease.try_acquire(&root).err().expect("busy write lease");
+        assert!(second.contains("Another write"));
+        assert_eq!(
+            crate::timing_log::CommandError::from(second)
+                .failure
+                .as_str(),
+            "scope_busy"
+        );
         // The adapter picks the key: two roots must not share one.
         assert!(lease.try_acquire(&other).is_ok());
         drop(first);
