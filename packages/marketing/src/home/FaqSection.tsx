@@ -5,23 +5,6 @@ import { siteTokens } from "../SiteTheme.stylex";
 import { DOCS_URL } from "../site-links";
 import { homeSectionStyles as section } from "./HomeSection.stylex";
 
-const questions = [
-  {
-    question: "Which agents does it work with?",
-    answer:
-      "Claude Code, Codex, Cursor, OpenCode, pi, and Grok Build. Claude Code and Codex record the skill list for each session. For the other agents, Skill Studio shows an estimate of the current list.",
-  },
-  {
-    question: "Does it work on Intel Macs?",
-    answer: "Yes. The desktop app runs on Apple silicon and Intel Macs with macOS 13 or later.",
-  },
-  {
-    question: "When does it go online?",
-    answer:
-      "The Skill Store, installs, updates, update checks, and public install-count lookups use the network. The app also sends crash and performance reports when Telemetry is on. You can scan skills without an account.",
-  },
-] as const;
-
 export function FaqSection() {
   return (
     <div {...stylex.props(section.columns)}>
@@ -95,6 +78,7 @@ const styles = stylex.create({
       "@media (prefers-reduced-motion: reduce)": "none",
     },
   },
+  answerLink: { color: siteTokens.text, textDecorationLine: "underline", textUnderlineOffset: 3 },
   answer: {
     color: siteTokens.muted,
     fontSize: 15,
@@ -104,3 +88,28 @@ const styles = stylex.create({
     textWrap: "pretty",
   },
 });
+
+const questions = [
+  {
+    question: "Which agents does it work with?",
+    answer:
+      "Claude Code, Codex, Cursor, OpenCode, pi, and Grok Build. Claude Code and Codex record the skill list for each session. For the other agents, Skill Studio shows an estimate of the current list.",
+  },
+  {
+    question: "Does it work on Intel Macs?",
+    answer: (
+      <>
+        Yes. The desktop app runs on Apple silicon and Intel Macs with macOS 13 or later.{" "}
+        <a href="/docs/#install" {...stylex.props(styles.answerLink)}>
+          Choose the Intel download
+        </a>
+        .
+      </>
+    ),
+  },
+  {
+    question: "When does it go online?",
+    answer:
+      "The Skill Store, installs, updates, update checks, and public install-count lookups use the network. The app also sends crash and performance reports when Telemetry is on. You can scan skills without an account.",
+  },
+] as const;
