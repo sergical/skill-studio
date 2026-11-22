@@ -156,6 +156,8 @@ pub struct PackReport {
 impl Outcome for PackReport {
     const LISTS: &'static [ViewList<'static>] =
         &[ViewList::new("/packs", &["/kind", "/source", "/ref_pin"])];
+    const NESTED_LIST: Option<ViewList<'static>> =
+        Some(ViewList::new("/skills", &["/scope", "/name"]));
 
     fn status(&self) -> OpStatus {
         if self

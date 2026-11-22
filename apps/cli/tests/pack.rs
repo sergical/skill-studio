@@ -275,3 +275,122 @@ fn pack_export_gives_the_same_plan_on_cli_and_mcp_and_writes_only_for_real_or_th
         "{readme}"
     );
 }
+
+/// An oversized pack still returns complete skill rows and a way to read the rest.
+#[test]
+fn oversized_pack_skills_page_within_the_budget_on_cli_and_mcp() {
+    use skill_studio_core::view::ANSWER_BYTES;
+
+    let home = home();
+    let names: Vec<_> = (0..320)
+        .map(|i| format!("large-pack-skill-{i:03}"))
+        .collect();
+    let lock_path = home.path().join(".agents/.skill-lock.json");
+    let mut lock: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&lock_path).unwrap()).unwrap();
+    let template = lock["skills"]["tracked"].clone();
+    for name in &names {
+        write(
+            home.path(),
+            &format!(".agents/skills/{name}/SKILL.md"),
+            &format!("---\nname: {name}\ndescription: A pack skill.\n---\n"),
+        );
+        let mut skill = template.clone();
+        skill["source"] = json!("owner/zz-large");
+        skill["sourceUrl"] = json!("https://github.com/owner/zz-large.git");
+        lock["skills"][name] = skill;
+    }
+    std::fs::write(&lock_path, lock.to_string()).unwrap();
+
+    for surface in ["cli", "mcp"] {
+        let call = |show: bool, cursor: Option<&str>| {
+            if surface == "cli" {
+                let mut args = if show {
+                    vec!["pack", "show", "owner/zz-large"]
+                } else {
+                    vec!["pack", "list"]
+                };
+                if let Some(cursor) = cursor {
+                    args.extend(["--cursor", cursor]);
+                }
+                headless::cli(home.path(), &args)
+            } else {
+                let tool = if show { "pack_show" } else { "pack_list" };
+                let mut args = if show {
+                    json!({"source": "owner/zz-large"})
+                } else {
+                    json!({})
+                };
+                if let Some(cursor) = cursor {
+                    args["cursor"] = json!(cursor);
+                }
+                headless::mcp(home.path(), tool, &args)["result"]["structuredContent"].clone()
+            }
+        };
+        let size = |envelope: &serde_json::Value| {
+            let bytes = envelope.to_string().len();
+            assert!(
+                bytes <= ANSWER_BYTES,
+                "{surface} pack answer is {bytes} bytes, budget is {ANSWER_BYTES}"
+            );
+            assert_eq!(
+                envelope["status"], "ok",
+                "{surface}: {}",
+                envelope["errors"]
+            );
+        };
+
+        let mut answer = call(true, None);
+        size(&answer);
+        let first_page = &answer["page"]["also"][0];
+        assert_eq!(first_page["list"], "/packs/0/skills", "{surface}");
+        assert_eq!(first_page["total"], names.len(), "{surface}");
+        assert!(first_page["next_cursor"].is_string(), "{surface}");
+        let mut seen = Vec::new();
+        for index in 0..names.len() {
+            let page = if index == 0 {
+                &answer["page"]["also"][0]
+            } else {
+                &answer["page"]
+            };
+            let list = page["list"].as_str().unwrap();
+            let skills = answer["data"]
+                .pointer(list)
+                .and_then(serde_json::Value::as_array)
+                .unwrap();
+            assert_eq!(
+                answer["data"]["packs"][0]["source"], "owner/zz-large",
+                "{surface}"
+            );
+            assert_eq!(page["returned"], skills.len(), "{surface}");
+            assert!(!skills.is_empty(), "{surface}");
+            seen.extend(
+                skills
+                    .iter()
+                    .map(|skill| skill["name"].as_str().unwrap().to_owned()),
+            );
+            let Some(cursor) = page["next_cursor"].as_str() else {
+                break;
+            };
+            answer = call(true, Some(cursor));
+            size(&answer);
+        }
+        assert_eq!(seen, names, "{surface}: skills were lost or repeated");
+
+        let small = call(false, None);
+        size(&small);
+        assert_eq!(
+            small["data"]["packs"][0]["source"], "owner/repo",
+            "{surface}"
+        );
+        let large = call(false, Some(small["page"]["next_cursor"].as_str().unwrap()));
+        size(&large);
+        assert_eq!(
+            large["data"]["packs"][0]["source"], "owner/zz-large",
+            "{surface}"
+        );
+        let next = call(false, large["page"]["also"][0]["next_cursor"].as_str());
+        size(&next);
+        assert_eq!(next["page"]["list"], "/packs/0/skills", "{surface}");
+    }
+}

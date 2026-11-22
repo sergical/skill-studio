@@ -196,6 +196,9 @@ pub trait Outcome {
     /// Empty for a result without lists.
     const LISTS: &'static [ViewList<'static>] = &[];
 
+    /// List inside a primary row to page when that row exceeds the byte cap.
+    const NESTED_LIST: Option<ViewList<'static>> = None;
+
     /// Status of this value.
     fn status(&self) -> OpStatus {
         OpStatus::Ok

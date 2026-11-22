@@ -376,6 +376,13 @@ skill and deployment for diagnosis, and invariant and path for doctor.
 Repeated diagnostics with the same key are tracked by their occurrence
 in the list.
 
+Pack results name a nested list of installed skills. If a pack cannot fit
+on its own, the pager emits a page for that list in `page.also`. The nested
+cursor uses the pack keys and the ordered scope and name of each skill. It
+resumes into the first returned pack row, so the page pointer addresses the
+returned data. Outer and nested continuations advance independently and both
+honor the 32 KB budget.
+
 ### 8.2 MCP tools
 
 Tools usually use the serde name of the core operation. These tools use

@@ -113,6 +113,12 @@ continues its own list. The other lists return only totals. If the cursor
 is from an older version or the list has changed, the CLI returns
 `invalid_request` and asks you to start again without a cursor.
 
+If a pack row alone exceeds the 32 KB budget, the answer keeps its metadata
+and starts paging its installed skills at `/packs/0/skills` in `page.also`.
+Pass that list's cursor to the same pack command. On continuation, `page`
+describes the skill list and `--limit`, `--fields`, and `--count-by` apply to
+skill rows. The outer cursor, when present, continues with the next pack.
+
 These flags need `--json`. The MCP read tools take the same names
 (`limit`, `cursor`, `fields`, `count_by`) as arguments.
 
