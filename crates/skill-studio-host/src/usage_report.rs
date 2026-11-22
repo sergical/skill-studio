@@ -19,6 +19,7 @@ use skill_studio_core::dto::{Completeness, Inventory};
 use skill_studio_core::identity::RootKind;
 use skill_studio_core::ops::{OpStatus, Outcome};
 use skill_studio_core::skill_uses::{history_start, SkillInvocation, SkillTrigger, HISTORY_DAYS};
+use skill_studio_core::view::ViewList;
 
 use crate::fs::RealFs;
 use crate::skill_uses::SkillInvocationIndex;
@@ -83,7 +84,10 @@ pub struct UsageReport {
 }
 
 impl Outcome for UsageReport {
-    const LISTS: &'static [&'static str] = &["/rows", "/unused"];
+    const LISTS: &'static [ViewList<'static>] = &[
+        ViewList::new("/rows", &["/skill"]),
+        ViewList::new("/unused", &[]),
+    ];
 
     fn status(&self) -> OpStatus {
         if self.partial {
@@ -104,7 +108,7 @@ pub struct SkillUsage {
 }
 
 /// Optional exact matches over recorded history. Paths use lexical path equality.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct UsageFilter {
     /// Exact recorded harness id, or all harnesses.
     pub harness: Option<String>,

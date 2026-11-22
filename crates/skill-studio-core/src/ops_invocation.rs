@@ -3,6 +3,7 @@ use crate::frontmatter::InvocationPolicy;
 use crate::identity::{AgentId, DeploymentId, DeploymentMutability, EventId, PlanId, SkillName};
 use crate::ops::{Operation, Outcome};
 use crate::ports::{MutationSession, OpContext, PlanStatus, Runtime};
+use crate::view::ViewList;
 use crate::{CoreError, ErrorCode};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -61,7 +62,7 @@ pub struct InvocationReport {
     pub event_ids: Vec<EventId>,
 }
 impl Outcome for InvocationReport {
-    const LISTS: &'static [&'static str] = &["/skills"];
+    const LISTS: &'static [ViewList<'static>] = &[ViewList::new("/skills", &["/skill"])];
 }
 
 /// Check invocation, or set both skill-owned controls under the write lease.
