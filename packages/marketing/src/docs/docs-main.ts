@@ -1,7 +1,7 @@
 // ============================================================================
 // Skill Studio - Docs client
 // The docs and 404 pages are static HTML. This script adds the copy buttons
-// and the theme toggle with delegated listeners, and ships no React.
+// and the theme toggle with delegated listeners.
 // ============================================================================
 
 import type { SiteTheme } from "../SiteTheme.stylex";
@@ -16,13 +16,14 @@ import {
 import { bufferEarlyErrors, startSiteSentry } from "../site-sentry";
 import "../marketing-site.css";
 import "./docs-prose.css";
+import { setupDocsSearch } from "./docs-search";
 // Imported for its StyleX rules, which the build collects into the shared CSS file.
 import "./docs-page-styles";
 
 // The SDK chunk loads after this script finishes, so a setup error below is still buffered.
 void startSiteSentry(bufferEarlyErrors());
 
-const COPY_LABEL_RESET_MS = 2000;
+const COPY_LABEL_RESET_MS = 1500;
 const copyResetTimers = new WeakMap<HTMLElement, number>();
 
 function showCopyLabel(button: HTMLElement, text: string, state?: "copied") {
@@ -41,7 +42,7 @@ function showCopyLabel(button: HTMLElement, text: string, state?: "copied") {
 }
 
 async function copyCode(button: HTMLElement) {
-  const code = button.parentElement?.querySelector("code");
+  const code = button.closest(".docs-code")?.querySelector("code");
   if (!code) return;
   try {
     await navigator.clipboard.writeText(code.textContent ?? "");
@@ -49,7 +50,7 @@ async function copyCode(button: HTMLElement) {
   } catch {
     // Clipboard access can be blocked. Selecting the code still lets the reader copy it.
     window.getSelection()?.selectAllChildren(code);
-    showCopyLabel(button, "Press Cmd+C");
+    showCopyLabel(button, "Selected");
   }
 }
 
@@ -63,7 +64,7 @@ async function copyPage(button: HTMLElement, url: string) {
     await navigator.clipboard.write([new ClipboardItem({ "text/plain": markdown })]);
     showCopyLabel(button, "Copied", "copied");
   } catch {
-    showCopyLabel(button, "Use View Markdown to copy");
+    showCopyLabel(button, "Copy failed");
   }
 }
 
@@ -80,34 +81,13 @@ if (
   });
 }
 
-const docsSearch = document.querySelector<HTMLInputElement>("#docs-search");
-if (docsSearch) {
-  const groups = document.querySelectorAll<HTMLElement>("[data-docs-group]");
-  const empty = document.querySelector<HTMLElement>("[data-docs-search-empty]");
-  const toggle = document.querySelector<HTMLButtonElement>(".docs-nav-toggle");
-  toggle?.removeAttribute("hidden");
-  toggle?.addEventListener("click", () => {
-    toggle.setAttribute("aria-expanded", String(toggle.getAttribute("aria-expanded") === "false"));
-  });
-  document.querySelector("[data-docs-search-label]")?.removeAttribute("hidden");
-  docsSearch.hidden = false;
-  docsSearch.addEventListener("input", () => {
-    const query = docsSearch.value.toLowerCase().trim();
-    const words = query.split(/\s+/);
-    if (query) toggle?.setAttribute("aria-expanded", "true");
-    let matches = 0;
-    for (const group of groups) {
-      let groupMatches = 0;
-      for (const link of group.querySelectorAll<HTMLElement>("[data-docs-headings]")) {
-        const text = `${link.textContent} ${link.dataset.docsHeadings}`.toLowerCase();
-        const match = words.every((word) => text.includes(word));
-        link.hidden = !match;
-        if (match) groupMatches++;
-      }
-      group.hidden = groupMatches === 0;
-      matches += groupMatches;
-    }
-    if (empty) empty.hidden = matches > 0;
+setupDocsSearch();
+
+const agentMenu = document.querySelector<HTMLElement>("[data-docs-agent-menu]");
+if (agentMenu?.dataset.docsAgentMenu) {
+  const markdownPath = agentMenu.dataset.docsAgentMenu;
+  void import("./DocsAgentMenu").then(({ mountDocsAgentMenu }) => {
+    mountDocsAgentMenu(agentMenu, markdownPath);
   });
 }
 
