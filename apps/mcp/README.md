@@ -60,6 +60,12 @@ The cursor continues its own list. If the cursor is invalid or that
 list has changed, the tool returns `invalid_request` and asks you to start
 again without a cursor.
 
+For a pack that exceeds the 32 KB answer budget, `pack_show` and `pack_list`
+return pack metadata and an installed skill page at `/packs/0/skills` in
+`page.also`. Pass the nested cursor to the same tool to continue that list.
+On continuation, `page` describes the skill list. Any outer cursor continues
+the pack list independently.
+
 ## Progress
 
 A call whose `_meta.progressToken` is set receives at least one
