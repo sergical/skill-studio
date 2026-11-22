@@ -142,7 +142,7 @@ export function renderLlmsText(): string {
   return [
     "# Skill Studio",
     "",
-    "> A free macOS app, CLI and MCP server that finds skills across Claude Code, Codex, Cursor, OpenCode, pi and Grok Build. Find broken, duplicate, outdated and unused skills. Fix, update, remove or park skills, with undo.",
+    "> A free macOS app, CLI and MCP server that finds broken, duplicate and unused agent skills across Claude Code, Codex, Cursor, OpenCode, pi and Grok Build. Fix or park them, with undo.",
     "",
     "## Docs",
     "",

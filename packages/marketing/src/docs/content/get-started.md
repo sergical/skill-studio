@@ -1,6 +1,6 @@
 # Get started
 
-Skill Studio shows every agent skill on your Mac in one list. Use it to find broken, duplicate, outdated and unused skills. Fix, update, remove or park skills. You can undo each change.
+Skill Studio shows every agent skill on your Mac in one list. Use it to find broken, duplicate and unused skills, then fix or park them. You can undo each change.
 
 ## Install
 
