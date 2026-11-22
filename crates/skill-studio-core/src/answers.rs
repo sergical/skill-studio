@@ -2,6 +2,7 @@
 use crate::identity::AgentId;
 use crate::ops::Outcome;
 use crate::ops_invocation::{InvocationMode, InvocationReport};
+use crate::view::ViewList;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -26,7 +27,7 @@ pub struct InvocationMismatch {
 }
 
 impl Outcome for InvocationMismatches {
-    const LISTS: &'static [&'static str] = &["/skills"];
+    const LISTS: &'static [ViewList<'static>] = &[ViewList::new("/skills", &["/skill"])];
 }
 
 /// Keeps only the skills whose agents disagree on invocation.

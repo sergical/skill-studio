@@ -14,6 +14,7 @@ use crate::ops::{OpStatus, Operation, Outcome};
 use crate::ports::{
     acquire_shared, CancelToken, FileKind, OpContext, Runtime, ScopeFs, ScopedReads,
 };
+use crate::view::ViewList;
 
 /// `agent_home_roots` key for the folder that holds the skills CLI's global
 /// `.skill-lock.json` when `$XDG_STATE_HOME` moves it out of `~/.agents`.
@@ -153,7 +154,8 @@ pub struct PackReport {
 }
 
 impl Outcome for PackReport {
-    const LISTS: &'static [&'static str] = &["/packs"];
+    const LISTS: &'static [ViewList<'static>] =
+        &[ViewList::new("/packs", &["/kind", "/source", "/ref_pin"])];
 
     fn status(&self) -> OpStatus {
         if self
