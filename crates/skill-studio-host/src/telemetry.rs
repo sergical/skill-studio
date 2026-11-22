@@ -180,7 +180,7 @@ fn client_options(
             return None;
         }
         log.attributes.retain(|key, _| !key.starts_with("user."));
-        if let Some(span) = CommandSpan::current() {
+        if let Some(span) = CommandSpan::current().filter(|span| span.sampled) {
             log.trace_id = Some(span.trace_id);
             log.attributes.insert(
                 "sentry.trace.parent_span_id".into(),
@@ -194,7 +194,7 @@ fn client_options(
         if !metric_consent.enabled() {
             return None;
         }
-        if let Some(span) = CommandSpan::current() {
+        if let Some(span) = CommandSpan::current().filter(|span| span.sampled) {
             metric.trace_id = span.trace_id;
             metric.span_id = Some(span.span_id);
         }
@@ -726,12 +726,15 @@ pub fn record_command(
     let ok = failure.is_none();
     let name = format!("command.{command}");
     if command.starts_with("snapshot_refresh.") {
-        if span.sampled {
-            span.enter(|| {
+        span.enter(|| {
+            if let Some(issue) = issue {
+                application_metrics::record_command_failure(surface, &name, issue);
+            }
+            if span.sampled {
                 structured_logs::record_refresh_finish(command, elapsed_ms, ok);
                 application_metrics::record_snapshot_duration(command, elapsed_ms);
-            });
-        }
+            }
+        });
     } else {
         span.enter(|| {
             application_metrics::record_command_metrics(surface, &name, elapsed_ms, failure);
@@ -2070,6 +2073,56 @@ mod tests {
             unreachable!("every transaction this module builds carries a trace context");
         };
         (**trace).clone()
+    }
+
+    #[test]
+    fn an_unsampled_refresh_still_counts_reportable_failures() {
+        use sentry::protocol::ItemContainer;
+
+        let span = CommandSpan {
+            sampled: false,
+            ..CommandSpan::start(Trigger::Background, None)
+        };
+        let options = client_options(
+            "https://examplePublicKey@o0.ingest.sentry.io/0"
+                .parse()
+                .expect("fixture DSN"),
+            Surface::Desktop,
+            "9.9.9",
+            Consent::new(true),
+        );
+        let envelopes = sentry::test::with_captured_envelopes_options(
+            || {
+                record_command(
+                    Surface::Desktop,
+                    "snapshot_refresh.full",
+                    span,
+                    80,
+                    Some(CommandFailure::TooManyOpenFiles),
+                );
+            },
+            options,
+        );
+        let items: Vec<_> = envelopes.iter().flat_map(Envelope::items).collect();
+        let [EnvelopeItem::ItemContainer(ItemContainer::Metrics(metrics))] = items.as_slice()
+        else {
+            panic!("only a failure metric is sent");
+        };
+        let [failure] = metrics.as_slice() else {
+            panic!("one failure metric is sent");
+        };
+        assert_eq!(failure.name, "skill_studio.command.failures");
+        assert_eq!(failure.value, 1.0);
+        assert_eq!(
+            failure.attributes["command"],
+            "command.snapshot_refresh.full".into()
+        );
+        assert_eq!(
+            failure.attributes["error_code"],
+            "too_many_open_files".into()
+        );
+        assert_ne!(failure.trace_id, span.trace_id);
+        assert!(failure.span_id.is_none());
     }
 
     #[test]

@@ -11,25 +11,28 @@ pub(super) fn record_command_metrics(
     elapsed_ms: u64,
     failure: Option<CommandFailure>,
 ) {
-    let surface = surface.as_str();
     metrics::distribution("skill_studio.command.duration", elapsed_ms as f64)
         .unit(Unit::Millisecond)
         .attribute("command", command.to_owned())
-        .attribute("surface", surface)
+        .attribute("surface", surface.as_str())
         .capture();
     if let Some(failure) = failure.filter(|failure| failure.opens_issue()) {
-        metrics::counter("skill_studio.command.failures", 1)
-            .attribute("command", command.to_owned())
-            .attribute("surface", surface)
-            .attribute("error_code", failure.as_str())
-            .capture();
+        record_command_failure(surface, command, failure);
     }
     if let Some(count) = open_file_descriptor_count() {
         metrics::gauge("skill_studio.command.open_file_descriptors", count as f64)
             .attribute("command", command.to_owned())
-            .attribute("surface", surface)
+            .attribute("surface", surface.as_str())
             .capture();
     }
+}
+
+pub(super) fn record_command_failure(surface: Surface, command: &str, failure: CommandFailure) {
+    metrics::counter("skill_studio.command.failures", 1)
+        .attribute("command", command.to_owned())
+        .attribute("surface", surface.as_str())
+        .attribute("error_code", failure.as_str())
+        .capture();
 }
 
 pub(super) fn record_snapshot_duration(step: &'static str, elapsed_ms: u64) {

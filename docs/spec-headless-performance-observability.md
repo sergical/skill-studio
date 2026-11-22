@@ -290,6 +290,8 @@ In **Explore → Metrics**, choose the metric by name and filter by
 `surface` or the applicable command or step. Chart p95 for duration, sum
 for failures, and max for file descriptors. Refresh completion logs, refresh
 duration and scan counts inside a refresh follow the background trace sample.
+The failure counter includes every reportable refresh failure. The file
+descriptor gauge measures completed commands outside the refresh loop.
 
 | Metric                                       | Type and dimensions beyond surface and SDK metadata                                      |
 | -------------------------------------------- | ---------------------------------------------------------------------------------------- |
@@ -302,7 +304,7 @@ duration and scan counts inside a refresh follow the background trace sample.
 The native SDK adds release, environment and SDK name and version to
 logs and metrics, the constant server address `skill-studio`, and OS
 name and version to logs when available. Command and refresh logs and
-scan counts carry the native trace ID and the span ID for the operation.
+scan counts carry the native trace ID and span ID when a trace is sampled.
 Rust checks consent before recording the signals and the transport checks it again
 when a batch is sent. React SDK 11 supports logs and metrics, as does Rust
 SDK 0.49.5 with its `logs` and `metrics` features. The desktop uses the
