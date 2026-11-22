@@ -87,6 +87,8 @@ fn default_run_budget() -> u64 {
 /// scratch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct IndexedTranscript {
+    #[serde(default)]
+    source_harness: String,
     size: u64,
     modified: SystemTime,
     parsed_bytes: u64,
@@ -281,6 +283,7 @@ pub struct SkillUseRefreshReport {
 struct TranscriptFile<'a> {
     home: &'a Path,
     path: &'a Path,
+    harness: &'static str,
     /// The file's modification time, or now when the platform can't tell.
     modified: DateTime<Utc>,
 }
@@ -331,10 +334,7 @@ enum UseReader {
 struct UseSource {
     /// `AgentId` wire name, e.g. `AgentId::CLAUDE_CODE`.
     harness: &'static str,
-    /// The root directory this source reads under `home`, used to scope the
-    /// drop rule to files this source (when enabled) actually owns, so a
-    /// switched-off source's cached files are left untouched even if their
-    /// directory is later removed.
+    /// The resolved history root, used for diagnostics and cache invalidation.
     root: fn(&Path) -> PathBuf,
     reader: UseReader,
     /// Where the app should watch on disk for changes that can add, change,
@@ -1223,6 +1223,9 @@ pub struct SkillInvocationIndex {
     #[serde(default)]
     reader_version: u32,
     files: BTreeMap<PathBuf, IndexedTranscript>,
+    /// Last resolved root for each refreshed transcript source.
+    #[serde(default)]
+    transcript_roots: BTreeMap<String, PathBuf>,
     #[serde(default)]
     databases: BTreeMap<PathBuf, IndexedDatabase>,
     #[serde(skip, default = "default_file_budget")]
@@ -1237,6 +1240,7 @@ impl Default for SkillInvocationIndex {
             codex_home: None,
             reader_version: USAGE_READER_VERSION,
             files: BTreeMap::new(),
+            transcript_roots: BTreeMap::new(),
             databases: BTreeMap::new(),
             file_budget: MAX_FILE_BYTES,
             run_budget: MAX_RUN_BYTES,
@@ -1416,6 +1420,11 @@ impl SkillInvocationIndex {
             self.reader_version = USAGE_READER_VERSION;
         }
         let mut report = SkillUseRefreshReport::default();
+        if self.transcript_roots.is_empty() {
+            // Legacy caches did not record which root owned each transcript.
+            report.files_dropped += self.files.len();
+            self.files.clear();
+        }
         let mut run_budget = self.run_budget;
 
         let codex_home = self.codex_home.clone();
@@ -1463,8 +1472,8 @@ impl SkillInvocationIndex {
 
     /// One [`UseReader::Transcripts`] source's share of `refresh`: lists its
     /// files, re-parses the ones that changed (resuming from their cached
-    /// byte offset), and drops cached files under this source's root that
-    /// are no longer listed and no longer exist.
+    /// byte offset), and drops files that left this source's history or
+    /// belong to a former root.
     fn refresh_transcripts(
         &mut self,
         home: &Path,
@@ -1475,6 +1484,14 @@ impl SkillInvocationIndex {
         report: &mut SkillUseRefreshReport,
     ) {
         let owned_root = (source.root)(home);
+        if self.transcript_roots.get(source.harness) != Some(&owned_root) {
+            let before = self.files.len();
+            self.files
+                .retain(|_, entry| entry.source_harness != source.harness);
+            report.files_dropped += before - self.files.len();
+            self.transcript_roots
+                .insert(source.harness.to_owned(), owned_root.clone());
+        }
         let listing = list(home);
         if listing.incomplete {
             report.incomplete = true;
@@ -1515,6 +1532,7 @@ impl SkillInvocationIndex {
                 let file = TranscriptFile {
                     home,
                     path: &path,
+                    harness: source.harness,
                     modified: DateTime::<Utc>::from(modified),
                 };
                 self.refresh_compressed(&file, &log_root, &meta, parse, run_budget, report);
@@ -1598,6 +1616,7 @@ impl SkillInvocationIndex {
             let file = TranscriptFile {
                 home,
                 path: &path,
+                harness: source.harness,
                 modified: modified_utc,
             };
             let mut parsed = parse(&file, &text, &mut context, &mut invalid);
@@ -1626,6 +1645,7 @@ impl SkillInvocationIndex {
             self.files.insert(
                 path,
                 IndexedTranscript {
+                    source_harness: source.harness.to_owned(),
                     size,
                     modified,
                     parsed_bytes,
@@ -1641,8 +1661,8 @@ impl SkillInvocationIndex {
         }
 
         let before = self.files.len();
-        self.files.retain(|path, _| {
-            if seen.contains(path) {
+        self.files.retain(|path, entry| {
+            if entry.source_harness != source.harness || seen.contains(path) {
                 return true;
             }
             let Some(parent) = path.parent() else {
@@ -1650,9 +1670,6 @@ impl SkillInvocationIndex {
             };
             if listed_dirs.contains(parent) {
                 return false;
-            }
-            if !path.starts_with(&owned_root) {
-                return true;
             }
             // The parent wasn't listed successfully this refresh, but its
             // owning source ran: drop only if the parent directory itself
@@ -1692,6 +1709,7 @@ impl SkillInvocationIndex {
             return;
         }
         let mut entry = previous.cloned().unwrap_or(IndexedTranscript {
+            source_harness: transcript.harness.to_owned(),
             size: meta.len(),
             modified,
             parsed_bytes: 0,
@@ -2268,7 +2286,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_projects_dir_keeps_cached_files_and_is_not_incomplete() {
+    fn switching_to_missing_claude_projects_drops_former_history_and_stays_complete() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         write_transcript(
@@ -2284,15 +2302,14 @@ mod tests {
         index.refresh(home, &sources);
         assert_eq!(stats(&index, &known_skills, &sources).len(), 1);
 
-        // Point at a home whose `.claude/projects` doesn't exist: a user
-        // without Claude Code must not be stuck `incomplete` forever (that
-        // drives the desktop's 5s rebuild loop).
+        // Switching to a home without Claude history is a complete scan of
+        // an empty source, even when the former home still has its logs.
         let missing_home = tmp.path().join("missing-home");
         fs::create_dir_all(&missing_home).unwrap();
         let report = index.refresh(&missing_home, &sources);
         assert!(!report.incomplete);
-        assert_eq!(report.files_dropped, 0);
-        assert_eq!(stats(&index, &known_skills, &sources).len(), 1);
+        assert_eq!(report.files_dropped, 1);
+        assert!(stats(&index, &known_skills, &sources).is_empty());
     }
 
     #[cfg(unix)]
