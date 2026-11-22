@@ -11,13 +11,13 @@
 use proptest::prelude::*;
 use serde_json::{json, Value};
 use skill_studio_core::ops::Outcome;
-use skill_studio_core::view::{render_document, ViewRequest, ANSWER_BYTES};
+use skill_studio_core::view::{render_document, ViewList, ViewRequest, ANSWER_BYTES};
 
 /// An outcome with one pageable list at `/rows`, like `library`.
 struct Rows;
 
 impl Outcome for Rows {
-    const LISTS: &'static [&'static str] = &["/rows"];
+    const LISTS: &'static [ViewList<'static>] = &[ViewList::new("/rows", &["/name"])];
 }
 
 fn rows() -> impl Strategy<Value = Vec<Value>> {
@@ -44,7 +44,7 @@ proptest! {
         for _ in 0..=all.len() + 1 {
             let document = json!({"status": "ok", "data": {"rows": all.clone()}, "errors": []});
             let view = ViewRequest { limit, cursor: cursor.clone(), ..ViewRequest::default() };
-            let rendered = render_document::<Rows>(document, 0, &view, false).unwrap();
+            let rendered = render_document::<Rows>(document, 0, &view, &(), false).unwrap();
             if limit.is_none() {
                 let bytes = rendered.json.to_string().len();
                 prop_assert!(bytes <= ANSWER_BYTES, "answer of {} bytes", bytes);

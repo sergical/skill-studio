@@ -27,6 +27,7 @@ use std::collections::BTreeMap;
 pub fn print_json<T: Serialize + Outcome>(
     envelope: &ResultEnvelope<T>,
     view: &ViewRequest,
+    request: &impl Serialize,
     time: bool,
 ) -> i32 {
     // Every field on a `ResultEnvelope` is one of our own DTOs; the only way
@@ -34,7 +35,7 @@ pub fn print_json<T: Serialize + Outcome>(
     // neither of which this envelope ever holds. If it ever does, stdout must
     // stay empty rather than carry a document that is not a `ResultEnvelope`,
     // and the process must not exit as if the command succeeded: EX_SOFTWARE.
-    match skill_studio_core::view::render(envelope, view, time) {
+    match skill_studio_core::view::render(envelope, view, request, time) {
         Ok(rendered) => {
             println!("{}", rendered.json);
             rendered.exit_status

@@ -52,6 +52,14 @@ SQLite history. Core operations use the same lease rules as the CLI and
 desktop app. A call that cannot acquire its lease in time returns
 `scope_busy`.
 
+## Bounded answers
+
+A read tool may return a `page` with an opaque `next_cursor`. Copy the
+cursor exactly and call the same tool with the same scope and filters.
+The cursor continues its own list. If the cursor is invalid or that
+list has changed, the tool returns `invalid_request` and asks you to start
+again without a cursor.
+
 ## Progress
 
 A call whose `_meta.progressToken` is set receives at least one
