@@ -675,7 +675,7 @@ pub fn record_command(
     let timestamp = SystemTime::now();
     let start_timestamp = timestamp - elapsed;
     let name = format!("command.{command}");
-    let tags = outcome_tags(surface, ok, None);
+    let tags = outcome_tags(surface, ok, failure.map(CommandFailure::as_str));
 
     let mut contexts = Map::new();
     contexts.insert(
@@ -2040,6 +2040,7 @@ mod tests {
             })
             .expect("command transaction");
         assert_eq!(event.contexts["trace"], transaction.contexts["trace"]);
+        assert_eq!(transaction.tags["error_code"], "too_many_open_files");
         for envelope in envelopes {
             let mut bytes = Vec::new();
             envelope.to_writer(&mut bytes).expect("serialize envelope");
