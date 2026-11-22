@@ -123,6 +123,77 @@ fn usage_claude_history_preserves_uses_and_each_trigger() {
         "{data}"
     );
 }
+/// Flow: report legacy Claude sidechains that share their parent's session ID.
+/// Expect one use per log. Failure: sidechains merge into the parent session.
+#[test]
+fn usage_counts_legacy_claude_sidechains_as_separate_sessions() {
+    let dir = fixture();
+    let root = dir.path().join(".claude/projects/work");
+    fs::create_dir_all(&root).unwrap();
+    let mut record = serde_json::json!({
+        "type": "user",
+        "sessionId": "parent",
+        "uuid": "parent-use",
+        "timestamp": "2026-09-29T12:00:00Z",
+        "message": {"content": "<command-name>/gamma</command-name>"}
+    });
+    fs::write(root.join("parent.jsonl"), format!("{record}\n")).unwrap();
+    assert_eq!(report(dir.path())["rows"][0]["recent_uses"], 1);
+
+    record["isSidechain"] = true.into();
+    record["message"] = serde_json::json!({"content": [
+        {"type": "tool_use", "name": "Skill", "input": {"skill": "gamma"}}
+    ]});
+    record["type"] = "assistant".into();
+    for id in ["one", "two"] {
+        record["uuid"] = format!("{id}-first").into();
+        let first = record.to_string();
+        if id == "two" {
+            record.as_object_mut().unwrap().remove("uuid");
+        } else {
+            record["uuid"] = format!("{id}-second").into();
+        }
+        fs::write(
+            root.join(format!("agent-{id}.jsonl")),
+            format!("{first}\n{record}\n"),
+        )
+        .unwrap();
+    }
+    let row = &report(dir.path())["rows"][0];
+    assert_eq!(row["recent_uses"], 3, "{row}");
+    assert_eq!(row["triggers"]["user"], 1, "{row}");
+    assert_eq!(row["triggers"]["agent"], 2, "{row}");
+
+    let inventory = scan(dir.path());
+    let now = "2026-09-30T12:00:00Z".parse().unwrap();
+    let mut usage = SkillUsage::default();
+    let expected = usage.report(dir.path(), &inventory, 30, now);
+    let cache = dir.path().join("usage-cache.json");
+    usage.save_cache(&cache).unwrap();
+    let mut old: serde_json::Value = serde_json::from_slice(&fs::read(&cache).unwrap()).unwrap();
+    old["reader_version"] = 6.into();
+    for entry in old["files"].as_object_mut().unwrap().values_mut() {
+        for use_ in entry["uses"].as_array_mut().unwrap() {
+            use_["use_session"] = "parent".into();
+        }
+        for uses in entry["context"]["claude_records"]
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+        {
+            for use_ in uses.as_array_mut().unwrap() {
+                use_["use_session"] = "parent".into();
+            }
+        }
+    }
+    fs::write(&cache, serde_json::to_vec(&old).unwrap()).unwrap();
+    let rebuilt = SkillUsage::load_read_only(Some(&cache)).report(dir.path(), &inventory, 30, now);
+    assert_eq!(
+        rebuilt, expected,
+        "cached legacy sidechains must be reindexed"
+    );
+}
+
 /// Flow: report with a log root that cannot be listed as a directory.
 /// Expect partial status and the exact root and reason. Failure: skipped history is silent.
 #[test]
