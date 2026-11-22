@@ -1,6 +1,6 @@
 {
   "name": "skill-studio",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Check, park and clean up the agent skills on your Mac, from the terminal or an MCP client.",
   "keywords": [
     "agent-skills",
@@ -25,8 +25,8 @@
     "bin/skill-studio.js"
   ],
   "optionalDependencies": {
-    "@skill-studio/cli-darwin-arm64": "0.4.0",
-    "@skill-studio/cli-darwin-x64": "0.4.0"
+    "@skill-studio/cli-darwin-arm64": "0.4.1",
+    "@skill-studio/cli-darwin-x64": "0.4.1"
   },
   "engines": {
     "node": ">=18"

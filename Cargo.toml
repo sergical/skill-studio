@@ -3,7 +3,7 @@ members = ["crates/*", "apps/desktop/src-tauri", "apps/cli", "apps/mcp"]
 resolver = "2"
 
 [workspace.package]
-version = "0.4.0"
+version = "0.4.1"
 
 # `preserve_order` swaps `serde_json::Map`'s backing store for an
 # `indexmap::IndexMap`, so a parsed JSON object round-trips through this
