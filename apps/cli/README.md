@@ -95,22 +95,23 @@ first. When a list loses rows, the envelope gets a top-level `page`:
     "list": "/skills",
     "total": 4002,
     "returned": 61,
-    "next_cursor": "61",
+    "next_cursor": "<opaque token>",
     "also": [
       {
         "list": "/inventory/skills",
         "total": 4002,
         "returned": 58,
-        "next_cursor": "/inventory/skills@58"
+        "next_cursor": "<opaque token>"
       }
     ]
   }
 }
 ```
 
-A cursor continues only its own list: `<offset>` for the main list,
-`<list>@<offset>` for a list in `also`. The other lists then return only
-their totals, so no call repeats a row.
+Copy a `next_cursor` exactly and repeat the same scope and filters. It
+continues its own list. The other lists return only totals. If the cursor
+is from an older version or the list has changed, the CLI returns
+`invalid_request` and asks you to start again without a cursor.
 
 These flags need `--json`. The MCP read tools take the same names
 (`limit`, `cursor`, `fields`, `count_by`) as arguments.
