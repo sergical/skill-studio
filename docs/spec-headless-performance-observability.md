@@ -301,9 +301,9 @@ duration and scan counts inside a refresh follow the background trace sample.
 
 The native SDK adds release, environment and SDK name and version to
 logs and metrics, the constant server address `skill-studio`, and OS
-name and version to logs when available. Command and refresh logs
-carry the native trace ID and parent span ID. These signals are sent
-from Rust after checking consent, and the transport checks consent again
+name and version to logs when available. Command and refresh logs and
+scan counts carry the native trace ID and the span ID for the operation.
+Rust checks consent before recording the signals and the transport checks it again
 when a batch is sent. React SDK 11 supports logs and metrics, as does Rust
 SDK 0.49.5 with its `logs` and `metrics` features. The desktop uses the
 Rust seams for these signals so the WebView bridge accepts the existing

@@ -558,12 +558,6 @@ fn capture_command_failure(
 }
 
 impl Telemetry for SentryTelemetry {
-    fn record_scanned_skills(&self, count: usize) {
-        if CommandSpan::current().is_none_or(|span| span.sampled) {
-            application_metrics::record_scan_count(self.surface, count);
-        }
-    }
-
     fn record(&self, record: OpRecord) {
         let ok = matches!(record.outcome, OpOutcome::Ok);
         let elapsed = Duration::from_millis(record.timing.elapsed_ms);
@@ -664,22 +658,27 @@ impl Telemetry for SentryTelemetry {
         };
 
         if let Some(client) = Hub::current().client() {
-            // A desktop command owns its issue. Headless operations are their own roots.
-            if command.is_none() {
-                CommandSpan {
-                    trace_id,
-                    span_id: root_span_id,
-                    parent_span_id: None,
-                    sampled: true,
+            CommandSpan {
+                trace_id,
+                span_id: root_span_id,
+                parent_span_id: command.map(|command| command.span_id),
+                sampled: true,
+            }
+            .enter(|| {
+                for count in record.scanned_skill_counts {
+                    application_metrics::record_scan_count(self.surface, count);
                 }
-                .enter(|| {
+                if command.is_none() {
                     application_metrics::record_command_metrics(
                         self.surface,
                         &op,
                         record.timing.elapsed_ms,
                         failure,
                     );
-                });
+                }
+            });
+            // A desktop command owns its issue. Headless operations are their own roots.
+            if command.is_none() {
                 if let Some(failure) = failure.filter(|failure| failure.opens_issue()) {
                     capture_command_failure(
                         &client,
@@ -882,6 +881,7 @@ mod tests {
                 ],
             },
             nested: Vec::new(),
+            scanned_skill_counts: Vec::new(),
         }
     }
 
@@ -988,6 +988,7 @@ mod tests {
                 steps: Vec::new(),
             },
             nested: Vec::new(),
+            scanned_skill_counts: Vec::new(),
         };
         let envelopes = capture_trace_envelopes(|| {
             telemetry().record(record);
@@ -1174,6 +1175,7 @@ mod tests {
                 ],
             },
             nested: Vec::new(),
+            scanned_skill_counts: Vec::new(),
         };
         record.nested = vec![NestedOp {
             operation: Operation::Scan,
@@ -2068,6 +2070,68 @@ mod tests {
             unreachable!("every transaction this module builds carries a trace context");
         };
         (**trace).clone()
+    }
+
+    #[test]
+    fn a_headless_doctor_scan_reports_its_count_on_the_doctor_trace() {
+        use sentry::protocol::ItemContainer;
+        use skill_studio_core::ports::{OpContext, Runtime};
+
+        let home = tempfile::tempdir().expect("fixture home");
+        let skill = home.path().join(".agents/skills/fixture-skill");
+        std::fs::create_dir_all(&skill).expect("create fixture skill folder");
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: fixture-skill\ndescription: A fixture skill.\n---\n",
+        )
+        .expect("write fixture skill");
+        let options = client_options(
+            "https://examplePublicKey@o0.ingest.sentry.io/0"
+                .parse()
+                .expect("fixture DSN"),
+            Surface::Cli,
+            "9.9.9",
+            Consent::new(true),
+        );
+        let envelopes = sentry::test::with_captured_envelopes_options(
+            || {
+                let mut ports = crate::default_ports(
+                    home.path().join("leases"),
+                    Arc::new(skill_studio_core::harness::HarnessCatalog::builtin()),
+                );
+                ports.telemetry = port(Surface::Cli, "9.9.9");
+                let runtime = Runtime::new(
+                    &skill_studio_core::RuntimeScope::fixture(home.path()),
+                    ports,
+                )
+                .expect("fixture runtime");
+                let ctx = OpContext::uncancellable(CorrelationId("c-doctor-scan".into()));
+                skill_studio_core::ops::doctor(&runtime, &ctx, &Default::default())
+                    .expect("doctor ran successfully");
+            },
+            options,
+        );
+        let items = || envelopes.iter().flat_map(Envelope::items);
+        let trace = items()
+            .find_map(|item| match item {
+                EnvelopeItem::Transaction(tx) if tx.name.as_deref() == Some("skill.doctor") => {
+                    Some(trace_context(tx))
+                }
+                _ => None,
+            })
+            .expect("doctor transaction");
+        let counts: Vec<_> = items()
+            .filter_map(|item| match item {
+                EnvelopeItem::ItemContainer(ItemContainer::Metrics(metrics)) => Some(metrics),
+                _ => None,
+            })
+            .flatten()
+            .filter(|metric| metric.name == "skill_studio.scan.skills")
+            .collect();
+        assert_eq!(counts.len(), 1);
+        assert_eq!(counts[0].value, 1.0);
+        assert_eq!(counts[0].trace_id, trace.trace_id);
+        assert_eq!(counts[0].span_id, Some(trace.span_id));
     }
 
     #[test]

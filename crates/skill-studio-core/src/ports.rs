@@ -1283,6 +1283,8 @@ pub struct OpRecord {
     /// Operations this one called through the same `OpContext`, in call
     /// order.
     pub nested: Vec<NestedOp>,
+    /// Inventory counts from this operation and its nested scans.
+    pub scanned_skill_counts: Vec<usize>,
 }
 
 /// Receives one [`OpRecord`] per op call. Must not block: a telemetry port
@@ -1290,9 +1292,6 @@ pub struct OpRecord {
 pub trait Telemetry: Send + Sync {
     /// Records one op call.
     fn record(&self, record: OpRecord);
-
-    /// Records the number of distinct skills returned by one inventory scan.
-    fn record_scanned_skills(&self, _count: usize) {}
 }
 
 /// A [`Telemetry`] that does nothing - the default until a host binds a real
@@ -1404,16 +1403,20 @@ pub struct OpContext {
     /// context - `0` outside any call, `1` for a top-level op, `2+` for an
     /// op called from inside another op's own body. Not `pub`: only
     /// [`Runtime::run`] may raise or lower it, so nothing outside this
-    /// module can desync it from `nested`.
+    /// module can desync it from `observations`.
     pub(crate) depth: std::sync::atomic::AtomicUsize,
-    /// [`NestedOp`]s a top-level [`Runtime::run`] call has collected so far
-    /// from ops its own body called through this same context. Not `pub`
-    /// for the same reason as `depth`.
-    pub(crate) nested: std::sync::Mutex<Vec<NestedOp>>,
+    /// Telemetry collected by this run and its nested calls.
+    observations: std::sync::Mutex<OpObservations>,
     /// The top-level run's `ports.clock.monotonic()` start, set when
     /// `depth` goes `0` -> `1` and cleared when it returns to `0`. A nested
     /// run reads this to compute its own [`NestedOp::offset_ms`].
     pub(crate) root_start: std::sync::Mutex<Option<Duration>>,
+}
+
+#[derive(Default)]
+struct OpObservations {
+    nested: Vec<NestedOp>,
+    scanned_skill_counts: Vec<usize>,
 }
 
 impl OpContext {
@@ -1433,7 +1436,7 @@ impl OpContext {
             cancel,
             timing: std::sync::Mutex::new(None),
             depth: std::sync::atomic::AtomicUsize::new(0),
-            nested: std::sync::Mutex::new(Vec::new()),
+            observations: std::sync::Mutex::new(OpObservations::default()),
             root_start: std::sync::Mutex::new(None),
         }
     }
@@ -1441,20 +1444,18 @@ impl OpContext {
     /// Appends one [`NestedOp`] a call nested through this context just
     /// finished.
     fn push_nested(&self, op: NestedOp) {
-        self.nested
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(op);
+        self.observations().nested.push(op);
     }
 
-    /// Takes every [`NestedOp`] collected so far, leaving the list empty.
-    fn take_nested(&self) -> Vec<NestedOp> {
-        std::mem::take(
-            &mut self
-                .nested
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )
+    /// Files the number of distinct skills returned by one inventory scan.
+    pub(crate) fn record_scanned_skills(&self, count: usize) {
+        self.observations().scanned_skill_counts.push(count);
+    }
+
+    fn observations(&self) -> std::sync::MutexGuard<'_, OpObservations> {
+        self.observations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Fails with [`ErrorCode::Cancelled`] once the token is set.
@@ -1523,7 +1524,7 @@ impl Runtime {
     /// `run` calls are nested right now: the outermost one (`depth` back to
     /// `0` once `body` returns) is the one [`Telemetry::record`] sees, with
     /// every op nested inside it attached as a [`NestedOp`]; an inner one
-    /// only appends to `ctx.nested` and records nothing of its own, so
+    /// only appends to `ctx.observations` and records nothing of its own, so
     /// `doctor` sends one transaction, not three.
     pub fn run<T>(
         &self,
@@ -1538,9 +1539,9 @@ impl Runtime {
             *ctx.root_start
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(start);
-            // Nested ops an earlier top-level body collected and then lost
+            // Observations an earlier top-level body collected and then lost
             // by panicking must not be attributed to this run.
-            ctx.take_nested();
+            *ctx.observations() = OpObservations::default();
         }
         // A timing filed through `ctx` before this call started - either a
         // stale one left by an unrelated earlier op (`depth_before == 0`) or
@@ -1578,12 +1579,17 @@ impl Runtime {
         };
 
         if depth_after == 0 {
+            let OpObservations {
+                nested,
+                scanned_skill_counts,
+            } = std::mem::take(&mut *ctx.observations());
             self.ports.telemetry.record(OpRecord {
                 operation,
                 correlation_id: ctx.correlation_id.clone(),
                 outcome,
                 timing: timing.clone(),
-                nested: ctx.take_nested(),
+                nested,
+                scanned_skill_counts,
             });
             // Leaves the final timing in `ctx` so a caller building a
             // `ResultEnvelope` from this same `ctx` after `run` returns
