@@ -18,6 +18,7 @@
     "@paper-design/shaders-react": "0.0.82",
     "@sentry/browser": "11.11.0",
     "@skill-studio/lib": "workspace:*",
+    "@skill-studio/ui": "workspace:*",
     "@stylexjs/stylex": "0.19.1",
     "lucide-react": "^1.70.0",
     "react": "19.3.1",

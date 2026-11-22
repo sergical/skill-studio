@@ -89,41 +89,175 @@
     vertical-align: top;
   }
 
-  .docs-nav-toggle.docs-copy {
-    align-self: start;
+  .docs-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .docs-nav-controls {
+    display: grid;
+    gap: 8px;
+  }
+
+  .docs-search {
+    position: relative;
+  }
+
+  .docs-search :is(svg, kbd) {
+    position: absolute;
+    inset-block-start: 50%;
+    transform: translateY(-50%);
+    color: var(--docs-muted);
+    pointer-events: none;
+  }
+
+  .docs-search-icon {
+    inset-inline-start: 12px;
+  }
+
+  .docs-search kbd {
+    inset-inline-end: 10px;
+    border: 1px solid var(--docs-border);
+    border-radius: 4px;
+    padding-inline: 5px;
+    font-size: 12px;
+  }
+
+  .docs-search input::placeholder {
+    color: var(--docs-muted);
+    opacity: 1;
+  }
+
+  .docs-search input::-webkit-search-cancel-button {
+    appearance: none;
+  }
+
+  .docs-search-empty {
+    color: var(--docs-muted);
+    font-size: 14px;
+    margin: 0 10px;
+  }
+
+  .docs-links {
+    overflow-y: auto;
+    min-height: 0;
+    padding: 3px;
+    scroll-padding: 3px;
+  }
+
+  .docs-nav-group + .docs-nav-group {
+    margin-top: 16px;
+  }
+
+  .docs-nav-group a {
+    margin-block: 2px;
+  }
+
+  .docs-nav-toggle.docs-action {
     display: none;
-    margin: 0;
-    min-height: 44px;
+    justify-self: start;
   }
 
   @media (max-width: 860px) {
-    .docs-nav-toggle.docs-copy:not([hidden]) {
+    .docs-nav-toggle.docs-action:not([hidden]) {
       display: inline-flex;
     }
 
-    .docs-nav-toggle[aria-expanded="false"]:not([hidden]) + .docs-links {
+    [data-docs-search-ready]:not([data-docs-browsing]) .docs-links {
       display: none;
     }
 
     .docs-links {
-      max-height: 40vh;
-      overflow-y: auto;
+      max-height: 42dvh;
+    }
+  }
+
+  @media (pointer: coarse) {
+    .docs-search kbd {
+      display: none;
     }
   }
 
   .docs-page-actions {
-    align-items: center;
     display: flex;
+    align-items: center;
     flex-wrap: wrap;
-    gap: 12px;
+    gap: 4px 8px;
     margin-bottom: 16px;
   }
 
-  .docs-page-actions .docs-copy {
+  .docs-action {
+    align-items: center;
     justify-content: center;
-    margin: 0;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    color: var(--docs-muted);
+    display: inline-flex;
+    font-size: 13px;
+    gap: 6px;
     min-height: 44px;
-    min-width: 156px;
+    padding-inline: 8px;
+    text-decoration: none;
+    touch-action: manipulation;
+    white-space: nowrap;
+  }
+
+  .docs-page-copy {
+    width: 157px;
+  }
+
+  .docs-agent-trigger {
+    width: 120px;
+    justify-content: space-between;
+  }
+
+  [data-docs-agent-menu] {
+    min-width: 120px;
+  }
+
+  @media (max-width: 860px) {
+    .docs-page-actions {
+      column-gap: 0;
+    }
+
+    .docs-page-actions .docs-action {
+      font-size: 12px;
+      padding-inline: 4px;
+    }
+
+    .docs-page-copy {
+      width: 148px;
+    }
+
+    [data-docs-agent-menu] {
+      min-width: 91px;
+    }
+
+    .docs-agent-trigger {
+      width: 91px;
+    }
+  }
+
+  .docs-action:focus-visible,
+  .docs-nav-group a:focus-visible,
+  .docs-code pre:focus-visible {
+    outline: 2px solid var(--docs-text);
+    outline-offset: 1px;
+  }
+
+  .docs-code pre:focus-visible {
+    outline-offset: -3px;
+  }
+
+  .docs-action[data-state="copied"] {
+    color: var(--docs-text);
   }
 
   [data-copy-page][hidden],
@@ -131,60 +265,93 @@
     display: none;
   }
 
-  /* The Copy button gets its own grid column, so no code line can sit under it. */
+  @media (hover: hover) and (pointer: fine) {
+    .docs-action:hover,
+    .docs-nav-group a:hover {
+      background: var(--docs-accent-soft);
+      color: var(--docs-text);
+    }
+  }
+
+  [data-base-ui-floating-ui-portal] > :has(> .docs-agent-menu) {
+    z-index: 10;
+  }
+
+  .docs-agent-menu {
+    background: var(--docs-background);
+    color: var(--docs-text);
+    border-radius: 9px;
+    box-shadow:
+      0 0 0 1px var(--docs-border),
+      0 4px 16px rgb(0 0 0 / 0.12);
+    width: min(250px, calc(100vw - 24px));
+    max-height: var(--available-height);
+    overflow-y: auto;
+    padding: 4px;
+  }
+
+  html[data-site-theme="dark"] .docs-agent-menu {
+    box-shadow: 0 0 0 1px var(--docs-border);
+  }
+
+  .docs-agent-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 44px;
+    gap: 12px;
+    padding-inline: 10px;
+    border-radius: 5px;
+    color: var(--docs-text);
+    font-size: 14px;
+    text-decoration: none;
+    user-select: none;
+  }
+
+  .docs-agent-item[data-highlighted] {
+    background: var(--docs-accent-soft);
+    outline: none;
+  }
+
+  .docs-agent-item-detail {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--docs-muted);
+    font-size: 12px;
+  }
+
+  .docs-agent-separator {
+    border: 0;
+    height: 1px;
+    background: var(--docs-border);
+    margin: 4px;
+  }
+
   .docs-code {
-    align-items: start;
     background: var(--docs-surface);
     border: 1px solid var(--docs-border);
-    border-radius: 12px;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    border-radius: 10px;
     margin: 0 0 20px;
   }
 
-  /* Scroll shadows: the "local" layers move with the code and hide the "scroll" shadow
-     layers at each end, so a shadow shows only on a side that has more code. */
+  .docs-code-toolbar {
+    display: flex;
+    justify-content: end;
+    border-bottom: 1px solid var(--docs-border);
+    padding-inline: 6px;
+  }
+
+  .docs-code-copy {
+    width: 76px;
+  }
+
   .docs-code pre {
-    --docs-scroll-shadow: color-mix(in oklab, var(--docs-text) 16%, transparent);
-    background:
-      linear-gradient(to right, var(--docs-surface) 50%, transparent) left / 24px 100% no-repeat
-        local,
-      linear-gradient(to left, var(--docs-surface) 50%, transparent) right / 24px 100% no-repeat
-        local,
-      linear-gradient(to right, var(--docs-scroll-shadow), transparent) left / 12px 100% no-repeat
-        scroll,
-      linear-gradient(to left, var(--docs-scroll-shadow), transparent) right / 12px 100% no-repeat
-        scroll;
-    border-radius: 11px 0 0 11px;
+    border-radius: 0 0 9px 9px;
     line-height: 1.6;
     margin: 0;
     overflow-x: auto;
-    padding: 16px;
-  }
-
-  .docs-copy {
-    align-items: center;
-    background: var(--docs-surface);
-    border: 1px solid var(--docs-border);
-    border-radius: 8px;
-    color: var(--docs-muted);
-    display: inline-flex;
-    font-size: 12px;
-    height: 32px;
-    margin: 11px 11px 0 0;
-    padding: 0 10px;
-    transition:
-      color 150ms ease-out,
-      border-color 150ms ease-out;
-  }
-
-  .docs-copy:hover {
-    border-color: var(--docs-muted);
-    color: var(--docs-text);
-  }
-
-  .docs-copy[data-state="copied"] {
-    border-color: var(--docs-accent);
-    color: var(--docs-accent);
+    padding: 12px 16px 16px;
+    scrollbar-width: thin;
   }
 }

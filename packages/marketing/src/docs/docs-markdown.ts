@@ -23,11 +23,10 @@ function headingId(text: string): string {
 const docsMarked = new Marked({
   gfm: true,
   renderer: {
-    // The button is plain markup because the docs ship no React on the client;
-    // docs-main.ts handles every copy button with one delegated click listener.
+    // The toolbar sits above the scrollport so it never covers code.
     code({ text, lang }) {
       const language = lang ? ` class="language-${escapeHtml(lang)}"` : "";
-      return `<div class="docs-code"><pre><code${language}>${escapeHtml(text)}</code></pre><button type="button" class="docs-copy" data-copy=""><span data-copy-label="" aria-live="polite">Copy</span></button></div>\n`;
+      return `<figure class="docs-code"><div class="docs-code-toolbar"><button type="button" class="docs-action docs-code-copy" data-copy=""><span data-copy-label="" aria-live="polite">Copy</span></button></div><pre tabindex="0" aria-label="Scrollable code example"><code${language}>${escapeHtml(text)}</code></pre></figure>\n`;
     },
     heading({ tokens, depth, text }) {
       const content = this.parser.parseInline(tokens);
