@@ -7,7 +7,7 @@
 // file (or chezmoi source) to paste it into.
 // ============================================================================
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Copy } from "lucide-react";
 import { Button, Input } from "@skill-studio/ui";
 import { deploymentLabelFromAgentId } from "@skill-studio/lib";
@@ -55,6 +55,17 @@ const differs = (now: ListingEntry, tried: ListingEntry | undefined) =>
 
 function scopeKey(row: HarnessListing): string {
   return row.scope.scope === "global" ? GLOBAL : row.scope.project;
+}
+
+function listingRequest(scope: string): ListingRequest {
+  return {
+    project_path: scope === GLOBAL ? null : scope,
+    claude_budget_fraction: null,
+    claude_context_window_tokens: null,
+    codex_max_context_tokens: null,
+    claude_transcript: null,
+    codex_transcript: null,
+  };
 }
 
 /** The budget field's value as the request override for this harness. */
@@ -222,27 +233,14 @@ export function ListingView({ snapshot }: ListingViewProps) {
   const [onlyChanges, setOnlyChanges] = useState(false);
   const [showHidden, setShowHidden] = useState(false);
   const refreshListing = useAppStore((s) => s.refreshListing);
-  const base = useMemo<ListingRequest>(
-    () => ({
-      project_path: scope === GLOBAL ? null : scope,
-      claude_budget_fraction: null,
-      claude_context_window_tokens: null,
-      codex_max_context_tokens: null,
-      claude_transcript: null,
-      codex_transcript: null,
-    }),
-    [scope],
-  );
-  const comparison = useMemo(() => tryRequest && { ...base, ...tryRequest }, [base, tryRequest]);
+  const base = listingRequest(scope);
+  const comparison = tryRequest && { ...base, ...tryRequest };
   const current = useAppStore((s) => s.listingReports[listingReportKey(base)]);
   const compared = useAppStore((s) =>
     comparison ? s.listingReports[listingReportKey(comparison)] : undefined,
   );
 
-  useEffect(() => refreshListing(base), [base, refreshListing]);
-  useEffect(() => {
-    if (comparison) refreshListing(comparison);
-  }, [comparison, refreshListing]);
+  useEffect(() => refreshListing(listingRequest(scope)), [scope, refreshListing]);
 
   const pick = (report: ListingReport | undefined) =>
     report?.listings.find((r) => r.harness === harness && scopeKey(r) === scope) ?? null;
@@ -296,7 +294,19 @@ export function ListingView({ snapshot }: ListingViewProps) {
             items={harnesses}
             ariaLabel="Agent"
           />
-          <SelectControl value={scope} onValueChange={setScope} items={scopes} ariaLabel="Scope" />
+          <SelectControl
+            value={scope}
+            onValueChange={(value) => {
+              setScope(value);
+              if (tryRequest) {
+                const request = listingRequest(value);
+                refreshListing(request);
+                refreshListing({ ...request, ...tryRequest });
+              }
+            }}
+            items={scopes}
+            ariaLabel="Scope"
+          />
         </>
       }
     >
@@ -317,7 +327,9 @@ export function ListingView({ snapshot }: ListingViewProps) {
               className="flex flex-wrap items-center gap-2"
               onSubmit={(event) => {
                 event.preventDefault();
-                setTryRequest(override(harness, budgetText));
+                const request = override(harness, budgetText);
+                setTryRequest(request);
+                if (request) refreshListing({ ...base, ...request });
               }}
             >
               <label htmlFor="listing-budget" className="text-small text-text-secondary">

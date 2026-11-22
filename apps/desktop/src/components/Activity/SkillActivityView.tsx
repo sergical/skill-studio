@@ -59,7 +59,7 @@ export function SkillActivityView({
 
   if (!snapshot) {
     return (
-      <PageShell title="Activity" refreshing={usageRefreshing}>
+      <PageShell title="Activity">
         <FirstScanState isLoading={isLoading} error={error} onRetry={onRetry} />
       </PageShell>
     );

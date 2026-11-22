@@ -836,7 +836,7 @@ fn scan_inventory(
     // through an explicit `~/.claude/skills/<name>` link, never the shared
     // root directly (`reads_universal_root: Support::No` in `harness.rs`).
     let step_start = clock.monotonic();
-    let _home_lease = mode.read_lease(rt, &rt.scope.home)?;
+    let home_lease = mode.read_lease(rt, &rt.scope.home)?;
     let claude_skills_dir = rt.scope.global_root_path(Path::new(".claude/skills"));
     for skill in skills.values_mut() {
         for deployment in &mut skill.deployments {
@@ -880,7 +880,7 @@ fn scan_inventory(
         step_start,
     ));
 
-    drop(_home_lease);
+    drop(home_lease);
     let mut lock_only = Vec::new();
     for (scope, ledger) in &scope_ledgers {
         let names: std::collections::BTreeSet<_> = ledger
