@@ -2104,15 +2104,18 @@ mod tests {
             options,
         );
         let items: Vec<_> = envelopes.iter().flat_map(Envelope::items).collect();
-        let [EnvelopeItem::ItemContainer(ItemContainer::Metrics(metrics))] = items.as_slice()
-        else {
-            panic!("only a failure metric is sent");
-        };
-        let [failure] = metrics.as_slice() else {
-            panic!("one failure metric is sent");
-        };
+        assert_eq!(items.len(), 1, "only a failure metric is sent");
+        let metrics = items
+            .iter()
+            .find_map(|item| match item {
+                EnvelopeItem::ItemContainer(ItemContainer::Metrics(metrics)) => Some(metrics),
+                _ => None,
+            })
+            .expect("failure metrics envelope");
+        assert_eq!(metrics.len(), 1, "one failure metric is sent");
+        let failure = &metrics[0];
         assert_eq!(failure.name, "skill_studio.command.failures");
-        assert_eq!(failure.value, 1.0);
+        assert!((failure.value - 1.0).abs() < f64::EPSILON);
         assert_eq!(
             failure.attributes["command"],
             "command.snapshot_refresh.full".into()
@@ -2182,7 +2185,7 @@ mod tests {
             .filter(|metric| metric.name == "skill_studio.scan.skills")
             .collect();
         assert_eq!(counts.len(), 1);
-        assert_eq!(counts[0].value, 1.0);
+        assert!((counts[0].value - 1.0).abs() < f64::EPSILON);
         assert_eq!(counts[0].trace_id, trace.trace_id);
         assert_eq!(counts[0].span_id, Some(trace.span_id));
     }
