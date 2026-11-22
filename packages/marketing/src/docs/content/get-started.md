@@ -1,6 +1,6 @@
 # Start here
 
-You'll have a first report of the skills Skill Studio found and any problems it spotted.
+You'll have a first report of the skills and problems Skill Studio found in the supported agents' home and project folders.
 
 Choose the Mac app for a visual list, the CLI for terminal output, or MCP to ask your agent. See [Requirements and install](/docs/requirements/) for your choice.
 
