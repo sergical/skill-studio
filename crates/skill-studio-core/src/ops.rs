@@ -973,6 +973,7 @@ fn scan_inventory(
         .collect();
 
     ctx.record_timing(crate::timing::op_timing(clock, "scan", start, op_steps));
+    rt.ports.telemetry.record_scanned_skills(skills.len());
 
     let mut timings = Vec::new();
     if req.timings {

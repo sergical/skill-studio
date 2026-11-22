@@ -1576,7 +1576,6 @@ fn in_background_span_with_span<T, E>(
 where
     E: std::fmt::Display + 'static,
 {
-    span.enter(|| skill_studio_host::telemetry::record_refresh_start(name));
     let start = Instant::now();
     let result = span.enter(step);
     skill_studio_host::telemetry::record_command(

@@ -40,11 +40,6 @@ pub fn record_desktop_update_check(manual: bool, outcome: &'static str) {
     );
 }
 
-/// Reports the start of a named snapshot refresh step.
-pub fn record_refresh_start(step: &'static str) {
-    sentry::logger_info!(surface = "desktop", step = step, "Snapshot refresh started");
-}
-
 pub(super) fn record_refresh_finish(step: &'static str, elapsed_ms: u64, ok: bool) {
     let outcome = if ok { "ok" } else { "error" };
     sentry::logger_info!(

@@ -1290,6 +1290,9 @@ pub struct OpRecord {
 pub trait Telemetry: Send + Sync {
     /// Records one op call.
     fn record(&self, record: OpRecord);
+
+    /// Records the number of distinct skills returned by one inventory scan.
+    fn record_scanned_skills(&self, _count: usize) {}
 }
 
 /// A [`Telemetry`] that does nothing - the default until a host binds a real

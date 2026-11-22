@@ -4192,6 +4192,7 @@ dependencies = [
  "sentry-backtrace",
  "sentry-contexts",
  "sentry-core",
+ "sentry-log",
  "sentry-tracing",
  "tokio",
  "ureq",
@@ -4233,6 +4234,17 @@ dependencies = [
  "serde",
  "serde_json",
  "url",
+]
+
+[[package]]
+name = "sentry-log"
+version = "0.49.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f24141aaeb20c731719b33077f1063a79e07eef63a4954530559c067ba046aad"
+dependencies = [
+ "bitflags 2.13.2",
+ "log",
+ "sentry-core",
 ]
 
 [[package]]
@@ -4643,6 +4655,7 @@ version = "0.4.1"
 dependencies = [
  "cap-std",
  "chrono",
+ "libc",
  "memchr",
  "percent-encoding",
  "reqwest",

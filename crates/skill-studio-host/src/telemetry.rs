@@ -16,6 +16,7 @@ use skill_studio_core::ops::Operation;
 use skill_studio_core::ports::{NestedOp, NoopTelemetry, OpOutcome, OpRecord, Telemetry};
 use skill_studio_core::timing::StepTiming;
 
+mod application_metrics;
 mod command_failure;
 mod command_span;
 mod structured_logs;
@@ -26,7 +27,6 @@ pub use command_span::{
 };
 pub use structured_logs::{
     record_desktop_data_folder, record_desktop_startup, record_desktop_update_check,
-    record_refresh_start,
 };
 pub use webview::{WebviewBundle, WebviewItem, WebviewTelemetry, WEBVIEW_ERROR_CAP};
 
@@ -188,6 +188,17 @@ fn client_options(
             );
         }
         Some(log)
+    }));
+    let metric_consent = consent.clone();
+    options.before_send_metric = Some(Arc::new(move |mut metric| {
+        if !metric_consent.enabled() {
+            return None;
+        }
+        if let Some(span) = CommandSpan::current() {
+            metric.trace_id = span.trace_id;
+            metric.span_id = Some(span.span_id);
+        }
+        Some(metric)
     }));
     options.transport = Some(Arc::new(ConsentTransportFactory { consent }));
     options.sample_rate(1.0)
@@ -547,6 +558,12 @@ fn capture_command_failure(
 }
 
 impl Telemetry for SentryTelemetry {
+    fn record_scanned_skills(&self, count: usize) {
+        if CommandSpan::current().is_none_or(|span| span.sampled) {
+            application_metrics::record_scan_count(self.surface, count);
+        }
+    }
+
     fn record(&self, record: OpRecord) {
         let ok = matches!(record.outcome, OpOutcome::Ok);
         let elapsed = Duration::from_millis(record.timing.elapsed_ms);
@@ -615,7 +632,8 @@ impl Telemetry for SentryTelemetry {
         clamp_spans_to_transaction(&mut spans, timestamp);
 
         let failure = CommandFailure::from_op_outcome(&record.outcome);
-        let tags = outcome_tags(self.surface, ok, failure.map(CommandFailure::as_str));
+        let error_code = failure.map(CommandFailure::as_str);
+        let tags = outcome_tags(self.surface, ok, error_code);
 
         let mut contexts = Map::new();
         contexts.insert(
@@ -647,8 +665,30 @@ impl Telemetry for SentryTelemetry {
 
         if let Some(client) = Hub::current().client() {
             // A desktop command owns its issue. Headless operations are their own roots.
-            if let (None, Some(failure)) = (command, failure.filter(|code| code.opens_issue())) {
-                capture_command_failure(&client, &op, self.surface, failure, &transaction.contexts);
+            if command.is_none() {
+                CommandSpan {
+                    trace_id,
+                    span_id: root_span_id,
+                    parent_span_id: None,
+                    sampled: true,
+                }
+                .enter(|| {
+                    application_metrics::record_command_metrics(
+                        self.surface,
+                        &op,
+                        record.timing.elapsed_ms,
+                        failure,
+                    );
+                });
+                if let Some(failure) = failure.filter(|failure| failure.opens_issue()) {
+                    capture_command_failure(
+                        &client,
+                        &op,
+                        self.surface,
+                        failure,
+                        &transaction.contexts,
+                    );
+                }
             }
             let mut envelope = Envelope::new();
             envelope.add_item(transaction);
@@ -680,21 +720,29 @@ pub fn record_command(
     elapsed_ms: u64,
     failure: Option<CommandFailure>,
 ) {
+    let Some(client) = Hub::current().client() else {
+        return;
+    };
     let issue = failure.filter(|failure| failure.opens_issue());
     let ok = failure.is_none();
+    let name = format!("command.{command}");
     if command.starts_with("snapshot_refresh.") {
-        span.enter(|| structured_logs::record_refresh_finish(command, elapsed_ms, ok));
+        if span.sampled {
+            span.enter(|| {
+                structured_logs::record_refresh_finish(command, elapsed_ms, ok);
+                application_metrics::record_snapshot_duration(command, elapsed_ms);
+            });
+        }
+    } else {
+        span.enter(|| {
+            application_metrics::record_command_metrics(surface, &name, elapsed_ms, failure);
+        });
     }
     if !span.sampled {
         return;
     }
-    let Some(client) = Hub::current().client() else {
-        return;
-    };
-    let elapsed = Duration::from_millis(elapsed_ms);
     let timestamp = SystemTime::now();
-    let start_timestamp = timestamp - elapsed;
-    let name = format!("command.{command}");
+    let start_timestamp = timestamp - Duration::from_millis(elapsed_ms);
     let tags = outcome_tags(surface, ok, failure.map(CommandFailure::as_str));
 
     let mut contexts = Map::new();
@@ -837,6 +885,17 @@ mod tests {
         }
     }
 
+    fn capture_trace_envelopes(run: impl FnOnce()) -> Vec<Envelope> {
+        sentry::test::with_captured_envelopes(run)
+            .into_iter()
+            .filter(|envelope| {
+                envelope
+                    .items()
+                    .any(|item| matches!(item, sentry::protocol::EnvelopeItem::Transaction(_)))
+            })
+            .collect()
+    }
+
     fn telemetry() -> SentryTelemetry {
         SentryTelemetry {
             surface: Surface::Desktop,
@@ -851,7 +910,7 @@ mod tests {
     #[test]
     fn an_op_record_with_three_steps_becomes_one_transaction_with_three_child_spans() {
         let record = three_step_record("scan");
-        let envelopes = sentry::test::with_captured_envelopes(|| {
+        let envelopes = capture_trace_envelopes(|| {
             telemetry().record(record.clone());
         });
         assert_eq!(envelopes.len(), 1);
@@ -930,7 +989,7 @@ mod tests {
             },
             nested: Vec::new(),
         };
-        let envelopes = sentry::test::with_captured_envelopes(|| {
+        let envelopes = capture_trace_envelopes(|| {
             telemetry().record(record);
         });
         let transaction = transaction_from(&envelopes[0]);
@@ -988,7 +1047,7 @@ mod tests {
             // Starts right after `doctor`'s own three steps (60ms).
             offset_ms: 60,
         }];
-        let envelopes = sentry::test::with_captured_envelopes(|| {
+        let envelopes = capture_trace_envelopes(|| {
             telemetry().record(record);
         });
         let transaction = transaction_from(&envelopes[0]);
@@ -1054,7 +1113,7 @@ mod tests {
                 },
             ],
         };
-        let envelopes = sentry::test::with_captured_envelopes(|| {
+        let envelopes = capture_trace_envelopes(|| {
             telemetry().record(record);
         });
         let transaction = transaction_from(&envelopes[0]);
@@ -1131,7 +1190,7 @@ mod tests {
             depth: 1,
             offset_ms: 0,
         }];
-        let envelopes = sentry::test::with_captured_envelopes(|| {
+        let envelopes = capture_trace_envelopes(|| {
             telemetry().record(record);
         });
         let transaction = transaction_from(&envelopes[0]);
@@ -1285,7 +1344,7 @@ mod tests {
                 offset_ms: 0,
             },
         ];
-        let envelopes = sentry::test::with_captured_envelopes(|| {
+        let envelopes = capture_trace_envelopes(|| {
             telemetry().record(record);
         });
         let transaction = transaction_from(&envelopes[0]);
@@ -1361,7 +1420,7 @@ mod tests {
                 offset_ms: 200,
             },
         ];
-        let envelopes = sentry::test::with_captured_envelopes(|| {
+        let envelopes = capture_trace_envelopes(|| {
             telemetry().record(record);
         });
         let transaction = transaction_from(&envelopes[0]);
@@ -1430,7 +1489,7 @@ mod tests {
             depth: 1,
             offset_ms: 0,
         }];
-        let envelopes = sentry::test::with_captured_envelopes(|| {
+        let envelopes = capture_trace_envelopes(|| {
             telemetry().record(record);
         });
         let mut bytes = Vec::new();
@@ -2013,12 +2072,18 @@ mod tests {
 
     #[test]
     fn a_core_file_limit_failure_sends_one_issue_linked_to_the_operation_without_the_path() {
-        use sentry::protocol::EnvelopeItem;
+        use sentry::protocol::{EnvelopeItem, ItemContainer};
 
         const PRIVATE_PATH: &str = "/Users/alice/.agents/skills/private-skill/SKILL.md";
         let home = tempfile::tempdir().expect("fixture home");
-        let mut options = ClientOptions::default();
-        options.release = Some("skill-studio@9.9.9".into());
+        let options = client_options(
+            "https://examplePublicKey@o0.ingest.sentry.io/0"
+                .parse()
+                .expect("fixture DSN"),
+            Surface::Cli,
+            "9.9.9",
+            Consent::new(true),
+        );
         let envelopes = sentry::test::with_captured_envelopes_options(
             || {
                 let mut ports = crate::default_ports(
@@ -2048,6 +2113,8 @@ mod tests {
                     })
                     .expect_err("listing failed");
                 assert_eq!(error.code, ErrorCode::Io);
+                let client = Hub::current().client().expect("test client");
+                assert!(client.flush(Some(SHUTDOWN_FLUSH)));
             },
             options,
         );
@@ -2079,6 +2146,16 @@ mod tests {
             .expect("operation transaction");
         assert_eq!(event.contexts["trace"], transaction.contexts["trace"]);
         assert_eq!(transaction.tags["error_code"], "too_many_open_files");
+        assert!(envelopes.iter().flat_map(Envelope::items).any(|item| {
+            matches!(item, EnvelopeItem::ItemContainer(ItemContainer::Logs(logs))
+                if logs.iter().any(|log| log.body == "Command failed"
+                    && log.attributes["error_code"] == "too_many_open_files".into()))
+        }));
+        assert!(envelopes.iter().flat_map(Envelope::items).any(|item| {
+            matches!(item, EnvelopeItem::ItemContainer(ItemContainer::Metrics(metrics))
+                if metrics.iter().any(|metric| metric.name == "skill_studio.command.failures"
+                    && metric.attributes["error_code"] == "too_many_open_files".into()))
+        }));
         let listing_error = format!(
             "io: {} ({PRIVATE_PATH})",
             std::io::Error::from_raw_os_error(rustix::io::Errno::MFILE.raw_os_error()),
@@ -2091,7 +2168,9 @@ mod tests {
         for envelope in envelopes {
             let mut bytes = Vec::new();
             envelope.to_writer(&mut bytes).expect("serialize envelope");
-            assert!(!String::from_utf8_lossy(&bytes).contains(PRIVATE_PATH));
+            let serialized = String::from_utf8_lossy(&bytes);
+            assert!(!serialized.contains("/Users/alice"));
+            assert!(!serialized.contains("private-skill"));
         }
     }
 
@@ -2108,7 +2187,7 @@ mod tests {
                 )),
             );
         });
-        assert_eq!(envelopes.len(), 1);
+        assert!(envelopes.iter().all(|envelope| envelope.event().is_none()));
         assert_eq!(transaction_from(&envelopes[0]).tags["outcome"], "error");
     }
 
@@ -2194,7 +2273,7 @@ mod tests {
             sampled: false,
             ..CommandSpan::start(Trigger::Background, None)
         };
-        let envelopes = sentry::test::with_captured_envelopes(|| {
+        let envelopes = capture_trace_envelopes(|| {
             span.enter(|| telemetry().record(three_step_record("scan")));
             record_command(Surface::Desktop, "snapshot_refresh.full", span, 80, None);
         });
@@ -2206,7 +2285,7 @@ mod tests {
     /// Catches: a span check that drops every op outside the desktop.
     #[test]
     fn an_op_outside_any_command_span_starts_its_own_trace() {
-        let envelopes = sentry::test::with_captured_envelopes(|| {
+        let envelopes = capture_trace_envelopes(|| {
             telemetry().record(three_step_record("scan"));
         });
         assert_eq!(envelopes.len(), 1);
