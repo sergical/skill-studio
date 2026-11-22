@@ -24,9 +24,33 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @skill-studio/server run test
+      - name: Prepare the Worker bundle and upload its Sentry source map
+        working-directory: apps/server
+        run: |
+          set -euo pipefail
+          if [[ -z "$SENTRY_AUTH_TOKEN" ]]; then
+            echo "::warning::SENTRY_AUTH_TOKEN is missing. Skipping Worker source map upload."
+            exit 0
+          fi
+          sentry_auth_token="$SENTRY_AUTH_TOKEN"
+          unset SENTRY_AUTH_TOKEN
+          worker_bundle="$RUNNER_TEMP/skill-studio-worker"
+          pnpm exec wrangler deploy --dry-run --outdir "$worker_bundle"
+          pnpm exec sentry-cli sourcemaps inject "$worker_bundle"
+          SENTRY_AUTH_TOKEN="$sentry_auth_token" pnpm exec sentry-cli sourcemaps upload --org sergtech \
+            --project skill-studio-api "$worker_bundle"
+          echo "SENTRY_WORKER_ENTRY=$worker_bundle/worker.js" >> "$GITHUB_ENV"
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
       - name: Deploy to Cloudflare Workers
         working-directory: apps/server
-        run: pnpm exec wrangler deploy
+        run: |
+          set -euo pipefail
+          if [[ -n "${SENTRY_WORKER_ENTRY:-}" ]]; then
+            pnpm exec wrangler deploy --config wrangler.jsonc --no-bundle "$SENTRY_WORKER_ENTRY"
+          else
+            pnpm exec wrangler deploy
+          fi
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

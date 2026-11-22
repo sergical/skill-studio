@@ -139,6 +139,28 @@ jobs:
           set -euo pipefail
           jq --arg v "$RELEASE_VERSION" '.version = $v' apps/desktop/src-tauri/tauri.release.conf.json > /tmp/tauri.release.conf.json
           mv /tmp/tauri.release.conf.json apps/desktop/src-tauri/tauri.release.conf.json
+      - name: Prepare the WebView bundle and upload its Sentry source maps
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SKILL_STUDIO_WEBVIEW_SOURCE_MAPS: "1"
+        run: |
+          set -euo pipefail
+          if [[ -z "$SENTRY_AUTH_TOKEN" ]]; then
+            echo "::warning::SENTRY_AUTH_TOKEN is missing. Skipping WebView source map upload."
+            exit 0
+          fi
+          sentry_auth_token="$SENTRY_AUTH_TOKEN"
+          unset SENTRY_AUTH_TOKEN
+          pnpm --filter skill-studio run build
+          pnpm exec sentry-cli sourcemaps inject apps/desktop/dist/assets
+          node scripts/release/stamp-webview-debug-ids.mjs apps/desktop/dist
+          SENTRY_AUTH_TOKEN="$sentry_auth_token" pnpm exec sentry-cli sourcemaps upload --org sergtech \
+            --project skill-studio-desktop-react apps/desktop/dist/assets
+          find apps/desktop/dist -type f -name '*.map' -delete
+          # Package the exact JS that was just uploaded, including its debug IDs.
+          config=apps/desktop/src-tauri/tauri.release.conf.json
+          jq '.build.beforeBuildCommand = null' "$config" > "$config.tmp"
+          mv "$config.tmp" "$config"
       - name: Configure Apple code signing
         # Apple's own tooling (tauri-bundler's sign.rs) checks these
         # variables with `var_os`, so an empty string still counts as
@@ -319,6 +341,15 @@ jobs:
           mkdir -p "$cli_dir"
           cp "target/${{ matrix.target }}/release/skill-studio" "$cli_dir/skill-studio"
           echo "cli_bin=$cli_dir/skill-studio" >> "$GITHUB_ENV"
+
+      - name: Upload matching desktop and CLI debug files to Sentry
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          release_dir="target/$TARGET/release"
+          bash scripts/release/upload-sentry-dsyms.sh \
+            "$release_dir/skill-studio-desktop" "$release_dir/skill-studio"
 
       # Runs on the native leg only: both legs build the same source, and the
       # x86_64 binary would need Rosetta to run on this arm64 runner.

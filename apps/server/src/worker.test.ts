@@ -68,6 +68,7 @@ async function callWorker({
   const pending: Promise<unknown>[] = [];
   const env: Env = {
     SKILLS_SH_API_KEY: API_KEY,
+    SENTRY_ENVIRONMENT: "staging",
     RATE_LIMITER: { limit: async () => ({ success: true }) },
     SENTRY_DSN: "https://examplePublicKey@o0.ingest.sentry.io/0",
   };
@@ -104,7 +105,9 @@ describe("Worker tracing", () => {
   it("does not send request spans when tracing is off", async () => {
     const payload = await callWorker();
 
-    expect(payload).toBe("");
+    expect(payload).toContain("skill_studio.proxy.request.duration");
+    expect(payload).not.toMatch(/"type":"(?:span|transaction|log)"/);
+    for (const detail of [...CALLER_DETAILS, API_KEY]) expect(payload).not.toContain(detail);
   });
 
   it("keeps the caller's details and the skills.sh key out of the error a 5xx upstream reports", async () => {
@@ -112,6 +115,9 @@ describe("Worker tracing", () => {
     const payload = await callWorker();
 
     expect(payload).toContain("skills.sh answered 503");
+    expect(payload).toContain('"environment":"staging"');
+    expect(payload).toContain("Skills proxy request failed");
+    expect(payload).toMatch(/"type":"log"/);
     for (const detail of [...CALLER_DETAILS, API_KEY]) {
       expect(payload).not.toContain(detail);
     }
@@ -125,7 +131,7 @@ describe("Worker tracing", () => {
       },
     });
 
-    expect(payload).toBe("");
+    expect(payload).not.toMatch(/"type":"(?:span|transaction)"/);
     expect(payload).not.toContain(CALLER_TRACE_ID);
     expect(payload).not.toContain(SEARCH_TEXT);
   });
@@ -133,7 +139,7 @@ describe("Worker tracing", () => {
   it("does not send spans for a made-up method", async () => {
     const payload = await callWorker({ method: CALLER_METHOD, path: "/api/v1/skills" });
 
-    expect(payload).toBe("");
+    expect(payload).not.toMatch(/"type":"(?:span|transaction)"/);
     expect(payload).not.toContain(CALLER_METHOD);
   });
 

@@ -3,6 +3,8 @@ packages:
   - "packages/*"
 
 allowBuilds:
+  # The CLI resolves its lockfile-installed platform binary without postinstall.
+  "@sentry/cli": false
   # Its postinstall links the platform binary (@oven/bun-*).
   bun: true
   esbuild: true

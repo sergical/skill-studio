@@ -314,6 +314,46 @@ error and timing items only. [Rust logs](https://docs.sentry.io/platforms/rust/l
 [React logs](https://docs.sentry.io/platforms/javascript/guides/react/logs/),
 [React metrics](https://docs.sentry.io/platforms/javascript/guides/react/metrics/).
 
+### Proxy and website signals
+
+The Worker records a distribution named `skill_studio.proxy.request.duration`
+in milliseconds. Filter by the route category and HTTP status. The sample
+count is request volume and p95 is the proxy response time. A 5xx response
+adds one `Skills proxy request failed` log with the same dimensions and
+duration. The metrics and logs exclude URLs, queries, client headers and
+upstream error text. A staging Worker can set `SENTRY_ENVIRONMENT` to
+separate its events from the default production environment. The local Node proxy writes its structured terminal
+log. The marketing site uses its browser SDK for Web Vitals and errors,
+and already uploads its Vite source maps from Workers Builds.
+[Cloudflare logs](https://docs.sentry.io/platforms/javascript/guides/cloudflare/logs/) ·
+[Cloudflare metrics](https://docs.sentry.io/platforms/javascript/guides/cloudflare/metrics/)
+
+### Debug files, source maps, and profiling
+
+Desktop and CLI builds produce one dSYM per macOS architecture. The release
+job verifies each dSYM UUID against its executable and uploads it to
+`skill-studio-desktop-rust`. The CLI executable also runs the MCP server.
+Native error events retain the shipped executable's image ID and addresses
+for symbolization.
+
+The release job injects Sentry debug IDs into the desktop JavaScript before
+packaging, uploads its maps to `skill-studio-desktop-react`, and removes
+the maps from the app bundle. Rust builds WebView error annotations from
+the build manifest for frames that belong to those assets. The Worker
+workflow uploads source maps to `skill-studio-api` and deploys the exact
+injected JavaScript. Both workflows use the GitHub Actions secret
+`SENTRY_AUTH_TOKEN` with an organization token for `sergtech`. A missing
+secret emits a workflow warning and skips the upload. With the secret set,
+an upload failure stops the release or Worker deployment.
+
+Debug files provide names and source lines for native addresses. CPU
+sampling on macOS uses the [local performance tools](perf/README.md).
+Sentry's JavaScript browser profiler depends on Chromium's self-profiling
+API and does not collect from the macOS WebKit WebView.
+[Debug files](https://docs.sentry.io/cli/dif/) ·
+[JavaScript source maps](https://docs.sentry.io/platforms/javascript/sourcemaps/uploading/cli/) ·
+[Browser profiling](https://docs.sentry.io/platforms/javascript/guides/react/profiling/)
+
 ## Delivery phases and exit criteria
 
 | Phase | Deliverable                                               | Exit criteria                                                                                       |

@@ -214,6 +214,29 @@ fn redact_event(mut event: Event<'static>, surface: Surface) -> Event<'static> {
     event.request = None;
     event.breadcrumbs = Default::default();
     event.extra = Map::new();
+    // Keep the shipped executable's UUID and addresses for symbolication.
+    // The loader's full image names can include the user's home directory.
+    event.debug_meta.to_mut().images.retain_mut(|image| {
+        use sentry::protocol::DebugImage;
+        let name = match image {
+            DebugImage::Apple(image) => &mut image.name,
+            DebugImage::Symbolic(image) => {
+                image.debug_file = None;
+                &mut image.name
+            }
+            _ => return false,
+        };
+        let basename = std::path::Path::new(name)
+            .file_name()
+            .and_then(|name| name.to_str());
+        let Some(basename @ ("skill-studio-desktop" | "skill-studio" | "skill-studio-mcp")) =
+            basename
+        else {
+            return false;
+        };
+        *name = basename.to_owned();
+        true
+    });
     event
         .contexts
         .retain(|key, _| matches!(key.as_str(), "os" | "device" | "rust" | "runtime"));
@@ -1857,6 +1880,13 @@ mod tests {
             ..Default::default()
         };
         event.breadcrumbs.values.push(sentry::Breadcrumb::default());
+        event.debug_meta = serde_json::from_value(serde_json::json!({"images": [
+            {"type": "symbolic", "name": "/Users/alice/Skill Studio.app/Contents/MacOS/skill-studio-desktop",
+             "debug_file": "/Users/alice/skill-studio-desktop.dSYM",
+             "image_addr": "0x1000", "image_size": 4096, "id": "d0e05a8a-3463-30ac-a860-2ca48cc10209"},
+            {"type": "symbolic", "name": "/Users/alice/libPrivate.dylib",
+             "image_addr": "0x2000", "image_size": 4096, "id": "88a5ff48-a9dd-3a46-971c-b38d394141f2"}
+        ]})).expect("debug images");
         event.extra.insert(
             "note".to_string(),
             serde_json::Value::String("secret".to_string()),
@@ -1881,6 +1911,18 @@ mod tests {
         assert!(redacted.request.is_none());
         assert!(redacted.breadcrumbs.is_empty());
         assert!(redacted.extra.is_empty());
+        let images = &redacted.debug_meta.images;
+        assert_eq!(images.len(), 1);
+        let image = images
+            .iter()
+            .find_map(|image| match image {
+                sentry::protocol::DebugImage::Symbolic(image) => Some(image),
+                _ => None,
+            })
+            .expect("the app image is present");
+        assert_eq!(image.name, "skill-studio-desktop");
+        assert!(image.debug_file.is_none());
+        assert_eq!(image.id.to_string(), "d0e05a8a-3463-30ac-a860-2ca48cc10209");
         assert_eq!(
             redacted.tags.get("surface").map(String::as_str),
             Some("desktop")

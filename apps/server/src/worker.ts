@@ -28,6 +28,7 @@ export interface Env {
   SKILLS_SH_API_KEY: string;
   RATE_LIMITER: RateLimiter;
   SENTRY_DSN?: string;
+  SENTRY_ENVIRONMENT?: string;
 }
 
 /** The Workers fetch handler's third argument - its `waitUntil` schedules the
@@ -44,6 +45,9 @@ interface ExecutionContext {
 // tsconfig - declared narrowly here instead of pulling in the full
 // `@cloudflare/workers-types` package just for one global.
 declare const caches: { default: ResponseCache };
+
+const PROXY_REQUEST_DURATION = "skill_studio.proxy.request.duration";
+const PROXY_REQUEST_FAILED = "Skills proxy request failed";
 
 /** The SDK names a streamed request span by its raw method only, so every
  * route would group as one `GET` and any invented method would open a new
@@ -77,6 +81,13 @@ const handler = {
       waitUntil: (promise) => ctx.waitUntil(promise),
       reportServerError: (error, { kind }) =>
         Sentry.captureException(error, { tags: { error_kind: kind } }),
+      observeProxyRequest: ({ route, status, durationMs }) => {
+        Sentry.metrics.distribution(PROXY_REQUEST_DURATION, durationMs, {
+          unit: "millisecond",
+          attributes: { route, status },
+        });
+        if (status >= 500) Sentry.logger.error(PROXY_REQUEST_FAILED, { route, status, durationMs });
+      },
     });
     return app.fetch(request);
   },
@@ -94,7 +105,7 @@ const handler = {
 function sentryOptionsFor(env: Env): CloudflareOptions {
   return {
     dsn: env.SENTRY_DSN,
-    environment: "production",
+    environment: env.SENTRY_ENVIRONMENT || "production",
     tracesSampleRate: 0,
     dataCollection: {
       userInfo: false,
@@ -105,6 +116,8 @@ function sentryOptionsFor(env: Env): CloudflareOptions {
     },
     beforeSend: scrubSentryEvent,
     beforeSendSpan: scrubSentrySpan,
+    beforeSendLog: (log) => (log.message === PROXY_REQUEST_FAILED ? log : null),
+    beforeSendMetric: (metric) => (metric.name === PROXY_REQUEST_DURATION ? metric : null),
     tracePropagationTargets: [],
   };
 }

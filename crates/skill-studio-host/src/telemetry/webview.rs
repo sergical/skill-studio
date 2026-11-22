@@ -5,7 +5,7 @@
 //! message text, URL, path, breadcrumb, user, or free-text span description
 //! survives.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LazyLock};
 
@@ -39,6 +39,8 @@ const MAX_COMPONENT_STACK_LINES: usize = 50;
 pub struct WebviewBundle {
     sdk_version: Option<Box<str>>,
     code_names: HashSet<Box<str>>,
+    #[serde(default)]
+    debug_ids: HashMap<Box<str>, Box<str>>,
 }
 
 impl WebviewBundle {
@@ -635,6 +637,29 @@ fn scrub_event(payload: &Value, stamp: &Stamp<'_>) -> Option<Value> {
         .filter(|level| matches!(*level, "fatal" | "error" | "warning"))
         .unwrap_or("error");
     out.insert("level".into(), level.into());
+    let mut mapped_files = BTreeSet::new();
+    for frame in exceptions
+        .iter()
+        .filter_map(|exception| exception.pointer("/stacktrace/frames")?.as_array())
+        .flatten()
+    {
+        if let Some(file) = frame.get("abs_path").and_then(Value::as_str) {
+            mapped_files.insert(file);
+        }
+    }
+    let images: Vec<Value> = mapped_files
+        .into_iter()
+        .filter_map(|file| {
+            let id = stamp
+                .bundle
+                .debug_ids
+                .get(file.strip_prefix("app:///assets/")?)?;
+            Some(serde_json::json!({ "type": "sourcemap", "code_file": file, "debug_id": id }))
+        })
+        .collect();
+    if !images.is_empty() {
+        out.insert("debug_meta".into(), serde_json::json!({ "images": images }));
+    }
     out.insert(
         "exception".into(),
         serde_json::json!({ "values": exceptions }),
@@ -716,7 +741,7 @@ fn scrub_frame(frame: &Value, bundle: &WebviewBundle) -> Value {
         .get("abs_path")
         .or_else(|| frame.get("filename"))
         .and_then(Value::as_str)
-        .and_then(app_file);
+        .and_then(|raw| app_file(raw, bundle));
     if let Some(file) = file {
         out.insert("filename".into(), file.clone().into());
         out.insert("abs_path".into(), file.into());
@@ -727,14 +752,16 @@ fn scrub_frame(frame: &Value, bundle: &WebviewBundle) -> Value {
     Value::Object(out)
 }
 
-/// `tauri://localhost/assets/index-abc.js?v=1` becomes
-/// the fixed bundle name `app:///assets/index.js`. Other filenames are dropped.
-fn app_file(raw: &str) -> Option<String> {
+/// Uses build-owned filenames for debug ID matching and a fixed name for builds without source maps.
+fn app_file(raw: &str, bundle: &WebviewBundle) -> Option<String> {
     let path = raw.split(['?', '#']).next()?;
     let base = path
         .strip_prefix("tauri://localhost/assets/")
         .or_else(|| path.strip_prefix("http://tauri.localhost/assets/"))
         .or_else(|| path.strip_prefix("app:///assets/"))?;
+    if bundle.debug_ids.contains_key(base) {
+        return Some(format!("app:///assets/{base}"));
+    }
     let hash = base.strip_prefix("index-")?.strip_suffix(".js")?;
     if hash.is_empty()
         || hash.len() > 16
@@ -1010,7 +1037,7 @@ mod tests {
             "tauri://localhost/assets/private-skill.js",
             "file:///Users/alice/assets/index-alice.js",
         ] {
-            assert!(app_file(file).is_none());
+            assert!(app_file(file, stamp.bundle).is_none());
         }
     }
 
@@ -1234,6 +1261,37 @@ mod tests {
         );
         assert_eq!(event["tags"]["source"], "webview");
         assert_eq!(event["release"], "skill-studio@9.9.9");
+    }
+
+    #[test]
+    fn webview_error_uses_debug_ids_from_the_built_bundle() {
+        let mut input = sensitive_error_event();
+        input["debug_meta"] = serde_json::json!({"images": [{
+            "type": "sourcemap",
+            "code_file": "file:///Users/alice/private-skill.js",
+            "debug_id": "00000000-0000-0000-0000-000000000000"
+        }]});
+        let bundle = WebviewBundle::from_json(
+            br#"{"codeNames":["renderRow"],"debugIds":{"index-abc123.js":"12345678-abcd-1234-abcd-123456789abc"}}"#,
+        );
+        let stamp = Stamp {
+            release: None,
+            environment: None,
+            bundle: &bundle,
+        };
+        let sent = scrub_event(&input, &stamp).expect("error is retained");
+        assert_eq!(
+            sent.pointer("/exception/values/0/stacktrace/frames/0/abs_path"),
+            Some(&serde_json::json!("app:///assets/index-abc123.js"))
+        );
+        assert_eq!(
+            sent["debug_meta"]["images"],
+            serde_json::json!([{
+                "type": "sourcemap",
+                "code_file": "app:///assets/index-abc123.js",
+                "debug_id": "12345678-abcd-1234-abcd-123456789abc"
+            }])
+        );
     }
 
     /// guards: a skill or user name reaching Sentry as an SDK name, SDK

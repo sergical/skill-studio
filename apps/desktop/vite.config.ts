@@ -6,6 +6,8 @@ import { webviewBundle } from "./webview-bundle";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
+// @ts-expect-error process is a nodejs global
+const uploadSourceMaps = process.env.SKILL_STUDIO_WEBVIEW_SOURCE_MAPS === "1";
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
@@ -23,6 +25,7 @@ export default defineConfig(async () => ({
   // expression (`forwardRef(function Name ..)`) loses its name before the
   // mangler ever sees it.
   build: {
+    sourcemap: uploadSourceMaps ? "hidden" : false,
     rolldownOptions: {
       output: {
         minify: {
