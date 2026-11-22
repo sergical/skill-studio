@@ -251,6 +251,69 @@ span keeps its description only when it is an `ipc` span named after a
 command. Each `invoke` carries a `sentry-trace` header, so the Rust command
 root continues the WebView trace.
 
+### Sentry signals from the desktop, CLI, and MCP
+
+The native client sends the following signals with telemetry consent and a
+configured DSN. Look in `skill-studio-desktop-rust` for the desktop. CLI and
+MCP use the configured native DSN and set `surface:cli` or `surface:mcp`.
+Filter by release (`skill-studio@<version>`) and environment.
+
+| Signal                                 | Payload and query                                                                                                                                                                                                                                                                                                                                     |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Command or operation issue             | Error event with a fixed message, `command` (`command.<ipc_name>` or `skill.<operation>`), `error_code`, `surface`, release, environment and the transaction's trace and span IDs. The command and code form the issue fingerprint. In Issues, filter by `command:command.skill_listing error_code:too_many_open_files`, then open the event's trace. |
+| Native panic issue                     | The source location and redacted stack described above. In Issues, filter by `level:fatal` and surface.                                                                                                                                                                                                                                               |
+| Native command or core operation trace | The named transaction, timestamps, trace and parent IDs, release, environment, `surface`, `outcome` and `error_code` on failure. Core transactions can have operation and timed step spans named from code. In Explore, filter by transaction name and `outcome:error`. Automatic refresh errors follow the background trace sample rate.             |
+| WebView error and timing               | The allowlisted error, screen transaction and span data described above. Look in `skill-studio-desktop-react` for errors and `view.<screen>` timings, or use the trace ID from a related native event.                                                                                                                                                |
+
+Core validation, ambiguous targets, unsupported operations, expired
+backups, scope contention, stale proposals, content or ownership
+conflicts, already reverted changes, and cancellations stay in traces.
+Execution failures, I/O failures, pending recovery, incomplete errors
+and unclassified legacy command failures can open issues. A retained
+I/O cause, including a wrapped OS error, supplies one of
+`too_many_open_files`, `permission_denied`, `not_found`, `timed_out`, or
+`other_io`. A legacy string with an OS error number uses the same codes.
+Other legacy strings use `unknown`.
+
+In **Explore → Logs**, filter by message and attributes such as
+`step:snapshot_refresh.full` or `error_code:too_many_open_files`.
+
+| Log message                 | Attributes beyond surface and SDK metadata                                                                               |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Desktop data folder checked | `status` (ready or blocked), `event_store` (open or unavailable)                                                         |
+| Desktop inventory loaded    | Numeric `skills`, `agents` with observed non-shared deployments, `projects`                                              |
+| Desktop update checked      | `trigger` (manual or background), `outcome` (up_to_date, checking, downloading, ready_to_install, error or check_failed) |
+| Snapshot refresh finished   | `step`, `elapsed_ms`, `outcome` (ok or error)                                                                            |
+| Command failed              | `command`, `error_code`                                                                                                  |
+
+In **Explore → Metrics**, choose the metric by name and filter by
+`surface` or the applicable command or step. Chart p95 for duration, sum
+for failures, and max for file descriptors. Refresh completion logs, refresh
+duration and scan counts inside a refresh follow the background trace sample.
+The failure counter includes every reportable refresh failure. The file
+descriptor gauge measures completed commands outside the refresh loop.
+
+| Metric                                       | Type and dimensions beyond surface and SDK metadata                                      |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `skill_studio.command.duration`              | Millisecond distribution by `command`                                                    |
+| `skill_studio.command.failures`              | Counter of reportable failures by `command` and `error_code`                             |
+| `skill_studio.command.open_file_descriptors` | Gauge by `command`, measured at completion on macOS and when procfs is readable on Linux |
+| `skill_studio.scan.skills`                   | Distribution of the number of distinct skills returned by a core scan                    |
+| `skill_studio.snapshot_refresh.duration`     | Millisecond distribution by refresh `step`                                               |
+
+The native SDK adds release, environment and SDK name and version to
+logs and metrics, the constant server address `skill-studio`, and OS
+name and version to logs when available. Command and refresh logs and
+scan counts carry the native trace ID and span ID when a trace is sampled.
+Rust checks consent before recording the signals and the transport checks it again
+when a batch is sent. React SDK 11 supports logs and metrics, as does Rust
+SDK 0.49.5 with its `logs` and `metrics` features. The desktop uses the
+Rust seams for these signals so the WebView bridge accepts the existing
+error and timing items only. [Rust logs](https://docs.sentry.io/platforms/rust/logs/),
+[Rust metrics](https://docs.sentry.io/platforms/rust/metrics/),
+[React logs](https://docs.sentry.io/platforms/javascript/guides/react/logs/),
+[React metrics](https://docs.sentry.io/platforms/javascript/guides/react/metrics/).
+
 ## Delivery phases and exit criteria
 
 | Phase | Deliverable                                               | Exit criteria                                                                                       |

@@ -316,6 +316,10 @@ pub fn run() {
                     None,
                 ),
             };
+            skill_studio_host::telemetry::record_desktop_data_folder(
+                data_folder_message.is_some(),
+                event_store.is_some(),
+            );
             app.manage(skills::data_folder_status::DataFolderStatusState(
                 std::sync::Mutex::new(data_folder_message.clone()),
             ));

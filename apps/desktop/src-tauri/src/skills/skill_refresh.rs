@@ -1407,6 +1407,20 @@ fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
             &mut || {
                 let started = Instant::now();
                 let result = rebuild_snapshot_now(&app, &state);
+                if let Ok(snapshot) = &result {
+                    let agents: BTreeSet<_> = snapshot
+                        .skills
+                        .iter()
+                        .flat_map(|skill| &skill.deployments)
+                        .filter(|deployment| deployment.agent != "shared")
+                        .map(|deployment| &deployment.agent)
+                        .collect();
+                    skill_studio_host::telemetry::record_desktop_startup(
+                        snapshot.skills.len(),
+                        agents.len(),
+                        snapshot.projects.len(),
+                    );
+                }
                 watched_rebuild.finish(started, Instant::now());
                 if let Err(e) = &result {
                     eprintln!("skill refresh: initial rebuild failed: {e}");

@@ -397,7 +397,20 @@ async fn run_check_and_emit(
             let _ = app_for_emit.emit(UPDATE_STATUS_EVENT, status.clone());
         })
         .await;
-    engine.status()
+    let status = engine.status();
+    let outcome = match &status {
+        UpdateStatus::UpToDate => "up_to_date",
+        UpdateStatus::Checking => "checking",
+        UpdateStatus::Downloading { .. } => "downloading",
+        UpdateStatus::ReadyToInstall { .. } => "ready_to_install",
+        UpdateStatus::Error { .. } => "error",
+        UpdateStatus::CheckFailed { .. } => "check_failed",
+    };
+    skill_studio_host::telemetry::record_desktop_update_check(
+        matches!(trigger, CheckTrigger::Manual),
+        outcome,
+    );
+    status
 }
 
 /// Starts the background loop on the async runtime (never the main thread,

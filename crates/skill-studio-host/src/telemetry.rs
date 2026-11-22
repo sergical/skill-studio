@@ -16,12 +16,17 @@ use skill_studio_core::ops::Operation;
 use skill_studio_core::ports::{NestedOp, NoopTelemetry, OpOutcome, OpRecord, Telemetry};
 use skill_studio_core::timing::StepTiming;
 
+mod application_metrics;
 mod command_failure;
 mod command_span;
+mod structured_logs;
 mod webview;
 pub use command_failure::CommandFailure;
 pub use command_span::{
     sampled_at, CommandSpan, TraceParent, Trigger, BACKGROUND_SAMPLE_RATE, USER_SAMPLE_RATE,
+};
+pub use structured_logs::{
+    record_desktop_data_folder, record_desktop_startup, record_desktop_update_check,
 };
 pub use webview::{WebviewBundle, WebviewItem, WebviewTelemetry, WEBVIEW_ERROR_CAP};
 
@@ -169,6 +174,32 @@ fn client_options(
     options.max_breadcrumbs = 0;
     options.shutdown_timeout = SHUTDOWN_FLUSH;
     options.before_send = Some(Arc::new(move |event| Some(redact_event(event, surface))));
+    let log_consent = consent.clone();
+    options.before_send_log = Some(Arc::new(move |mut log| {
+        if !log_consent.enabled() {
+            return None;
+        }
+        log.attributes.retain(|key, _| !key.starts_with("user."));
+        if let Some(span) = CommandSpan::current().filter(|span| span.sampled) {
+            log.trace_id = Some(span.trace_id);
+            log.attributes.insert(
+                "sentry.trace.parent_span_id".into(),
+                span.span_id.to_string().into(),
+            );
+        }
+        Some(log)
+    }));
+    let metric_consent = consent.clone();
+    options.before_send_metric = Some(Arc::new(move |mut metric| {
+        if !metric_consent.enabled() {
+            return None;
+        }
+        if let Some(span) = CommandSpan::current().filter(|span| span.sampled) {
+            metric.trace_id = span.trace_id;
+            metric.span_id = Some(span.span_id);
+        }
+        Some(metric)
+    }));
     options.transport = Some(Arc::new(ConsentTransportFactory { consent }));
     options.sample_rate(1.0)
 }
@@ -498,6 +529,15 @@ fn capture_command_failure(
     contexts: &Map<String, Context>,
 ) {
     let code = failure.as_str();
+    if let Some(Context::Trace(trace)) = contexts.get("trace") {
+        CommandSpan {
+            trace_id: trace.trace_id,
+            span_id: trace.span_id,
+            parent_span_id: trace.parent_span_id,
+            sampled: true,
+        }
+        .enter(|| structured_logs::record_failure_log(surface, name, code));
+    }
     let mut tags = outcome_tags(surface, false, Some(code));
     tags.insert("command".to_string(), name.to_string());
     let event = Event {
@@ -586,7 +626,8 @@ impl Telemetry for SentryTelemetry {
         clamp_spans_to_transaction(&mut spans, timestamp);
 
         let failure = CommandFailure::from_op_outcome(&record.outcome);
-        let tags = outcome_tags(self.surface, ok, failure.map(CommandFailure::as_str));
+        let error_code = failure.map(CommandFailure::as_str);
+        let tags = outcome_tags(self.surface, ok, error_code);
 
         let mut contexts = Map::new();
         contexts.insert(
@@ -617,9 +658,36 @@ impl Telemetry for SentryTelemetry {
         };
 
         if let Some(client) = Hub::current().client() {
+            CommandSpan {
+                trace_id,
+                span_id: root_span_id,
+                parent_span_id: command.map(|command| command.span_id),
+                sampled: true,
+            }
+            .enter(|| {
+                for count in record.scanned_skill_counts {
+                    application_metrics::record_scan_count(self.surface, count);
+                }
+                if command.is_none() {
+                    application_metrics::record_command_metrics(
+                        self.surface,
+                        &op,
+                        record.timing.elapsed_ms,
+                        failure,
+                    );
+                }
+            });
             // A desktop command owns its issue. Headless operations are their own roots.
-            if let (None, Some(failure)) = (command, failure.filter(|code| code.opens_issue())) {
-                capture_command_failure(&client, &op, self.surface, failure, &transaction.contexts);
+            if command.is_none() {
+                if let Some(failure) = failure.filter(|failure| failure.opens_issue()) {
+                    capture_command_failure(
+                        &client,
+                        &op,
+                        self.surface,
+                        failure,
+                        &transaction.contexts,
+                    );
+                }
             }
             let mut envelope = Envelope::new();
             envelope.add_item(transaction);
@@ -651,18 +719,32 @@ pub fn record_command(
     elapsed_ms: u64,
     failure: Option<CommandFailure>,
 ) {
-    let issue = failure.filter(|failure| failure.opens_issue());
-    let ok = failure.is_none();
-    if !span.sampled {
-        return;
-    }
     let Some(client) = Hub::current().client() else {
         return;
     };
-    let elapsed = Duration::from_millis(elapsed_ms);
-    let timestamp = SystemTime::now();
-    let start_timestamp = timestamp - elapsed;
+    let issue = failure.filter(|failure| failure.opens_issue());
+    let ok = failure.is_none();
     let name = format!("command.{command}");
+    if command.starts_with("snapshot_refresh.") {
+        span.enter(|| {
+            if let Some(issue) = issue {
+                application_metrics::record_command_failure(surface, &name, issue);
+            }
+            if span.sampled {
+                structured_logs::record_refresh_finish(command, elapsed_ms, ok);
+                application_metrics::record_snapshot_duration(command, elapsed_ms);
+            }
+        });
+    } else {
+        span.enter(|| {
+            application_metrics::record_command_metrics(surface, &name, elapsed_ms, failure);
+        });
+    }
+    if !span.sampled {
+        return;
+    }
+    let timestamp = SystemTime::now();
+    let start_timestamp = timestamp - Duration::from_millis(elapsed_ms);
     let tags = outcome_tags(surface, ok, failure.map(CommandFailure::as_str));
 
     let mut contexts = Map::new();
@@ -802,7 +884,19 @@ mod tests {
                 ],
             },
             nested: Vec::new(),
+            scanned_skill_counts: Vec::new(),
         }
+    }
+
+    fn capture_trace_envelopes(run: impl FnOnce()) -> Vec<Envelope> {
+        sentry::test::with_captured_envelopes(run)
+            .into_iter()
+            .filter(|envelope| {
+                envelope
+                    .items()
+                    .any(|item| matches!(item, sentry::protocol::EnvelopeItem::Transaction(_)))
+            })
+            .collect()
     }
 
     fn telemetry() -> SentryTelemetry {
@@ -819,7 +913,7 @@ mod tests {
     #[test]
     fn an_op_record_with_three_steps_becomes_one_transaction_with_three_child_spans() {
         let record = three_step_record("scan");
-        let envelopes = sentry::test::with_captured_envelopes(|| {
+        let envelopes = capture_trace_envelopes(|| {
             telemetry().record(record.clone());
         });
         assert_eq!(envelopes.len(), 1);
@@ -897,8 +991,9 @@ mod tests {
                 steps: Vec::new(),
             },
             nested: Vec::new(),
+            scanned_skill_counts: Vec::new(),
         };
-        let envelopes = sentry::test::with_captured_envelopes(|| {
+        let envelopes = capture_trace_envelopes(|| {
             telemetry().record(record);
         });
         let transaction = transaction_from(&envelopes[0]);
@@ -956,7 +1051,7 @@ mod tests {
             // Starts right after `doctor`'s own three steps (60ms).
             offset_ms: 60,
         }];
-        let envelopes = sentry::test::with_captured_envelopes(|| {
+        let envelopes = capture_trace_envelopes(|| {
             telemetry().record(record);
         });
         let transaction = transaction_from(&envelopes[0]);
@@ -1022,7 +1117,7 @@ mod tests {
                 },
             ],
         };
-        let envelopes = sentry::test::with_captured_envelopes(|| {
+        let envelopes = capture_trace_envelopes(|| {
             telemetry().record(record);
         });
         let transaction = transaction_from(&envelopes[0]);
@@ -1083,6 +1178,7 @@ mod tests {
                 ],
             },
             nested: Vec::new(),
+            scanned_skill_counts: Vec::new(),
         };
         record.nested = vec![NestedOp {
             operation: Operation::Scan,
@@ -1099,7 +1195,7 @@ mod tests {
             depth: 1,
             offset_ms: 0,
         }];
-        let envelopes = sentry::test::with_captured_envelopes(|| {
+        let envelopes = capture_trace_envelopes(|| {
             telemetry().record(record);
         });
         let transaction = transaction_from(&envelopes[0]);
@@ -1253,7 +1349,7 @@ mod tests {
                 offset_ms: 0,
             },
         ];
-        let envelopes = sentry::test::with_captured_envelopes(|| {
+        let envelopes = capture_trace_envelopes(|| {
             telemetry().record(record);
         });
         let transaction = transaction_from(&envelopes[0]);
@@ -1329,7 +1425,7 @@ mod tests {
                 offset_ms: 200,
             },
         ];
-        let envelopes = sentry::test::with_captured_envelopes(|| {
+        let envelopes = capture_trace_envelopes(|| {
             telemetry().record(record);
         });
         let transaction = transaction_from(&envelopes[0]);
@@ -1398,7 +1494,7 @@ mod tests {
             depth: 1,
             offset_ms: 0,
         }];
-        let envelopes = sentry::test::with_captured_envelopes(|| {
+        let envelopes = capture_trace_envelopes(|| {
             telemetry().record(record);
         });
         let mut bytes = Vec::new();
@@ -1980,13 +2076,134 @@ mod tests {
     }
 
     #[test]
+    fn an_unsampled_refresh_still_counts_reportable_failures() {
+        use sentry::protocol::ItemContainer;
+
+        let span = CommandSpan {
+            sampled: false,
+            ..CommandSpan::start(Trigger::Background, None)
+        };
+        let options = client_options(
+            "https://examplePublicKey@o0.ingest.sentry.io/0"
+                .parse()
+                .expect("fixture DSN"),
+            Surface::Desktop,
+            "9.9.9",
+            Consent::new(true),
+        );
+        let envelopes = sentry::test::with_captured_envelopes_options(
+            || {
+                record_command(
+                    Surface::Desktop,
+                    "snapshot_refresh.full",
+                    span,
+                    80,
+                    Some(CommandFailure::TooManyOpenFiles),
+                );
+            },
+            options,
+        );
+        let items: Vec<_> = envelopes.iter().flat_map(Envelope::items).collect();
+        assert_eq!(items.len(), 1, "only a failure metric is sent");
+        let metrics = items
+            .iter()
+            .find_map(|item| match item {
+                EnvelopeItem::ItemContainer(ItemContainer::Metrics(metrics)) => Some(metrics),
+                _ => None,
+            })
+            .expect("failure metrics envelope");
+        assert_eq!(metrics.len(), 1, "one failure metric is sent");
+        let failure = &metrics[0];
+        assert_eq!(failure.name, "skill_studio.command.failures");
+        assert!((failure.value - 1.0).abs() < f64::EPSILON);
+        assert_eq!(
+            failure.attributes["command"],
+            "command.snapshot_refresh.full".into()
+        );
+        assert_eq!(
+            failure.attributes["error_code"],
+            "too_many_open_files".into()
+        );
+        assert_ne!(failure.trace_id, span.trace_id);
+        assert!(failure.span_id.is_none());
+    }
+
+    #[test]
+    fn a_headless_doctor_scan_reports_its_count_on_the_doctor_trace() {
+        use sentry::protocol::ItemContainer;
+        use skill_studio_core::ports::{OpContext, Runtime};
+
+        let home = tempfile::tempdir().expect("fixture home");
+        let skill = home.path().join(".agents/skills/fixture-skill");
+        std::fs::create_dir_all(&skill).expect("create fixture skill folder");
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: fixture-skill\ndescription: A fixture skill.\n---\n",
+        )
+        .expect("write fixture skill");
+        let options = client_options(
+            "https://examplePublicKey@o0.ingest.sentry.io/0"
+                .parse()
+                .expect("fixture DSN"),
+            Surface::Cli,
+            "9.9.9",
+            Consent::new(true),
+        );
+        let envelopes = sentry::test::with_captured_envelopes_options(
+            || {
+                let mut ports = crate::default_ports(
+                    home.path().join("leases"),
+                    Arc::new(skill_studio_core::harness::HarnessCatalog::builtin()),
+                );
+                ports.telemetry = port(Surface::Cli, "9.9.9");
+                let runtime = Runtime::new(
+                    &skill_studio_core::RuntimeScope::fixture(home.path()),
+                    ports,
+                )
+                .expect("fixture runtime");
+                let ctx = OpContext::uncancellable(CorrelationId("c-doctor-scan".into()));
+                skill_studio_core::ops::doctor(&runtime, &ctx, &Default::default())
+                    .expect("doctor ran successfully");
+            },
+            options,
+        );
+        let items = || envelopes.iter().flat_map(Envelope::items);
+        let trace = items()
+            .find_map(|item| match item {
+                EnvelopeItem::Transaction(tx) if tx.name.as_deref() == Some("skill.doctor") => {
+                    Some(trace_context(tx))
+                }
+                _ => None,
+            })
+            .expect("doctor transaction");
+        let counts: Vec<_> = items()
+            .filter_map(|item| match item {
+                EnvelopeItem::ItemContainer(ItemContainer::Metrics(metrics)) => Some(metrics),
+                _ => None,
+            })
+            .flatten()
+            .filter(|metric| metric.name == "skill_studio.scan.skills")
+            .collect();
+        assert_eq!(counts.len(), 1);
+        assert!((counts[0].value - 1.0).abs() < f64::EPSILON);
+        assert_eq!(counts[0].trace_id, trace.trace_id);
+        assert_eq!(counts[0].span_id, Some(trace.span_id));
+    }
+
+    #[test]
     fn a_core_file_limit_failure_sends_one_issue_linked_to_the_operation_without_the_path() {
-        use sentry::protocol::EnvelopeItem;
+        use sentry::protocol::{EnvelopeItem, ItemContainer};
 
         const PRIVATE_PATH: &str = "/Users/alice/.agents/skills/private-skill/SKILL.md";
         let home = tempfile::tempdir().expect("fixture home");
-        let mut options = ClientOptions::default();
-        options.release = Some("skill-studio@9.9.9".into());
+        let options = client_options(
+            "https://examplePublicKey@o0.ingest.sentry.io/0"
+                .parse()
+                .expect("fixture DSN"),
+            Surface::Cli,
+            "9.9.9",
+            Consent::new(true),
+        );
         let envelopes = sentry::test::with_captured_envelopes_options(
             || {
                 let mut ports = crate::default_ports(
@@ -2016,6 +2233,8 @@ mod tests {
                     })
                     .expect_err("listing failed");
                 assert_eq!(error.code, ErrorCode::Io);
+                let client = Hub::current().client().expect("test client");
+                assert!(client.flush(Some(SHUTDOWN_FLUSH)));
             },
             options,
         );
@@ -2047,6 +2266,16 @@ mod tests {
             .expect("operation transaction");
         assert_eq!(event.contexts["trace"], transaction.contexts["trace"]);
         assert_eq!(transaction.tags["error_code"], "too_many_open_files");
+        assert!(envelopes.iter().flat_map(Envelope::items).any(|item| {
+            matches!(item, EnvelopeItem::ItemContainer(ItemContainer::Logs(logs))
+                if logs.iter().any(|log| log.body == "Command failed"
+                    && log.attributes["error_code"] == "too_many_open_files".into()))
+        }));
+        assert!(envelopes.iter().flat_map(Envelope::items).any(|item| {
+            matches!(item, EnvelopeItem::ItemContainer(ItemContainer::Metrics(metrics))
+                if metrics.iter().any(|metric| metric.name == "skill_studio.command.failures"
+                    && metric.attributes["error_code"] == "too_many_open_files".into()))
+        }));
         let listing_error = format!(
             "io: {} ({PRIVATE_PATH})",
             std::io::Error::from_raw_os_error(rustix::io::Errno::MFILE.raw_os_error()),
@@ -2059,7 +2288,9 @@ mod tests {
         for envelope in envelopes {
             let mut bytes = Vec::new();
             envelope.to_writer(&mut bytes).expect("serialize envelope");
-            assert!(!String::from_utf8_lossy(&bytes).contains(PRIVATE_PATH));
+            let serialized = String::from_utf8_lossy(&bytes);
+            assert!(!serialized.contains("/Users/alice"));
+            assert!(!serialized.contains("private-skill"));
         }
     }
 
@@ -2076,7 +2307,7 @@ mod tests {
                 )),
             );
         });
-        assert_eq!(envelopes.len(), 1);
+        assert!(envelopes.iter().all(|envelope| envelope.event().is_none()));
         assert_eq!(transaction_from(&envelopes[0]).tags["outcome"], "error");
     }
 
@@ -2162,7 +2393,7 @@ mod tests {
             sampled: false,
             ..CommandSpan::start(Trigger::Background, None)
         };
-        let envelopes = sentry::test::with_captured_envelopes(|| {
+        let envelopes = capture_trace_envelopes(|| {
             span.enter(|| telemetry().record(three_step_record("scan")));
             record_command(Surface::Desktop, "snapshot_refresh.full", span, 80, None);
         });
@@ -2174,7 +2405,7 @@ mod tests {
     /// Catches: a span check that drops every op outside the desktop.
     #[test]
     fn an_op_outside_any_command_span_starts_its_own_trace() {
-        let envelopes = sentry::test::with_captured_envelopes(|| {
+        let envelopes = capture_trace_envelopes(|| {
             telemetry().record(three_step_record("scan"));
         });
         assert_eq!(envelopes.len(), 1);
