@@ -34,4 +34,4 @@ Call `listing` and read the per-agent totals and states in `data.listings`. The 
 
 On a Mac with 438 skills, Claude Code fit all 152 listed descriptions in 70,845 of its 75,000 characters. Codex needed about 20,734 tokens against a 10,000-token budget and shortened 124 of 165 descriptions.
 
-The report changes no settings. When a current estimate and a past session differ, check their scope, settings and available history. Use **Show hidden skills** if you're looking for an intentionally hidden entry.
+The report changes no settings. When a current estimate and a past session differ, check their scope, settings and available history. Use the **Show N hidden skills** button if you're looking for an intentionally hidden entry.

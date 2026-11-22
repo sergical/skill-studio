@@ -16,7 +16,7 @@ Use an Apple silicon or Intel Mac with Node.js 18 or later. The first `npx` run 
 npx -y skill-studio@latest --version
 ```
 
-The output for this release starts with `skill-studio 0.4.1`. There is no global install to reverse when you use `npx`. For MCP, follow [Set up with an agent](/docs/agent-setup/) and verify the first tool call.
+The command prints `skill-studio` and the version number. It printed `skill-studio 0.4.1` when this guide was tested. There is no global install to reverse when you use `npx`. For MCP, follow [Set up with an agent](/docs/agent-setup/) and verify the first tool call.
 
 ## Tools for each job
 

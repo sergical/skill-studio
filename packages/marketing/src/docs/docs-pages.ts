@@ -8,7 +8,12 @@ const markdownFiles = import.meta.glob<string>("./content/*.md", {
 
 const docsNavigation = {
   Start: [
-    ["get-started", "Start here", "Choose a surface and scan your skills."],
+    [
+      "get-started",
+      "Start here",
+      "Choose a surface and scan your skills.",
+      "Get started with Skill Studio",
+    ],
     ["requirements", "Requirements and install", "Check what your Mac needs for each job."],
   ],
   Jobs: [
@@ -30,8 +35,8 @@ const docsNavigation = {
     ["listing", "Check listing budgets", "See which descriptions fit in the model’s skill list."],
   ],
   Reference: [
-    ["cli", "CLI", "Find terminal commands and options."],
-    ["mcp", "MCP server", "Find server setup and tools."],
+    ["cli", "CLI", "Find terminal commands and options.", "Skill Studio CLI"],
+    ["mcp", "MCP server", "Find server setup and tools.", "Skill Studio MCP server"],
   ],
   Help: [
     ["privacy", "Privacy and telemetry", "See what stays on your Mac and what goes online."],
@@ -55,7 +60,7 @@ export interface DocsPageEntry {
 
 export const DOCS_GROUPS = Object.entries(docsNavigation).map(([group, entries]) => ({
   group,
-  pages: entries.map(([slug, navLabel, description]): DocsPageEntry => {
+  pages: entries.map(([slug, navLabel, description, title]): DocsPageEntry => {
     const source = markdownFiles[`./content/${slug}.md`];
     if (!source) throw new Error(`Docs navigation has no Markdown source for ${slug}`);
     return {
@@ -63,7 +68,7 @@ export const DOCS_GROUPS = Object.entries(docsNavigation).map(([group, entries])
       path: slug === "get-started" ? "/docs/" : `/docs/${slug}/`,
       markdownPath: slug === "get-started" ? "docs/index.md" : `docs/${slug}.md`,
       navLabel,
-      title: `${navLabel} | Skill Studio`,
+      title: title ?? `${navLabel} | Skill Studio`,
       description,
       markdown: fillAgentSetup(source),
     };

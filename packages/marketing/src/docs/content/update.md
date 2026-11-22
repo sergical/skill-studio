@@ -33,6 +33,8 @@ The fixture command reported `updated fixture-greeting` with an event ID. A pack
 
 ## MCP
 
-Call `outdated`, then use `update` for a skill or `pack_update` with the source from `pack_list`. Set `dry_run` on a pack to preview what will update. Verify the finished result, including any skipped or failed steps.
+Call `outdated`. To update a global skills.sh install, call `update` with `{"skill":"fixture-greeting","method":"skills_sh","scope":{"scope":"global"}}`. For a project, set the inner `scope` to `project` and add the absolute `project` path beside it.
+
+For a pack, call `pack_update` with the source from `pack_list`. Set `dry_run` to preview what will update. Verify the finished result, including any skipped or failed steps.
 
 Pack updates skip skills with local edits and plugin and npm packs. Use the plugin's own owner for plugin updates. If the check shows `unknown`, check `gh` sign-in and repository access. Restore an update from **Activity**, CLI `restore`, or `restore_event` with its event ID. A dotagents update can refresh multiple skills in the same scope under one event.

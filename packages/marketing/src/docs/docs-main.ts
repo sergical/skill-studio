@@ -94,7 +94,7 @@ if (docsSearch) {
   docsSearch.addEventListener("input", () => {
     const query = docsSearch.value.toLowerCase().trim();
     const words = query.split(/\s+/);
-    toggle?.setAttribute("aria-expanded", String(query.length > 0));
+    if (query) toggle?.setAttribute("aria-expanded", "true");
     let matches = 0;
     for (const group of groups) {
       let groupMatches = 0;
