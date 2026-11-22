@@ -4561,7 +4561,7 @@ checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
 
 [[package]]
 name = "skill-studio"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "chrono",
  "dirs",
@@ -4593,7 +4593,7 @@ dependencies = [
 
 [[package]]
 name = "skill-studio-cli"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "chrono",
  "clap",
@@ -4612,7 +4612,7 @@ dependencies = [
 
 [[package]]
 name = "skill-studio-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "chrono",
  "criterion",
@@ -4639,7 +4639,7 @@ dependencies = [
 
 [[package]]
 name = "skill-studio-host"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "cap-std",
  "chrono",
@@ -4663,7 +4663,7 @@ dependencies = [
 
 [[package]]
 name = "skill-studio-mcp"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "chrono",

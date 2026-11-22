@@ -6,14 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+## v0.4.1
+
+### Added
+
+- `outdated` and `library --source` (MCP `outdated` and `library`) now show a skill that a lock file lists but that has no folder on disk: `currency: "missing_on_disk"` in `outdated`, and `missing_on_disk: true` on the `library` row. Before, such a skill was absent from both answers, and an agent had to read the lock file by hand.
+- The MCP `library` tool takes `project_path`, with the same meaning as the CLI `library --project` flag. Before, the tool had no project input for one call: it used only the projects Skill Studio found or `SKILL_STUDIO_PROJECT` named.
+- Homepage: it now shows Model listing and Sessions with live demos, the three states a skill can have in the model's list, and new walkthroughs.
+- Scan timings name four more steps (the folder walk, the content hash, the token count and the scan-memo stamp), so a slow scan shows where the time went.
+
 ### Fixed
 
+- `pack update` reports a parked skill as skipped. Before, it reported the skill as failed with code `io`, so a correct run read as a failure.
+- Updating one dotagents skill no longer brings back a skill that an older version of Skill Studio parked. The parked copy keeps its bytes.
+- `pack switch-source` keeps the branch or tag each scope was pinned to as part of the pack's original, so `pack show <fork> --remote` compares with that ref, not the default branch.
+- A journal that a newer build wrote no longer makes an older build refuse every write. A plan status this build does not know is read as `unknown`: this build leaves that plan and its backups alone.
+- A scan on a home with no lock file yet now holds a real lock, so a write waits for it. Before, the write could run beside the scan. A read-only fixture home is still left unchanged.
+- Desktop: Undo holds the write lease from the read of the event to the finished history row, and takes its locks in the same order as other writes. Before, most restored files were written with no lease held, and Undo could be refused after a 3-second wait when another write ran.
+- Homepage: the benchmark bars no longer start again after reduced motion stops them.
 - Desktop Undo confines file changes to approved skill and backup directories. It follows a skills directory link when it leads to another approved root or matches the location recorded with the event.
 - Usage counts each legacy Claude Code sidechain log as its own session, even when it shares its parent's session ID.
 - CLI and MCP pack updates reject plans with more than 100 update steps across all scopes before running an owner tool.
 - Codex usage keeps a fork's copied skill uses when the parent rollout is gone.
 - Pack updates report each tool's own result when skills.sh and dotagents claim the same skill name in one scope.
 - Usage drops sessions from the former Codex home when the Codex root changes and keeps other agents' cached history.
+- CLI and MCP pack reads page the installed skill list inside an oversized pack so the answer fits the 32 KB budget.
+- CLI and MCP page cursors now ask callers to restart if the scope, filters, row order, or list membership change between pages. A use count can update while the cursor stays valid.
 
 ## v0.4.0
 
@@ -33,8 +51,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
-- CLI and MCP pack reads page the installed skill list inside an oversized pack so the answer fits the 32 KB budget.
-- CLI and MCP page cursors now ask callers to restart if the scope, filters, row order, or list membership change between pages. A use count can update while the cursor stays valid.
 - Model listing: the Codex tier has its own box with grouped numbers, the comparison column stays empty until you try a budget, and a page subtitle no longer draws over the title in a narrow window. Sessions links each agent's skills docs.
 - The doctor listing budget for Claude Code now uses the model's context window from Claude Code's model catalog cache and the model's characters per token (3 for current models). Before, it used 200,000 tokens at 4 characters, so the limit for Opus 5.5 was 2,000 tokens instead of 7,500. Codex uses `context_window` from `models_cache.json` for the configured model.
 - Frontmatter that is not valid YAML, such as a description with `: ` in it, still shows its top-level fields, the way Claude Code reads it.
