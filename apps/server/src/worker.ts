@@ -45,6 +45,9 @@ interface ExecutionContext {
 // `@cloudflare/workers-types` package just for one global.
 declare const caches: { default: ResponseCache };
 
+const PROXY_REQUEST_DURATION = "skill_studio.proxy.request.duration";
+const PROXY_REQUEST_FAILED = "Skills proxy request failed";
+
 /** The SDK names a streamed request span by its raw method only, so every
  * route would group as one `GET` and any invented method would open a new
  * group. The template keeps skill names out of the name. */
@@ -77,6 +80,13 @@ const handler = {
       waitUntil: (promise) => ctx.waitUntil(promise),
       reportServerError: (error, { kind }) =>
         Sentry.captureException(error, { tags: { error_kind: kind } }),
+      observeProxyRequest: ({ route, status, durationMs }) => {
+        Sentry.metrics.distribution(PROXY_REQUEST_DURATION, durationMs, {
+          unit: "millisecond",
+          attributes: { route, status },
+        });
+        if (status >= 500) Sentry.logger.error(PROXY_REQUEST_FAILED, { route, status, durationMs });
+      },
     });
     return app.fetch(request);
   },
@@ -105,6 +115,8 @@ function sentryOptionsFor(env: Env): CloudflareOptions {
     },
     beforeSend: scrubSentryEvent,
     beforeSendSpan: scrubSentrySpan,
+    beforeSendLog: (log) => (log.message === PROXY_REQUEST_FAILED ? log : null),
+    beforeSendMetric: (metric) => (metric.name === PROXY_REQUEST_DURATION ? metric : null),
     tracePropagationTargets: [],
   };
 }

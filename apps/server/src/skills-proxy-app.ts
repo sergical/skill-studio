@@ -200,6 +200,7 @@ interface CreateSkillsProxyAppOptions {
   /** Receives a skills.sh network failure, a skills.sh 5xx or non-JSON answer (`kind: "upstream"`),
    *  or a route that threw (`kind: "unhandled"`). Absent in the Node dev server; the Worker forwards it to Sentry. */
   reportServerError?: (cause: unknown, context: { kind: "upstream" | "unhandled" }) => void;
+  observeProxyRequest?: (request: ProxyRequestTiming) => void;
 }
 
 export const PROXY_ROUTE_TEMPLATES = {
@@ -210,6 +211,13 @@ export const PROXY_ROUTE_TEMPLATES = {
 } as const;
 
 type ProxyRoute = keyof typeof PROXY_ROUTE_TEMPLATES | "other";
+
+/** Request timing and outcome with bounded labels and no caller data. */
+interface ProxyRequestTiming {
+  route: ProxyRoute;
+  status: number;
+  durationMs: number;
+}
 
 export function proxyRouteFor(path: string): ProxyRoute {
   if (path === PROXY_ROUTE_TEMPLATES.health) return "health";
@@ -266,6 +274,7 @@ export function createSkillsProxyApp({
   cache,
   waitUntil,
   reportServerError,
+  observeProxyRequest,
 }: CreateSkillsProxyAppOptions): Hono {
   const app = new Hono();
 
@@ -289,6 +298,7 @@ export function createSkillsProxyApp({
     await next();
     const ms = Date.now() - start;
     const route = proxyRouteFor(c.req.path);
+    observeProxyRequest?.({ route, status: c.res.status, durationMs: ms });
     process.stdout.write(
       `${JSON.stringify({ event: "proxy_request", method: methodLabel(c.req.method), route, status: c.res.status, duration_ms: ms })}\n`,
     );
