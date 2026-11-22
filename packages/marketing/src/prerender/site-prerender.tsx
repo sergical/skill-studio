@@ -16,8 +16,7 @@ import { MarketingSite } from "../MarketingSite";
 import { themeBootScript } from "../site-theme";
 
 const SITE_ORIGIN = "https://useskillstudio.com";
-const OG_IMAGE_ALT =
-  "Skill Studio: Tidy up your agent skills. The app icon in a messy pile of skills.";
+const OG_IMAGE_ALT = "The Skill Studio app icon in a pile of agent skills.";
 
 interface SiteRoute {
   /** The HTML template, relative to the package root and to dist. */

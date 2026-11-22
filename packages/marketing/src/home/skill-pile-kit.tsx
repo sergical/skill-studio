@@ -8,14 +8,11 @@ import { useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "rea
 import * as stylex from "@stylexjs/stylex";
 
 import { siteTokens } from "../SiteTheme.stylex";
-import { ACTIVE_PILE_CHIPS, PILE, PILE_COUNTS, type PileChip } from "./skill-pile-data";
+import { ACTIVE_PILE_CHIPS, PILE, type PileChip } from "./skill-pile-data";
 
 /** Maps each active skill to its place in the sorted list. */
 export const ACTIVE_PILE_SLOTS = new Map(ACTIVE_PILE_CHIPS.map((chip, slot) => [chip.id, slot]));
 const SETTLE = "cubic-bezier(0.32, 0.72, 0, 1)";
-
-const MESSY_SUMMARY = `${PILE_COUNTS.total} skills across ${PILE_COUNTS.folders} folders`;
-const SORTED_SUMMARY = `${PILE_COUNTS.active} skills kept · ${PILE_COUNTS.parked} skills parked`;
 
 export interface Point {
   x: number;
@@ -62,7 +59,11 @@ export function slotPose(g: Geometry, slot: number): Pose {
   const perColumn = Math.ceil(ACTIVE_PILE_CHIPS.length / 2);
   const column = slot < perColumn ? 0 : 1;
   const row = slot % perColumn;
-  if (g.narrow) return { x: column === 0 ? 0 : g.w / 2 + 4, y: 128 + row * 32, ax: 0 };
+  if (g.narrow) {
+    const top = g.mascot.y + g.mascotSize / 2 + 18;
+    const step = Math.min(32, (g.drawer.y - 32 - top) / (perColumn - 1));
+    return { x: column === 0 ? 0 : g.w / 2 + 4, y: top + row * step, ax: 0 };
+  }
   if (g.stacked) {
     const top = g.mascot.y + g.mascotSize / 2 + 22;
     const step = Math.min(34, (g.drawer.y - 22 - top) / perColumn);
@@ -369,26 +370,25 @@ export function PileFrame({
       <div ref={stageRef} {...stylex.props(styles.stage, !ready && styles.stageHidden)}>
         {children}
       </div>
-      <p aria-live="polite" {...stylex.props(styles.caption, !ready && styles.stageHidden)}>
-        {sorted ? SORTED_SUMMARY : MESSY_SUMMARY}
+      <p aria-live="polite" {...stylex.props(styles.visuallyHidden)}>
+        {sorted ? "Skills sorted and parked." : ""}
       </p>
     </div>
   );
 }
 
 const styles = stylex.create({
-  caption: {
-    color: siteTokens.text,
-    fontSize: 12,
-    fontWeight: 560,
-    lineHeight: 1.5,
-    margin: "14px 0 0",
-    textAlign: { default: "left", "@media (max-width: 1080px)": "center" },
-    paddingInline: 12,
+  visuallyHidden: {
+    clipPath: "inset(50%)",
+    height: 1,
+    overflow: "hidden",
+    position: "absolute",
+    whiteSpace: "nowrap",
+    width: 1,
   },
   frame: { textAlign: "center", width: "100%" },
   stage: {
-    height: { default: 480, "@media (max-width: 600px)": 440 },
+    height: { default: 480, "@media (max-width: 600px)": 360 },
     position: "relative",
     width: "100%",
   },

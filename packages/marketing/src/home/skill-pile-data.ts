@@ -1,7 +1,7 @@
 // ============================================================================
 // Skill Studio - Skill pile data
-// The made-up skill pile the homepage hero throws around: 92 skills in 11
-// folders, with a fixed seed so the prerender and every visit draw the same pile.
+// A fictional set of skills and folders, with a fixed seed so the prerender
+// and every visit draw the same pile.
 // The sorted scene keeps the skills in use and parks the rest.
 // ============================================================================
 
@@ -130,11 +130,3 @@ function buildPile(): PileChip[] {
 export const PILE = buildPile();
 /** The skills the mascot keeps in the active list. */
 export const ACTIVE_PILE_CHIPS = PILE.filter((chip) => chip.inUse);
-
-/** The example scan totals shown with the skill pile. */
-export const PILE_COUNTS = {
-  total: PILE.length,
-  folders: FOLDERS.length,
-  active: ACTIVE_PILE_CHIPS.length,
-  parked: PILE.length - ACTIVE_PILE_CHIPS.length,
-};

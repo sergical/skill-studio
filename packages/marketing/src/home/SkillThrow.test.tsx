@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MockInstance } from "vitest";
 
 import { SkillThrow } from "./SkillThrow";
-import { PILE_COUNTS } from "./skill-pile-data";
 import { fly, frame, poseTransform } from "./skill-pile-kit";
 
 /** The `Element.prototype.animate` spy that each test starts with. */
@@ -102,17 +101,12 @@ describe("intro", () => {
     const first = render(<SkillThrow />);
     await act(async () => {});
     expect(animate).toHaveBeenCalled();
-    expect(first.container.querySelector('[aria-live="polite"]')?.textContent).toContain(
-      `${PILE_COUNTS.total} skills`,
-    );
+    expect(screen.getByRole("button", { name: "Sort the skills" })).toBeTruthy();
     first.unmount();
     animate.mockClear();
-    const second = render(<SkillThrow />);
+    render(<SkillThrow />);
     await act(async () => {});
     expect(animate).not.toHaveBeenCalled();
-    expect(second.container.querySelector('[aria-live="polite"]')?.textContent).toContain(
-      `${PILE_COUNTS.parked} skills parked`,
-    );
     expect(screen.getByRole("button", { name: "Make a mess again" })).toBeTruthy();
   });
 });

@@ -2,7 +2,6 @@ import * as stylex from "@stylexjs/stylex";
 import { Check, Copy, Download } from "lucide-react";
 import { AGENT_SETUP_PROMPT } from "@skill-studio/lib/agent-setup";
 
-import { AgentIcon, type AgentId } from "../AgentIcon";
 import { ProductMock, type ThemeToggleOrigin } from "../ProductMock";
 import { Arrow } from "../MarketingBrand";
 import { SiteFooter, SiteHeader, siteLayout } from "../SiteChrome";
@@ -16,7 +15,7 @@ import { FaqSection } from "../home/FaqSection";
 import { homeSectionStyles } from "../home/HomeSection.stylex";
 import { JobsSection } from "../home/JobsSection";
 import { ListingBudgetSection } from "../home/ListingBudgetSection";
-import { FirstScanSteps } from "../home/FirstScanSteps";
+import { SkillJobGuide } from "../home/SkillJobGuides";
 import { SkillThrow } from "../home/SkillThrow";
 import { UsageSection } from "../home/UsageSection";
 import { useCopyFlash } from "../home/useCopyFlash";
@@ -32,19 +31,6 @@ interface CommandCenterProps {
   theme: SiteTheme;
   onToggleTheme: (origin: ThemeToggleOrigin) => void;
 }
-
-const supportedAgents = [
-  { id: "claude", name: "Claude Code" },
-  { id: "codex", name: "Codex" },
-  { id: "opencode", name: "OpenCode" },
-  { id: "pi", name: "pi" },
-  { id: "cursor", name: "Cursor" },
-  { id: "grok", name: "Grok Build" },
-] satisfies ReadonlyArray<{ id: AgentId; name: string }>;
-
-const marqueeMove = stylex.keyframes({
-  to: { transform: "translateX(-50%)" },
-});
 
 // Phones and tablets cannot run the macOS installer, so they get the CLI and MCP console instead.
 const TOUCH_DEVICE = "@media (hover: none) and (pointer: coarse)";
@@ -156,11 +142,11 @@ export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
           <TopDither theme={theme} />
           <section {...stylex.props(siteLayout.container, styles.hero)}>
             <div {...stylex.props(styles.copy)}>
-              <h1 {...stylex.props(styles.title)}>Get your agent skills under control.</h1>
+              <h1 {...stylex.props(styles.title)}>Fix your skill issues</h1>
               <p {...stylex.props(styles.lede)}>
-                Skill Studio finds the skills scattered across your agents and projects. See what’s
-                broken, duplicated or out of date. Park skills you no longer use and bring them back
-                any time.
+                Skill Studio finds agent skills for Claude Code, Codex, Cursor, and more. See which
+                skills are broken, duplicated, outdated, or unused. Park, fix, update, or remove
+                them. You can undo changes.
               </p>
               <div {...stylex.props(styles.actions)}>
                 <DownloadButton theme={theme} />
@@ -175,55 +161,23 @@ export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
         </div>
 
         <section
-          id="product"
-          {...stylex.props(siteLayout.container, styles.product, styles.anchor)}
-        >
-          <ProductMock theme={theme} onToggleTheme={onToggleTheme} />
-        </section>
-
-        <section {...stylex.props(styles.agentProof)} aria-label="Supported agents">
-          <div {...stylex.props(styles.agentProofRow)}>
-            <span {...stylex.props(styles.agentProofLabel)}>Works with</span>
-            <div {...stylex.props(styles.desktopAgentList)}>
-              {supportedAgents.map((agent) => (
-                <span key={agent.id} {...stylex.props(styles.agentMark)}>
-                  <AgentIcon agent={agent.id} size={20} />
-                  {agent.name}
-                </span>
-              ))}
-            </div>
-            <div {...stylex.props(styles.marqueeViewport)}>
-              <div {...stylex.props(styles.marqueeTrack)} aria-hidden="true">
-                {[0, 1].map((copy) => (
-                  <div key={copy} {...stylex.props(styles.marqueeSet)}>
-                    {supportedAgents.map((agent) => (
-                      <span key={`${copy}-${agent.id}`} {...stylex.props(styles.agentMark)}>
-                        <AgentIcon agent={agent.id} size={20} />
-                        {agent.name}
-                      </span>
-                    ))}
-                  </div>
-                ))}
-              </div>
-              <span {...stylex.props(styles.visuallyHidden)}>
-                Claude Code, Codex, OpenCode, pi, Cursor, and Grok Build
-              </span>
-            </div>
-          </div>
-        </section>
-
-        <section
           id="jobs"
-          {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}
+          aria-label="What you can do"
+          {...stylex.props(siteLayout.container, styles.jobsOverview, styles.anchor)}
         >
           <JobsSection />
         </section>
 
         <section
-          id="how-it-works"
+          id="product"
           {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}
         >
-          <FirstScanSteps />
+          <h2 {...stylex.props(homeSectionStyles.title)}>See what’s installed</h2>
+          <p {...stylex.props(styles.productIntro)}>
+            Skill Studio scans the agents and project folders you choose. Open Skills to browse what
+            it found, Home to see what needs fixing, or Activity to see which skills ran.
+          </p>
+          <ProductMock theme={theme} onToggleTheme={onToggleTheme} />
         </section>
 
         <section
@@ -233,8 +187,19 @@ export function CommandCenter({ theme, onToggleTheme }: CommandCenterProps) {
           <ListingBudgetSection />
         </section>
 
-        <section {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}>
-          <SidecarWalkthrough theme={theme} title="Then, day to day." />
+        <section
+          id="how-it-works"
+          {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}
+        >
+          <SidecarWalkthrough theme={theme} title="See how it works" />
+        </section>
+
+        <section {...stylex.props(siteLayout.container, homeSectionStyles.section)}>
+          <SkillJobGuide kind="install" />
+        </section>
+
+        <section {...stylex.props(siteLayout.container, homeSectionStyles.section)}>
+          <SkillJobGuide kind="customize" />
         </section>
 
         <section
@@ -343,11 +308,12 @@ const styles = stylex.create({
     width: "100%",
     "@media (max-width: 1080px)": { maxWidth: 680 },
   },
-  product: {
-    paddingBottom: 96,
-    position: "relative",
-    zIndex: 1,
-    "@media (max-width: 600px)": { paddingBottom: 64 },
+  jobsOverview: { paddingTop: 12 },
+  productIntro: {
+    color: siteTokens.muted,
+    margin: "-16px 0 22px",
+    maxWidth: "64ch",
+    lineHeight: 1.55,
   },
   headerCta: {
     alignItems: "center",
@@ -469,92 +435,6 @@ const styles = stylex.create({
     ":hover": { backgroundColor: siteTokens.surface, borderColor: siteTokens.muted },
     ":active": { transform: "scale(.96)" },
     "@media (max-width: 600px)": { minHeight: 48, width: "100%" },
-  },
-  agentProof: {
-    alignItems: "center",
-    borderBottomColor: siteTokens.border,
-    borderBottomStyle: "solid",
-    borderBottomWidth: 1,
-    borderTopColor: siteTokens.border,
-    borderTopStyle: "solid",
-    borderTopWidth: 1,
-    color: siteTokens.muted,
-    display: "flex",
-    flexDirection: "column",
-    fontSize: 12,
-    gap: 12,
-    justifyContent: "center",
-    overflow: "hidden",
-    padding: "22px 28px 20px",
-    "@media (max-width: 600px)": { paddingInline: 20 },
-  },
-  agentProofRow: {
-    alignItems: "center",
-    display: "flex",
-    gap: 28,
-    justifyContent: "center",
-    maxWidth: "100%",
-    minWidth: 0,
-    // The marquee fills the row, so the row must fill the strip.
-    width: { default: "auto", "@media (max-width: 860px)": "100%" },
-    "@media (max-width: 600px)": { gap: 18 },
-  },
-  agentProofLabel: {
-    color: siteTokens.muted,
-    flexShrink: 0,
-    fontSize: 12,
-    whiteSpace: "nowrap",
-  },
-  desktopAgentList: {
-    alignItems: "center",
-    display: "flex",
-    gap: 34,
-    justifyContent: "center",
-    "@media (max-width: 860px)": { display: "none" },
-  },
-  marqueeViewport: {
-    display: "none",
-    maskImage: "linear-gradient(90deg, transparent, black 5%, black 95%, transparent)",
-    minWidth: 0,
-    overflow: "hidden",
-    position: "relative",
-    width: "100%",
-    "@media (max-width: 860px)": { display: "block" },
-  },
-  marqueeTrack: {
-    alignItems: "center",
-    animationDuration: "20s",
-    animationIterationCount: "infinite",
-    animationName: marqueeMove,
-    animationTimingFunction: "linear",
-    display: "flex",
-    width: "max-content",
-    ":hover": { animationPlayState: "paused" },
-    "@media (prefers-reduced-motion: reduce)": { animationName: "none" },
-  },
-  marqueeSet: {
-    alignItems: "center",
-    display: "flex",
-    gap: 40,
-    paddingRight: 40,
-  },
-  agentMark: {
-    alignItems: "center",
-    color: siteTokens.text,
-    display: "flex",
-    fontSize: 13,
-    fontWeight: 560,
-    gap: 9,
-    whiteSpace: "nowrap",
-  },
-  visuallyHidden: {
-    clip: "rect(0 0 0 0)",
-    clipPath: "inset(50%)",
-    height: 1,
-    overflow: "hidden",
-    position: "absolute",
-    whiteSpace: "nowrap",
-    width: 1,
   },
   closingSection: {
     alignItems: "center",
