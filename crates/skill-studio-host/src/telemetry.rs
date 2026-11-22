@@ -1913,9 +1913,13 @@ mod tests {
         assert!(redacted.extra.is_empty());
         let images = &redacted.debug_meta.images;
         assert_eq!(images.len(), 1);
-        let sentry::protocol::DebugImage::Symbolic(image) = &images[0] else {
-            panic!("the app image is present");
-        };
+        let image = images
+            .iter()
+            .find_map(|image| match image {
+                sentry::protocol::DebugImage::Symbolic(image) => Some(image),
+                _ => None,
+            })
+            .expect("the app image is present");
         assert_eq!(image.name, "skill-studio-desktop");
         assert!(image.debug_file.is_none());
         assert_eq!(image.id.to_string(), "d0e05a8a-3463-30ac-a860-2ca48cc10209");

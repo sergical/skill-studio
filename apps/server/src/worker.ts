@@ -105,7 +105,7 @@ const handler = {
 function sentryOptionsFor(env: Env): CloudflareOptions {
   return {
     dsn: env.SENTRY_DSN,
-    environment: env.SENTRY_ENVIRONMENT ?? "production",
+    environment: env.SENTRY_ENVIRONMENT || "production",
     tracesSampleRate: 0,
     dataCollection: {
       userInfo: false,

@@ -32,10 +32,12 @@ jobs:
             echo "::warning::SENTRY_AUTH_TOKEN is missing. Skipping Worker source map upload."
             exit 0
           fi
+          sentry_auth_token="$SENTRY_AUTH_TOKEN"
+          unset SENTRY_AUTH_TOKEN
           worker_bundle="$RUNNER_TEMP/skill-studio-worker"
           pnpm exec wrangler deploy --dry-run --outdir "$worker_bundle"
           pnpm exec sentry-cli sourcemaps inject "$worker_bundle"
-          pnpm exec sentry-cli sourcemaps upload --org sergtech \
+          SENTRY_AUTH_TOKEN="$sentry_auth_token" pnpm exec sentry-cli sourcemaps upload --org sergtech \
             --project skill-studio-api "$worker_bundle"
           echo "SENTRY_WORKER_ENTRY=$worker_bundle/worker.js" >> "$GITHUB_ENV"
         env:
