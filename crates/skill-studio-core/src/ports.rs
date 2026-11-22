@@ -1192,9 +1192,45 @@ pub trait EventSink: Send + Sync {
     fn notify(&self, notice: CoreNotice);
 }
 
-/// Outcome of one op call, as [`OpRecord`] tags it. Never carries the
-/// message text of the error - only its stable [`ErrorCode`] - so a
-/// telemetry port can send this without redacting free text itself.
+/// I/O cause of an operation failure, without its message or path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpIoCause {
+    /// The portable I/O error kind.
+    pub kind: std::io::ErrorKind,
+    /// The native OS error number, if the I/O error came from the OS.
+    pub raw_os_error: Option<i32>,
+}
+
+impl From<&std::io::Error> for OpIoCause {
+    fn from(error: &std::io::Error) -> Self {
+        let causes =
+            std::iter::successors(Some(error as &(dyn std::error::Error + 'static)), |cause| {
+                let cause = *cause;
+                // io::Error::source can skip the wrapped error itself.
+                cause
+                    .downcast_ref::<std::io::Error>()
+                    .and_then(std::io::Error::get_ref)
+                    .map(|inner| inner as &(dyn std::error::Error + 'static))
+                    .or_else(|| cause.source())
+            });
+        let cause = causes
+            .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
+            .min_by_key(|cause| {
+                (
+                    cause.raw_os_error().is_none(),
+                    cause.kind() == std::io::ErrorKind::Other,
+                )
+            })
+            .unwrap_or(error);
+        Self {
+            kind: cause.kind(),
+            raw_os_error: cause.raw_os_error(),
+        }
+    }
+}
+
+/// Outcome of one op call, as [`OpRecord`] tags it. Carries the stable
+/// error code and optional I/O cause without any error text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpOutcome {
     /// The op returned `Ok`.
@@ -1203,6 +1239,8 @@ pub enum OpOutcome {
     Err {
         /// The error's stable code.
         code: ErrorCode,
+        /// The I/O cause, when the core error retained a source.
+        io_cause: Option<OpIoCause>,
     },
 }
 
@@ -1530,7 +1568,10 @@ impl Runtime {
 
         let outcome = match &result {
             Ok(_) => OpOutcome::Ok,
-            Err(e) => OpOutcome::Err { code: e.code },
+            Err(error) => OpOutcome::Err {
+                code: error.code,
+                io_cause: error.source.as_ref().map(OpIoCause::from),
+            },
         };
 
         if depth_after == 0 {

@@ -29,6 +29,8 @@ use skill_studio_host::telemetry::{CommandSpan, Trigger};
 use skill_studio_host::{SkillInvocationIndex, SkillUseRefreshReport};
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::timing_log::{CommandError, CommandOutcome};
+
 use super::agents;
 use super::skill_assembly;
 use super::skill_dto::{Deployment, InstalledSkill};
@@ -308,7 +310,7 @@ pub async fn request_skill_rescan(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(
+    crate::timing_log::time_core_command_blocking(
         &timing_app,
         trace,
         "request_skill_rescan",
@@ -332,10 +334,15 @@ pub async fn rescan_skills_now(
     app: tauri::AppHandle,
 ) -> Result<SkillSnapshot, String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, trace, "rescan_skills_now", move || {
-        let state = app.state::<SkillRefreshState>();
-        rebuild_snapshot_now(&app, &state)
-    })
+    crate::timing_log::time_core_command_blocking(
+        &timing_app,
+        trace,
+        "rescan_skills_now",
+        move || {
+            let state = app.state::<SkillRefreshState>();
+            rebuild_snapshot_now(&app, &state)
+        },
+    )
     .await
 }
 
@@ -674,7 +681,7 @@ fn acquire_rebuild_lease(
     lease: &super::write_lease::WriteLease,
     state: &SkillRefreshState,
     home: &Path,
-) -> Result<super::write_lease::ScanLeaseGuard, String> {
+) -> Result<super::write_lease::ScanLeaseGuard, CommandError> {
     lease
         .acquire_scan_lease(home, &effective_project_paths(home)?)
         .inspect_err(|_| state.mark_skills_dirty())
@@ -738,13 +745,16 @@ fn activity_sources_or_disabled(home: &Path) -> DiscoverySources {
 /// project's skills, or the result of an install/remove/update). Blocks on
 /// `rebuild_lock` so it never overlaps another rebuild. On error the
 /// previous snapshot is left in place.
-pub fn rebuild_snapshot_now(
+pub(crate) fn rebuild_snapshot_now(
     app: &AppHandle,
     state: &SkillRefreshState,
-) -> Result<SkillSnapshot, String> {
+) -> Result<SkillSnapshot, CommandError> {
     if let Some(state) = app.try_state::<super::data_folder_status::DataFolderStatusState>() {
         if let Some(message) = state.0.lock().map_err(|error| error.to_string())?.clone() {
-            return Err(message);
+            return Err(CommandError::with_code(
+                skill_studio_core::error::ErrorCode::InvalidScope,
+                message,
+            ));
         }
     }
     super::background_work::run(app, super::background_work::BackgroundWorker::Scan, || {
@@ -760,7 +770,7 @@ pub(crate) fn rebuild_snapshot_at(
     home: &Path,
     state: &SkillRefreshState,
     publish: impl FnOnce(&SkillSnapshot) -> Result<(), String>,
-) -> Result<SkillSnapshot, String> {
+) -> Result<SkillSnapshot, CommandError> {
     let (scan_lease, _guard) = loop {
         let scan_lease =
             acquire_rebuild_lease(&super::write_lease::WriteLease::default(), state, home)?;
@@ -792,6 +802,7 @@ pub(crate) fn rebuild_snapshot_at(
         },
         publish,
     )
+    .map_err(CommandError::from)
 }
 
 fn rebuild_snapshot_with(
@@ -1391,7 +1402,7 @@ fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
     // Routed through `first_scan_then_sweep` so a test can pin both the
     // order and the thread without re-implementing this loop's scaffold.
     let mut watched_rebuild = WatchedRebuildGate::default();
-    let _: Result<(), String> = in_background_span("snapshot_refresh.startup", || {
+    let _ = in_background_span("snapshot_refresh.startup", || {
         first_scan_then_sweep(
             &mut || {
                 let started = Instant::now();
@@ -1536,10 +1547,10 @@ fn run_refresh_loop(app: AppHandle, state: SkillRefreshState) {
 
 /// Runs one refresh step as a sampled background root, so the core ops it
 /// runs join that root's trace and share its sampling decision.
-fn in_background_span<T, E>(
-    name: &'static str,
-    step: impl FnOnce() -> Result<T, E>,
-) -> Result<T, E> {
+fn in_background_span<T, E>(name: &'static str, step: impl FnOnce() -> Result<T, E>) -> Result<T, E>
+where
+    E: std::fmt::Display + 'static,
+{
     in_background_span_with_span(name, CommandSpan::start(Trigger::Background, None), step)
 }
 
@@ -1547,7 +1558,10 @@ fn in_background_span_with_span<T, E>(
     name: &'static str,
     span: CommandSpan,
     step: impl FnOnce() -> Result<T, E>,
-) -> Result<T, E> {
+) -> Result<T, E>
+where
+    E: std::fmt::Display + 'static,
+{
     let start = Instant::now();
     let result = span.enter(step);
     skill_studio_host::telemetry::record_command(
@@ -1555,7 +1569,7 @@ fn in_background_span_with_span<T, E>(
         name,
         span,
         start.elapsed().as_millis() as u64,
-        result.is_ok(),
+        result.failure(),
     );
     result
 }
@@ -1653,13 +1667,13 @@ fn next_refresh_step(tick: RefreshTick) -> RefreshStep {
 /// directly, rather than a test-owned closure that would stay green under
 /// that mutation. Only `build_runtime` - the sweep's own seam, already used
 /// without a real `AppHandle` - is passed through.
-fn first_scan_then_sweep(
-    rebuild: &mut dyn FnMut() -> Result<(), String>,
+fn first_scan_then_sweep<E: From<String>>(
+    rebuild: &mut dyn FnMut() -> Result<(), E>,
     build_runtime: impl FnOnce() -> Result<skill_studio_core::ports::Runtime, String>,
-) -> Result<(), String> {
+) -> Result<(), E> {
     let rebuild_result = rebuild();
     let sweep_result = run_startup_quarantine_sweep(build_runtime);
-    rebuild_result.and(sweep_result)
+    rebuild_result.and(sweep_result.map_err(E::from))
 }
 
 /// The startup quarantine sweep unit 3.9b's `run_refresh_loop` runs once,
@@ -1718,7 +1732,7 @@ fn run_startup_doctor_pass(app: &AppHandle) {
             |result, elapsed| {
                 let (outcome, error) = match &result {
                     Ok(_) => ("ok", None),
-                    Err(e) => ("error", Some(e.clone())),
+                    Err(e) => ("error", Some(e.message.clone())),
                 };
                 crate::timing_log::record_command(
                     &app_for_result,
@@ -1729,6 +1743,7 @@ fn run_startup_doctor_pass(app: &AppHandle) {
                     "worker",
                     outcome,
                     error,
+                    result.as_ref().err().map(|error| error.failure),
                 );
                 match result {
                     Ok(report) => {
@@ -1757,10 +1772,15 @@ fn run_startup_doctor_pass(app: &AppHandle) {
 /// thread.
 fn run_startup_doctor_pass_with(
     build_runtime: impl FnOnce() -> Result<skill_studio_core::ports::Runtime, String>,
-    on_result: impl FnOnce(Result<skill_studio_core::dto::DoctorReport, String>, std::time::Duration),
+    on_result: impl FnOnce(
+        Result<skill_studio_core::dto::DoctorReport, crate::timing_log::CommandError>,
+        std::time::Duration,
+    ),
 ) {
     let start = Instant::now();
-    let result = build_runtime().and_then(|rt| super::skill_doctor::run_doctor(&rt));
+    let result = build_runtime()
+        .map_err(crate::timing_log::CommandError::from)
+        .and_then(|rt| super::skill_doctor::run_doctor(&rt));
     on_result(result, start.elapsed());
 }
 
@@ -6562,7 +6582,7 @@ resolved_commit = "old"
                 "snapshot_refresh.startup",
                 CommandSpan::start(Trigger::User, None),
                 || {
-                    first_scan_then_sweep(&mut || Err("rebuild failed".into()), || {
+                    first_scan_then_sweep(&mut || Err("rebuild failed".to_string()), || {
                         swept = true;
                         Err("runtime unavailable".into())
                     })
@@ -6624,7 +6644,7 @@ resolved_commit = "old"
         let build_runtime_log = StdArc::clone(&log);
 
         let handle = std::thread::spawn(move || {
-            let _ = first_scan_then_sweep(
+            let _: Result<(), String> = first_scan_then_sweep(
                 &mut || {
                     scan_log
                         .lock()
@@ -6709,7 +6729,7 @@ resolved_commit = "old"
             Arc::new(Mutex::new(None));
         let record_slot = result_slot.clone();
         run_startup_doctor_pass_with(build_runtime, move |result, _elapsed| {
-            *record_slot.lock().unwrap() = Some(result);
+            *record_slot.lock().unwrap() = Some(result.map_err(String::from));
         });
 
         let report = result_slot

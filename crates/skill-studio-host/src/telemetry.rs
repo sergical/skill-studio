@@ -16,8 +16,10 @@ use skill_studio_core::ops::Operation;
 use skill_studio_core::ports::{NestedOp, NoopTelemetry, OpOutcome, OpRecord, Telemetry};
 use skill_studio_core::timing::StepTiming;
 
+mod command_failure;
 mod command_span;
 mod webview;
+pub use command_failure::CommandFailure;
 pub use command_span::{
     sampled_at, CommandSpan, TraceParent, Trigger, BACKGROUND_SAMPLE_RATE, USER_SAMPLE_RATE,
 };
@@ -36,9 +38,9 @@ pub const SHUTDOWN_FLUSH: Duration = Duration::from_secs(2);
 pub enum Surface {
     /// The Tauri desktop app.
     Desktop,
-    /// The `skill-studio` CLI. Not wired up by this PR.
+    /// The `skill-studio` CLI.
     Cli,
-    /// The stdio MCP server. Not wired up by this PR.
+    /// The stdio MCP server.
     Mcp,
 }
 
@@ -487,6 +489,34 @@ fn clamp_spans_to_transaction(spans: &mut [Span], transaction_end: SystemTime) {
     }
 }
 
+/// Reports a failed command from fixed fields and the exact context of its transaction.
+fn capture_command_failure(
+    client: &sentry::Client,
+    name: &str,
+    surface: Surface,
+    failure: CommandFailure,
+    contexts: &Map<String, Context>,
+) {
+    let code = failure.as_str();
+    let mut tags = outcome_tags(surface, false, Some(code));
+    tags.insert("command".to_string(), name.to_string());
+    let event = Event {
+        level: Level::Error,
+        message: Some(format!("{name} failed ({code})")),
+        transaction: Some(name.to_string()),
+        fingerprint: vec![name.to_string().into(), code.into()].into(),
+        release: client.options().release.clone(),
+        environment: client.options().environment.clone(),
+        platform: "native".into(),
+        contexts: contexts.clone(),
+        tags,
+        ..Default::default()
+    };
+    let mut envelope = Envelope::new();
+    envelope.add_item(event);
+    client.send_envelope(envelope);
+}
+
 impl Telemetry for SentryTelemetry {
     fn record(&self, record: OpRecord) {
         let ok = matches!(record.outcome, OpOutcome::Ok);
@@ -555,11 +585,8 @@ impl Telemetry for SentryTelemetry {
         }
         clamp_spans_to_transaction(&mut spans, timestamp);
 
-        let error_code = match &record.outcome {
-            OpOutcome::Err { code } => Some(code.as_str()),
-            OpOutcome::Ok => None,
-        };
-        let tags = outcome_tags(self.surface, ok, error_code);
+        let failure = CommandFailure::from_op_outcome(&record.outcome);
+        let tags = outcome_tags(self.surface, ok, failure.map(CommandFailure::as_str));
 
         let mut contexts = Map::new();
         contexts.insert(
@@ -575,7 +602,7 @@ impl Telemetry for SentryTelemetry {
         );
 
         let transaction = Transaction {
-            name: Some(op),
+            name: Some(op.clone()),
             release: Some(self.release.clone().into()),
             environment: Some(self.environment.into()),
             platform: "native".into(),
@@ -590,6 +617,10 @@ impl Telemetry for SentryTelemetry {
         };
 
         if let Some(client) = Hub::current().client() {
+            // A desktop command owns its issue. Headless operations are their own roots.
+            if let (None, Some(failure)) = (command, failure.filter(|code| code.opens_issue())) {
+                capture_command_failure(&client, &op, self.surface, failure, &transaction.contexts);
+            }
             let mut envelope = Envelope::new();
             envelope.add_item(transaction);
             client.send_envelope(envelope);
@@ -612,17 +643,16 @@ pub fn port(surface: Surface, app_version: &str) -> Arc<dyn Telemetry> {
 }
 
 /// One transaction per desktop Tauri command or background refresh step,
-/// sent as `span`. The core op transactions recorded inside `span` are its
-/// children. `command`'s error text is free text a `CommandOutcome` can
-/// carry a path in, so only `ok`/`error` and the command name itself are
-/// ever tagged - never the error text.
+/// plus one issue event for a reportable failure within the trace sample.
 pub fn record_command(
     surface: Surface,
     command: &'static str,
     span: CommandSpan,
     elapsed_ms: u64,
-    ok: bool,
+    failure: Option<CommandFailure>,
 ) {
+    let issue = failure.filter(|failure| failure.opens_issue());
+    let ok = failure.is_none();
     if !span.sampled {
         return;
     }
@@ -633,7 +663,7 @@ pub fn record_command(
     let timestamp = SystemTime::now();
     let start_timestamp = timestamp - elapsed;
     let name = format!("command.{command}");
-    let tags = outcome_tags(surface, ok, None);
+    let tags = outcome_tags(surface, ok, failure.map(CommandFailure::as_str));
 
     let mut contexts = Map::new();
     contexts.insert(
@@ -650,6 +680,9 @@ pub fn record_command(
 
     let release = client.options().release.clone();
     let environment = client.options().environment.clone();
+    if let Some(issue) = issue {
+        capture_command_failure(&client, &name, surface, issue, &contexts);
+    }
     let transaction = Transaction {
         name: Some(name),
         release,
@@ -856,6 +889,7 @@ mod tests {
             correlation_id: CorrelationId("c-fail".into()),
             outcome: OpOutcome::Err {
                 code: ErrorCode::InvalidRequest,
+                io_cause: None,
             },
             timing: OpTiming {
                 op: "install".to_string(),
@@ -1945,29 +1979,166 @@ mod tests {
         (**trace).clone()
     }
 
+    #[test]
+    fn a_core_file_limit_failure_sends_one_issue_linked_to_the_operation_without_the_path() {
+        use sentry::protocol::EnvelopeItem;
+
+        const PRIVATE_PATH: &str = "/Users/alice/.agents/skills/private-skill/SKILL.md";
+        let home = tempfile::tempdir().expect("fixture home");
+        let mut options = ClientOptions::default();
+        options.release = Some("skill-studio@9.9.9".into());
+        let envelopes = sentry::test::with_captured_envelopes_options(
+            || {
+                let mut ports = crate::default_ports(
+                    home.path().join("leases"),
+                    Arc::new(skill_studio_core::harness::HarnessCatalog::builtin()),
+                );
+                ports.telemetry = port(Surface::Cli, "9.9.9");
+                let runtime = skill_studio_core::ports::Runtime::new(
+                    &skill_studio_core::RuntimeScope::fixture(home.path()),
+                    ports,
+                )
+                .expect("fixture runtime");
+                let ctx = skill_studio_core::ports::OpContext::uncancellable(CorrelationId(
+                    "c-file-limit".into(),
+                ));
+                let error = runtime
+                    .run(Operation::Listing, &ctx, || {
+                        Err::<(), _>(skill_studio_core::error::CoreError::io(
+                            PRIVATE_PATH,
+                            std::io::Error::other(skill_studio_core::fsops::FsOpsError::Io {
+                                path: PRIVATE_PATH.into(),
+                                source: std::io::Error::from_raw_os_error(
+                                    rustix::io::Errno::MFILE.raw_os_error(),
+                                ),
+                            }),
+                        ))
+                    })
+                    .expect_err("listing failed");
+                assert_eq!(error.code, ErrorCode::Io);
+            },
+            options,
+        );
+        let events: Vec<_> = envelopes
+            .iter()
+            .flat_map(Envelope::items)
+            .filter_map(|item| match item {
+                EnvelopeItem::Event(event) => Some(event),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(events.len(), 1, "expected one issue event");
+        let event = events[0];
+        assert_eq!(event.tags["command"], "skill.listing");
+        assert_eq!(event.tags["error_code"], "too_many_open_files");
+        assert_eq!(event.tags["surface"], "cli");
+        assert_eq!(event.release.as_deref(), Some("skill-studio@9.9.9"));
+        assert_eq!(
+            &*event.fingerprint,
+            ["skill.listing", "too_many_open_files"]
+        );
+        let transaction = envelopes
+            .iter()
+            .flat_map(Envelope::items)
+            .find_map(|item| match item {
+                EnvelopeItem::Transaction(transaction) => Some(transaction),
+                _ => None,
+            })
+            .expect("operation transaction");
+        assert_eq!(event.contexts["trace"], transaction.contexts["trace"]);
+        assert_eq!(transaction.tags["error_code"], "too_many_open_files");
+        let listing_error = format!(
+            "io: {} ({PRIVATE_PATH})",
+            std::io::Error::from_raw_os_error(rustix::io::Errno::MFILE.raw_os_error()),
+        );
+        assert_eq!(
+            CommandFailure::from_legacy(&listing_error).as_str(),
+            "too_many_open_files"
+        );
+
+        for envelope in envelopes {
+            let mut bytes = Vec::new();
+            envelope.to_writer(&mut bytes).expect("serialize envelope");
+            assert!(!String::from_utf8_lossy(&bytes).contains(PRIVATE_PATH));
+        }
+    }
+
+    #[test]
+    fn a_validation_refusal_sends_a_trace_without_an_issue_event() {
+        let envelopes = sentry::test::with_captured_envelopes(|| {
+            record_command(
+                Surface::Desktop,
+                "skill_listing",
+                CommandSpan::start(Trigger::User, None),
+                10,
+                Some(CommandFailure::Core(
+                    skill_studio_core::error::ErrorCode::InvalidRequest,
+                )),
+            );
+        });
+        assert_eq!(envelopes.len(), 1);
+        assert_eq!(transaction_from(&envelopes[0]).tags["outcome"], "error");
+    }
+
     /// Flow: the webview invokes a command that runs a core op. Expectation:
     /// the webview trace id is the command root's trace id and the op
     /// transaction's trace id, the root's parent is the webview span, and
     /// the op's parent is the root. Catches: an op or a root that starts
     /// its own trace, which splits one click into unrelated traces.
     #[test]
-    fn a_webview_command_and_its_op_share_one_trace_with_the_op_under_the_root() {
+    fn a_failed_webview_command_owns_one_issue_on_the_operation_trace() {
         let webview =
             TraceParent::from_sentry_trace("4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-1")
                 .expect("well-formed header");
         let span = CommandSpan::start(Trigger::User, Some(webview));
         let envelopes = sentry::test::with_captured_envelopes(|| {
-            span.enter(|| telemetry().record(three_step_record("scan")));
-            record_command(Surface::Desktop, "install_skill", span, 80, true);
+            let mut operation = three_step_record("scan");
+            operation.outcome = OpOutcome::Err {
+                code: ErrorCode::Io,
+                io_cause: None,
+            };
+            span.enter(|| telemetry().record(operation));
+            record_command(
+                Surface::Desktop,
+                "install_skill",
+                span,
+                80,
+                Some(CommandFailure::Core(ErrorCode::Io)),
+            );
         });
-        assert_eq!(envelopes.len(), 2, "one op transaction, one command root");
-        let op = transaction_from(&envelopes[0]);
-        let root = transaction_from(&envelopes[1]);
+        let mut transactions = envelopes
+            .iter()
+            .flat_map(Envelope::items)
+            .filter_map(|item| {
+                if let EnvelopeItem::Transaction(transaction) = item {
+                    Some(transaction.as_ref())
+                } else {
+                    None
+                }
+            });
+        let op = transactions.next().expect("operation transaction");
+        let root = transactions.next().expect("command transaction");
+        assert!(transactions.next().is_none());
         assert_eq!(op.name.as_deref(), Some("skill.scan"));
         assert_eq!(root.name.as_deref(), Some("command.install_skill"));
 
-        let op_trace = trace_context(&op);
-        let root_trace = trace_context(&root);
+        let mut issues = envelopes
+            .iter()
+            .flat_map(Envelope::items)
+            .filter_map(|item| {
+                if let EnvelopeItem::Event(event) = item {
+                    Some(event.as_ref())
+                } else {
+                    None
+                }
+            });
+        let issue = issues.next().expect("command issue event");
+        assert!(issues.next().is_none(), "one issue for the whole command");
+        assert_eq!(issue.tags["command"], "command.install_skill");
+        assert_eq!(issue.contexts["trace"], root.contexts["trace"]);
+
+        let op_trace = trace_context(op);
+        let root_trace = trace_context(root);
         assert_eq!(root_trace.trace_id, webview.trace_id);
         assert_eq!(op_trace.trace_id, webview.trace_id);
         assert_eq!(root_trace.parent_span_id, Some(webview.span_id));
@@ -1993,7 +2164,7 @@ mod tests {
         };
         let envelopes = sentry::test::with_captured_envelopes(|| {
             span.enter(|| telemetry().record(three_step_record("scan")));
-            record_command(Surface::Desktop, "snapshot_refresh.full", span, 80, true);
+            record_command(Surface::Desktop, "snapshot_refresh.full", span, 80, None);
         });
         assert!(envelopes.is_empty(), "got {} envelopes", envelopes.len());
     }

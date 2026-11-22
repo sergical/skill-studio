@@ -289,7 +289,7 @@ fn core_restore_event_at(
     data_root: &Path,
     event_id: &str,
     force: bool,
-) -> Result<(), String> {
+) -> Result<(), crate::timing_log::CommandError> {
     let rt = super::core_runtime::build_runtime_write_at(home, data_root)?;
     let ctx = skill_studio_core::ports::OpContext::uncancellable(
         skill_studio_core::identity::CorrelationId(ulid::Ulid::generate().to_string()),
@@ -303,19 +303,27 @@ fn core_restore_event_at(
         },
     );
     if let Err(error) = &result {
-        return Err(serde_json::json!({
+        let message = serde_json::json!({
             "code": error.code.as_str(),
             "message": error.message,
         })
-        .to_string());
+        .to_string();
+        return Err(crate::timing_log::CommandError {
+            failure: skill_studio_host::telemetry::CommandFailure::from_core(
+                error.code,
+                error.source.as_ref(),
+                &error.message,
+            ),
+            message,
+        });
     }
-    let envelope = skill_studio_core::ops::ResultEnvelope::from_result(
+    super::core_runtime::finish_core_command(
         skill_studio_core::ops::Operation::RestoreEvent,
-        &rt.scope,
+        &rt,
         &ctx,
         result,
-    );
-    super::core_runtime::to_command_result(envelope).map(|_outcome| ())
+    )
+    .map(|_| ())
 }
 
 /// Undoes one event against `store`, rooted at `home`/`data_root`. Dispatches
@@ -348,7 +356,7 @@ pub fn restore_event_with_runtime(
     if desktop_restored {
         return Ok(());
     }
-    core_restore_event_at(home, data_root, event_id, force)
+    core_restore_event_at(home, data_root, event_id, force).map_err(String::from)
 }
 
 // Returns false for a core-owned event. The caller releases both desktop
@@ -360,20 +368,26 @@ fn restore_desktop_event(
     event_id: &str,
     force: bool,
     mutation: &WriteLeaseGuard,
-) -> Result<bool, String> {
-    let target = store
-        .get(event_id)?
-        .ok_or_else(|| format!("Event {event_id} not found"))?;
+) -> Result<bool, crate::timing_log::CommandError> {
+    let target = store.get(event_id)?.ok_or_else(|| {
+        crate::timing_log::CommandError::with_code(
+            skill_studio_core::error::ErrorCode::InvalidRequest,
+            format!("Event {event_id} not found"),
+        )
+    })?;
     if skill_studio_core::backup_retention::backup_is_expired(&target.payload) {
-        return Err(skill_studio_core::backup_retention::BACKUP_EXPIRED_REASON.to_owned());
+        return Err(crate::timing_log::CommandError::with_code(
+            skill_studio_core::error::ErrorCode::BackupExpired,
+            skill_studio_core::backup_retention::BACKUP_EXPIRED_REASON,
+        ));
     }
     skill_materialize::restore_guard_for_explode(store, &target, home)?;
     if target.kind == "make_independent_copy" {
         if force {
-            return Err(
-                "An independent copy cannot be force-restored because that could delete local edits"
-                    .to_string(),
-            );
+            return Err(crate::timing_log::CommandError::with_code(
+                skill_studio_core::error::ErrorCode::Unsupported,
+                "An independent copy cannot be force-restored because that could delete local edits",
+            ));
         }
         super::skill_independent_copy::restore_independent_copy(store, home, &target, mutation)?;
         store.retain_backups(mutation.as_exclusive_guard());
@@ -413,7 +427,7 @@ fn restore_event_with_state(
     event_id: &str,
     force: bool,
     acquire_lease: impl FnOnce() -> Result<WriteLeaseGuard, String>,
-) -> Result<(), String> {
+) -> Result<(), crate::timing_log::CommandError> {
     // Match materialize, link repair and frontmatter repair: lease first.
     let desktop_restored = {
         let mutation = acquire_lease()?;
@@ -436,17 +450,22 @@ pub async fn restore_skill_event(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let timing_app = app.clone();
-    crate::timing_log::time_command_blocking(&timing_app, trace, "restore_skill_event", move || {
-        let event_store = app.state::<EventStoreState>();
-        let home = dirs::home_dir().ok_or("Could not find home directory")?;
-        let data_root = super::core_runtime::data_root();
-        restore_event_with_state(&event_store, &home, &data_root, &event_id, force, || {
-            WriteLease::for_data_root(&data_root).try_acquire(&home)
-        })?;
+    crate::timing_log::time_core_command_blocking(
+        &timing_app,
+        trace,
+        "restore_skill_event",
+        move || {
+            let event_store = app.state::<EventStoreState>();
+            let home = dirs::home_dir().ok_or("Could not find home directory")?;
+            let data_root = super::core_runtime::data_root();
+            restore_event_with_state(&event_store, &home, &data_root, &event_id, force, || {
+                WriteLease::for_data_root(&data_root).try_acquire(&home)
+            })?;
 
-        skill_refresh::request_snapshot_rebuild(&app);
-        Ok(())
-    })
+            skill_refresh::request_snapshot_rebuild(&app);
+            Ok(())
+        },
+    )
     .await
 }
 

@@ -7,7 +7,7 @@
 
 use skill_studio_core::identity::CorrelationId;
 use skill_studio_core::listing_visibility::{self, ListingReport, ListingRequest};
-use skill_studio_core::ops::{Operation, ResultEnvelope};
+use skill_studio_core::ops::Operation;
 use skill_studio_core::ports::OpContext;
 
 /// Reads only. Skill Studio never writes an agent's settings file, so the
@@ -18,12 +18,11 @@ pub async fn skill_listing(
     request: ListingRequest,
     app: tauri::AppHandle,
 ) -> Result<ListingReport, String> {
-    crate::timing_log::time_command_blocking(&app, trace, "skill_listing", move || {
+    crate::timing_log::time_core_command_blocking(&app, trace, "skill_listing", move || {
         let rt = super::core_runtime::build_runtime_write()?;
         let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
         let result = listing_visibility::listing(&rt, &ctx, &request);
-        let envelope = ResultEnvelope::from_result(Operation::Listing, &rt.scope, &ctx, result);
-        super::core_runtime::to_command_result(envelope)
+        super::core_runtime::finish_core_command(Operation::Listing, &rt, &ctx, result)
     })
     .await
 }

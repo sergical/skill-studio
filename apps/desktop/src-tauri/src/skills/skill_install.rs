@@ -24,13 +24,14 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::timing_log::CommandError;
 use skill_studio_core::dto::{
     InstallFile, InstallHarnessResult, InstallMethod, InstallOutcome, InstallRequest,
 };
 use skill_studio_core::identity::{
     CorrelationId, ProjectRef, RootScope, SkillName, UNIVERSAL_ROOT_RELATIVE,
 };
-use skill_studio_core::ops::{self, Operation, ResultEnvelope};
+use skill_studio_core::ops::{self, Operation};
 use skill_studio_core::ports::{OpContext, Runtime};
 
 use super::agents::AgentId;
@@ -539,7 +540,7 @@ pub(crate) fn install_one(
     fetch: &dyn UpstreamFetch,
     lookup: &dyn CommitLookup,
     snapshot: Option<&dyn RepoSnapshot>,
-) -> Result<InstallAdapterOutcome, String> {
+) -> Result<InstallAdapterOutcome, CommandError> {
     #[cfg(test)]
     INSTALL_ONE_THREAD_PROBE.with(|cell| {
         if let Some(probe) = cell.borrow().as_ref() {
@@ -551,7 +552,7 @@ pub(crate) fn install_one(
     });
     install_many(rt, std::slice::from_ref(request), fetch, lookup, snapshot)
         .pop()
-        .unwrap_or_else(|| Err("install_many returned no result".to_string()))
+        .unwrap_or_else(|| Err("install_many returned no result".into()))
 }
 
 /// Installs skills, results in request order: gathers `Copy` files
@@ -565,7 +566,7 @@ pub(crate) fn install_many(
     fetch: &dyn UpstreamFetch,
     lookup: &dyn CommitLookup,
     snapshot: Option<&dyn RepoSnapshot>,
-) -> Vec<Result<InstallAdapterOutcome, String>> {
+) -> Vec<Result<InstallAdapterOutcome, CommandError>> {
     let built: Vec<Result<InstallRequest, String>> = requests
         .iter()
         .map(|request| {
@@ -601,8 +602,8 @@ pub(crate) fn install_many(
             let result = installed
                 .next()
                 .ok_or("install_batch returned too few results")?;
-            let envelope = ResultEnvelope::from_result(Operation::Install, &rt.scope, &ctx, result);
-            let outcome = super::core_runtime::to_command_result(envelope)?;
+            let outcome =
+                super::core_runtime::finish_core_command(Operation::Install, rt, &ctx, result)?;
             Ok(finish_install(request, outcome))
         })
         .collect()
@@ -621,13 +622,16 @@ pub(crate) async fn add_skill_with_runtime(
     build_runtime: impl FnOnce() -> Result<Runtime, String> + Send + 'static,
     request: AddSkillRequest,
     github: GithubTools,
-) -> Result<AddSkillResult, String> {
+) -> Result<AddSkillResult, CommandError> {
     let joined = crate::timing_log::spawn_blocking_in_span(move || {
         let rt = build_runtime()?;
         let (fetch, lookup) = github;
         match install_one(&rt, &request, fetch.as_ref(), lookup.as_ref(), None)? {
             InstallAdapterOutcome::Result(result) => Ok(result),
-            InstallAdapterOutcome::NeedsTrust { identity } => Err(needs_trust_message(&identity)),
+            InstallAdapterOutcome::NeedsTrust { identity } => Err(CommandError::with_code(
+                skill_studio_core::error::ErrorCode::InvalidRequest,
+                needs_trust_message(&identity),
+            )),
         }
     })
     .await;
@@ -701,6 +705,7 @@ pub async fn add_skill(
         add_skill_with_runtime(super::core_runtime::build_runtime_write, request, github),
     )
     .await
+    .map_err(String::from)
 }
 
 #[cfg(test)]
@@ -983,7 +988,8 @@ mod tests {
 
         let error = add_skill_with_runtime(move || Ok(rt), request, never_github())
             .await
-            .unwrap_err();
+            .unwrap_err()
+            .message;
 
         assert!(
             error.starts_with(UNTRUSTED_DOTAGENTS_SOURCE_PREFIX),
@@ -1011,7 +1017,8 @@ mod tests {
         let rt = test_runtime(&home);
         let first_error = add_skill_with_runtime(move || Ok(rt), request.clone(), stub_github())
             .await
-            .unwrap_err();
+            .unwrap_err()
+            .message;
         assert!(
             first_error.starts_with(UNTRUSTED_DOTAGENTS_SOURCE_PREFIX),
             "unexpected error: {first_error}"

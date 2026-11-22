@@ -12,9 +12,10 @@ use std::io::{BufRead, Write};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use skill_studio_core::error::{CoreError, ErrorCode};
 use skill_studio_core::health::{Outcome, TimingRow};
 use skill_studio_core::timing::StepTiming;
-use skill_studio_host::telemetry::{CommandSpan, TraceParent, Trigger};
+use skill_studio_host::telemetry::{CommandFailure, CommandSpan, TraceParent, Trigger};
 use tauri::ipc::{CommandArg, CommandItem, InvokeError};
 use tauri::{AppHandle, Manager};
 
@@ -60,17 +61,33 @@ fn default_outcome<'a>() -> std::borrow::Cow<'a, str> {
 /// command that starts returning a type with a real failure path doesn't
 /// silently inherit an "always ok" impl instead of using `Result`.
 pub trait CommandOutcome {
-    /// `("ok", None)`, or `("error", Some(first line of the error, capped
-    /// at 120 chars))`.
+    /// `("ok", None)`, or `("error", Some(first line of the error, capped at 120 chars))`.
     fn outcome(&self) -> (&'static str, Option<String>);
+
+    /// The telemetry code before the local timing log truncates the message.
+    fn failure(&self) -> Option<CommandFailure> {
+        None
+    }
 }
 
-impl<T, E: std::fmt::Display> CommandOutcome for Result<T, E> {
+impl<T, E: std::fmt::Display + 'static> CommandOutcome for Result<T, E> {
     fn outcome(&self) -> (&'static str, Option<String>) {
         match self {
             Ok(_) => ("ok", None),
             Err(error) => ("error", Some(first_line_capped(&error.to_string()))),
         }
+    }
+
+    fn failure(&self) -> Option<CommandFailure> {
+        self.as_ref().err().map(|error| {
+            // Async and background wrappers also accept typed command errors.
+            (error as &dyn std::any::Any)
+                .downcast_ref::<CommandError>()
+                .map_or_else(
+                    || CommandError::from(error.to_string()).failure,
+                    |error| error.failure,
+                )
+        })
     }
 }
 
@@ -164,6 +181,7 @@ pub fn time_command<T: CommandOutcome>(
         "main",
         outcome,
         error,
+        result.failure(),
     );
     result
 }
@@ -201,6 +219,7 @@ pub async fn time_command_async<T: CommandOutcome>(
         "worker",
         outcome,
         error,
+        result.failure(),
     );
     result
 }
@@ -219,18 +238,85 @@ pub async fn time_command_blocking<T: Send + 'static>(
     command: &'static str,
     f: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
+    time_core_command_blocking(app, trace, command, move || f().map_err(CommandError::from)).await
+}
+
+/// The IPC rejection string and its fixed telemetry code.
+#[derive(Debug)]
+pub(crate) struct CommandError {
+    pub(crate) message: String,
+    pub(crate) failure: CommandFailure,
+}
+
+impl CommandError {
+    /// Keeps a known refusal's code alongside its existing IPC text.
+    pub(crate) fn with_code(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            failure: CommandFailure::Core(code),
+        }
+    }
+}
+
+impl std::fmt::Display for CommandError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl From<CoreError> for CommandError {
+    fn from(error: CoreError) -> Self {
+        Self {
+            failure: CommandFailure::from_core(error.code, error.source.as_ref(), &error.message),
+            message: error.message,
+        }
+    }
+}
+
+impl From<&str> for CommandError {
+    fn from(message: &str) -> Self {
+        Self::from(message.to_owned())
+    }
+}
+
+impl From<String> for CommandError {
+    fn from(message: String) -> Self {
+        let failure = if message == crate::skills::skill_process::PROCESS_CANCELLED_MESSAGE {
+            CommandFailure::Core(ErrorCode::Cancelled)
+        } else if message.starts_with(crate::skills::write_lease::WRITE_LEASE_BUSY_PREFIX) {
+            CommandFailure::Core(ErrorCode::ScopeBusy)
+        } else {
+            CommandFailure::from_legacy(&message)
+        };
+        Self { message, failure }
+    }
+}
+
+impl From<CommandError> for String {
+    fn from(error: CommandError) -> Self {
+        error.message
+    }
+}
+
+/// Times a blocking command while keeping its typed code and original IPC rejection.
+pub(crate) async fn time_core_command_blocking<T: Send + 'static>(
+    app: &AppHandle,
+    trace: IpcTrace,
+    command: &'static str,
+    f: impl FnOnce() -> Result<T, CommandError> + Send + 'static,
+) -> Result<T, String> {
     let span = trace.start_span();
     let start = std::time::Instant::now();
     let ready = app
         .try_state::<crate::skills::event_commands::EventStoreState>()
         .map(|state| state.recovery_ready());
-    let result = join_result_to_err(
-        command,
-        tauri::async_runtime::spawn_blocking(move || {
-            span.enter(|| run_after_startup_recovery(ready.as_deref(), f))
-        })
-        .await,
-    );
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        span.enter(|| run_after_startup_recovery(ready.as_deref(), f))
+    })
+    .await;
+    let result = join_result_to_err(command, joined);
+    let failure = result.as_ref().err().map(|error| error.failure);
+    let result = result.map_err(|error| error.message);
     let (outcome, error) = result.outcome();
     record_command(
         app,
@@ -241,19 +327,20 @@ pub async fn time_command_blocking<T: Send + 'static>(
         "worker",
         outcome,
         error,
+        failure,
     );
     result
 }
 
-fn run_after_startup_recovery<T>(
+fn run_after_startup_recovery<T, E: From<String>>(
     ready: Option<&std::sync::OnceLock<crate::skills::event_commands::StartupRecoveryOutcome>>,
-    run: impl FnOnce() -> Result<T, String>,
-) -> Result<T, String> {
+    run: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
     if let Some(ready) = ready {
         match ready.wait() {
             crate::skills::event_commands::StartupRecoveryOutcome::Completed => {}
             crate::skills::event_commands::StartupRecoveryOutcome::Failed(error) => {
-                return Err(format!("Startup recovery failed: {error}"));
+                return Err(format!("Startup recovery failed: {error}").into());
             }
         }
     }
@@ -265,11 +352,11 @@ fn run_after_startup_recovery<T>(
 /// `JoinError` (the task panicked or was cancelled) becomes an `Err`
 /// carrying the panic message instead of a `spawn_blocking(..).await.unwrap()`
 /// that would itself panic on the calling thread.
-pub(crate) fn join_result_to_err<T>(
+pub(crate) fn join_result_to_err<T, E: From<String>>(
     command: &'static str,
-    joined: Result<Result<T, String>, tauri::Error>,
-) -> Result<T, String> {
-    joined.unwrap_or_else(|join_error| Err(format!("{command} panicked: {join_error}")))
+    joined: Result<Result<T, E>, tauri::Error>,
+) -> Result<T, E> {
+    joined.unwrap_or_else(|join_error| Err(format!("{command} panicked: {join_error}").into()))
 }
 
 /// Appends one record to `<app_data_dir>/timing.jsonl`, rotating first if
@@ -291,6 +378,7 @@ pub fn record_command(
     thread: &str,
     outcome: &str,
     error: Option<String>,
+    failure: Option<CommandFailure>,
 ) {
     // Every command reports to Sentry regardless of the local `timing.jsonl`
     // write below - a data folder the desktop can't write to must not also
@@ -300,7 +388,7 @@ pub fn record_command(
         command,
         span,
         elapsed_ms,
-        outcome == "ok",
+        failure,
     );
     if !crate::skills::data_folder_status::data_folder_writable(app) {
         return;
@@ -500,7 +588,7 @@ mod tests {
             )
             .unwrap();
         let ran = std::cell::Cell::new(false);
-        let result = run_after_startup_recovery(Some(&ready), || {
+        let result: Result<(), String> = run_after_startup_recovery(Some(&ready), || {
             ran.set(true);
             Ok(())
         });

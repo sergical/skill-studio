@@ -1176,6 +1176,8 @@ pub struct SplitCopiesOutcome {
     pub updated: Vec<PathBuf>,
     /// Live copies left as they were, each with a plain reason.
     pub refused: Vec<(PathBuf, String)>,
+    /// First error from reading or writing a copy, if a refusal was technical.
+    pub copy_error_code: Option<ErrorCode>,
 }
 
 /// Writes one fetched version of a split skill to every live split copy,
@@ -1288,9 +1290,12 @@ fn update_split_copies_body(
                 path,
                 "this copy has changes of its own, so the update left it as it is".to_string(),
             )),
-            Err(error) => outcome
-                .refused
-                .push((path, format!("could not write: {}", error.message))),
+            Err(error) => {
+                outcome.copy_error_code.get_or_insert(error.code);
+                outcome
+                    .refused
+                    .push((path, format!("could not write: {}", error.message)));
+            }
         }
     }
     let Some((_, primary, _)) = candidates.first() else {
@@ -1397,9 +1402,12 @@ fn update_split_copies_body(
                 outcome.updated.push(path.clone());
             }
             Ok(Err(reason)) => outcome.refused.push((path.clone(), reason)),
-            Err(e) => outcome
-                .refused
-                .push((path.clone(), format!("could not write: {}", e.message))),
+            Err(error) => {
+                outcome.copy_error_code.get_or_insert(error.code);
+                outcome
+                    .refused
+                    .push((path.clone(), format!("could not write: {}", error.message)));
+            }
         }
     }
     // Hashes of the copies that did swap are always recorded, even when a

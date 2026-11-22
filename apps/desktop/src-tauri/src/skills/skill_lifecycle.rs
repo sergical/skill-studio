@@ -127,7 +127,7 @@ pub fn rebuild_fresh_lifecycle_snapshot(
     app: &tauri::AppHandle,
     refresh_state: &SkillRefreshState,
 ) -> Result<SkillSnapshot, String> {
-    skill_refresh::rebuild_snapshot_now(app, refresh_state)
+    skill_refresh::rebuild_snapshot_now(app, refresh_state).map_err(String::from)
 }
 
 /// Resolve and verify a lifecycle target inside one already-fresh snapshot.

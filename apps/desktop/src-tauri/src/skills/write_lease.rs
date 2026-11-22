@@ -59,6 +59,9 @@ impl Drop for ScanLeaseGuard {
 /// finish instead of failing the write with "in progress".
 const SCAN_WAIT: Duration = Duration::from_secs(3);
 
+/// Prefix carried by the older commands that return a string when the lease is busy.
+pub(crate) const WRITE_LEASE_BUSY_PREFIX: &str = "Another write is in progress (pid ";
+
 /// Holds the write lease until dropped, releasing it.
 pub struct WriteLeaseGuard(ExclusiveGuard);
 
@@ -139,11 +142,11 @@ impl WriteLease {
     /// Acquires a shared lease over `home` and `projects` for a rebuild, so a
     /// write and the scan exclude each other while scans do not block each
     /// other. Takes no lease when this thread already holds one over the home.
-    pub fn acquire_scan_lease(
+    pub(crate) fn acquire_scan_lease(
         &self,
         home: &Path,
         projects: &[std::path::PathBuf],
-    ) -> Result<ScanLeaseGuard, String> {
+    ) -> Result<ScanLeaseGuard, crate::timing_log::CommandError> {
         let history = if std::env::var_os("SKILL_STUDIO_FIXTURE").is_some() {
             home.join(".history")
         } else {
@@ -168,8 +171,7 @@ impl WriteLease {
         scan_wait_probe::notify(&home.canonicalize().unwrap_or_else(|_| home.to_path_buf()));
         let handle = self
             .lease
-            .acquire(&keys, LeaseMode::Shared, self.scan_wait)
-            .map_err(|e| e.message)?;
+            .acquire(&keys, LeaseMode::Shared, self.scan_wait)?;
         HELD_ON_THIS_THREAD.with(|held| held.set(held.get() + 1));
         Ok(ScanLeaseGuard {
             handle: Some(handle),
@@ -215,7 +217,7 @@ impl WriteLease {
             })
             .map_err(|e| match e.busy {
                 Some(busy) => format!(
-                    "Another write is in progress (pid {}, held for {:?})",
+                    "{WRITE_LEASE_BUSY_PREFIX}{}, held for {:?})",
                     busy.pid, busy.age
                 ),
                 None => e.message,
@@ -317,8 +319,14 @@ mod tests {
 
         let lease = WriteLease::with_lease_root(lease_root);
         let first = lease.try_acquire(&root).unwrap();
-        let second = lease.try_acquire(&root);
-        assert!(second.err().unwrap().contains("Another write"));
+        let second = lease.try_acquire(&root).err().expect("busy write lease");
+        assert!(second.contains("Another write"));
+        assert_eq!(
+            crate::timing_log::CommandError::from(second)
+                .failure
+                .as_str(),
+            "scope_busy"
+        );
         // The adapter picks the key: two roots must not share one.
         assert!(lease.try_acquire(&other).is_ok());
         drop(first);
