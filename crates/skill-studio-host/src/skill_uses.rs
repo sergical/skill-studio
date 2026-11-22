@@ -61,6 +61,8 @@ const MAX_RUN_BYTES: u64 = 128 * 1024 * 1024;
 /// loaded, so a runaway cache can't blow up memory on startup.
 const MAX_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
+const USAGE_READER_VERSION: u32 = 7;
+
 /// Claude Code keeps one directory per project here, and (for subagent
 /// sessions) one `<session>/subagents/*.jsonl` per parent session inside it.
 #[cfg(test)]
@@ -85,6 +87,8 @@ fn default_run_budget() -> u64 {
 /// scratch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct IndexedTranscript {
+    #[serde(default)]
+    source_harness: String,
     size: u64,
     modified: SystemTime,
     parsed_bytes: u64,
@@ -125,9 +129,56 @@ struct IndexedContext {
     #[serde(default)]
     claude_records: BTreeMap<String, Vec<SkillInvocation>>,
     #[serde(default)]
+    codex_transcript: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    codex_fork: Option<Box<IndexedCodexFork>>,
+}
+
+/// Parsed parent history remains available if the original rollout disappears.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct IndexedCodexFork {
+    parent_session: String,
     inherited_lines: u64,
-    #[serde(default)]
-    history_start_ordinal: Option<u64>,
+    history_start_ordinal: u64,
+    transcript: TranscriptContext,
+    uses: Vec<SkillInvocation>,
+}
+
+impl IndexedCodexFork {
+    fn from_session_meta(line: &str) -> Option<Self> {
+        let record: serde_json::Value = serde_json::from_str(line).ok()?;
+        if record["type"].as_str()? != "session_meta" {
+            return None;
+        }
+        let payload = &record["payload"];
+        let parent_session = payload["forked_from_id"]
+            .as_str()
+            .filter(|id| !id.is_empty())?;
+        let history_start_ordinal = payload["subagent_history_start_ordinal"].as_u64()?;
+        Some(Self {
+            parent_session: parent_session.to_owned(),
+            // The fork header is ordinal 0. The parent copy starts on the next line.
+            inherited_lines: history_start_ordinal.saturating_sub(1),
+            history_start_ordinal,
+            transcript: TranscriptContext::default(),
+            uses: Vec::new(),
+        })
+    }
+
+    fn take_inherited_line(&mut self, line: &str) -> bool {
+        if self.inherited_lines == 0 {
+            return false;
+        }
+        let ordinal = serde_json::from_str::<serde_json::Value>(line)
+            .ok()
+            .and_then(|record| record["ordinal"].as_u64());
+        if ordinal.is_some_and(|ordinal| ordinal >= self.history_start_ordinal) {
+            self.inherited_lines = 0;
+            return false;
+        }
+        self.inherited_lines -= 1;
+        true
+    }
 }
 
 /// How many bytes of a transcript's already-parsed tail are kept for
@@ -232,6 +283,7 @@ pub struct SkillUseRefreshReport {
 struct TranscriptFile<'a> {
     home: &'a Path,
     path: &'a Path,
+    harness: &'static str,
     /// The file's modification time, or now when the platform can't tell.
     modified: DateTime<Utc>,
 }
@@ -242,10 +294,16 @@ fn is_subagent_log(path: &Path) -> bool {
         .is_some_and(|name| name == "subagents")
 }
 
-fn log_session(file: &TranscriptFile<'_>, session: Option<&str>) -> String {
+fn is_legacy_claude_subagent_log(path: &Path) -> bool {
+    path.file_stem()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("agent-"))
+}
+
+fn log_session(file: &TranscriptFile<'_>, session: Option<&str>, legacy_sidechain: bool) -> String {
     match session {
         None => file.path.to_string_lossy().into_owned(),
-        Some(session) if is_subagent_log(file.path) => {
+        Some(session) if legacy_sidechain || is_subagent_log(file.path) => {
             format!(
                 "{session}:subagent:{}",
                 file.path.file_name().unwrap_or_default().to_string_lossy()
@@ -276,10 +334,7 @@ enum UseReader {
 struct UseSource {
     /// `AgentId` wire name, e.g. `AgentId::CLAUDE_CODE`.
     harness: &'static str,
-    /// The root directory this source reads under `home`, used to scope the
-    /// drop rule to files this source (when enabled) actually owns, so a
-    /// switched-off source's cached files are left untouched even if their
-    /// directory is later removed.
+    /// The resolved history root, used for diagnostics and cache invalidation.
     root: fn(&Path) -> PathBuf,
     reader: UseReader,
     /// Where the app should watch on disk for changes that can add, change,
@@ -447,28 +502,24 @@ fn parse_claude_code_uses_with_context(
     invalid: &mut usize,
 ) -> Vec<SkillInvocation> {
     let mut unidentified = Vec::new();
+    let legacy_subagent_log = is_legacy_claude_subagent_log(file.path);
     for line in text.lines() {
         let mut uses = parse_claude_code_uses_checked(line, invalid);
         if uses.is_empty() {
             continue;
         }
-        let key = serde_json::from_str::<serde_json::Value>(line)
-            .ok()
-            .and_then(|record| {
-                let uuid = record
-                    .get("uuid")?
-                    .as_str()
-                    .filter(|uuid| !uuid.is_empty())?;
-                let session = record
-                    .get("sessionId")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("");
-                Some(format!("{session}/{uuid}"))
-            });
+        let record = serde_json::from_str::<serde_json::Value>(line).ok();
+        let legacy_sidechain = legacy_subagent_log
+            && record.as_ref().and_then(|r| r["isSidechain"].as_bool()) == Some(true);
+        for use_ in &mut uses {
+            use_.use_session = Some(log_session(file, use_.session.as_deref(), legacy_sidechain));
+        }
+        let key = record.and_then(|record| {
+            let uuid = record["uuid"].as_str().filter(|uuid| !uuid.is_empty())?;
+            let session = record["sessionId"].as_str().unwrap_or("");
+            Some(format!("{session}/{uuid}"))
+        });
         if let Some(key) = key {
-            for use_ in &mut uses {
-                use_.use_session = Some(log_session(file, use_.session.as_deref()));
-            }
             context.claude_records.entry(key).or_insert(uses);
         } else {
             unidentified.extend(uses);
@@ -485,35 +536,22 @@ fn parse_codex_uses_with_file(
     context: &mut IndexedContext,
     invalid: &mut usize,
 ) -> Vec<SkillInvocation> {
+    context.codex_transcript = true;
     let mut uses = Vec::new();
     for line in text.lines() {
-        if let Some(start) = context
-            .history_start_ordinal
-            .filter(|_| context.inherited_lines > 0)
-        {
-            let ordinal = serde_json::from_str::<serde_json::Value>(line)
-                .ok()
-                .and_then(|record| record.get("ordinal")?.as_u64());
-            if ordinal.is_some_and(|ordinal| ordinal >= start) {
-                context.inherited_lines = 0;
-            } else {
-                context.inherited_lines -= 1;
+        if let Some(fork) = &mut context.codex_fork {
+            if fork.take_inherited_line(line) {
+                let mut inherited = parse_codex_uses_checked(line, &mut fork.transcript, invalid);
+                for use_ in &mut inherited {
+                    use_.session = Some(fork.parent_session.clone());
+                    use_.use_session.clone_from(&use_.session);
+                }
+                fork.uses.extend(inherited);
                 continue;
             }
         }
         if context.transcript.session.is_none() && line.contains("session_meta") {
-            context.history_start_ordinal = serde_json::from_str::<serde_json::Value>(line)
-                .ok()
-                .and_then(|record| {
-                    record
-                        .get("payload")?
-                        .get("subagent_history_start_ordinal")?
-                        .as_u64()
-                });
-            // The header is ordinal 0, so the copied parent history is the next start - 1 lines.
-            context.inherited_lines = context
-                .history_start_ordinal
-                .map_or(0, |start| start.saturating_sub(1));
+            context.codex_fork = IndexedCodexFork::from_session_meta(line).map(Box::new);
         }
         uses.extend(parse_codex_uses_checked(
             line,
@@ -1185,6 +1223,9 @@ pub struct SkillInvocationIndex {
     #[serde(default)]
     reader_version: u32,
     files: BTreeMap<PathBuf, IndexedTranscript>,
+    /// Last resolved root for each refreshed transcript source.
+    #[serde(default)]
+    transcript_roots: BTreeMap<String, PathBuf>,
     #[serde(default)]
     databases: BTreeMap<PathBuf, IndexedDatabase>,
     #[serde(skip, default = "default_file_budget")]
@@ -1197,8 +1238,9 @@ impl Default for SkillInvocationIndex {
     fn default() -> Self {
         Self {
             codex_home: None,
-            reader_version: 6,
+            reader_version: USAGE_READER_VERSION,
             files: BTreeMap::new(),
+            transcript_roots: BTreeMap::new(),
             databases: BTreeMap::new(),
             file_budget: MAX_FILE_BYTES,
             run_budget: MAX_RUN_BYTES,
@@ -1238,12 +1280,9 @@ impl SkillInvocationIndex {
     #[cfg(test)]
     fn with_budgets(file_bytes: u64, run_bytes: u64) -> Self {
         Self {
-            codex_home: None,
-            reader_version: 6,
-            files: BTreeMap::new(),
-            databases: BTreeMap::new(),
             file_budget: file_bytes,
             run_budget: run_bytes,
+            ..Self::default()
         }
     }
 
@@ -1375,12 +1414,17 @@ impl SkillInvocationIndex {
     /// cached entries. Never panics: unreadable dirs/files/databases are
     /// skipped.
     pub fn refresh(&mut self, home: &Path, sources: &DiscoverySources) -> SkillUseRefreshReport {
-        if self.reader_version != 6 {
+        if self.reader_version != USAGE_READER_VERSION {
             self.files.clear();
             self.databases.clear();
-            self.reader_version = 6;
+            self.reader_version = USAGE_READER_VERSION;
         }
         let mut report = SkillUseRefreshReport::default();
+        if self.transcript_roots.is_empty() {
+            // Legacy caches did not record which root owned each transcript.
+            report.files_dropped += self.files.len();
+            self.files.clear();
+        }
         let mut run_budget = self.run_budget;
 
         let codex_home = self.codex_home.clone();
@@ -1428,8 +1472,8 @@ impl SkillInvocationIndex {
 
     /// One [`UseReader::Transcripts`] source's share of `refresh`: lists its
     /// files, re-parses the ones that changed (resuming from their cached
-    /// byte offset), and drops cached files under this source's root that
-    /// are no longer listed and no longer exist.
+    /// byte offset), and drops files that left this source's history or
+    /// belong to a former root.
     fn refresh_transcripts(
         &mut self,
         home: &Path,
@@ -1440,6 +1484,14 @@ impl SkillInvocationIndex {
         report: &mut SkillUseRefreshReport,
     ) {
         let owned_root = (source.root)(home);
+        if self.transcript_roots.get(source.harness) != Some(&owned_root) {
+            let before = self.files.len();
+            self.files
+                .retain(|_, entry| entry.source_harness != source.harness);
+            report.files_dropped += before - self.files.len();
+            self.transcript_roots
+                .insert(source.harness.to_owned(), owned_root.clone());
+        }
         let listing = list(home);
         if listing.incomplete {
             report.incomplete = true;
@@ -1466,10 +1518,21 @@ impl SkillInvocationIndex {
             let size = meta.len();
             let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
 
+            // Older caches discarded inherited uses. Replay those Codex rollouts once.
+            if source.harness == AgentId::CODEX
+                && self
+                    .files
+                    .get(&path)
+                    .is_some_and(|entry| !entry.context.codex_transcript)
+            {
+                self.files.remove(&path);
+            }
+
             if is_zstd(&path) {
                 let file = TranscriptFile {
                     home,
                     path: &path,
+                    harness: source.harness,
                     modified: DateTime::<Utc>::from(modified),
                 };
                 self.refresh_compressed(&file, &log_root, &meta, parse, run_budget, report);
@@ -1553,11 +1616,13 @@ impl SkillInvocationIndex {
             let file = TranscriptFile {
                 home,
                 path: &path,
+                harness: source.harness,
                 modified: modified_utc,
             };
             let mut parsed = parse(&file, &text, &mut context, &mut invalid);
             for use_ in &mut parsed {
-                use_.use_session = Some(log_session(&file, use_.session.as_deref()));
+                use_.use_session
+                    .get_or_insert_with(|| log_session(&file, use_.session.as_deref(), false));
             }
             uses.extend(parsed);
             if invalid > 0 || gaps > 0 {
@@ -1580,6 +1645,7 @@ impl SkillInvocationIndex {
             self.files.insert(
                 path,
                 IndexedTranscript {
+                    source_harness: source.harness.to_owned(),
                     size,
                     modified,
                     parsed_bytes,
@@ -1595,8 +1661,8 @@ impl SkillInvocationIndex {
         }
 
         let before = self.files.len();
-        self.files.retain(|path, _| {
-            if seen.contains(path) {
+        self.files.retain(|path, entry| {
+            if entry.source_harness != source.harness || seen.contains(path) {
                 return true;
             }
             let Some(parent) = path.parent() else {
@@ -1604,9 +1670,6 @@ impl SkillInvocationIndex {
             };
             if listed_dirs.contains(parent) {
                 return false;
-            }
-            if !path.starts_with(&owned_root) {
-                return true;
             }
             // The parent wasn't listed successfully this refresh, but its
             // owning source ran: drop only if the parent directory itself
@@ -1646,6 +1709,7 @@ impl SkillInvocationIndex {
             return;
         }
         let mut entry = previous.cloned().unwrap_or(IndexedTranscript {
+            source_harness: transcript.harness.to_owned(),
             size: meta.len(),
             modified,
             parsed_bytes: 0,
@@ -1678,7 +1742,8 @@ impl SkillInvocationIndex {
             let mut invalid = 0;
             let mut parsed = parse(transcript, &text, &mut entry.context, &mut invalid);
             for use_ in &mut parsed {
-                use_.use_session = Some(log_session(transcript, use_.session.as_deref()));
+                use_.use_session
+                    .get_or_insert_with(|| log_session(transcript, use_.session.as_deref(), false));
             }
             entry.uses.extend(parsed);
             entry.parsed_bytes += consumed;
@@ -1790,7 +1855,8 @@ impl SkillInvocationIndex {
         skill_heatmap(self.all_uses(), filter, now)
     }
 
-    /// File uses plus database uses. A database row id (`"<table>:<id>"`)
+    /// File uses plus database uses, with the best available copy of missing
+    /// Codex parent history. A database row id (`"<table>:<id>"`)
     /// that appears in more than one database (`opencode-next.db` rows get
     /// copied into `opencode.db`) counts once: databases are visited in
     /// path order and the first one to have a row wins.
@@ -1804,11 +1870,17 @@ impl SkillInvocationIndex {
             .flat_map(|(_, uses)| uses.iter())
             .collect();
         let mut seen_uuids = BTreeSet::new();
+        let claude_subagent =
+            |path: &Path| is_subagent_log(path) || is_legacy_claude_subagent_log(path);
         let claude_uses = self
             .files
             .iter()
-            .filter(|(path, _)| !is_subagent_log(path))
-            .chain(self.files.iter().filter(|(path, _)| is_subagent_log(path)))
+            .filter(move |(path, _)| !claude_subagent(path))
+            .chain(
+                self.files
+                    .iter()
+                    .filter(move |(path, _)| claude_subagent(path)),
+            )
             .flat_map(|(_, t)| t.context.claude_records.iter())
             .filter(move |(key, _)| seen_uuids.insert(key.as_str()))
             .flat_map(|(_, uses)| uses.iter());
@@ -1816,7 +1888,36 @@ impl SkillInvocationIndex {
             .values()
             .flat_map(|t| t.uses.iter())
             .chain(claude_uses)
+            .chain(self.orphaned_codex_uses())
             .chain(database_uses)
+    }
+
+    fn orphaned_codex_uses(&self) -> impl Iterator<Item = &SkillInvocation> {
+        let mut by_parent: BTreeMap<&str, &[SkillInvocation]> = BTreeMap::new();
+        for fork in self
+            .files
+            .values()
+            .filter_map(|entry| entry.context.codex_fork.as_deref())
+        {
+            // Sibling forks copy prefixes of the same parent history. Use the
+            // copy with the most parsed skill uses so siblings count it once.
+            let uses = by_parent.entry(&fork.parent_session).or_default();
+            if fork.uses.len() > uses.len() {
+                *uses = &fork.uses;
+            }
+        }
+        if !by_parent.is_empty() {
+            for entry in self
+                .files
+                .values()
+                .filter(|entry| entry.context.codex_transcript)
+            {
+                if let Some(session) = entry.context.transcript.session.as_deref() {
+                    by_parent.remove(session);
+                }
+            }
+        }
+        by_parent.into_values().flatten()
     }
 }
 
@@ -2185,7 +2286,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_projects_dir_keeps_cached_files_and_is_not_incomplete() {
+    fn switching_to_missing_claude_projects_drops_former_history_and_stays_complete() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         write_transcript(
@@ -2201,15 +2302,14 @@ mod tests {
         index.refresh(home, &sources);
         assert_eq!(stats(&index, &known_skills, &sources).len(), 1);
 
-        // Point at a home whose `.claude/projects` doesn't exist: a user
-        // without Claude Code must not be stuck `incomplete` forever (that
-        // drives the desktop's 5s rebuild loop).
+        // Switching to a home without Claude history is a complete scan of
+        // an empty source, even when the former home still has its logs.
         let missing_home = tmp.path().join("missing-home");
         fs::create_dir_all(&missing_home).unwrap();
         let report = index.refresh(&missing_home, &sources);
         assert!(!report.incomplete);
-        assert_eq!(report.files_dropped, 0);
-        assert_eq!(stats(&index, &known_skills, &sources).len(), 1);
+        assert_eq!(report.files_dropped, 1);
+        assert!(stats(&index, &known_skills, &sources).is_empty());
     }
 
     #[cfg(unix)]

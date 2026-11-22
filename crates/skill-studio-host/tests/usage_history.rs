@@ -84,6 +84,83 @@ fn usage_compressed_codex_history_includes_live_and_archived_sessions() {
     assert_eq!(data["rows"][0]["recent_uses"], 1, "{data}");
     assert!(data["rows"][0].get("sessions").is_none(), "{data}");
 }
+/// Flow: report a Codex fork with and without its parent rollout.
+/// Expect two uses in both cases. Failure: deleting the parent loses its use.
+#[test]
+fn usage_keeps_codex_fork_history_after_removing_parent_and_reloading_cache() {
+    let dir = fixture();
+    let root = dir.path().join(".codex/sessions");
+    fs::create_dir_all(&root).unwrap();
+    let parent_header = serde_json::json!({
+        "type": "session_meta", "ordinal": 0,
+        "payload": {"id": "parent", "cwd": "/parent-project"}
+    });
+    let parent_use = serde_json::json!({
+        "type": "response_item", "ordinal": 1, "timestamp": "2026-09-29T12:00:00Z",
+        "payload": {"type": "message", "role": "user", "content": [{
+            "type": "input_text", "text": "<skill>\n<name>gamma</name>\n<path>/u/.agents/skills/gamma/SKILL.md</path>"
+        }]}
+    });
+    let parent = root.join("parent.jsonl");
+    fs::write(&parent, format!("{parent_header}\n{parent_use}\n")).unwrap();
+    let child_header = serde_json::json!({
+        "type": "session_meta", "ordinal": 0,
+        "payload": {
+            "id": "child", "cwd": "/child-project", "forked_from_id": "parent",
+            "subagent_history_start_ordinal": 3
+        }
+    });
+    let mut copied_header = parent_header;
+    copied_header["ordinal"] = 1.into();
+    let mut copied_use = parent_use.clone();
+    copied_use["ordinal"] = 2.into();
+    let mut child_use = parent_use;
+    child_use["ordinal"] = 3.into();
+    child_use["timestamp"] = "2026-09-29T13:00:00Z".into();
+    fs::write(
+        root.join("child.jsonl"),
+        format!("{child_header}\n{copied_header}\n{copied_use}\n{child_use}\n"),
+    )
+    .unwrap();
+
+    let inventory = scan(dir.path());
+    let now = "2026-09-30T12:00:00Z".parse().unwrap();
+    let cache = dir.path().join("usage-cache.json");
+    let mut usage = SkillUsage::default();
+    let with_parent = usage.report(dir.path(), &inventory, 30, now);
+    assert_eq!(
+        with_parent.rows[0].recent_uses, 2,
+        "the copy must not add a use"
+    );
+    usage.save_cache(&cache).unwrap();
+
+    fs::remove_file(&parent).unwrap();
+    let restored = SkillUsage::load_read_only(Some(&cache)).report(dir.path(), &inventory, 30, now);
+    assert_eq!(
+        restored.rows[0].recent_uses, 2,
+        "the cached fork must supply its parent's use"
+    );
+    let fresh = SkillUsage::default().report(dir.path(), &inventory, 30, now);
+    assert_eq!(fresh, with_parent);
+    assert_eq!(restored, fresh);
+
+    let mut old: serde_json::Value = serde_json::from_slice(&fs::read(&cache).unwrap()).unwrap();
+    for entry in old["files"].as_object_mut().unwrap().values_mut() {
+        let context = entry["context"].as_object_mut().unwrap();
+        context.remove("codex_transcript");
+        if context.remove("codex_fork").is_some() {
+            context.insert("inherited_lines".into(), 0.into());
+            context.insert("history_start_ordinal".into(), 3.into());
+        }
+    }
+    fs::write(&cache, serde_json::to_vec(&old).unwrap()).unwrap();
+    let rebuilt = SkillUsage::load_read_only(Some(&cache)).report(dir.path(), &inventory, 30, now);
+    assert_eq!(
+        rebuilt, fresh,
+        "legacy caches must recover discarded fork history"
+    );
+}
+
 /// Flow: report Claude user, Skill tool and direct reads in separate sessions.
 /// Expect three uses and one of each trigger. Failure: the report loses trigger evidence.
 #[test]
@@ -123,6 +200,77 @@ fn usage_claude_history_preserves_uses_and_each_trigger() {
         "{data}"
     );
 }
+/// Flow: report legacy Claude sidechains that share their parent's session ID.
+/// Expect one use per log. Failure: sidechains merge into the parent session.
+#[test]
+fn usage_counts_legacy_claude_sidechains_as_separate_sessions() {
+    let dir = fixture();
+    let root = dir.path().join(".claude/projects/work");
+    fs::create_dir_all(&root).unwrap();
+    let mut record = serde_json::json!({
+        "type": "user",
+        "sessionId": "parent",
+        "uuid": "parent-use",
+        "timestamp": "2026-09-29T12:00:00Z",
+        "message": {"content": "<command-name>/gamma</command-name>"}
+    });
+    fs::write(root.join("parent.jsonl"), format!("{record}\n")).unwrap();
+    assert_eq!(report(dir.path())["rows"][0]["recent_uses"], 1);
+
+    record["isSidechain"] = true.into();
+    record["message"] = serde_json::json!({"content": [
+        {"type": "tool_use", "name": "Skill", "input": {"skill": "gamma"}}
+    ]});
+    record["type"] = "assistant".into();
+    for id in ["one", "two"] {
+        record["uuid"] = format!("{id}-first").into();
+        let first = record.to_string();
+        if id == "two" {
+            record.as_object_mut().unwrap().remove("uuid");
+        } else {
+            record["uuid"] = format!("{id}-second").into();
+        }
+        fs::write(
+            root.join(format!("agent-{id}.jsonl")),
+            format!("{first}\n{record}\n"),
+        )
+        .unwrap();
+    }
+    let row = &report(dir.path())["rows"][0];
+    assert_eq!(row["recent_uses"], 3, "{row}");
+    assert_eq!(row["triggers"]["user"], 1, "{row}");
+    assert_eq!(row["triggers"]["agent"], 2, "{row}");
+
+    let inventory = scan(dir.path());
+    let now = "2026-09-30T12:00:00Z".parse().unwrap();
+    let mut usage = SkillUsage::default();
+    let expected = usage.report(dir.path(), &inventory, 30, now);
+    let cache = dir.path().join("usage-cache.json");
+    usage.save_cache(&cache).unwrap();
+    let mut old: serde_json::Value = serde_json::from_slice(&fs::read(&cache).unwrap()).unwrap();
+    old["reader_version"] = 6.into();
+    for entry in old["files"].as_object_mut().unwrap().values_mut() {
+        for use_ in entry["uses"].as_array_mut().unwrap() {
+            use_["use_session"] = "parent".into();
+        }
+        for uses in entry["context"]["claude_records"]
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+        {
+            for use_ in uses.as_array_mut().unwrap() {
+                use_["use_session"] = "parent".into();
+            }
+        }
+    }
+    fs::write(&cache, serde_json::to_vec(&old).unwrap()).unwrap();
+    let rebuilt = SkillUsage::load_read_only(Some(&cache)).report(dir.path(), &inventory, 30, now);
+    assert_eq!(
+        rebuilt, expected,
+        "cached legacy sidechains must be reindexed"
+    );
+}
+
 /// Flow: report with a log root that cannot be listed as a directory.
 /// Expect partial status and the exact root and reason. Failure: skipped history is silent.
 #[test]
@@ -211,6 +359,93 @@ fn usage_cache_round_trip_preserves_complete_history() {
     assert_eq!(second.rows[0].recent_uses, 1);
     assert_eq!(fs::read(&cache).unwrap(), bytes);
     assert_eq!(fs::read_dir(cache.parent().unwrap()).unwrap().count(), 1);
+}
+
+/// Flow: switch the Codex root with a saved cache and an unreadable Claude root.
+/// Expect only the new Codex session and the cached Claude session.
+/// Failure: the old Codex root still counts, or the Claude use disappears.
+#[test]
+fn usage_cache_switches_codex_roots_and_keeps_claude_history() {
+    let dir = fixture();
+    let home = dir.path();
+    let old_codex = home.join("old-codex");
+    let new_codex = home.join("new-codex");
+    for (root, subdir, id) in [
+        (&old_codex, "sessions", "old-live"),
+        (&old_codex, "archived_sessions", "old-archived"),
+        (&new_codex, "sessions", "current"),
+    ] {
+        let logs = root.join(subdir);
+        fs::create_dir_all(&logs).unwrap();
+        let header = serde_json::json!({"type": "session_meta", "payload": {"id": id}});
+        let record = serde_json::json!({
+            "type": "response_item", "timestamp": "2026-09-29T12:00:00Z",
+            "payload": {"type": "message", "role": "user", "content": [{
+                "type": "input_text", "text": "<skill>\n<name>gamma</name>\n<path>/u/.agents/skills/gamma/SKILL.md</path>"
+            }]}
+        });
+        let text = format!("{header}\n{record}\n");
+        if subdir == "archived_sessions" {
+            fs::write(
+                logs.join("session.jsonl.zst"),
+                zstd::stream::encode_all(text.as_bytes(), 1).unwrap(),
+            )
+            .unwrap();
+        } else {
+            fs::write(logs.join("session.jsonl"), text).unwrap();
+        }
+    }
+    let claude_root = home.join(".claude/projects");
+    fs::create_dir_all(claude_root.join("work")).unwrap();
+    let claude = serde_json::json!({
+        "type": "user", "sessionId": "claude-session", "timestamp": "2026-09-29T12:00:00Z",
+        "message": {"content": "<command-name>/gamma</command-name>"}
+    });
+    fs::write(
+        claude_root.join("work/session.jsonl"),
+        format!("{claude}\n"),
+    )
+    .unwrap();
+
+    let inventory = scan(home);
+    let now = "2026-09-30T12:00:00Z".parse().unwrap();
+    let cache = home.join("usage-cache.json");
+    let mut usage = SkillUsage::default();
+    usage.set_codex_home(old_codex);
+    let first = usage.report(home, &inventory, 30, now);
+    assert_eq!(first.rows[0].agents["codex"], 2);
+    assert_eq!(first.rows[0].agents["claude-code"], 1);
+    usage.save_cache(&cache).unwrap();
+
+    // Claude cannot be read again this pass. Its unmodified source still
+    // contributes its cached use when only the Codex root changes.
+    fs::rename(&claude_root, home.join("claude-history")).unwrap();
+    fs::write(&claude_root, "not a directory").unwrap();
+    let mut reloaded = SkillUsage::load_read_only(Some(&cache));
+    reloaded.set_codex_home(new_codex.clone());
+    let second = reloaded.report(home, &inventory, 30, now);
+    assert_eq!(
+        second.rows[0].agents["codex"], 1,
+        "only the current Codex root counts"
+    );
+    assert_eq!(second.rows[0].agents["claude-code"], 1);
+
+    fs::remove_file(&claude_root).unwrap();
+    fs::rename(home.join("claude-history"), &claude_root).unwrap();
+    let mut legacy: serde_json::Value = serde_json::from_slice(&fs::read(&cache).unwrap()).unwrap();
+    legacy.as_object_mut().unwrap().remove("transcript_roots");
+    for file in legacy["files"].as_object_mut().unwrap().values_mut() {
+        file.as_object_mut().unwrap().remove("source_harness");
+    }
+    fs::write(&cache, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let mut legacy = SkillUsage::load_read_only(Some(&cache));
+    legacy.set_codex_home(new_codex);
+    let rebuilt = legacy.report(home, &inventory, 30, now);
+    assert!(!rebuilt.partial);
+    assert_eq!(
+        rebuilt.rows, second.rows,
+        "legacy caches rebuild from the current roots"
+    );
 }
 
 #[test]
