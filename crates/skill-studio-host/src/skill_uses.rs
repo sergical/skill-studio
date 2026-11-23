@@ -2177,6 +2177,36 @@ mod tests {
     }
 
     #[test]
+    fn refreshing_usage_excludes_a_confirmed_builtin_but_keeps_a_typed_skill() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join(CLAUDE_PROJECTS_ROOT).join("-proj");
+        fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("s.jsonl");
+        let typed = |name: &str| {
+            serde_json::json!({
+                "type":"user", "uuid":name, "sessionId":"s", "timestamp":"2026-11-21T12:00:00Z",
+                "message":{"content":format!("<command-name>/{name}</command-name>")}
+            })
+            .to_string()
+        };
+        let first = format!("{}\n{}\n", typed("release-summary"), typed("context"));
+        fs::write(&path, &first).unwrap();
+        let mut index = SkillInvocationIndex::default();
+        let sources = DiscoverySources::default();
+        index.refresh(tmp.path(), &sources);
+        let local = serde_json::json!({"type":"system","subtype":"local_command","sessionId":"s","parentUuid":"context","commandRun":{"command":"context","args":""}});
+        fs::write(&path, format!("{first}{local}\n")).unwrap();
+        index.refresh(tmp.path(), &sources);
+        assert_eq!(
+            index
+                .all_uses()
+                .map(|u| u.skill.as_str())
+                .collect::<Vec<_>>(),
+            ["release-summary"]
+        );
+    }
+
+    #[test]
     fn claude_records_with_one_uuid_in_two_sessions_both_count() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();

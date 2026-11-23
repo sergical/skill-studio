@@ -29,7 +29,13 @@ pub fn local_command_parent(record: &serde_json::Value) -> Option<String> {
     if record["type"] != "system" || record["subtype"] != LOCAL_COMMAND_MARKER {
         return None;
     }
-    record_key(record, "parentUuid")
+    let is_result = record["commandRun"]["command"].is_string()
+        || record["content"]
+            .as_str()
+            .is_some_and(|text| text.starts_with("<local-command-stdout>"));
+    is_result
+        .then(|| record_key(record, "parentUuid"))
+        .flatten()
 }
 
 fn record_key(record: &serde_json::Value, id_field: &str) -> Option<String> {
