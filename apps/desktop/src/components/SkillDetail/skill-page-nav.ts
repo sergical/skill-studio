@@ -12,6 +12,8 @@ export function backLabel(from: ActiveView): string {
       return "Home";
     case "skills":
       return "Skills";
+    case "listing":
+      return "Client configuration";
     case "activity":
       return "Activity";
     default:

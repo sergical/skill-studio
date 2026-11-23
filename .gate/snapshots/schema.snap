@@ -4511,6 +4511,26 @@
         "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
         "type": "string"
       },
+      "ConfiguredListingModel": {
+        "description": "Model selection from the winning config layer.",
+        "properties": {
+          "file": {
+            "description": "Settings layer that supplied the value.",
+            "type": "string",
+            "x-untrusted": true
+          },
+          "name": {
+            "description": "Model id or alias, as written.",
+            "type": "string",
+            "x-untrusted": true
+          }
+        },
+        "required": [
+          "name",
+          "file"
+        ],
+        "type": "object"
+      },
       "HarnessListing": {
         "description": "One harness listing in one scope.",
         "properties": {
@@ -4532,6 +4552,17 @@
             "description": "`characters` or `tokens` (UTF-8 bytes divided by four).",
             "type": "string"
           },
+          "configured_model": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ConfiguredListingModel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Configured model, independent of the model in the last recorded session."
+          },
           "context_source": {
             "description": "Where the context window came from.",
             "type": "string",
@@ -4545,6 +4576,26 @@
               "integer",
               "null"
             ]
+          },
+          "description_char_limit": {
+            "description": "Effective Claude Code skillListingMaxDescChars in this scope.",
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "description_limit_setting": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ListingSetting"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The layer controlling the Claude Code per-skill cap, independent of its total budget."
           },
           "entries": {
             "description": "Entries in listing order; hidden entries last.",
@@ -4630,9 +4681,40 @@
         ],
         "type": "object"
       },
+      "ListingDescription": {
+        "description": "Wording from the local skill after the harness applies its listing limits.",
+        "properties": {
+          "remainder": {
+            "description": "Original text beyond the cutoff.",
+            "type": "string",
+            "x-untrusted": true
+          },
+          "shown": {
+            "description": "The description in the estimated listing.",
+            "type": "string",
+            "x-untrusted": true
+          }
+        },
+        "required": [
+          "shown",
+          "remainder"
+        ],
+        "type": "object"
+      },
       "ListingEntry": {
         "description": "One skill in one harness listing.",
         "properties": {
+          "description_preview": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ListingDescription"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Exact text for scanned Claude Code and Codex skills with a description."
+          },
           "full_description_chars": {
             "description": "Description characters before any cut.",
             "format": "uint64",
@@ -4681,6 +4763,14 @@
           },
           "path": {
             "description": "Deployment folder. Null for entries known only from a session.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
+          "plugin": {
+            "description": "Plugin identified by the scanner. Other entries come from a skill folder or session.",
             "type": [
               "string",
               "null"
@@ -4752,6 +4842,13 @@
               "null"
             ],
             "x-untrusted": true
+          },
+          "edit_revision": {
+            "description": "Revision needed for an in-app edit. Absent for managed, linked and read-only settings.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "file": {
             "description": "File to edit.",
@@ -7201,6 +7298,14 @@
       "AgentSessions": {
         "description": "One agent's sessions and per-skill rollup.",
         "properties": {
+          "captured_descriptions": {
+            "description": "Distinct description strings read from this agent's saved listings, in first-seen order.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "x-untrusted": true
+          },
           "doc": {
             "description": "The agent's skills documentation.",
             "type": [
@@ -7213,12 +7318,12 @@
             "description": "Agent id."
           },
           "note": {
-            "description": "What this agent records, in plain words.",
+            "description": "A description of reader coverage.",
             "type": "string"
           },
           "records": {
             "$ref": "#/$defs/SessionRecords",
-            "description": "What this agent records."
+            "description": "Session evidence supported by this reader."
           },
           "sessions_read": {
             "description": "Sessions read.",
@@ -7323,6 +7428,15 @@
       "SessionListedSkill": {
         "description": "One entry in a session's listing.",
         "properties": {
+          "description_index": {
+            "description": "Index into this agent's captured descriptions when the session contained wording.",
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "listed_as": {
             "$ref": "#/$defs/SessionListingState",
             "description": "How the session listed it."

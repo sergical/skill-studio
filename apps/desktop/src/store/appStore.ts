@@ -24,14 +24,17 @@ import type {
   PackExportRequest,
   PackReport,
 } from "@skill-studio/lib";
+import { BUSY_MESSAGE, UPDATE_ALL_BUSY_MESSAGE } from "../lib/skill-busy-message";
 import { addToast } from "../lib/toast";
 import {
   checkSkillUpdatesNow,
   getAddMethodDefaults,
   invokeErrorMessage,
+  openListingSetting,
   packAdd,
   packExport,
   packList,
+  saveListingSetting,
   skillListing,
   skillSessions,
   packRemove,
@@ -76,7 +79,7 @@ export type ActiveView =
   | { kind: "skills" }
   | { kind: "plugins" }
   | { kind: "packs" }
-  | { kind: "listing" }
+  | { kind: "listing"; harness?: string; scope?: string }
   | { kind: "sessions" }
   | { kind: "activity" }
   | { kind: "learn"; section?: LearnSection }
@@ -152,6 +155,7 @@ interface ReportRead<T> {
 
 // Listing and Sessions both scan skills. Keep at most one of their reads in flight.
 let reportReadQueue = Promise.resolve();
+let listingGeneration = 0;
 
 function refreshReport<T>(
   previous: ReportRead<T> | undefined,
@@ -161,10 +165,19 @@ function refreshReport<T>(
   if (previous?.refreshing) return;
   publish({ data: previous?.data, refreshing: true });
   reportReadQueue = reportReadQueue.then(async () => {
-    try {
-      publish({ data: await read(), refreshing: false });
-    } catch (error) {
-      publish({ data: previous?.data, error: invokeErrorMessage(error), refreshing: false });
+    // On launch the inventory scan can still hold the shared scope lease.
+    for (const retryDelay of [500, 1500, 3000, 0]) {
+      try {
+        publish({ data: await read(), refreshing: false });
+        return;
+      } catch (error) {
+        const message = invokeErrorMessage(error);
+        if (!retryDelay || (message !== BUSY_MESSAGE && message !== UPDATE_ALL_BUSY_MESSAGE)) {
+          publish({ data: previous?.data, error: message, refreshing: false });
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, retryDelay));
+      }
     }
   });
 }
@@ -203,7 +216,12 @@ interface AppState {
    * from an existing skill page reuses that page's `from`, so the back
    * button never lands on another skill page.
    */
-  openSkill: (name: string, deploymentPath?: string, intent?: "compare") => void;
+  openSkill: (
+    name: string,
+    deploymentPath?: string,
+    intent?: "compare",
+    origin?: Extract<ActiveView, { kind: "listing" }>,
+  ) => void;
   /** Returns to the view the current skill page was opened from. */
   closeSkill: () => void;
   /** The skill whose page `closeSkill` just returned from - lets the list that reappears
@@ -306,6 +324,8 @@ interface AppState {
   // === Model listing ===
   /** Per-skill listing state for each agent, from the core's `listing`. Reads only. */
   listingReports: Record<string, ReportRead<ListingReport>>;
+  openListingSetting: typeof openListingSetting;
+  saveListingSetting: typeof saveListingSetting;
   readListing: (request: ListingRequest) => Promise<ListingReport>;
   refreshListing: (request: ListingRequest) => void;
   /** Per-session listing states and uses, rolled up per skill. Reads only. */
@@ -459,9 +479,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       rowActs: runningActs(state.rowActs),
       lastClosedSkillName: null,
     })),
-  openSkill: (name, deploymentPath, intent) => {
+  openSkill: (name, deploymentPath, intent, origin) => {
     const current = get().activeView;
-    const from = current.kind === "skill" ? current.from : current;
+    const from = origin ?? (current.kind === "skill" ? current.from : current);
     const next: ActiveView = { kind: "skill", name, deploymentPath, from, intent };
     set((state) => ({
       activeView: next,
@@ -595,23 +615,39 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   listPacks: (remote) => withCommandMessage(packList(remote)),
   listingReports: {},
+  openListingSetting: (...args) => withCommandMessage(openListingSetting(...args)),
+  saveListingSetting: async (...args) => {
+    await withCommandMessage(saveListingSetting(...args));
+    // All project scopes inherit global client settings. A read queued before
+    // Save may also have computed its result using the old configuration.
+    listingGeneration++;
+    set({ listingReports: {}, sessionsReports: {} });
+  },
   readListing: (request) => withCommandMessage(skillListing(request)),
   refreshListing: (request) => {
     const key = listingReportKey(request);
+    const generation = listingGeneration;
     refreshReport(
       get().listingReports[key],
       () => get().readListing(request),
-      (entry) => set((state) => ({ listingReports: { ...state.listingReports, [key]: entry } })),
+      (entry) => {
+        if (generation === listingGeneration)
+          set((state) => ({ listingReports: { ...state.listingReports, [key]: entry } }));
+      },
     );
   },
   sessionsReports: {},
   readSkillSessions: (request) => withCommandMessage(skillSessions(request)),
   refreshSkillSessions: (request) => {
     const key = sessionsReportKey(request);
+    const generation = listingGeneration;
     refreshReport(
       get().sessionsReports[key],
       () => get().readSkillSessions(request),
-      (entry) => set((state) => ({ sessionsReports: { ...state.sessionsReports, [key]: entry } })),
+      (entry) => {
+        if (generation === listingGeneration)
+          set((state) => ({ sessionsReports: { ...state.sessionsReports, [key]: entry } }));
+      },
     );
   },
   runPackAction: (intent, dryRun) =>

@@ -162,7 +162,7 @@ function SidebarNavItems({
         onClick={() => setActiveView({ kind: "listing" })}
       >
         <ListTree size={14} />
-        <span className="min-w-0 truncate">Model listing</span>
+        <span className="min-w-0 truncate">Client configuration</span>
       </Button>
       <Button
         variant="ghost"

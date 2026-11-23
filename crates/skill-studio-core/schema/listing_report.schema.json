@@ -66,6 +66,37 @@
           "format": "uint64",
           "minimum": 0
         },
+        "description_char_limit": {
+          "description": "Effective Claude Code skillListingMaxDescChars in this scope.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "description_limit_setting": {
+          "description": "The layer controlling the Claude Code per-skill cap, independent of its total budget.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ListingSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "configured_model": {
+          "description": "Configured model, independent of the model in the last recorded session.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConfiguredListingModel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "context_source": {
           "description": "Where the context window came from.",
           "type": "string",
@@ -227,12 +258,39 @@
           "description": "The text to put in `file` for the requested budget.",
           "type": "string",
           "x-untrusted": true
+        },
+        "edit_revision": {
+          "description": "Revision needed for an in-app edit. Absent for managed, linked and read-only settings.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
         "key",
         "file",
         "snippet"
+      ]
+    },
+    "ConfiguredListingModel": {
+      "description": "Model selection from the winning config layer.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Model id or alias, as written.",
+          "type": "string",
+          "x-untrusted": true
+        },
+        "file": {
+          "description": "Settings layer that supplied the value.",
+          "type": "string",
+          "x-untrusted": true
+        }
+      },
+      "required": [
+        "name",
+        "file"
       ]
     },
     "ObservedSession": {
@@ -378,6 +436,14 @@
           ],
           "x-untrusted": true
         },
+        "plugin": {
+          "description": "Plugin identified by the scanner. Other entries come from a skill folder or session.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true
+        },
         "state": {
           "description": "Model listing state for a preview. For discovery, describes the scanned entry only.",
           "$ref": "#/$defs/ListingState"
@@ -387,6 +453,17 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "description_preview": {
+          "description": "Exact text for scanned Claude Code and Codex skills with a description.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ListingDescription"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "shown_description_chars": {
@@ -478,6 +555,26 @@
           "type": "string",
           "const": "hidden"
         }
+      ]
+    },
+    "ListingDescription": {
+      "description": "Wording from the local skill after the harness applies its listing limits.",
+      "type": "object",
+      "properties": {
+        "shown": {
+          "description": "The description in the estimated listing.",
+          "type": "string",
+          "x-untrusted": true
+        },
+        "remainder": {
+          "description": "Original text beyond the cutoff.",
+          "type": "string",
+          "x-untrusted": true
+        }
+      },
+      "required": [
+        "shown",
+        "remainder"
       ]
     }
   }

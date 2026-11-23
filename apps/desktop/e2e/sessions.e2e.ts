@@ -10,6 +10,7 @@ test.beforeEach(async ({ page }) => {
 test("the Sessions page groups skills by finding and lists the sessions behind them", async ({
   page,
 }) => {
+  await page.getByText("Findings and listing definitions", { exact: true }).click();
   await expect(page.getByRole("region", { name: "What the words mean" })).toContainText(
     "Name only",
   );
@@ -27,15 +28,33 @@ test("the Sessions page groups skills by finding and lists the sessions behind t
     page.getByRole("region", { name: "Possibly missed" }).getByRole("listitem"),
   ).toHaveCount(1);
 
-  // Only sessions with a finding show first; the toggle shows every session.
-  const sessions = page.getByRole("region", { name: "Sessions" }).getByRole("listitem");
-  await expect(sessions).toHaveCount(2);
-  await page.getByRole("button", { name: "Show all 3" }).click();
+  // Open the recorded work, then narrow the list to sessions with a finding.
+  const sessions = page.getByRole("region", { name: "Sessions" }).locator(":scope > ul > li");
   await expect(sessions).toHaveCount(3);
+  await sessions.first().locator("summary").first().click();
+  await expect(sessions.first().getByText(/skills listed/)).toBeVisible();
+  await sessions
+    .first()
+    .getByText(/Recorded listing ·/)
+    .click();
+  await expect(page.getByRole("list", { name: "Recorded skills" })).toContainText(
+    "Original wording from the session.",
+  );
+  const captured = page
+    .getByRole("listitem")
+    .filter({ has: page.getByText("Original wording from the session.", { exact: true }) })
+    .last();
+  await expect(captured).toContainText("shortened");
+  await page.getByRole("button", { name: "Show only sessions with findings" }).click();
+  await expect(sessions).toHaveCount(2);
+
+  await page.getByText("Findings and listing definitions", { exact: true }).click();
 
   // An agent that records no listing says so instead of showing empty sessions.
   await page.getByRole("combobox", { name: "Agent" }).click();
   await page.getByRole("option", { name: "Cursor" }).click();
-  await expect(page.getByText("This agent does not record its listing.")).toBeVisible();
+  await expect(
+    page.getByText("Skill Studio does not yet read saved listings for Cursor."),
+  ).toBeVisible();
   await expect(page.getByRole("region", { name: "Sessions" })).toHaveCount(0);
 });

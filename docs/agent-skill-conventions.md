@@ -59,10 +59,10 @@ Re-check it when an agent changes.
 
 ## Invocation control and per-agent off settings
 
-Claude Code, Codex, OpenCode and pi auto-invoke a skill by default when its
-description matches the task. Grok Build's model-side control is not verified
-yet (see the "unknown" cell below). [Skill uses](#skill-uses) lists
-how each harness records a typed command and a model call.
+Clients use the skill description to decide when to load a skill. The table lists
+their invocation controls. Skill Studio implements a subset of these controls.
+[Skill uses](#skill-uses) covers recorded invocations. [Listing evidence](research/harness-listing-evidence.md)
+covers discovery, prompt rendering and session records by client version.
 
 | Agent       | Explicit invocation | Restrict model auto-invoke                                                                                       | Agent setting that hides a skill (Skill Studio reads it)                         |
 | ----------- | ------------------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
@@ -71,7 +71,7 @@ how each harness records a typed command and a model call.
 | OpenCode    | `/name`             | `disable-model-invocation: true`; `metadata["opencode/autoinvoke"]` overrides it (boolean or number 1/0, v2.2.6) | `permission.skill` in `opencode.json`: `"name": "deny"` (wildcards allowed)      |
 | pi          | `/skill:name`       | frontmatter `disable-model-invocation: true`                                                                     | none                                                                             |
 | Cursor      | `/name`             | frontmatter `disable-model-invocation: true`                                                                     | none                                                                             |
-| Grok Build  | `/name`             | unknown                                                                                                          | none                                                                             |
+| Grok Build  | `/name`             | frontmatter `disable-model-invocation: true` in xAI’s published implementation                                   | native `[skills].disabled` exists; Skill Studio does not read it yet             |
 
 Sources: https://code.claude.com/docs/en/skills · https://developers.openai.com/codex/skills ·
 https://opencode.ai/docs/skills/ · https://opencode.ai/v2/docs/skills/ · https://pi.dev/docs/latest/skills ·
@@ -144,7 +144,9 @@ skill page as "Hidden by <agent> setting", with an "Open" action for the file:
   matched by the skill's canonical SKILL.md path. Park and unpark leave this
   file byte-identical.
 - **OpenCode**: `~/.config/opencode/opencode.json` → `permission.skill.<name-or-glob> = "deny"`.
-- **pi, Cursor, Grok Build**: no per-skill setting. Park is the only off.
+- **pi and Cursor**: this flow offers Park.
+- **Grok Build**: its native `[skills]` settings include `disabled` names and `ignore` paths.
+  Skill Studio currently offers Park. [xAI’s skill configuration](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/08-skills.md)
 
 A skill a setting hides stays hidden after unpark: edit the file to change it.
 Older builds also wrote these files and, for Claude Code, removed the per-skill
@@ -235,6 +237,11 @@ CLI `usage` and MCP `skill_usage` report `recent_uses` for the requested window 
 
 Codex history includes streaming reads of `.jsonl.zst` files in both `sessions`
 and `archived_sessions`. `$CODEX_HOME` moves both the reader and its live watch.
+Claude Code also writes a typed command wrapper for built-ins such as
+`/context`. A following system record with subtype `local_command` links to
+that wrapper by its parent UUID. Skill Studio excludes that command from skill
+use counts.
+
 A changed compressed file is decoded again; an unchanged file uses the cache.
 Large files resume at a decoded byte offset. The decoder replays the prefix
 without buffering it because zstd does not provide a byte seek.
@@ -446,7 +453,9 @@ competes for the budget. The settings loader is the same as before: `yt`
 merges user `~/.claude/settings.json`, project `.claude/settings.json`, and
 project `.claude/settings.local.json`; managed settings and session flags can
 also apply. The skill directory loader removes duplicate real file paths.
-Disabled plugins do not supply skills.
+Disabled plugins do not supply skills. When an estimate uses a saved listing
+from a known project to account for bundled entries, it scans that project's
+skills as well. Entries supplied by the project stay in the project count.
 
 Codex's installed package identifies version 0.167.0. Its binary contains
 `SkillsConfig.max_context_tokens`, `SkillMetadataBudget`, and the bounded-list
@@ -565,18 +574,20 @@ or Codex's 8000-character fallback, as 2000 estimated tokens. The
 `limit_source` and `uses_default_context_window` fields state the fallback.
 An unknown limit is null with source `no known limit`.
 
-`skill-studio listing`, the MCP `listing` tool and the desktop Model listing
+`skill-studio listing`, the MCP `listing` tool and the desktop Client configuration
 page report each skill's state per agent and scope: `described`, `truncated`,
 `name_only`, `omitted` or `hidden` (manual-only, off in settings, parked,
 plugin off or installed for another project, or rejected by Codex). Inputs
 predict another Claude fraction, context window or Codex
-`skills.max_context_tokens`. Skill Studio does not write these settings: the
-report gives the text and the file, and the chezmoi source when chezmoi
-manages the file. Measured on 2026-11-19 with five `claude -p` sessions at
+`skills.max_context_tokens`. The desktop saves supported numeric settings in regular JSON and
+TOML config files. For chezmoi-managed files it opens the owning source.
+Previewing a budget only estimates the effect. Measured on 2026-11-19 with five `claude -p` sessions at
 fractions 0.003 to 0.02: 418 of 420 predicted skill states matched the
 recorded listing (99.5%), and the model named the described skills of its
-own listing correctly in 755 of 755 cases. OpenCode, pi, Cursor, and
-Grok Build currently have no known listing limit. `near_limit` starts at 80%;
+own listing correctly in 755 of 755 cases. Skill Studio currently computes budgets for
+Claude Code and Codex. Grok Build also publishes a budgeted renderer. OpenCode
+and pi publish listing formats that can be rendered without a budget setting.
+See [the six-client evidence](research/harness-listing-evidence.md) for version and session coverage. `near_limit` starts at 80%;
 `over_limit` means the estimate exceeds the budget. These are warning findings.
 
 Manual-only checks are per harness. Claude, pi, and Cursor read
@@ -596,7 +607,7 @@ recorded listing with its skill uses.
   rows of type `skill_listing` (`names`, `content`). The first has
   `isInitial: true`; later ones add skills that appear during the session.
   An entry `- name: description` is described; `- name` is name only. Claude
-  Code does not record a cut description, so Skill Studio reports none.
+  Code can save the actual description text. Sessions preserves that text, including line breaks.
   Subagent transcripts (`<session>/subagents/*.jsonl`) carry no listing and
   are not read.
 - **Codex** writes the listing into the developer message inside
@@ -604,8 +615,7 @@ recorded listing with its skill uses.
   `- name: description (file: rN/...)`. Plugin skills are `plugin:name`. A
   skill that is not in the block was omitted. A description shorter than the
   scanned one (whitespace collapsed) is reported as shortened.
-- **Cursor, OpenCode, pi, Grok Build** record uses but not the listing. The
-  report says so and shows only the current prediction.
+- **Cursor, OpenCode, pi, Grok Build** have usage readers. Skill Studio currently shows folder discovery for these clients. The version-specific [listing research](research/harness-listing-evidence.md) identifies further sources, including saved OpenCode and Grok Build listings.
 
 Uses come from the same parsers as Activity ("Skill uses"): a skill tool
 call, a typed command, or a `SKILL.md` read. A use names a listing entry by

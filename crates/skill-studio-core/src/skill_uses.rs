@@ -18,7 +18,10 @@ mod cursor;
 mod grok;
 mod opencode;
 mod pi;
-pub use claude_code::{parse_claude_code_uses, parse_claude_code_uses_checked};
+pub use claude_code::{
+    local_command_parent, parse_claude_code_uses, parse_claude_code_uses_checked,
+    LOCAL_COMMAND_MARKER,
+};
 pub use codex::{codex_skill_name_from_package, parse_codex_uses, parse_codex_uses_checked};
 pub use cursor::{parse_cursor_uses, parse_cursor_uses_checked};
 pub use grok::{parse_grok_uses, parse_grok_uses_checked};

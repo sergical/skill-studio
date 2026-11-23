@@ -28,6 +28,7 @@ import { InfoPopover } from "../ui/InfoPopover";
 import { MaterializeRootDialog } from "../ui/MaterializeRootDialog";
 import { TooltipControl } from "../ui/TooltipControl";
 import { useUpdateCheck } from "./useUpdateCheck";
+import { HomeVisibility } from "./HomeVisibility";
 import { HomeInboxGrid } from "./HomeInboxGroups";
 import { buildHomeRowPlan, computeHomeGroups } from "./home-inbox-data";
 import type { HomeFilter, HomeInboxLists } from "./home-inbox-data";
@@ -480,6 +481,8 @@ export function HomeView({
 
   return (
     <PageShell title="Home">
+      <HomeVisibility />
+      <h2 className="text-heading font-semibold -mb-2">Library maintenance</h2>
       <HomeStatTiles
         broken={broken}
         warnings={warnings}

@@ -1900,21 +1900,25 @@ pub fn open_skill_path(
 ) -> Result<(), String> {
     require_snapshot_owns_path(&refresh_state, std::path::Path::new(&path))?;
 
+    open_in_finder_or_editor(&path, &mode)
+}
+
+pub(super) fn open_in_finder_or_editor(path: &str, mode: &str) -> Result<(), String> {
     let mut script_to_clean_up: Option<PathBuf> = None;
-    let args: Vec<String> = match mode.as_str() {
-        "reveal" => vec!["-R".to_string(), path.clone()],
+    let args: Vec<String> = match mode {
+        "reveal" => vec!["-R".to_string(), path.to_owned()],
         // `-t` would mean the system default *text* editor, which is TextEdit
         // on a stock machine - see `skill_editor` for the setting behind this.
         "editor" => {
             let home = dirs::home_dir().ok_or("Could not find home directory")?;
             match skill_editor::editor_launch(&home) {
                 skill_editor::EditorLaunch::Open(mut args) => {
-                    args.push(path.clone());
+                    args.push(path.to_owned());
                     args
                 }
                 skill_editor::EditorLaunch::Terminal { command } => {
                     let script =
-                        skill_editor::write_terminal_launch_script(Path::new(&path), &command)?;
+                        skill_editor::write_terminal_launch_script(Path::new(path), &command)?;
                     let script_arg = script.to_string_lossy().to_string();
                     script_to_clean_up = Some(script);
                     vec![script_arg]

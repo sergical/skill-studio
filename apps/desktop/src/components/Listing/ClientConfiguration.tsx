@@ -1,0 +1,364 @@
+import { useState } from "react";
+import { ExternalLink } from "lucide-react";
+import { Button, Input } from "@skill-studio/ui";
+import { deploymentLabelFromAgentId, homeRelativePath } from "@skill-studio/lib";
+import type { HarnessListing, ListingEntry } from "@skill-studio/lib";
+import { useAppStore } from "../../store/appStore";
+import {
+  budgetRule,
+  entrySource,
+  hasAssumedClaudeWindow,
+  listedEntries,
+  sourceCounts,
+} from "./client-allocation";
+
+type Setting = NonNullable<HarnessListing["setting"]>;
+
+function SettingRow({
+  setting,
+  value,
+  project,
+  label,
+  inputValue,
+  onSaved,
+}: {
+  setting: Setting;
+  value: string;
+  project: string | null;
+  label: string;
+  inputValue: number | null;
+  onSaved: () => void;
+}) {
+  const addToast = useAppStore((s) => s.addToast);
+  const openListingSetting = useAppStore((s) => s.openListingSetting);
+  const saveListingSetting = useAppStore((s) => s.saveListingSetting);
+  const [opening, setOpening] = useState(false);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const percent = setting.key === "skillListingBudgetFraction";
+  const codex = setting.key === "skills.max_context_tokens";
+  const max = percent ? 100 : codex ? 10000 : Number.MAX_SAFE_INTEGER;
+  const n = Number(draft);
+  const valid = draft != null && n > 0 && n <= max && (percent || Number.isSafeInteger(n));
+  const save = async (reset: boolean) => {
+    if (!setting.edit_revision || (!reset && !valid)) return;
+    setOpening(true);
+    setError("");
+    try {
+      await saveListingSetting(
+        setting.key,
+        project,
+        reset ? null : String(percent ? Number((n / 100).toPrecision(15)) : n),
+        setting.edit_revision,
+      );
+      setDraft(null);
+      onSaved();
+      addToast({
+        type: "success",
+        title: reset ? "Override removed" : "Client configuration saved",
+      });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+    setOpening(false);
+  };
+  const open = async () => {
+    setOpening(true);
+    try {
+      await openListingSetting(setting.key, project);
+    } catch (error) {
+      addToast({
+        type: "error",
+        title: "Couldn’t open configuration",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+    setOpening(false);
+  };
+  return (
+    <div className="grid grid-cols-[minmax(9rem,1fr)_minmax(9rem,1.1fr)_auto] items-center gap-3 border-t border-border-subtle py-2.5">
+      <span>
+        <strong className="block text-small font-medium">{label}</strong>
+        <code className="text-caption text-text-tertiary">{setting.key}</code>
+      </span>
+      <span>
+        <strong className="block text-small font-medium">{value}</strong>
+        <span title={setting.file} className="block break-all text-caption text-text-secondary">
+          {setting.current == null ? "Client default" : homeRelativePath(setting.file)}
+        </span>
+      </span>
+      {setting.edit_revision ? (
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label={`Edit ${label}`}
+          className="justify-self-end"
+          disabled={draft !== null}
+          onClick={() => {
+            setDraft(inputValue == null ? "" : String(inputValue));
+            setError("");
+          }}
+        >
+          Edit
+        </Button>
+      ) : (
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => void open()}
+          disabled={opening}
+          aria-label={`Open configuration source for ${setting.key}`}
+          title={homeRelativePath(setting.chezmoi_source ?? setting.file)}
+        >
+          {opening ? "Opening…" : "Open source"} <ExternalLink size={12} />
+        </Button>
+      )}
+      {draft !== null && (
+        <form
+          className="col-span-3 flex flex-wrap items-center gap-2 rounded-md bg-bg-secondary p-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void save(false);
+          }}
+        >
+          <label className="text-small" htmlFor={setting.key}>
+            {percent ? "Context window (%)" : codex ? "Tokens" : "Characters"}
+          </label>
+          <Input
+            id={setting.key}
+            inputMode={percent ? "decimal" : "numeric"}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            className="w-28"
+          />
+          <Button type="submit" size="sm" disabled={!valid || opening}>
+            Save
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={opening}
+            onClick={() => setDraft(null)}
+          >
+            Cancel
+          </Button>
+          {setting.current != null && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={opening}
+              onClick={() => void save(true)}
+            >
+              Remove override
+            </Button>
+          )}
+          <p className="w-full break-all text-caption text-text-secondary">
+            Saves to {homeRelativePath(setting.file)}. New sessions use the updated setting.
+          </p>
+          {error && (
+            <p role="alert" className="w-full text-small text-destructive-text">
+              {error}
+            </p>
+          )}
+        </form>
+      )}
+    </div>
+  );
+}
+
+function sourceExample(entry: ListingEntry) {
+  return (
+    entry.plugin ?? (entry.path && homeRelativePath(entry.path)) ?? "Recorded in the client listing"
+  );
+}
+
+export function ClientConfiguration({
+  row,
+  onSaved,
+}: {
+  row: HarnessListing;
+  onSaved: () => void;
+}) {
+  const name = deploymentLabelFromAgentId(row.harness);
+  const entries = listedEntries(row);
+  const sources = sourceCounts(entries);
+  const project = row.scope.scope === "global" ? null : row.scope.project;
+  const preview = row.evidence === "preview";
+  const shortened = entries.filter((e) => e.state === "truncated").length;
+  const namesOnly = entries.filter((e) => e.state === "name_only").length;
+  const omitted = row.entries.filter((e) => e.state === "omitted").length;
+  const session = row.observed_session;
+  const assumedWindow = preview && hasAssumedClaudeWindow(row);
+  return (
+    <>
+      <section className="rounded-lg border border-border-subtle bg-bg-secondary p-4">
+        <h2 className="text-heading font-semibold">
+          {!preview || row.budget === null ? `Skills in ${name}` : `${name} skill allocation`}
+        </h2>
+        <p className="mt-2 text-display font-semibold leading-tight tabular-nums">
+          {assumedWindow ? (
+            budgetRule(row)
+          ) : !preview || row.budget === null ? (
+            <>
+              {entries.length}{" "}
+              <span className="text-heading font-medium">
+                {entries.length === 1 ? "skill" : "skills"} {preview ? "in the estimate" : "found"}
+              </span>
+            </>
+          ) : (
+            <>
+              {row.budget.toLocaleString()}{" "}
+              <span className="text-heading font-medium">{row.budget_unit}</span>
+            </>
+          )}
+        </p>
+        {preview && row.budget !== null && !assumedWindow && (
+          <p className="mt-1 text-small text-text-secondary">
+            {budgetRule(row)}
+            {row.context_window_tokens
+              ? ` · ${row.context_window_tokens.toLocaleString()}-token context window`
+              : ""}
+          </p>
+        )}
+        <p className="mt-3 border-t border-border-subtle pt-2.5 text-small">
+          {assumedWindow ? (
+            <>
+              Model window unknown. {name}’s settings give a percentage. The model catalog could not
+              confirm how many characters that allows.
+            </>
+          ) : !preview ? (
+            `From folders ${name} reads in this scope.`
+          ) : (
+            <>
+              Estimated listing · <strong>{entries.length} entries</strong>
+              {shortened ? ` · ${shortened} shortened` : ""}
+              {namesOnly ? ` · ${namesOnly} name only` : ""}
+              {!shortened && !namesOnly && entries.length > 0 ? " · All descriptions fit" : ""}
+              {omitted ? ` · ${omitted} left out` : ""}
+            </>
+          )}
+        </p>
+      </section>
+      {row.setting && (
+        <section aria-label="Effective settings">
+          <h3 className="mb-2 text-heading font-semibold">Effective settings</h3>
+          {row.configured_model && (
+            <div className="grid grid-cols-[minmax(9rem,1fr)_minmax(9rem,1.1fr)_auto] gap-3 border-t border-border-subtle py-2.5 text-small">
+              <span>Configured model</span>
+              <span className="col-span-2">
+                <strong className="font-medium">{row.configured_model.name}</strong>
+                <span className="ml-2 text-caption text-text-secondary">
+                  {homeRelativePath(row.configured_model.file)}
+                </span>
+              </span>
+            </div>
+          )}
+          <SettingRow
+            key={(row.setting.edit_revision ?? row.setting.file) + row.harness}
+            onSaved={onSaved}
+            inputValue={
+              row.harness === "claude-code"
+                ? Number((Number(row.setting.current ?? 0.01) * 100).toPrecision(12))
+                : row.setting.current != null
+                  ? Number(row.setting.current)
+                  : row.budget_unit === "tokens"
+                    ? Math.min(row.budget ?? 0, 10000)
+                    : null
+            }
+            setting={row.setting}
+            label="Listing budget"
+            value={budgetRule(row)}
+            project={project}
+          />
+          {row.description_limit_setting && row.description_char_limit != null && (
+            <SettingRow
+              key={
+                row.description_limit_setting.edit_revision ?? row.description_limit_setting.file
+              }
+              onSaved={onSaved}
+              inputValue={row.description_char_limit}
+              setting={row.description_limit_setting}
+              label="Per-skill description"
+              value={`${row.description_char_limit.toLocaleString()} characters`}
+              project={project}
+            />
+          )}
+          {(row.setting.chezmoi_source || row.description_limit_setting?.chezmoi_source) && (
+            <p className="text-caption text-text-secondary">
+              Managed by chezmoi. Edit the source, then run <code>chezmoi apply</code>.
+            </p>
+          )}
+        </section>
+      )}
+      {preview && (
+        <section aria-label="Listing sources">
+          <h3 className="text-heading font-semibold">
+            Where the {entries.length} entries come from
+          </h3>
+          <div className="mt-2 divide-y divide-border-subtle rounded-md border border-border-subtle px-3">
+            {(["Skill folder", "Plugin", "Session record"] as const).map((source) => {
+              const count = sources[source];
+              const title = {
+                "Skill folder": "Scanned skill folders",
+                Plugin: "Scanned plugin entries",
+                "Session record": "Added from session records",
+              }[source];
+              const heading = (
+                <span className="inline-flex w-[calc(100%-1.5rem)] justify-between text-small">
+                  <span>{title}</span>
+                  <strong className="tabular-nums">{count}</strong>
+                </span>
+              );
+              if (!count)
+                return (
+                  <div key={source} className="py-1.5 pl-4 text-text-tertiary">
+                    {heading}
+                  </div>
+                );
+              return (
+                <details key={source} className="py-1.5">
+                  <summary className="cursor-pointer">{heading}</summary>
+                  <div className="my-2 ml-4 space-y-1.5">
+                    {source === "Session record" && (
+                      <p className="text-caption text-text-secondary">
+                        The client listed these entries in a recorded session. The folder scan could
+                        not attribute them to an installation.
+                      </p>
+                    )}
+                    {entries
+                      .filter((e) => entrySource(e) === source)
+                      .slice(0, 3)
+                      .map((e) => (
+                        <p className="text-small" key={e.name + (e.path ?? "")}>
+                          {e.name}{" "}
+                          <span className="break-all text-caption text-text-secondary">
+                            {sourceExample(e)}
+                          </span>
+                        </p>
+                      ))}
+                    {count > 3 && (
+                      <p className="text-caption text-text-secondary">
+                        3 of {count} shown. Browse all entries below.
+                      </p>
+                    )}
+                  </div>
+                </details>
+              );
+            })}
+          </div>
+        </section>
+      )}
+      {session && (
+        <p className="text-small text-text-secondary">
+          Last recorded listing · {session.listed} entries
+          {session.model ? ` · ${session.model}` : ""}
+          {session.at && Number.isFinite(Date.parse(session.at))
+            ? ` · ${new Date(session.at).toLocaleString()}`
+            : ""}
+        </p>
+      )}
+    </>
+  );
+}

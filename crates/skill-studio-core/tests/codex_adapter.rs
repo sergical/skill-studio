@@ -192,3 +192,149 @@ fn codex_honours_codex_home_for_config_and_rollouts_or_names_the_path_read_from_
     std::fs::remove_dir_all(&home).ok();
     std::fs::remove_dir_all(&custom_codex_home).ok();
 }
+
+#[test]
+fn a_listing_budget_can_be_saved_reset_and_protected_from_a_stale_edit() {
+    use skill_studio_core::listing_setting_edit::save;
+    use skill_studio_core::listing_visibility::{listing, ListingRequest};
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join(".codex/config.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "# keep this comment\nmodel = 'local-model'\n").unwrap();
+    let rt = runtime_for(home.path(), Some(path.parent().unwrap()));
+    let read_budget = || {
+        listing(&rt, &ctx(), &ListingRequest::default())
+            .unwrap()
+            .listings
+            .into_iter()
+            .find(|r| r.harness.as_str() == "codex")
+            .unwrap()
+            .setting
+            .unwrap()
+    };
+    let initial = read_budget().edit_revision.unwrap();
+    save(
+        &rt,
+        &ctx(),
+        None,
+        "skills.max_context_tokens",
+        Some("8000"),
+        &initial,
+    )
+    .unwrap();
+    let saved = read_budget();
+    assert_eq!(saved.current.as_deref(), Some("8000"));
+    assert!(save(
+        &rt,
+        &ctx(),
+        None,
+        "skills.max_context_tokens",
+        Some("5000"),
+        &initial
+    )
+    .is_err());
+    save(
+        &rt,
+        &ctx(),
+        None,
+        "skills.max_context_tokens",
+        None,
+        &saved.edit_revision.unwrap(),
+    )
+    .unwrap();
+    assert!(read_budget().current.is_none());
+    assert!(std::fs::read_to_string(path)
+        .unwrap()
+        .contains("# keep this comment\nmodel = 'local-model'"));
+}
+
+#[test]
+fn codex_preview_separates_its_ellipsis_from_the_original_description() {
+    use skill_studio_core::listing_visibility::{listing, ListingRequest, ListingState};
+    let home = tempfile::tempdir().unwrap();
+    let folder = home.path().join(".agents/skills/check-preview");
+    std::fs::create_dir_all(&folder).unwrap();
+    let description = format!("{} original ending", "é".repeat(1030));
+    std::fs::write(
+        folder.join("SKILL.md"),
+        format!("---\nname: check-preview\ndescription: {description}\n---\n\nReview changes.\n"),
+    )
+    .unwrap();
+    let rt = runtime_for(home.path(), None);
+    let report = listing(&rt, &ctx(), &ListingRequest::default()).unwrap();
+    let codex = report
+        .listings
+        .iter()
+        .find(|row| row.harness.as_str() == "codex")
+        .unwrap();
+    let entry = codex
+        .entries
+        .iter()
+        .find(|e| e.name == "check-preview")
+        .unwrap();
+    assert_eq!(entry.state, ListingState::Truncated);
+    let preview = entry.description_preview.as_ref().unwrap();
+    let prefix = preview.shown.strip_suffix("...").unwrap();
+    assert_eq!(preview.shown.chars().count(), 1024);
+    assert_eq!(format!("{prefix}{}", preview.remainder), description);
+}
+
+#[test]
+fn claude_settings_save_preserves_other_keys_and_activity_can_restore_the_original() {
+    use skill_studio_core::dto::RestoreRequest;
+    use skill_studio_core::listing_setting_edit::save;
+    use skill_studio_core::listing_visibility::{listing, ListingRequest};
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join(".claude/settings.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = br#"{ "theme": "dark", "model": "sonnet" }"#;
+    std::fs::write(&path, original).unwrap();
+    let rt = runtime_for(home.path(), None);
+    let revision = || {
+        listing(&rt, &ctx(), &ListingRequest::default())
+            .unwrap()
+            .listings
+            .into_iter()
+            .find(|row| row.harness.as_str() == "claude-code")
+            .unwrap()
+            .setting
+            .unwrap()
+            .edit_revision
+            .unwrap()
+    };
+    let first = revision();
+    let id = save(
+        &rt,
+        &ctx(),
+        None,
+        "skillListingBudgetFraction",
+        Some("0.025"),
+        &first,
+    )
+    .unwrap()
+    .unwrap();
+    let after: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        after,
+        serde_json::json!({"theme":"dark","model":"sonnet","skillListingBudgetFraction":0.025})
+    );
+    assert!(save(
+        &rt,
+        &ctx(),
+        None,
+        "skillListingBudgetFraction",
+        None,
+        &first
+    )
+    .is_err());
+    ops::restore_event(
+        &rt,
+        &ctx(),
+        &RestoreRequest {
+            event_id: id,
+            force: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+}

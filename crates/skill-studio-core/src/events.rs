@@ -44,6 +44,8 @@ pub enum EventKind {
     MoveAsideRestore,
     /// Invocation policy rewritten.
     InvocationChange,
+    /// A client listing setting changed.
+    ListingSettingChange,
     /// Fork created.
     Fork,
     /// Per-skill harness link removed.
@@ -78,7 +80,7 @@ pub enum EventKind {
 
 impl EventKind {
     /// Every kind, in declaration order.
-    pub const ALL: [EventKind; 24] = [
+    pub const ALL: [EventKind; 25] = [
         EventKind::Install,
         EventKind::Remove,
         EventKind::Update,
@@ -89,6 +91,7 @@ impl EventKind {
         EventKind::MoveAsideDisable,
         EventKind::MoveAsideRestore,
         EventKind::InvocationChange,
+        EventKind::ListingSettingChange,
         EventKind::Fork,
         EventKind::UnlinkHarness,
         EventKind::RelinkHarness,
@@ -118,6 +121,7 @@ impl EventKind {
             EventKind::MoveAsideDisable => "move_aside_disable",
             EventKind::MoveAsideRestore => "move_aside_restore",
             EventKind::InvocationChange => "invocation_change",
+            EventKind::ListingSettingChange => "listing_setting_change",
             EventKind::Fork => "fork",
             EventKind::UnlinkHarness => "unlink_harness",
             EventKind::RelinkHarness => "relink_harness",

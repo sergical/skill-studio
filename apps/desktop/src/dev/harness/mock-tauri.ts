@@ -148,6 +148,7 @@ const DISCOVERY_HARNESSES = HARNESS_CATALOG.flatMap((row) =>
  * capture page) drives it with. */
 export function installMockTauri(initial: SkillSnapshot): HarnessControl {
   let currentSnapshot = initial;
+  let configuredTokens: string | null = null;
   // Mirrors the event store: newest first, as `list_skill_events` returns it. A remove keeps the
   // skill it took out, so restoring that event puts the same skill back.
   const events: SkillEvent[] = [];
@@ -637,6 +638,7 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
         case "connect_mcp":
           mcpConnections.add(z.string().parse(payload.harness));
           return undefined;
+        case "open_listing_setting":
         case "open_skill_path":
         case "unfork_skill":
           return undefined;
@@ -771,7 +773,14 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
               codex_max_context_tokens: z.number().nullish(),
             })
             .parse(payload.request);
-          return mockListingReport(currentSnapshot, request);
+          return mockListingReport(currentSnapshot, request, configuredTokens);
+        }
+        case "save_listing_setting": {
+          const { value } = z
+            .object({ key: z.literal("skills.max_context_tokens"), value: z.string().nullable() })
+            .parse(payload);
+          configuredTokens = value;
+          return;
         }
         case "skill_sessions":
           return mockSkillSessionsReport(currentSnapshot);

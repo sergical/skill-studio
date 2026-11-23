@@ -52,6 +52,7 @@ function iconForKind(kind: string, className: string) {
       return <RefreshCw {...props} />;
     case "fork":
       return <GitFork {...props} />;
+    case "listing_setting_change":
     case "invocation_change":
       return <SlidersHorizontal {...props} />;
     case "repair_skill_frontmatter":
