@@ -265,24 +265,35 @@ The shared guard proposed in #531 was not built; #531 was also closed. Before yo
    Rust changed, it runs `pnpm run check` and the contract snapshots instead
    (about 6 minutes). When a workflow changed, it also runs zizmor. Fix what
    fails. Do not use `--no-verify`.
-3. Open the PR with `.github/PULL_REQUEST_TEMPLATE.md`, then run
-   `gh pr merge --auto --squash`.
+3. Open the PR with `.github/PULL_REQUEST_TEMPLATE.md`. Run
+   `scripts/gate/gate risk --json` locally before enabling auto-merge, **and
+   re-run it after every subsequent push**:
+   - For `ship` or `show` PRs, or in an interactive thread when the owner
+     explicitly asked for that `stop` change (and did not ask to hold), enable
+     `gh pr merge --auto --squash` so GitHub merges when green.
+   - For unasked-for `stop` rules, AFK / `full send` runs hitting `stop`, or
+     explicit `full stop` / hold requests, do not enable `--auto` (and run
+     `gh pr merge --disable-auto` first if already enabled); follow
+     `full-stop` (`babysit-pr` until real CI is green, call
+     `unwatch_pull_request`, then hand off) before posting a passing
+     `gate/review` status.
 4. Get a review from a model of another provider and post it with
    `scripts/gate/gate review-status` (see `scripts/gate/README.md`). Each push
-   needs a new review.
-5. GitHub merges when the required checks pass. Watch the PR only to fix a
-   failing check.
-6. `gate/risk` adds the `risk:owner` label and stays pending for: a release, a
-   version change, deploy or secret files, a new dependency, a change to
-   `package.json` scripts, workflows, `.githooks/`, `.gate/` or `deny.toml`, and
-   policy files. The rules
-   are in `.gate/config.toml`. The owner merges these PRs. The workflow posts a
-   `Needed from you and why` comment on the PR: the decision, why a person must
-   make it, and the files and rule that matched. Start your reply with
-   `Needs you: #<number> <the one decision>`. End it with that section: link
-   the PR, copy the comment, and add your pick and why. Then stop. Do not wait
-   for the merge, use `--admin` without the owner's go-ahead in the chat, or
-   remove the label.
+   needs a new review. Before posting a passing `gate/review`, re-verify
+   `scripts/gate/gate risk --json` on the current head and ensure auto-merge is
+   disabled if an unasked `stop` rule matched.
+5. Watch the PR via `babysit-pr` (`watch_pull_request`). GitHub merges `--auto`
+   PRs when required checks pass; if handing off unmerged, always call
+   `unwatch_pull_request` once real CI is green.
+6. `gate/risk` is advisory (`state=success`), adding the `risk:owner` label and a
+   `Needed from you and why` PR comment (never `pending` or `failure`) for: a
+   release, a version change, deploy or secret files, a new dependency, a change
+   to `package.json` scripts, workflows, `.githooks/`, `.gate/` or `deny.toml`,
+   and policy files. The rules are in `.gate/config.toml`. When handing a
+   `stop` PR to the owner, end your reply with `Needed from you and why`: link
+   the PR, copy the risk ask/why, and add your pick and why. Never use
+   `--admin` without the owner's go-ahead in the chat, and never remove the
+   label.
 7. Review rounds follow the `diff-review` skill. If the review still fails
    after 2 rounds of fixes, stop and start your reply with `Needs you:` and
    the disagreement. Findings still open at the end go in your

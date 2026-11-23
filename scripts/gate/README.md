@@ -13,8 +13,7 @@ command output and JSON data, so edits to CLI or MCP implementation files alone
 do not stop a PR.
 
 Tiers: **ship** and **show** PRs merge by auto-merge when CI and the review
-pass. A **stop** PR gets the `risk:owner` label, its `gate/risk` status stays
-pending, and the owner merges it.
+pass. A **stop** PR gets the `risk:owner` label and an advisory `gate/risk = success` status; agents run `gate risk` locally to decide whether to hold for the owner (`full-stop`) or auto-merge when explicitly requested.
 
 Each stop rule has an `[owner.<rule id>]` table with `ask` (the decision the
 owner makes) and `why` (why a person must make it). `gate risk --json` returns
@@ -83,18 +82,18 @@ review. Run review-status only after the review is complete.
 
 ## Workflows and metrics
 
-`gate-risk.yml` runs the `risk` job on `pull_request_target`, only for PRs to the default branch. GitHub uses base-branch YAML for this event. The job checks out the base SHA without stored credentials. It fetches the PR head as git objects and runs only base-branch scripts. For a stop tier it adds the `risk:owner` label, posts one PR comment from `comment.jq`, and posts `gate/risk = pending` with the first `ask`. Otherwise it removes that label and that comment and posts `gate/risk = success`. It never posts failure, so the risk check sends no failure email.
+`gate-risk.yml` runs the `risk` job on `pull_request_target`, only for PRs to the default branch. GitHub uses base-branch YAML for this event. The job checks out the base SHA without stored credentials. It fetches the PR head as git objects and runs only base-branch scripts. For a stop tier it adds the `risk:owner` label, posts one PR comment from `comment.jq`, and posts advisory `gate/risk = success` with the first `ask`. Otherwise it removes that label and that comment and posts `gate/risk = success`. It never posts pending or failure, so real CI and email notifications stay quiet.
 
 `gate.yml` runs `unit` and `contracts` on `pull_request` with read access only. These checks run PR code. They do not control the risk job. Both are required checks in the ruleset.
 
-Do not execute PR code in a workflow that has write access. The owner merges a stop PR with the ruleset bypass. Agents push with the owner's account, so the label and the pending status stop agent mistakes, not an agent that uses `--admin`.
+Do not execute PR code in a workflow that has write access. Agents push with the owner's account, so the label and comment surface risk while the agent checks `gate risk` locally to hold unasked `stop` PRs via `full-stop`.
 
 `gate-update.yml` updates behind PRs that have auto-merge enabled. Supply an
 optional `GATE_UPDATE_TOKEN` secret with contents and pull-request write access
 so update pushes trigger CI. GitHub suppresses most workflows from pushes made
 with the default workflow token. Without that secret, updates can occur but a
 maintainer must trigger checks. Conflicts or head changes fail the job and leave
-the PR for a maintainer. Agents enable auto-merge when they open a PR.
+the PR for a maintainer. Agents enable auto-merge only when the local risk decision allows it.
 
 `gate-metrics.yml` runs on day 1 of each month and on manual dispatch. It reports the previous calendar month in the Actions job summary. It has read access to contents, pull requests, Actions runs, and commit statuses. It does not write to the repository.
 
