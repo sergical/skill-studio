@@ -25,8 +25,8 @@ use crate::listing_visibility::{
 use crate::ops::Operation;
 use crate::ports::{FileKind, OpContext, Runtime};
 use crate::skill_uses::{
-    contains_marker, history_start, parse_claude_code_uses, parse_codex_uses, SkillInvocation,
-    SkillTrigger, TranscriptContext,
+    contains_marker, history_start, parse_codex_uses, SkillInvocation, SkillTrigger,
+    TranscriptContext,
 };
 use crate::timing::{op_timing, step};
 
@@ -414,6 +414,7 @@ fn typed_prompt(text: &str) -> Option<String> {
 /// first prompt, and the skill uses.
 #[derive(Debug, Default)]
 pub struct ClaudeSessionParser {
+    commands: crate::skill_uses::claude_code::ClaudeCommands,
     session: ParsedSession,
     listing: Vec<(String, RecordedEntry)>,
     seen: BTreeSet<String>,
@@ -427,10 +428,17 @@ impl ClaudeSessionParser {
     }
 
     fn line_bytes(&mut self, line: &[u8]) {
-        use crate::skill_uses::claude_code::{COMMAND_MARKER, SKILL_MD_MARKER, SKILL_TOOL_MARKER};
-        let possible_use = [SKILL_TOOL_MARKER, COMMAND_MARKER, SKILL_MD_MARKER]
-            .iter()
-            .any(|marker| contains_marker(line, marker));
+        use crate::skill_uses::claude_code::{
+            COMMAND_MARKER, LOCAL_COMMAND_MARKER, SKILL_MD_MARKER, SKILL_TOOL_MARKER,
+        };
+        let possible_use = [
+            SKILL_TOOL_MARKER,
+            COMMAND_MARKER,
+            SKILL_MD_MARKER,
+            LOCAL_COMMAND_MARKER,
+        ]
+        .iter()
+        .any(|marker| contains_marker(line, marker));
         let session = &mut self.session;
         let wanted = (session.at.is_none() && contains_marker(line, "\"timestamp\""))
             || contains_marker(line, "\"skill_listing\"")
@@ -441,7 +449,12 @@ impl ClaudeSessionParser {
         }
         let line = String::from_utf8_lossy(line);
         if possible_use {
-            session.uses.extend(parse_claude_code_uses(&line));
+            crate::skill_uses::claude_code::append_uses(
+                &line,
+                &mut session.uses,
+                &mut 0,
+                &mut self.commands,
+            );
         }
         if !wanted {
             return;
@@ -513,6 +526,7 @@ impl ClaudeSessionParser {
 
     /// The parsed session.
     pub fn finish(mut self) -> ParsedSession {
+        self.commands.finish(&mut self.session.uses);
         self.session.listing = self.recorded.then_some(self.listing);
         self.session
     }
@@ -1431,6 +1445,27 @@ pub fn build_agent(
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    #[test]
+    fn a_local_command_and_a_typed_skill_in_one_session_count_as_one_skill_use() {
+        let command = |id: &str, content: &str| {
+            serde_json::json!({
+                "type":"user", "uuid":id, "sessionId":"s", "timestamp":"2026-11-21T12:00:00Z",
+                "message":{"role":"user","content":content}
+            })
+            .to_string()
+        };
+        let transcript = [
+            command("first","<command-name>/context</command-name>\n<command-message>context</command-message>\n<command-args></command-args>"),
+            serde_json::json!({"type":"system","subtype":"local_command","sessionId":"s","parentUuid":"first","commandRun":{"command":"context","args":""}}).to_string(),
+            command("second","<command-message>release-summary</command-message>\n<command-name>/release-summary</command-name>"),
+            serde_json::json!({"type":"user","isMeta":true,"parentUuid":"second","message":{"content":[{"type":"text","text":"Base directory for this skill: /tmp/skills/release-summary"}]}}).to_string(),
+        ].join("\n");
+        let session = parse_claude_session(&transcript);
+        assert_eq!(session.uses.len(), 1);
+        assert_eq!(session.uses[0].skill, "release-summary");
+        assert_eq!(session.uses[0].trigger, SkillTrigger::User);
+    }
 
     #[test]
     fn claude_session_joins_listing_states_with_uses_and_reads_the_typed_prompt() {

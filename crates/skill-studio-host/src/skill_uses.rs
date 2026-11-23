@@ -31,7 +31,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use skill_studio_core::discovery_sources::DiscoverySources;
 use skill_studio_core::identity::AgentId;
-use skill_studio_core::skill_uses::parse_claude_code_uses_checked;
+use skill_studio_core::skill_uses::{
+    local_command_parent, parse_claude_code_uses_checked, LOCAL_COMMAND_MARKER,
+};
 use skill_studio_core::skill_uses::{
     parse_codex_uses_checked, parse_cursor_uses_checked, parse_grok_uses_checked,
     parse_pi_uses_checked, skill_heatmap, skill_stats, InvocationHeatmap, SkillInvocation,
@@ -61,7 +63,7 @@ const MAX_RUN_BYTES: u64 = 128 * 1024 * 1024;
 /// loaded, so a runaway cache can't blow up memory on startup.
 const MAX_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
-const USAGE_READER_VERSION: u32 = 7;
+const USAGE_READER_VERSION: u32 = 8;
 
 /// Claude Code keeps one directory per project here, and (for subagent
 /// sessions) one `<session>/subagents/*.jsonl` per parent session inside it.
@@ -504,6 +506,16 @@ fn parse_claude_code_uses_with_context(
     let mut unidentified = Vec::new();
     let legacy_subagent_log = is_legacy_claude_subagent_log(file.path);
     for line in text.lines() {
+        if line.contains(LOCAL_COMMAND_MARKER) {
+            if let Some(key) = serde_json::from_str(line)
+                .ok()
+                .as_ref()
+                .and_then(local_command_parent)
+            {
+                context.claude_records.insert(key, Vec::new());
+                continue;
+            }
+        }
         let mut uses = parse_claude_code_uses_checked(line, invalid);
         if uses.is_empty() {
             continue;
@@ -1974,6 +1986,7 @@ fn could_hold_skill_use(bytes: &[u8]) -> bool {
         "<skill",
         "\"Skill\"",
         "<command-name>",
+        LOCAL_COMMAND_MARKER,
         "session_meta",
         "\"session\"",
         "\"skills\"",

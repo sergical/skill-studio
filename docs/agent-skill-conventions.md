@@ -237,6 +237,11 @@ CLI `usage` and MCP `skill_usage` report `recent_uses` for the requested window 
 
 Codex history includes streaming reads of `.jsonl.zst` files in both `sessions`
 and `archived_sessions`. `$CODEX_HOME` moves both the reader and its live watch.
+Claude Code also writes a typed command wrapper for built-ins such as
+`/context`. A following system record with subtype `local_command` links to
+that wrapper by its parent UUID. Skill Studio excludes that command from skill
+use counts.
+
 A changed compressed file is decoded again; an unchanged file uses the cache.
 Large files resume at a decoded byte offset. The decoder replays the prefix
 without buffering it because zstd does not provide a byte seek.

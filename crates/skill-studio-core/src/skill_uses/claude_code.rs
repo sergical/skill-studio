@@ -5,6 +5,8 @@
 //! is self-contained (see `docs/agent-skill-conventions.md` "Skill uses" for
 //! the record shapes).
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use chrono::{DateTime, Utc};
 
 use crate::skill_uses::{
@@ -17,6 +19,44 @@ use crate::skill_uses::{
 pub(crate) const SKILL_TOOL_MARKER: &str = "\"name\":\"Skill\"";
 pub(crate) const COMMAND_MARKER: &str = "<command-name>";
 pub(crate) const SKILL_MD_MARKER: &str = "SKILL.md";
+
+/// A client-local command result points back to its typed slash-command row.
+pub const LOCAL_COMMAND_MARKER: &str = "local_command";
+
+/// The parent record key of a confirmed local command, using the same
+/// session/UUID identity as the usage index.
+pub fn local_command_parent(record: &serde_json::Value) -> Option<String> {
+    if record["type"] != "system" || record["subtype"] != LOCAL_COMMAND_MARKER {
+        return None;
+    }
+    record_key(record, "parentUuid")
+}
+
+fn record_key(record: &serde_json::Value, id_field: &str) -> Option<String> {
+    let id = record[id_field].as_str().filter(|id| !id.is_empty())?;
+    let session = record["sessionId"].as_str().unwrap_or("");
+    Some(format!("{session}/{id}"))
+}
+
+/// A typed command and its local result arrive on separate lines.
+#[derive(Debug, Default)]
+pub(crate) struct ClaudeCommands {
+    typed: BTreeMap<String, usize>,
+    local: BTreeSet<usize>,
+}
+
+impl ClaudeCommands {
+    pub(crate) fn finish(self, uses: &mut Vec<SkillInvocation>) {
+        if self.local.is_empty() {
+            return;
+        }
+        let mut index = 0;
+        uses.retain(|_| {
+            index += 1;
+            !self.local.contains(&(index - 1))
+        });
+    }
+}
 
 /// Parses one Claude Code transcript's text (newline-delimited JSON) into
 /// skill uses: an `Agent` use per `Skill` `tool_use` block, a `User` use per
@@ -31,15 +71,37 @@ pub fn parse_claude_code_uses(text: &str) -> Vec<SkillInvocation> {
 /// Parses history and counts corrupt JSON records without parsing a record twice.
 pub fn parse_claude_code_uses_checked(text: &str, invalid: &mut usize) -> Vec<SkillInvocation> {
     let mut out = Vec::new();
+    let mut commands = ClaudeCommands::default();
+    append_uses(text, &mut out, invalid, &mut commands);
+    commands.finish(&mut out);
+    out
+}
 
+pub(crate) fn append_uses(
+    text: &str,
+    out: &mut Vec<SkillInvocation>,
+    invalid: &mut usize,
+    commands: &mut ClaudeCommands,
+) {
     for line in text.lines() {
         let Some(record) = super::checked_history_line(
             line,
-            &[SKILL_TOOL_MARKER, COMMAND_MARKER, SKILL_MD_MARKER],
+            &[
+                SKILL_TOOL_MARKER,
+                COMMAND_MARKER,
+                SKILL_MD_MARKER,
+                LOCAL_COMMAND_MARKER,
+            ],
             invalid,
         ) else {
             continue;
         };
+        if let Some(parent) = local_command_parent(&record) {
+            if let Some(index) = commands.typed.remove(&parent) {
+                commands.local.insert(index);
+            }
+            continue;
+        }
         let before = out.len();
         let at = DateTime::<Utc>::UNIX_EPOCH;
         let project_path = record
@@ -147,10 +209,13 @@ pub fn parse_claude_code_uses_checked(text: &str, invalid: &mut usize) -> Vec<Sk
             }
             push(name, SkillTrigger::User);
         }
-        super::validate_invocation_timestamp(&mut out, before, &record, invalid);
+        super::validate_invocation_timestamp(out, before, &record, invalid);
+        if record_type == Some("user") && out.len() > before {
+            if let Some(key) = record_key(&record, "uuid") {
+                commands.typed.insert(key, before);
+            }
+        }
     }
-
-    out
 }
 
 #[cfg(test)]
