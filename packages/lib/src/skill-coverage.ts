@@ -12,15 +12,15 @@ import { HARNESS_CATALOG } from "./skill-types.generated";
 import { ownDeployments } from "./skill-plugin-partition";
 import type { AgentId, Deployment, InstalledSkill } from "./skill-types";
 
-/** The five first-class agents that read the shared `.agents/skills` root natively. */
+/** First-class agents that read the shared `.agents/skills` root natively. */
 export const AGENTS_READING_SHARED_ROOT: readonly AgentId[] = HARNESS_CATALOG.filter(
   (row) => row.readsSharedFolder,
 ).map((row) => row.id);
 
-/** The `Deployment.agent` value for a deployment placed in the shared root, not any one agent's own folder. */
 const ID_BY_LABEL = new Map<string, AgentId>(HARNESS_CATALOG.map((row) => [row.label, row.id]));
 const LABEL_BY_ID = new Map<string, string>(HARNESS_CATALOG.map((row) => [row.id, row.label]));
 
+/** The `Deployment.agent` value for a deployment placed in the shared root, not any one agent's own folder. */
 const SHARED_AGENT_ID = "shared";
 
 /**

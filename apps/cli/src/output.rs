@@ -1019,9 +1019,10 @@ pub fn print_listing_table(
         let count = |state: ListingState| row.entries.iter().filter(|e| e.state == state).count();
         if row.evidence == ListingEvidence::Discovery {
             println!(
-                "{} {scope}: {} skills found in folders this agent reads.",
+                "{} {scope}: {} skills found in folders this agent reads, {} hidden.",
                 row.harness,
-                row.entries.len()
+                row.entries.len(),
+                count(ListingState::Hidden)
             );
             continue;
         }
