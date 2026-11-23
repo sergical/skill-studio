@@ -2,6 +2,8 @@
 //! description, with a name only, or not at all. Claude Code and Codex
 //! follow the algorithms in docs/agent-skill-conventions.md "Model listing
 //! budgets". Discovery rows summarize the metadata found on disk.
+mod pi_listing;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -153,6 +155,10 @@ pub struct HarnessListing {
     /// How this listing was produced.
     #[serde(default)]
     pub evidence: ListingEvidence,
+    /// Rendered base prompt skills section, including markup and file locations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-untrusted" = true))]
+    pub base_prompt_skills: Option<String>,
     /// Harness id.
     pub harness: AgentId,
     /// Project sessions include global skills.
@@ -415,6 +421,9 @@ pub(crate) fn listing_rows(
                     Some(ListingRenderer::Codex) => {
                         codex_listing(rt, inventory, facts, scope, req)?
                     }
+                    Some(ListingRenderer::Pi) => {
+                        pi_listing::pi_base_prompt(rt, inventory, facts, scope)
+                    }
                     Some(ListingRenderer::Discovery) | None => {
                         discovery_listing(rt, inventory, facts, scope)?
                     }
@@ -479,7 +488,17 @@ fn discovery_listing(
         .filter(|e| e.state != ListingState::Hidden)
         .map(|e| e.name.chars().count() as u64 + e.full_description_chars + 5)
         .sum();
-    Ok(HarnessListing {
+    Ok(folder_listing(facts, scope, entries, full_size))
+}
+
+fn folder_listing(
+    facts: &crate::harness::HarnessFacts,
+    scope: &RootScope,
+    entries: Vec<ListingEntry>,
+    full_size: u64,
+) -> HarnessListing {
+    HarnessListing {
+        base_prompt_skills: None,
         evidence: ListingEvidence::Discovery,
         harness: facts.id.clone(),
         scope: scope.clone(),
@@ -498,7 +517,7 @@ fn discovery_listing(
         observed_session: None,
         thresholds: None,
         entries,
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1093,6 +1112,7 @@ fn claude_listing(
     };
     entries.extend(hidden);
     Ok(HarnessListing {
+        base_prompt_skills: None,
         evidence: ListingEvidence::Preview,
         harness: facts.id.clone(),
         scope: scope.clone(),
@@ -2097,6 +2117,7 @@ fn codex_listing(
     }
     entries.extend(hidden);
     Ok(HarnessListing {
+        base_prompt_skills: None,
         evidence: ListingEvidence::Preview,
         harness: facts.id.clone(),
         scope: scope.clone(),

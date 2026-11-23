@@ -58,6 +58,7 @@ pub(crate) fn home_only_scope(home: &Path, fs: &dyn ScopeFs) -> Result<Normalize
         cache_root: None,
         data_root: None,
         opencode_config_root: None,
+        opencode_databases: None,
         codex_home: None,
         agent_home_roots: Default::default(),
         read_timeout_ms: DEFAULT_READ_TIMEOUT_MS,

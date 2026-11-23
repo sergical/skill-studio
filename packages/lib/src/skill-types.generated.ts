@@ -258,6 +258,10 @@ export interface HarnessListing {
    */
   evidence: "discovery" | "preview";
   /**
+   * Rendered base prompt skills section, including markup and file locations.
+   */
+  base_prompt_skills?: string | null;
+  /**
    * Harness id.
    */
   harness: string;
@@ -632,6 +636,10 @@ export interface SkillSessionRollup {
  */
 export interface SessionSummary {
   /**
+   * Selected agent within the client, when recorded.
+   */
+  agent_name?: string | null;
+  /**
    * Agent id.
    */
   harness: string;
@@ -692,6 +700,10 @@ export interface SessionSummary {
  * One entry in a session's listing.
  */
 export interface SessionListedSkill {
+  /**
+   * Client skill ID (`OpenCode`) or file location (pi), exactly as saved.
+   */
+  locator?: string | null;
   /**
    * Index into this agent's captured descriptions when the session contained wording.
    */
@@ -758,7 +770,7 @@ export interface AgentSessions {
   /**
    * Session evidence supported by this reader.
    */
-  records: "listing_and_uses" | "uses_only";
+  records: "listing_and_uses" | "uses_only" | "saved_guidance";
   /**
    * A description of reader coverage.
    */
@@ -3199,7 +3211,7 @@ export const HARNESS_CATALOG = [
       {
         revision: "1.6.0",
         exposure: "Base prompt lists model-eligible skills with descriptions and paths",
-        savedListing: null,
+        savedListing: "Latest structured system skills section on the saved branch",
         sources: [
           "https://github.com/earendil-works/pi/blob/v1.6.0/packages/coding-agent/src/core/skills.ts",
         ],

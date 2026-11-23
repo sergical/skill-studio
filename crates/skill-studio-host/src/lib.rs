@@ -48,6 +48,7 @@ mod history;
 mod ids;
 mod lease;
 mod opencode_db;
+mod opencode_guidance;
 mod pack_remote;
 mod probe_cache;
 mod sink;

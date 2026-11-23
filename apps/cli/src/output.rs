@@ -1026,6 +1026,21 @@ pub fn print_listing_table(
             );
             continue;
         }
+        if let Some(section) = &row.base_prompt_skills {
+            println!(
+                "{} {scope} base prompt preview: {} skills, {} hidden.",
+                row.harness,
+                count(ListingState::Described),
+                count(ListingState::Hidden)
+            );
+            for note in &row.notes {
+                println!("  {note}");
+            }
+            if !section.is_empty() {
+                println!("{section}");
+            }
+            continue;
+        }
         let budget = row.budget.map_or_else(
             || "no known limit".to_string(),
             |b| format!("{b} {}", row.budget_unit),
@@ -1104,6 +1119,35 @@ pub fn print_sessions_table(
                 agent.sessions_with_use,
                 agent.sessions_with_miss
             );
+        }
+        if agent.records == SessionRecords::SavedGuidance {
+            println!(
+                "  {} of {} sessions have readable saved skill guidance.",
+                agent.sessions_with_listing, agent.sessions_read
+            );
+            for session in report
+                .sessions
+                .iter()
+                .filter(|s| s.harness == agent.harness)
+            {
+                let name = session
+                    .agent_name
+                    .as_deref()
+                    .unwrap_or(agent.harness.as_str());
+                let id = session.id.as_deref().unwrap_or("unknown session");
+                if session.listing_recorded {
+                    println!("  {name} · {id} · {} skills saved", session.listed);
+                    for entry in &session.entries {
+                        let description = entry
+                            .description_index
+                            .and_then(|i| agent.captured_descriptions.get(i))
+                            .map_or("", String::as_str);
+                        println!("    {} · {description}", entry.skill);
+                    }
+                } else {
+                    println!("  {name} · {id} · guidance unavailable");
+                }
+            }
         }
         let groups = [
             (

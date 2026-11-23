@@ -17,12 +17,15 @@ pub(crate) enum ListingRenderer {
     Discovery,
     Claude,
     Codex,
+    Pi,
 }
 
 /// Implemented reader for a listing captured by a saved session.
 #[derive(Clone, Copy)]
 pub(crate) enum SessionListingReader {
     UsesOnly,
+    OpenCode,
+    Pi,
     Claude,
     Codex,
 }
@@ -156,12 +159,12 @@ register_agents! {
              "docs/agent-skill-conventions.md"]);
         #[serde(alias = "open-code")]
         OpenCode, OPEN_CODE, "opencode", "OpenCode", ".opencode/skills", ".config/opencode/skills" =>
-            (open_code, OpenCodeAdapter, Discovery, UsesOnly, install(Shared, None))
+            (open_code, OpenCodeAdapter, Discovery, OpenCode, install(Shared, None))
         verified("2.3.2", "Registered skills and skill guidance", Some("Per-session skill guidance and instruction changes"),
             ["https://github.com/anomalyco/opencode/blob/v2.3.2/packages/core/src/session/instruction-state.ts"]);
         Pi, PI, "pi", "pi", ".pi/skills", ".pi/agent/skills" =>
-            (pi, PiAdapter, Discovery, UsesOnly, install(OwnExceptSkillsCli, Some(".pi")))
-        verified("1.6.0", "Base prompt lists model-eligible skills with descriptions and paths", None,
+            (pi, PiAdapter, Pi, Pi, install(OwnExceptSkillsCli, Some(".pi")))
+        verified("1.6.0", "Base prompt lists model-eligible skills with descriptions and paths", Some("Latest structured system skills section on the saved branch"),
             ["https://github.com/earendil-works/pi/blob/v1.6.0/packages/coding-agent/src/core/skills.ts"]);
         Cursor, CURSOR, "cursor", "Cursor", ".cursor/skills", ".cursor/skills" =>
             (cursor, CursorAdapter, Discovery, UsesOnly, install(Shared, None))

@@ -189,9 +189,10 @@ The text output groups skills by finding: listed in nearly every session but
 never used, used while listed by name only, possibly missed (a guess from the
 session's first prompt), not described now, and installed but out of the
 agent's reach. `--sessions N` reads up to 500 sessions per agent;
-`--for-project <path>` reads one project's sessions. Claude Code and Codex
-record their listing; the other agents record uses only, and the report says
-so.
+`--for-project <path>` reads one project's sessions. For each session,
+`listing_recorded` tells you whether the client saved a listing. A recorded
+count of zero means the listing was empty. OpenCode reports the latest saved
+guidance for the session’s agent. pi reports the skills section on the saved branch.
 
 This reads declarations only. It does not show config values or instruction
 contents. Unreadable files have an `unreadable` row. Agent trust and enable

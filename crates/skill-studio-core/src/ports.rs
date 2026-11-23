@@ -354,6 +354,18 @@ pub struct OpenedFile {
 /// Filesystem access. Read calls take plain paths; write calls take a
 /// [`ScopedPath`] and an [`ExclusiveGuard`].
 pub trait ScopeFs: Send + Sync {
+    /// Reads the latest `OpenCode` skill guidance in local session databases. A filesystem without
+    /// a database reader supplies no sessions.
+    fn opencode_guidance(
+        &self,
+        _home: &Path,
+        _databases: Option<&[PathBuf]>,
+        _project: Option<&Path>,
+        _since: DateTime<Utc>,
+        _limit: usize,
+    ) -> Vec<crate::skill_sessions::ParsedSession> {
+        Vec::new()
+    }
     /// Resolves every symlink. Fails when the path does not exist.
     fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf>;
     /// `lstat` facts. Fails when the path does not exist.

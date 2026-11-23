@@ -118,3 +118,49 @@ fn sessions_flag_a_skill_used_while_name_only_and_one_listed_every_time_but_neve
         .unwrap();
     assert_eq!(cursor["records"], "uses_only", "{cursor}");
 }
+
+#[test]
+fn pi_saved_section_follows_the_branch_and_explicit_removal() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let file = ".pi/agent/sessions/project/turns.jsonl";
+    let header = serde_json::json!({"type":"session","version":3,"id":"s1","cwd":home});
+    let message = |id, parent, sections| serde_json::json!({"type":"message","id":id,"parentId":parent,"message":{"role":"system","content":"","sections":sections}});
+    let first = message(
+        "a",
+        None,
+        serde_json::json!({"skills":"<skills>\nSkills\n<available_skills>\n  <skill>\n    <name>tags</name>\n    <description>A &amp; B</description>\n    <location>/project/tags/SKILL.md</location>\n  </skill>\n</available_skills>\n</skills>"}),
+    );
+    let removed = message("b", Some("a"), serde_json::json!({"skills":null}));
+    let branch = message("c", Some("a"), serde_json::json!({"cwd":"new folder"}));
+    let transcript = format!("{header}\n{first}\n{removed}\n");
+    let result = |text: &str| {
+        write(home, file, text);
+        let data = sessions(home);
+        let session = &data["sessions"][0];
+        assert_eq!(session["listing_recorded"], true);
+        (
+            session["entries"].clone(),
+            data["agents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|a| a["harness"] == "pi")
+                .unwrap()["captured_descriptions"]
+                .clone(),
+        )
+    };
+    let baseline = message(
+        "baseline",
+        None,
+        serde_json::json!({"preamble":"You are pi."}),
+    );
+    assert_eq!(
+        result(&format!("{header}\n{baseline}\n")).0,
+        serde_json::json!([])
+    );
+    assert_eq!(result(&transcript).0, serde_json::json!([]));
+    let (entries, descriptions) = result(&format!("{transcript}{branch}\n"));
+    assert_eq!(entries[0]["locator"], "/project/tags/SKILL.md");
+    assert_eq!(descriptions, serde_json::json!(["A & B"]));
+}

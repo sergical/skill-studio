@@ -6,8 +6,10 @@
 //!
 //! Claude Code records each session's listing as a `skill_listing`
 //! attachment; Codex records it in the `<skills_instructions>` developer
-//! message. Other formats currently contribute uses only. See
+//! message. `OpenCode` and pi contribute the latest saved guidance on their sessions. See
 //! docs/agent-skill-conventions.md "Skill sessions".
+mod pi_sessions;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -88,6 +90,8 @@ pub enum SessionRecords {
     ListingAndUses,
     /// The reader recognizes skill uses. The Activity page counts them.
     UsesOnly,
+    /// Latest saved skill guidance. Use counts are available separately in Activity.
+    SavedGuidance,
 }
 
 /// One skill a session used.
@@ -105,6 +109,10 @@ pub struct SessionSkillUse {
 /// One entry in a session's listing.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SessionListedSkill {
+    /// Client skill ID (`OpenCode`) or file location (pi), exactly as saved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-untrusted" = true))]
+    pub locator: Option<String>,
     /// Index into this agent's captured descriptions when the session contained wording.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description_index: Option<usize>,
@@ -133,6 +141,10 @@ pub struct MissedSkill {
 /// One recorded session.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SessionSummary {
+    /// Selected agent within the client, when recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-untrusted" = true))]
+    pub agent_name: Option<String>,
     /// Agent id.
     pub harness: AgentId,
     /// The agent's session id.
@@ -324,6 +336,24 @@ pub fn skill_sessions(
                         steps.push(step(clock, "codex_transcripts", transcripts_started));
                         (SessionRecords::ListingAndUses, sessions)
                     }
+                    Some(SessionListingReader::Pi) => (
+                        SessionRecords::SavedGuidance,
+                        pi_sessions::read_pi_sessions(rt, ctx, &scope, since, limit)?,
+                    ),
+                    Some(SessionListingReader::OpenCode) => {
+                        let project = match &scope {
+                            RootScope::Global => None,
+                            RootScope::Project(p) => Some(p.0.as_path()),
+                        };
+                        let sessions = rt.ports.fs.opencode_guidance(
+                            &rt.scope.home.lexical,
+                            rt.scope.raw.opencode_databases.as_deref(),
+                            project,
+                            since,
+                            limit,
+                        );
+                        (SessionRecords::SavedGuidance, sessions)
+                    }
                     Some(SessionListingReader::UsesOnly) | None => {
                         (SessionRecords::UsesOnly, Vec::new())
                     }
@@ -366,6 +396,13 @@ pub enum RecordedEntry {
         /// Description width used to compare this entry with the installation.
         chars: u64,
     },
+    /// Whole description and ID or location from a saved guidance snapshot.
+    Saved {
+        /// Description in the snapshot.
+        text: String,
+        /// Recorded client ID or skill file location.
+        locator: String,
+    },
     /// By name only.
     NameOnly,
 }
@@ -373,6 +410,8 @@ pub enum RecordedEntry {
 /// What one transcript records.
 #[derive(Debug, Clone, Default)]
 pub struct ParsedSession {
+    /// Selected `OpenCode` agent, when recorded.
+    pub agent_name: Option<String>,
     /// Session id.
     pub id: Option<String>,
     /// Transcript file.
@@ -822,8 +861,12 @@ const TEMPORARY_DIRS: &[&str] = &[
 /// True when a session ran in a temporary folder outside the home folder.
 /// A disposable home (a test, a verify run) can itself be temporary.
 pub(crate) fn temporary_dir(rt: &Runtime, path: &str) -> bool {
-    TEMPORARY_DIRS.iter().any(|dir| path.starts_with(dir))
-        && !Path::new(path).starts_with(&rt.scope.home.lexical)
+    temporary_session_directory(&rt.scope.home.lexical, Path::new(path))
+}
+
+/// Whether a saved session is in a system temporary folder outside the selected home.
+pub fn temporary_session_directory(home: &Path, path: &Path) -> bool {
+    TEMPORARY_DIRS.iter().any(|dir| path.starts_with(dir)) && !path.starts_with(home)
 }
 
 /// True for a Claude Code project folder name of a temporary folder
@@ -1144,8 +1187,10 @@ fn resolve_name<'a>(name: &str, candidates: impl IntoIterator<Item = &'a str>) -
 /// The state of one recorded entry. A description shorter than the scanned
 /// one was cut.
 fn entry_state(entry: &RecordedEntry, scanned: Option<&CorpusSkill>) -> SessionListingState {
-    let RecordedEntry::Described { chars, .. } = entry else {
-        return SessionListingState::NameOnly;
+    let chars = match entry {
+        RecordedEntry::Saved { .. } => return SessionListingState::Described,
+        RecordedEntry::NameOnly => return SessionListingState::NameOnly,
+        RecordedEntry::Described { chars, .. } => chars,
     };
     let full = scanned.map_or(0, |s| {
         s.description
@@ -1268,6 +1313,7 @@ pub fn build_agent(
             }
         };
         let mut summary = SessionSummary {
+            agent_name: session.agent_name.clone(),
             harness: harness.clone(),
             id: session.id.clone(),
             transcript: session.transcript.clone(),
@@ -1302,7 +1348,7 @@ pub fn build_agent(
             }
             let description_index = match entry {
                 RecordedEntry::NameOnly => None,
-                RecordedEntry::Described { text, .. } => {
+                RecordedEntry::Described { text, .. } | RecordedEntry::Saved { text, .. } => {
                     Some(*description_ids.entry(text.as_str()).or_insert_with(|| {
                         captured_descriptions.push(text.clone());
                         captured_descriptions.len() - 1
@@ -1310,6 +1356,10 @@ pub fn build_agent(
                 }
             };
             summary.entries.push(SessionListedSkill {
+                locator: match entry {
+                    RecordedEntry::Saved { locator, .. } => Some(locator.clone()),
+                    _ => None,
+                },
                 description_index,
                 skill: name.clone(),
                 listed_as: state,
@@ -1397,7 +1447,8 @@ pub fn build_agent(
         skill.not_listed = u32::try_from(with_listing)
             .unwrap_or(u32::MAX)
             .saturating_sub(listed);
-        if skill.used == 0
+        if records == SessionRecords::ListingAndUses
+            && skill.used == 0
             && listed >= NEVER_USED_MIN_SESSIONS
             && u64::from(listed) * 5 >= with_listing as u64 * 4
         {
@@ -1420,6 +1471,8 @@ pub fn build_agent(
             "Skill Studio reads listings and skill uses when present in {display_name} sessions from the last {} days.",
             crate::skill_uses::HISTORY_DAYS
         ),
+        SessionRecords::SavedGuidance if harness.as_str() == AgentId::OPEN_CODE => "Latest saved skill guidance for each OpenCode session and agent. It reflects the permissions and auto-invocation settings when saved.".into(),
+        SessionRecords::SavedGuidance => "Latest saved skills section on each pi session’s active branch. Extensions can override the prompt sent to the provider.".into(),
         SessionRecords::UsesOnly => format!(
             "Skill Studio does not yet read saved listings for {display_name}."
         ),

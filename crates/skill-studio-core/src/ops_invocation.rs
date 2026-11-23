@@ -285,17 +285,12 @@ pub fn invocation(
     })
 }
 
-pub(crate) fn deployment_invocation(
-    rt: &Runtime,
-    d: &crate::dto::DeploymentDto,
-) -> Result<Vec<InvocationDeployment>, CoreError> {
-    let mut rows = Vec::new();
+pub(crate) fn opencode_manual_only(d: &crate::dto::DeploymentDto) -> bool {
     let manual = d
         .frontmatter
         .as_ref()
         .is_some_and(|f| f.disable_model_invocation == Some(true));
-    let opencode_manual = d
-        .frontmatter
+    d.frontmatter
         .as_ref()
         .and_then(|f| f.metadata.as_ref())
         .and_then(|m| m.get("opencode/autoinvoke"))
@@ -305,7 +300,19 @@ pub(crate) fn deployment_invocation(
             crate::yaml::Value::I64(n @ (0 | 1)) => Some(*n == 1),
             _ => None,
         })
-        .map_or(manual, |auto| !auto);
+        .map_or(manual, |auto| !auto)
+}
+
+pub(crate) fn deployment_invocation(
+    rt: &Runtime,
+    d: &crate::dto::DeploymentDto,
+) -> Result<Vec<InvocationDeployment>, CoreError> {
+    let mut rows = Vec::new();
+    let manual = d
+        .frontmatter
+        .as_ref()
+        .is_some_and(|f| f.disable_model_invocation == Some(true));
+    let opencode_manual = opencode_manual_only(d);
     let bytes = match rt.ports.fs.read_capped(
         &d.path.join("agents/openai.yaml"),
         crate::ops::SKILL_MD_MAX_BYTES,

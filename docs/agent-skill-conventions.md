@@ -615,7 +615,9 @@ recorded listing with its skill uses.
   `- name: description (file: rN/...)`. Plugin skills are `plugin:name`. A
   skill that is not in the block was omitted. A description shorter than the
   scanned one (whitespace collapsed) is reported as shortened.
-- **Cursor, OpenCode, pi, Grok Build** have usage readers. Skill Studio currently shows folder discovery for these clients. The version-specific [listing research](research/harness-listing-evidence.md) identifies further sources, including saved OpenCode and Grok Build listings.
+- **OpenCode 2.3.2** saves the current skill IDs, names and descriptions for each session in the instruction blob referenced by `current_values["core/skill-guidance"]`. The saved set reflects that agent’s permissions and auto-invocation settings. Client configuration shows current folder discovery. Sessions shows the saved guidance.
+- **pi 1.6.0** formats the base prompt from eligible skills in loader order. Client configuration previews the default read tool and scanned roots in a trusted project, including XML-escaped locations. Sessions reads the most recent structured system skills section on the saved JSONL branch, including replacements and explicit removal. An extension can also force a different outgoing prompt without recording it.
+- **Cursor and Grok Build** have usage readers and folder discovery. The version-specific [listing research](research/harness-listing-evidence.md) describes additional sources.
 
 Uses come from the same parsers as Activity ("Skill uses"): a skill tool
 call, a typed command, or a `SKILL.md` read. A use names a listing entry by

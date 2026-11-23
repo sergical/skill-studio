@@ -154,14 +154,7 @@ fn manual_only(rt: &Runtime, deployment: &DeploymentDto, harness: &str) -> Resul
                 .get("disable-model-invocation")
                 .is_some_and(|v| v.trim() == "true"),
         }),
-        AgentId::OPEN_CODE => Ok(fm
-            .and_then(|f| f.metadata.as_ref())
-            .and_then(|m| m.get("opencode/autoinvoke"))
-            .is_some_and(|v| match v {
-                crate::yaml::Value::Bool(b) => !b,
-                crate::yaml::Value::String(s) => s == "false",
-                _ => false,
-            })),
+        AgentId::OPEN_CODE => Ok(crate::ops_invocation::opencode_manual_only(deployment)),
         AgentId::CODEX => {
             let path = deployment.path.join("agents/openai.yaml");
             let Some(bytes) = read(rt, &path)? else {
