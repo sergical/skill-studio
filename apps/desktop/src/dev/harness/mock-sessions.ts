@@ -45,7 +45,7 @@ export function mockSkillSessionsReport(snapshot: SkillSnapshot): SkillSessionsR
     name_only: 1,
     entries: [
       { skill: used, listed_as: "name_only" as const },
-      { skill: idle, listed_as: "described" as const },
+      { skill: idle, listed_as: "truncated" as const, description_index: 0 },
       { skill: missed, listed_as: "described" as const },
     ],
     used:
@@ -74,6 +74,7 @@ export function mockSkillSessionsReport(snapshot: SkillSnapshot): SkillSessionsR
         records: "listing_and_uses",
         note: "Claude Code records each session's skill listing and its skill uses.",
         doc: "https://code.claude.com/docs/en/skills",
+        captured_descriptions: ["Original wording from the session."],
         sessions_read: 3,
         sessions_with_listing: 3,
         sessions_with_use: 1,
@@ -82,7 +83,7 @@ export function mockSkillSessionsReport(snapshot: SkillSnapshot): SkillSessionsR
       {
         harness: "cursor",
         records: "uses_only",
-        note: "Cursor records skill uses but not what it listed for the model.",
+        note: "Skill Studio does not yet read saved listings for Cursor.",
         doc: "https://cursor.com/docs/skills",
         sessions_read: 0,
         sessions_with_listing: 0,

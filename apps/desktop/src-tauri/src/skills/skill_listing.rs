@@ -10,8 +10,7 @@ use skill_studio_core::listing_visibility::{self, ListingReport, ListingRequest}
 use skill_studio_core::ops::Operation;
 use skill_studio_core::ports::OpContext;
 
-/// Reads only. Skill Studio never writes an agent's settings file, so the
-/// report carries the setting text and file for the owner to change.
+/// Reading a listing and previewing another budget leave settings unchanged.
 #[tauri::command]
 pub async fn skill_listing(
     trace: crate::timing_log::IpcTrace,
@@ -25,4 +24,44 @@ pub async fn skill_listing(
         super::core_runtime::finish_core_command(Operation::Listing, &rt, &ctx, result)
     })
     .await
+}
+
+/// Resolve the owning file from native settings. The webview never supplies a file to open.
+#[tauri::command(async)]
+#[allow(clippy::needless_pass_by_value)] // Tauri owns the IPC arguments on its async executor.
+pub fn open_listing_setting(
+    key: String,
+    project_path: Option<std::path::PathBuf>,
+) -> Result<(), String> {
+    let rt = super::core_runtime::build_runtime_write()?;
+    let file = listing_visibility::listing_setting_source(&rt, project_path, &key)
+        .map_err(|err| err.to_string())?;
+    if !file.is_file() {
+        return Err(format!(
+            "No configuration file exists at {} yet.",
+            file.display()
+        ));
+    }
+    super::commands::open_in_finder_or_editor(&file.to_string_lossy(), "editor")
+}
+
+#[tauri::command(async)]
+#[allow(clippy::needless_pass_by_value)] // Tauri owns the IPC arguments on its async executor.
+pub fn save_listing_setting(
+    key: String,
+    project_path: Option<std::path::PathBuf>,
+    value: Option<String>,
+    revision: String,
+) -> Result<(), String> {
+    let rt = super::core_runtime::build_runtime_write()?;
+    skill_studio_core::listing_setting_edit::save(
+        &rt,
+        &OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string())),
+        project_path,
+        &key,
+        value.as_deref(),
+        &revision,
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }

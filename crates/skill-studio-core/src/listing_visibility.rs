@@ -33,6 +33,17 @@ pub enum ListingState {
     Hidden,
 }
 
+/// Wording from the local skill after the harness applies its listing limits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ListingDescription {
+    /// The description in the estimated listing.
+    #[schemars(extend("x-untrusted" = true))]
+    pub shown: String,
+    /// Original text beyond the cutoff.
+    #[schemars(extend("x-untrusted" = true))]
+    pub remainder: String,
+}
+
 /// One skill in one harness listing.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ListingEntry {
@@ -42,10 +53,17 @@ pub struct ListingEntry {
     /// Deployment folder. Null for entries known only from a session.
     #[schemars(extend("x-untrusted" = true))]
     pub path: Option<PathBuf>,
+    /// Plugin identified by the scanner. Other entries come from a skill folder or session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("x-untrusted" = true))]
+    pub plugin: Option<String>,
     /// Model listing state for a preview. For discovery, describes the scanned entry only.
     pub state: ListingState,
     /// Why a hidden skill is hidden.
     pub hidden_reason: Option<String>,
+    /// Exact text for scanned Claude Code and Codex skills with a description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_preview: Option<ListingDescription>,
     /// Description characters in the preview, or in the discovered metadata for discovery rows.
     pub shown_description_chars: u64,
     /// Description characters before any cut.
@@ -84,6 +102,9 @@ pub struct ListingSetting {
     /// The text to put in `file` for the requested budget.
     #[schemars(extend("x-untrusted" = true))]
     pub snippet: String,
+    /// Revision needed for an in-app edit. Absent for managed, linked and read-only settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edit_revision: Option<String>,
 }
 
 /// The session the observed states come from.
@@ -102,6 +123,17 @@ pub struct ObservedSession {
     pub listed: usize,
     /// Entries with a description.
     pub described: usize,
+}
+
+/// Model selection from the winning config layer.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConfiguredListingModel {
+    /// Model id or alias, as written.
+    #[schemars(extend("x-untrusted" = true))]
+    pub name: String,
+    /// Settings layer that supplied the value.
+    #[schemars(extend("x-untrusted" = true))]
+    pub file: PathBuf,
 }
 
 /// Evidence behind the current listing row. Session captures are reported independently.
@@ -136,6 +168,15 @@ pub struct HarnessListing {
     pub budget_source: String,
     /// Context window in tokens, when known.
     pub context_window_tokens: Option<u64>,
+    /// Effective Claude Code skillListingMaxDescChars in this scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_char_limit: Option<usize>,
+    /// The layer controlling the Claude Code per-skill cap, independent of its total budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_limit_setting: Option<ListingSetting>,
+    /// Configured model, independent of the model in the last recorded session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configured_model: Option<ConfiguredListingModel>,
     /// Where the context window came from.
     #[schemars(extend("x-untrusted" = true))]
     pub context_source: String,
@@ -342,10 +383,12 @@ fn hidden_entry(skill: &ListedSkill, name: String) -> ListingEntry {
         path: Some(skill.path.clone()),
         state: ListingState::Hidden,
         hidden_reason: skill.hidden.map(str::to_string),
+        description_preview: None,
         shown_description_chars: 0,
         full_description_chars: skill.description.chars().count() as u64,
         usage_score: None,
         observed: None,
+        plugin: skill.plugin.clone(),
         scanned: true,
         observed_description_chars: None,
         invocation_mismatch: None,
@@ -370,10 +413,12 @@ fn discovery_listing(
                 path: Some(skill.path),
                 state: ListingState::Described,
                 hidden_reason: None,
+                description_preview: None,
                 shown_description_chars: chars,
                 full_description_chars: chars,
                 usage_score: None,
                 observed: None,
+                plugin: skill.plugin.clone(),
                 scanned: true,
                 observed_description_chars: None,
                 invocation_mismatch: None,
@@ -395,6 +440,9 @@ fn discovery_listing(
         full_size,
         budget_source: "discovery only".into(),
         context_window_tokens: None,
+        description_char_limit: None,
+        description_limit_setting: None,
+        configured_model: None,
         context_source: "not used".into(),
         uses_default_context_window: false,
         notes: Vec::new(),
@@ -466,17 +514,23 @@ pub(crate) fn claude_width(text: &str) -> u64 {
 }
 
 /// `ibt`: the description plus `when_to_use`, cut to `cap` with an ellipsis.
-fn claude_description(skill: &ListedSkill, cap: usize) -> (String, bool) {
+fn claude_description(skill: &ListedSkill, cap: usize) -> ListingDescription {
     let text = match &skill.when_to_use {
         Some(when) => format!("{} - {when}", skill.description),
         None => skill.description.clone(),
     };
     let units: Vec<u16> = text.encode_utf16().collect();
     if units.len() > cap {
-        let cut = String::from_utf16_lossy(&units[..cap.saturating_sub(1)]);
-        (format!("{cut}\u{2026}"), true)
+        let (shown, rest) = units.split_at(cap.saturating_sub(1));
+        ListingDescription {
+            shown: format!("{}…", String::from_utf16_lossy(shown)),
+            remainder: String::from_utf16_lossy(rest),
+        }
     } else {
-        (text, false)
+        ListingDescription {
+            shown: text,
+            remainder: String::new(),
+        }
     }
 }
 
@@ -633,7 +687,10 @@ fn read_recorded_listing(rt: &Runtime, path: &Path) -> Option<RecordedListing> {
         .iter()
         .filter_map(|n| n.as_str().map(str::to_string))
         .collect();
-    let lines = parse_listing(content, &names);
+    let lines: Vec<_> = parse_listing(content, &names)
+        .into_iter()
+        .map(|(name, description, width)| (name, description.is_some(), width))
+        .collect();
     Some(RecordedListing {
         session: ObservedSession {
             transcript: path.to_path_buf(),
@@ -660,23 +717,32 @@ fn entry_head<'a>(line: &'a str, known: &BTreeSet<&str>) -> Option<(&'a str, boo
 
 /// Splits a listing into entries. Each entry starts with `- <name>` at the
 /// start of a line; descriptions can span lines.
-pub(crate) fn parse_listing(content: &str, names: &[String]) -> Vec<(String, bool, u64)> {
+pub(crate) fn parse_listing(content: &str, names: &[String]) -> Vec<(String, Option<String>, u64)> {
     let known: BTreeSet<&str> = names.iter().map(String::as_str).collect();
-    let mut out: Vec<(String, bool, u64)> = Vec::new();
+    let mut out = Vec::new();
     let mut text_lines = content.split('\n').peekable();
     while let Some(line) = text_lines.next() {
         let Some((name, described)) = entry_head(line, &known) else {
             continue;
         };
+        let mut description = described.then(|| {
+            line.split_once(": ")
+                .map_or("", |(_, text)| text)
+                .to_owned()
+        });
         let mut width = claude_width(line);
         while let Some(next) = text_lines.peek() {
             if entry_head(next, &known).is_some() {
                 break;
             }
+            if let Some(text) = &mut description {
+                text.push('\n');
+                text.push_str(next);
+            }
             width += claude_width(next);
             text_lines.next();
         }
-        out.push((name.to_string(), described, width));
+        out.push((name.to_string(), description, width));
     }
     out
 }
@@ -806,10 +872,12 @@ fn claude_listing(
                         path: None,
                         state: ListingState::Hidden,
                         hidden_reason: Some("off in agent settings".into()),
+                        description_preview: None,
                         shown_description_chars: 0,
                         full_description_chars: 0,
                         usage_score: None,
                         observed: None,
+                        plugin: None,
                         scanned: false,
                         observed_description_chars: None,
                         invocation_mismatch: None,
@@ -830,7 +898,8 @@ fn claude_listing(
     for name in &order {
         let score = scores.get(name).copied().unwrap_or(0.0);
         if let Some(skill) = by_name.get(name) {
-            let (description, cut) = claude_description(skill, settings.max_desc_chars);
+            let preview = claude_description(skill, settings.max_desc_chars);
+            let description = &preview.shown;
             // An empty description is listed as a name. Claude Code may
             // fill it from the body, which Skill Studio does not read.
             let name_only = settings.overrides.get(name).map(String::as_str) == Some("name-only")
@@ -850,13 +919,14 @@ fn claude_listing(
             entries.push(ListingEntry {
                 name: name.clone(),
                 path: Some(skill.path.clone()),
-                state: if cut {
-                    ListingState::Truncated
-                } else {
+                state: if preview.remainder.is_empty() {
                     ListingState::Described
+                } else {
+                    ListingState::Truncated
                 },
                 hidden_reason: None,
-                shown_description_chars: claude_width(&description),
+                shown_description_chars: claude_width(description),
+                description_preview: Some(preview),
                 full_description_chars: claude_width(&skill.description)
                     + skill
                         .when_to_use
@@ -864,6 +934,7 @@ fn claude_listing(
                         .map_or(0, |w| claude_width(w) + 3),
                 usage_score: Some(score),
                 observed: None,
+                plugin: skill.plugin.clone(),
                 scanned: true,
                 observed_description_chars: None,
                 invocation_mismatch: None,
@@ -885,10 +956,12 @@ fn claude_listing(
                 path: None,
                 state: ListingState::Described,
                 hidden_reason: None,
+                description_preview: None,
                 shown_description_chars: description,
                 full_description_chars: description,
                 usage_score: Some(score),
                 observed: None,
+                plugin: None,
                 scanned: false,
                 observed_description_chars: None,
                 invocation_mismatch: None,
@@ -900,6 +973,7 @@ fn claude_listing(
         if !kept || line.full_width == line.name_width {
             entry.state = ListingState::NameOnly;
             entry.shown_description_chars = 0;
+            entry.description_preview = None;
         }
     }
     if let Some(recorded) = recorded {
@@ -933,15 +1007,13 @@ fn claude_listing(
     }
     let requested = req.claude_budget_fraction;
     // The file that supplies the value now; a project layer overrides the user file.
-    let claude_file = settings
-        .fraction
-        .as_ref()
-        .map_or_else(|| settings.user_path.clone(), |(_, path)| path.clone());
+    let claude_file = configured_path(settings.fraction.as_ref(), &settings.user_path);
     let setting = ListingSetting {
         key: "skillListingBudgetFraction".into(),
         current: settings.fraction.as_ref().map(|(f, _)| f.to_string()),
         file: claude_file.clone(),
         chezmoi_source: chezmoi_source(rt, &claude_file),
+        edit_revision: None,
         snippet: format!(
             "\"skillListingBudgetFraction\": {}",
             requested.unwrap_or(budget.fraction)
@@ -960,10 +1032,33 @@ fn claude_listing(
             budget.fraction, budget.context_tokens, budget.chars_per_token, budget.fraction_source
         ),
         context_window_tokens: Some(budget.context_tokens),
+        configured_model: settings
+            .model
+            .zip(settings.model_file)
+            .map(|(name, file)| ConfiguredListingModel { name, file }),
+        description_char_limit: Some(settings.max_desc_chars),
+        description_limit_setting: Some({
+            let file = settings
+                .max_desc_file
+                .as_ref()
+                .unwrap_or(&settings.user_path);
+            ListingSetting {
+                key: "skillListingMaxDescChars".into(),
+                current: settings
+                    .max_desc_file
+                    .as_ref()
+                    .map(|_| settings.max_desc_chars.to_string()),
+                chezmoi_source: chezmoi_source(rt, file),
+                file: file.clone(),
+                edit_revision: None,
+                snippet: format!("\"skillListingMaxDescChars\": {}", settings.max_desc_chars),
+            }
+            .with_edit_revision(rt)
+        }),
         context_source: budget.context_source,
         uses_default_context_window: budget.default_context,
         notes,
-        setting: Some(setting),
+        setting: Some(setting.with_edit_revision(rt)),
         observed_session: recorded.map(|r| r.session.clone()),
         thresholds: None,
         entries,
@@ -1193,6 +1288,19 @@ struct CodexSkill {
     entry: ListingEntry,
 }
 
+const CODEX_DESCRIPTION_CAP: usize = 1024;
+const CODEX_PREFIX_BEFORE_ELLIPSIS: usize = CODEX_DESCRIPTION_CAP - 3;
+
+fn codex_description_state(shown: u64, full: u64) -> ListingState {
+    if shown == 0 {
+        ListingState::NameOnly
+    } else if shown < full {
+        ListingState::Truncated
+    } else {
+        ListingState::Described
+    }
+}
+
 /// Renders `skills` both ways and keeps the better one, as Codex does.
 /// `known_roots` gives the alias order a recorded session used.
 fn codex_render(skills: &[CodexSkill], limit: CodexLimit, known_roots: &[PathBuf]) -> CodexRender {
@@ -1202,8 +1310,12 @@ fn codex_render(skills: &[CodexSkill], limit: CodexLimit, known_roots: &[PathBuf
             let chars: Vec<char> = s.description.chars().collect();
             CodexLine {
                 name: s.name.clone(),
-                description: if chars.len() > 1024 {
-                    chars[..1021].iter().copied().chain("...".chars()).collect()
+                description: if chars.len() > CODEX_DESCRIPTION_CAP {
+                    chars[..CODEX_PREFIX_BEFORE_ELLIPSIS]
+                        .iter()
+                        .copied()
+                        .chain("...".chars())
+                        .collect()
                 } else {
                     chars
                 },
@@ -1635,10 +1747,12 @@ fn codex_listing(
                 path: Some(skill.path.clone()),
                 state: ListingState::Described,
                 hidden_reason: None,
+                description_preview: None,
                 shown_description_chars: chars,
                 full_description_chars: chars,
                 usage_score: None,
                 observed: None,
+                plugin: skill.plugin.clone(),
                 scanned: true,
                 observed_description_chars: None,
                 invocation_mismatch: skill.claude_manual.then(|| {
@@ -1764,10 +1878,12 @@ fn codex_listing(
                     path: entry.skill_md.parent().map(Path::to_path_buf),
                     state: ListingState::Described,
                     hidden_reason: None,
+                    description_preview: None,
                     shown_description_chars: chars,
                     full_description_chars: chars,
                     usage_score: None,
                     observed: None,
+                    plugin: None,
                     scanned: false,
                     observed_description_chars: None,
                     invocation_mismatch: None,
@@ -1787,14 +1903,24 @@ fn codex_listing(
     let mut entries: Vec<ListingEntry> = Vec::new();
     for ((skill, line), alloc) in skills.iter().zip(&render.lines).zip(&render.alloc) {
         let mut entry = skill.entry.clone();
-        let full = line.description.len();
-        entry.state = match alloc {
-            None => ListingState::Omitted,
-            Some(0) => ListingState::NameOnly,
-            Some(n) if *n < full => ListingState::Truncated,
-            Some(_) => ListingState::Described,
-        };
+        let full = entry.full_description_chars as usize;
         entry.shown_description_chars = alloc.unwrap_or(0) as u64;
+        entry.state = alloc.map_or(ListingState::Omitted, |n| {
+            codex_description_state(n as u64, entry.full_description_chars)
+        });
+        if let Some(n) = *alloc {
+            if n > 0 && entry.scanned {
+                let source_chars = if full > CODEX_DESCRIPTION_CAP {
+                    n.min(CODEX_PREFIX_BEFORE_ELLIPSIS)
+                } else {
+                    n
+                };
+                entry.description_preview = Some(ListingDescription {
+                    shown: line.description[..n].iter().collect(),
+                    remainder: skill.description.chars().skip(source_chars).collect(),
+                });
+            }
+        }
         entries.push(entry);
     }
     if let Some(recorded) = &recorded {
@@ -1817,12 +1943,9 @@ fn codex_listing(
                 .and_then(|p| observed.get(&real(&p.join("SKILL.md"))))
                 .copied();
             entry.observed_description_chars = chars;
-            entry.observed = Some(match chars {
-                None => ListingState::Hidden,
-                Some(0) => ListingState::NameOnly,
-                Some(n) if n < entry.full_description_chars.min(1024) => ListingState::Truncated,
-                Some(_) => ListingState::Described,
-            });
+            entry.observed = Some(chars.map_or(ListingState::Hidden, |n| {
+                codex_description_state(n, entry.full_description_chars)
+            }));
         }
     }
     let limit = budget.limit;
@@ -1872,10 +1995,7 @@ fn codex_listing(
         .codex_max_context_tokens
         .or(settings.max_context_tokens.as_ref().map(|(v, _)| *v));
     // The file that supplies the value now; a trusted project layer overrides the user file.
-    let codex_file = settings
-        .max_context_tokens
-        .as_ref()
-        .map_or_else(|| settings.user_path.clone(), |(_, path)| path.clone());
+    let codex_file = configured_path(settings.max_context_tokens.as_ref(), &settings.user_path);
     let setting = ListingSetting {
         key: "skills.max_context_tokens".into(),
         current: settings
@@ -1884,6 +2004,7 @@ fn codex_listing(
             .map(|(v, _)| v.to_string()),
         file: codex_file.clone(),
         chezmoi_source: chezmoi_source(rt, &codex_file),
+        edit_revision: None,
         snippet: format!(
             "[skills]\nmax_context_tokens = {}",
             requested.unwrap_or(max).min(10_000)
@@ -1912,6 +2033,12 @@ fn codex_listing(
         full_size,
         budget_source: budget.source,
         context_window_tokens: budget.context_tokens,
+        configured_model: settings
+            .model
+            .zip(settings.model_file)
+            .map(|(name, file)| ConfiguredListingModel { name, file }),
+        description_char_limit: None,
+        description_limit_setting: None,
         context_source: if budget.default_context {
             "unknown".into()
         } else {
@@ -1919,7 +2046,7 @@ fn codex_listing(
         },
         uses_default_context_window: budget.default_context,
         notes,
-        setting: Some(setting),
+        setting: Some(setting.with_edit_revision(rt)),
         observed_session: recorded.map(|r| r.session),
         thresholds: Some(thresholds),
         entries,
@@ -1930,9 +2057,69 @@ fn codex_listing(
 // chezmoi
 // ---------------------------------------------------------------------------
 
+fn configured_path<T>(value: Option<&(T, PathBuf)>, fallback: &Path) -> PathBuf {
+    value.map_or_else(|| fallback.to_path_buf(), |(_, file)| file.clone())
+}
+
+/// Resolve an editable source for a known setting in an allowed session scope.
+pub(crate) fn listing_setting_file(
+    rt: &Runtime,
+    project_path: Option<PathBuf>,
+    key: &str,
+) -> Result<PathBuf, CoreError> {
+    let scopes = listing_scopes(
+        rt,
+        &ListingRequest {
+            project_path,
+            ..ListingRequest::default()
+        },
+    )?;
+    let scope = scopes.last().unwrap_or(&RootScope::Global);
+    let file = match key {
+        "skillListingBudgetFraction" | "skillListingMaxDescChars" => {
+            let settings = claude_settings(rt, scope)?;
+            if key == "skillListingBudgetFraction" {
+                configured_path(settings.fraction.as_ref(), &settings.user_path)
+            } else {
+                settings.max_desc_file.unwrap_or(settings.user_path)
+            }
+        }
+        "skills.max_context_tokens" => {
+            let settings = codex_listing_settings(rt, scope)?;
+            configured_path(settings.max_context_tokens.as_ref(), &settings.user_path)
+        }
+        _ => {
+            return Err(CoreError::new(
+                ErrorCode::InvalidRequest,
+                "Unknown listing setting",
+            ))
+        }
+    };
+    Ok(file)
+}
+
+/// Choose the owning source when an editor must open a setting.
+pub fn listing_setting_source(
+    rt: &Runtime,
+    project: Option<PathBuf>,
+    key: &str,
+) -> Result<PathBuf, CoreError> {
+    let file = listing_setting_file(rt, project, key)?;
+    Ok(chezmoi_source(rt, &file).unwrap_or(file))
+}
+
+impl ListingSetting {
+    fn with_edit_revision(mut self, rt: &Runtime) -> Self {
+        if self.chezmoi_source.is_none() {
+            self.edit_revision = crate::listing_setting_edit::editable_revision(rt, &self.file);
+        }
+        self
+    }
+}
+
 /// The chezmoi source file for `target`, when `~/.local/share/chezmoi`
 /// manages it. A direct edit of `target` is reverted on the next apply.
-fn chezmoi_source(rt: &Runtime, target: &Path) -> Option<PathBuf> {
+pub(crate) fn chezmoi_source(rt: &Runtime, target: &Path) -> Option<PathBuf> {
     let home = &rt.scope.home.lexical;
     let relative = target.strip_prefix(home).ok()?;
     let mut dir = home.join(".local/share/chezmoi");
@@ -2034,11 +2221,25 @@ mod tests {
             hidden: None,
             claude_manual: false,
         };
-        assert_eq!(claude_description(&skill, 5), ("abcd\u{2026}".into(), true));
+        assert_eq!(
+            claude_description(&skill, 5),
+            ListingDescription {
+                shown: "abcd…".into(),
+                remainder: "ef - go".into()
+            }
+        );
         assert_eq!(
             claude_description(&skill, 20),
-            ("abcdef - go".into(), false)
+            ListingDescription {
+                shown: "abcdef - go".into(),
+                remainder: String::new()
+            }
         );
+    }
+
+    #[test]
+    fn codex_counts_text_lost_to_its_per_skill_cap_as_shortened() {
+        assert_eq!(codex_description_state(1024, 1400), ListingState::Truncated);
     }
 
     fn codex(name: &str, description: &str) -> CodexLine {
@@ -2180,9 +2381,9 @@ mod tests {
         assert_eq!(
             parsed,
             vec![
-                ("a".into(), true, 17),
-                ("p:b".into(), false, 5),
-                ("c".into(), true, 16)
+                ("a".into(), Some("one\nmore text".into()), 17),
+                ("p:b".into(), None, 5),
+                ("c".into(), Some("two".into()), 16)
             ]
         );
     }

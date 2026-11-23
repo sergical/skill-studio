@@ -190,10 +190,14 @@ pub(crate) struct ClaudeListingSettings {
     pub fraction: Option<(f64, PathBuf)>,
     /// `skillListingMaxDescChars`, default 1536.
     pub max_desc_chars: usize,
+    /// Settings layer that supplied the per-skill cap, if explicitly set.
+    pub max_desc_file: Option<PathBuf>,
     /// `enabledPlugins` switches, keyed `plugin@marketplace`.
     pub enabled_plugins: BTreeMap<String, bool>,
     /// `model`, as written (an alias such as `opus` or a model id).
     pub model: Option<String>,
+    /// Winning settings layer for the configured model.
+    pub model_file: Option<PathBuf>,
     /// `skillOverrides` values by skill name.
     pub overrides: BTreeMap<String, String>,
     /// The user settings file.
@@ -302,6 +306,7 @@ pub(crate) fn claude_settings(
         }
         if let Some(model) = settings.get("model").and_then(serde_json::Value::as_str) {
             out.model = Some(model.to_string());
+            out.model_file = Some(path.clone());
         }
         if let Some(value) = settings.get("skillListingBudgetFraction") {
             let fraction = value
@@ -317,6 +322,7 @@ pub(crate) fn claude_settings(
             out.fraction = Some((fraction, path.clone()));
         }
         if let Some(value) = settings.get("skillListingMaxDescChars") {
+            out.max_desc_file = Some(path.clone());
             out.max_desc_chars = value
                 .as_u64()
                 .filter(|v| *v > 0)
@@ -343,6 +349,8 @@ pub(crate) struct CodexListingSettings {
     pub max_context_tokens: Option<(u64, PathBuf)>,
     /// `model`.
     pub model: Option<String>,
+    /// Winning settings layer for the configured model.
+    pub model_file: Option<PathBuf>,
     /// The user config file.
     pub user_path: PathBuf,
 }
@@ -356,6 +364,7 @@ pub(crate) fn codex_listing_settings(
         context_window: None,
         max_context_tokens: None,
         model: None,
+        model_file: None,
         user_path,
     };
     for (path, layer) in codex_settings(rt, scope)? {
@@ -369,6 +378,7 @@ pub(crate) fn codex_listing_settings(
         }
         if let Some(model) = layer.get("model").and_then(toml::Value::as_str) {
             out.model = Some(model.to_string());
+            out.model_file = Some(path.clone());
         }
         if let Some(max) = layer
             .get("skills")

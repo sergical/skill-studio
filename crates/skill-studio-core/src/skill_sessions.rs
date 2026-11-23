@@ -105,6 +105,9 @@ pub struct SessionSkillUse {
 /// One entry in a session's listing.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SessionListedSkill {
+    /// Index into this agent's captured descriptions when the session contained wording.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_index: Option<usize>,
     /// Name as the session recorded it.
     #[schemars(extend("x-untrusted" = true))]
     pub skill: String,
@@ -224,11 +227,15 @@ pub struct SkillSessionRollup {
 /// One agent's sessions and per-skill rollup.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AgentSessions {
+    /// Distinct description strings read from this agent's saved listings, in first-seen order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(extend("x-untrusted" = true))]
+    pub captured_descriptions: Vec<String>,
     /// Agent id.
     pub harness: AgentId,
-    /// What this agent records.
+    /// Session evidence supported by this reader.
     pub records: SessionRecords,
-    /// What this agent records, in plain words.
+    /// A description of reader coverage.
     pub note: String,
     /// The agent's skills documentation.
     pub doc: Option<String>,
@@ -356,10 +363,15 @@ pub fn skill_sessions(
 // ---------------------------------------------------------------------------
 
 /// How one recorded listing showed one entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordedEntry {
-    /// With this many description characters.
-    Described(u64),
+    /// Verbatim wording from the record and its width in the client.
+    Described {
+        /// Literal description from the listing.
+        text: String,
+        /// Description width used to compare this entry with the installation.
+        chars: u64,
+    },
     /// By name only.
     NameOnly,
 }
@@ -470,18 +482,16 @@ impl ClaudeSessionParser {
                     })
                     .unwrap_or_default();
                 self.recorded = true;
-                for (name, described, width) in parse_listing(content, &names) {
+                for (name, description, _) in parse_listing(content, &names) {
                     if self.seen.insert(name.clone()) {
-                        let name_width =
-                            crate::listing_visibility::claude_width(&format!("- {name}"));
-                        self.listing.push((
-                            name,
-                            if described {
-                                RecordedEntry::Described(width.saturating_sub(name_width + 2))
-                            } else {
-                                RecordedEntry::NameOnly
+                        let entry = description.filter(|text| !text.is_empty()).map_or(
+                            RecordedEntry::NameOnly,
+                            |text| RecordedEntry::Described {
+                                chars: crate::listing_visibility::claude_width(&text),
+                                text,
                             },
-                        ));
+                        );
+                        self.listing.push((name, entry));
                     }
                 }
             }
@@ -529,22 +539,37 @@ fn parse_codex_listing(block: &str) -> Vec<(String, RecordedEntry)> {
     };
     let end = block.find("</skills_instructions>").unwrap_or(block.len());
     let mut out = Vec::new();
-    let mut seen = BTreeSet::new();
-    for line in block[start..end.max(start)].lines() {
+    for line in block[start..end.max(start)].lines().skip(1) {
+        if line.starts_with('#') {
+            break;
+        }
         let Some(rest) = line.strip_prefix("- ") else {
             continue;
         };
-        let body = rest.rsplit_once(" (file: ").map_or(rest, |(head, _)| head);
+        let body = [
+            " (file: ",
+            " (executor package: ",
+            " (cloud package: ",
+            " (custom resource: ",
+        ]
+        .iter()
+        .filter_map(|locator| rest.rfind(locator))
+        .max()
+        .filter(|_| rest.ends_with(')'))
+        .map_or(rest, |at| &rest[..at]);
         let (name, entry) = match body.split_once(": ") {
             Some((name, description)) if !description.trim().is_empty() => (
                 name,
-                RecordedEntry::Described(description.trim().chars().count() as u64),
+                RecordedEntry::Described {
+                    chars: description.chars().count() as u64,
+                    text: description.to_owned(),
+                },
             ),
             Some((name, _)) => (name, RecordedEntry::NameOnly),
-            None => (body, RecordedEntry::NameOnly),
+            None => (body.trim_end_matches(':'), RecordedEntry::NameOnly),
         };
         let name = name.trim();
-        if !name.is_empty() && seen.insert(name.to_string()) {
+        if !name.is_empty() {
             out.push((name.to_string(), entry));
         }
     }
@@ -1110,8 +1135,8 @@ fn resolve_name<'a>(name: &str, candidates: impl IntoIterator<Item = &'a str>) -
 
 /// The state of one recorded entry. A description shorter than the scanned
 /// one was cut.
-fn entry_state(entry: RecordedEntry, scanned: Option<&CorpusSkill>) -> SessionListingState {
-    let RecordedEntry::Described(chars) = entry else {
+fn entry_state(entry: &RecordedEntry, scanned: Option<&CorpusSkill>) -> SessionListingState {
+    let RecordedEntry::Described { chars, .. } = entry else {
         return SessionListingState::NameOnly;
     };
     let full = scanned.map_or(0, |s| {
@@ -1124,7 +1149,7 @@ fn entry_state(entry: RecordedEntry, scanned: Option<&CorpusSkill>) -> SessionLi
     });
     // Codex trims descriptions evenly; Claude Code lists them whole up to
     // 1536 characters, so only a large gap counts.
-    if full > chars + 3 && chars < 1536 {
+    if full > chars + 3 && *chars < 1536 {
         SessionListingState::Truncated
     } else {
         SessionListingState::Described
@@ -1206,13 +1231,19 @@ pub fn build_agent(
     }
     let mut sessions = Vec::new();
     let mut with_listing = 0usize;
+    let mut description_ids = BTreeMap::new();
+    let mut captured_descriptions = Vec::new();
     for session in parsed {
         // Recorded names stay as recorded: two plugins' `p:foo` and `q:foo`
         // are different entries even when both map to one scanned `foo`.
-        let recorded: Option<BTreeMap<&str, RecordedEntry>> = session
-            .listing
-            .as_ref()
-            .map(|l| l.iter().map(|(n, e)| (n.as_str(), *e)).collect());
+        let recorded: Option<BTreeMap<&str, &RecordedEntry>> =
+            session.listing.as_ref().map(|listing| {
+                let mut first_by_name = BTreeMap::new();
+                for (name, entry) in listing {
+                    first_by_name.entry(name.as_str()).or_insert(entry);
+                }
+                first_by_name
+            });
         let scanned = |name: &str| resolve_name(name, by_name.keys().copied());
         // How this session listed a skill, by a recorded or a scanned name.
         let state_of = |name: &str| -> (String, SessionListingState) {
@@ -1222,8 +1253,7 @@ pub fn build_agent(
             let listed = resolve_name(name, recorded.keys().copied());
             match recorded.get(listed.as_str()) {
                 Some(entry) => {
-                    let state =
-                        entry_state(*entry, by_name.get(scanned(&listed).as_str()).copied());
+                    let state = entry_state(entry, by_name.get(scanned(&listed).as_str()).copied());
                     (listed, state)
                 }
                 None => (name.to_string(), SessionListingState::NotListed),
@@ -1254,15 +1284,25 @@ pub fn build_agent(
         // One count per scanned skill per session, even when two recorded
         // names map to it.
         let mut counted = BTreeSet::new();
-        for (name, _) in session.listing.iter().flatten() {
-            let (_, state) = state_of(name);
+        for (name, entry) in session.listing.iter().flatten() {
+            let state = entry_state(entry, by_name.get(scanned(name).as_str()).copied());
             summary.listed += 1;
             if state == SessionListingState::NameOnly {
                 summary.name_only += 1;
             } else {
                 summary.described += 1;
             }
+            let description_index = match entry {
+                RecordedEntry::NameOnly => None,
+                RecordedEntry::Described { text, .. } => {
+                    Some(*description_ids.entry(text.as_str()).or_insert_with(|| {
+                        captured_descriptions.push(text.clone());
+                        captured_descriptions.len() - 1
+                    }))
+                }
+            };
             summary.entries.push(SessionListedSkill {
+                description_index,
                 skill: name.clone(),
                 listed_as: state,
             });
@@ -1369,15 +1409,16 @@ pub fn build_agent(
     }
     let note = match records {
         SessionRecords::ListingAndUses => format!(
-            "{display_name} records each session's skill listing and its skill uses. Skill Studio reads the newest sessions from the last {} days.",
+            "Skill Studio reads listings and skill uses when present in {display_name} sessions from the last {} days.",
             crate::skill_uses::HISTORY_DAYS
         ),
         SessionRecords::UsesOnly => format!(
-            "Skill Studio reads skill uses for {display_name}. See Activity for uses and Listing for current discovery or preview evidence."
+            "Skill Studio does not yet read saved listings for {display_name}."
         ),
     };
     AgentBuild {
         agent: AgentSessions {
+            captured_descriptions,
             harness: harness.clone(),
             records,
             note,
@@ -1412,7 +1453,10 @@ mod tests {
         assert_eq!(session.model.as_deref(), Some("claude-opus-5-5"));
         let listing = session.listing.clone().unwrap();
         assert_eq!(listing[1], ("b".to_string(), RecordedEntry::NameOnly));
-        assert!(matches!(listing[0].1, RecordedEntry::Described(6)));
+        assert!(matches!(
+            listing[0].1,
+            RecordedEntry::Described { chars: 6, .. }
+        ));
 
         let agent = build_agent(
             &AgentId::parse(AgentId::CLAUDE_CODE).unwrap(),
@@ -1424,6 +1468,9 @@ mod tests {
         );
         let s = &agent.sessions[0];
         assert_eq!((s.listed, s.described, s.name_only), (3, 2, 1));
+        assert_eq!(agent.agent.captured_descriptions, ["does a", "plugin c"]);
+        assert_eq!(s.entries[0].description_index, Some(0));
+        assert_eq!(s.entries[1].description_index, None);
         let used: Vec<_> = s
             .used
             .iter()
@@ -1442,7 +1489,7 @@ mod tests {
 
     #[test]
     fn codex_session_reads_the_listing_block_and_the_typed_prompt() {
-        let dev = "<skills_instructions>\n## Skills\n### Available skills\n- a: Does a thing (file: r1/a/SKILL.md)\n- p:b: Plugin b (file: r4/b/SKILL.md)\n</skills_instructions>";
+        let dev = "<skills_instructions>\n## Skills\n### Available skills\n- a: Does a thing (file: r1/a/SKILL.md)\n- p:b: Plugin b (file: r4/b/SKILL.md)\n- a: (file: r2/a/SKILL.md)\n### Instructions\n- This is not a skill\n</skills_instructions>";
         let text = [
             serde_json::json!({"type":"session_meta","timestamp":"2026-11-20T00:00:00Z","payload":{"id":"c1","cwd":"/w","timestamp":"2026-11-20T00:00:00Z"}}).to_string(),
             serde_json::json!({"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":dev}]}}).to_string(),
@@ -1454,13 +1501,26 @@ mod tests {
         assert_eq!(session.id.as_deref(), Some("c1"));
         assert_eq!(session.model.as_deref(), Some("gpt-6"));
         assert_eq!(session.prompt.as_deref(), Some("fix the build"));
-        let names: Vec<_> = session
-            .listing
-            .unwrap()
-            .into_iter()
-            .map(|(n, _)| n)
-            .collect();
-        assert_eq!(names, ["a", "p:b"]);
+        let agent = build_agent(
+            &AgentId::parse(AgentId::CODEX).unwrap(),
+            "Codex",
+            SessionRecords::ListingAndUses,
+            None,
+            &[],
+            &[session],
+        );
+        let entries = &agent.sessions[0].entries;
+        assert_eq!(
+            entries.iter().map(|e| e.skill.as_str()).collect::<Vec<_>>(),
+            ["a", "p:b", "a"]
+        );
+        assert_eq!(
+            agent.agent.captured_descriptions,
+            ["Does a thing", "Plugin b"]
+        );
+        assert_eq!(entries[0].description_index, Some(0));
+        assert_eq!(entries[2].listed_as, SessionListingState::NameOnly);
+        assert_eq!(entries[2].description_index, None);
     }
 
     #[test]
@@ -1570,7 +1630,15 @@ mod tests {
             listing: Some(
                 names
                     .iter()
-                    .map(|n| ((*n).to_string(), RecordedEntry::Described(10)))
+                    .map(|n| {
+                        (
+                            (*n).to_string(),
+                            RecordedEntry::Described {
+                                chars: 10,
+                                text: "described!".into(),
+                            },
+                        )
+                    })
                     .collect(),
             ),
             ..ParsedSession::default()

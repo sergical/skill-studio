@@ -7,6 +7,7 @@
 // ============================================================================
 
 import { useEffect, useState } from "react";
+import { ChevronRight } from "lucide-react";
 import { Button } from "@skill-studio/ui";
 import { deploymentLabelFromAgentId } from "@skill-studio/lib";
 import type {
@@ -15,6 +16,7 @@ import type {
   SkillSessionFlag,
   SkillSessionRollup,
 } from "@skill-studio/lib";
+import { useClientRows } from "../../hooks/useClientRows";
 import { PageShell } from "../Shell/PageShell";
 import { SelectControl } from "../ui/SelectControl";
 import { sessionsReportKey, useAppStore } from "../../store/appStore";
@@ -35,6 +37,12 @@ interface Finding {
   advice: string;
 }
 
+const NOT_REACHABLE: Finding = {
+  flag: "not_reachable",
+  title: "Installed outside this client’s skill folders",
+  advice: "Install the skill in a folder this client reads to make it available here.",
+};
+
 /** Findings in the order a person acts on them. */
 const FINDINGS: Finding[] = [
   {
@@ -47,20 +55,15 @@ const FINDINGS: Finding[] = [
     flag: "used_while_name_only",
     title: "Used while listed by name only",
     advice:
-      "The model found these from the name alone. Raise the listing budget on Model listing, or shorten other descriptions, so they keep a description.",
+      "The model found these from the name alone. Raise the listing budget on Client configuration, or shorten other descriptions, so they keep a description.",
   },
   {
     flag: "listed_never_used",
     title: "Listed in nearly every session, never used",
     advice:
-      "Each one takes listing space that other skills need. Park the skill, turn off its plugin, or in Claude Code set skillOverrides to user-invocable-only so you can still type it.",
+      "Check whether you still want these skills available. Open a skill to see its locations and invocation options.",
   },
-  {
-    flag: "not_reachable",
-    title: "Installed, but this agent cannot reach it",
-    advice:
-      "The skill is not in a folder this agent reads. Install it for this agent if you want the model to use it.",
-  },
+  NOT_REACHABLE,
   {
     flag: "not_described_now",
     title: "Not described in the current listing",
@@ -103,9 +106,13 @@ function AgentSummary({ agent }: { agent: AgentSessions }) {
       <p className="m-0 text-body text-text-primary">
         {agent.records === "listing_and_uses"
           ? `${agent.sessions_read} sessions read: ${agent.sessions_with_use} used a skill, ${agent.sessions_with_miss} possibly missed one.`
-          : "This agent does not record its listing."}
+          : agent.note}
       </p>
-      <p className="m-0">{agent.note}</p>
+      <p className="m-0">
+        {agent.records === "listing_and_uses"
+          ? agent.note
+          : "Explore the skills found in this client’s folders below."}
+      </p>
       {agent.doc && (
         <p className="m-0">
           <a
@@ -139,7 +146,7 @@ function SkillRow({ skill }: { skill: SkillSessionRollup }) {
         {skill.name}
       </span>
       <span className="text-caption text-text-tertiary">
-        {counts.length > 0 ? `Sessions: ${counts.join(", ")}.` : "Not in any session read."}
+        {counts.length > 0 && `Sessions: ${counts.join(", ")}.`}
         {skill.reach && ` ${skill.reach}`}
       </span>
     </li>
@@ -190,42 +197,136 @@ function formatTime(at: string | null): string {
     : date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-function SessionRow({ session }: { session: SessionSummary }) {
-  const nameOnly = session.entries.flatMap((e) => (e.listed_as === "name_only" ? [e.skill] : []));
-  const project = session.project_path?.split("/").filter(Boolean).pop() ?? "unknown folder";
+function RecordedListing({
+  session,
+  descriptions,
+}: {
+  session: SessionSummary;
+  descriptions: string[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [limit, setLimit] = useState(10);
   return (
-    <li className="flex flex-col gap-0.5 py-2">
-      <span className="min-w-0 truncate text-body text-text-primary" title={session.prompt ?? ""}>
-        {session.prompt ?? "No typed prompt"}
-      </span>
-      <span className="text-caption text-text-tertiary">
-        {formatTime(session.at)} in {project}
-        {session.listing_recorded
-          ? `. Listed ${session.listed}: ${session.described} described, ${session.name_only} name only.`
-          : ". No listing recorded."}
-      </span>
-      {nameOnly.length > 0 && (
-        <span className="text-caption text-text-tertiary">Name only: {nameOnly.join(", ")}</span>
+    <details onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary className="cursor-pointer text-small">
+        Recorded listing · {session.entries.length} skills
+      </summary>
+      {open && (
+        <>
+          <ul
+            className="mt-1 list-none divide-y divide-border-subtle pl-0"
+            aria-label="Recorded skills"
+          >
+            {session.entries.slice(0, limit).map((entry, position) => {
+              const text =
+                entry.description_index == null ? undefined : descriptions[entry.description_index];
+              return (
+                <li key={`${position}-${entry.skill}`} className="py-2">
+                  <strong className="font-medium">{entry.skill}</strong>
+                  {(!text || entry.listed_as !== "described") && (
+                    <span className="ml-2 text-caption text-text-tertiary">
+                      {LISTED_LABEL[entry.listed_as]}
+                    </span>
+                  )}
+                  {text && (
+                    <p className="mt-0.5 whitespace-pre-wrap select-text text-text-secondary">
+                      {text}
+                    </p>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+          {session.entries.length > limit && (
+            <Button variant="ghost" size="sm" onClick={() => setLimit(limit + 25)}>
+              Show more ({limit} of {session.entries.length})
+            </Button>
+          )}
+        </>
       )}
-      {session.used.length > 0 && (
-        <span className="text-caption text-text-secondary">
-          Used: {session.used.map((u) => `${u.skill} (${LISTED_LABEL[u.listed_as]})`).join(", ")}
-        </span>
-      )}
-      {session.missed.map((m) => (
-        <span key={m.skill} className="text-caption text-text-secondary">
-          Possibly missed (guess): {m.skill}, {LISTED_LABEL[m.listed_as]}. Matched{" "}
-          {m.words.join(", ")}.
-        </span>
-      ))}
+    </details>
+  );
+}
+
+function SessionRow({
+  session,
+  descriptions,
+}: {
+  session: SessionSummary;
+  descriptions: string[];
+}) {
+  const folder = session.project_path?.split("/").filter(Boolean) ?? [];
+  const parent = folder[folder.length - 2];
+  const leaf = folder[folder.length - 1];
+  const projectName =
+    folder[folder.length - 4] === ".t3" && folder[folder.length - 3] === "worktrees"
+      ? parent
+      : (leaf ?? "Unknown folder");
+  return (
+    <li>
+      <details className="group border-b border-border-subtle">
+        <summary className="grid cursor-pointer list-none grid-cols-[12px_minmax(0,1fr)_auto] [&::-webkit-details-marker]:hidden items-center gap-3 rounded-sm px-1 py-2.5 hover:bg-bg-hover">
+          <ChevronRight
+            aria-hidden="true"
+            size={13}
+            className="text-text-tertiary group-open:rotate-90"
+          />
+          <span className="min-w-0">
+            <strong
+              className="block truncate text-body font-medium"
+              title={session.project_path ?? undefined}
+            >
+              {projectName}
+            </strong>
+            <span className="block truncate text-caption text-text-secondary">
+              {session.used.length
+                ? session.used.map((u) => u.skill).join(" · ")
+                : "No skill use recorded"}
+            </span>
+          </span>
+          <span className="text-right">
+            <span className="block text-small tabular-nums">
+              {session.used.length} {session.used.length === 1 ? "skill" : "skills"} loaded
+            </span>
+            <span className="text-caption text-text-tertiary">{formatTime(session.at)}</span>
+          </span>
+        </summary>
+        <div className="mb-3 ml-1 flex flex-col gap-2 border-l-2 border-accent pl-3 text-small">
+          <p>
+            {session.listing_recorded
+              ? `${session.listed} skills listed · ${session.described} with a description · ${session.name_only} by name only`
+              : "Listing unavailable for this session."}
+          </p>
+          {session.used.map((u) => (
+            <p key={u.skill}>
+              {u.skill} <span className="text-text-tertiary">· {LISTED_LABEL[u.listed_as]}</span>
+            </p>
+          ))}
+          {session.listing_recorded && session.entries.length > 0 && (
+            <RecordedListing session={session} descriptions={descriptions} />
+          )}
+          {session.missed.map((m) => (
+            <p key={m.skill}>
+              Possible match: {m.skill} · matched {m.words.join(", ")}.
+            </p>
+          ))}
+          {session.prompt && (
+            <details className="text-text-tertiary">
+              <summary className="cursor-pointer text-caption">First message</summary>
+              <p className="mt-1 select-text text-text-secondary">{session.prompt}</p>
+            </details>
+          )}
+        </div>
+      </details>
     </li>
   );
 }
 
 export function SessionsView() {
-  const [harness, setHarness] = useState("claude-code");
+  const [selected, setSelected] = useState<string>();
+  const navigate = useAppStore((s) => s.setActiveView);
   const [count, setCount] = useState("100");
-  const [onlyFindings, setOnlyFindings] = useState(true);
+  const [onlyFindings, setOnlyFindings] = useState(false);
   const refreshSkillSessions = useAppStore((s) => s.refreshSkillSessions);
 
   const load = useAppStore(
@@ -236,13 +337,17 @@ export function SessionsView() {
   }, [refreshSkillSessions, count]);
 
   const report = load?.data;
-  const agent = report?.agents.find((a) => a.harness === harness) ?? null;
+  const clients = useClientRows(report?.agents ?? []);
+  const agent = clients.find((a) => a.harness === selected) ?? clients[0];
+  const harness = agent?.harness ?? "";
   const skills = report?.skills.filter((s) => s.harness === harness) ?? [];
-  const sessions = report?.sessions.filter((s) => s.harness === harness) ?? [];
+  const sessions = (report?.sessions.filter((s) => s.harness === harness) ?? []).sort((a, b) =>
+    (b.at ?? "").localeCompare(a.at ?? ""),
+  );
   const shownSessions = onlyFindings
     ? sessions.filter((s) => s.missed.length > 0 || s.used.some((u) => u.listed_as !== "described"))
     : sessions;
-  const agents = (report?.agents.map((a) => a.harness) ?? [harness]).map((id) => ({
+  const agents = clients.map(({ harness: id }) => ({
     value: id,
     label: deploymentLabelFromAgentId(id),
   }));
@@ -251,48 +356,66 @@ export function SessionsView() {
     <PageShell
       title="Sessions"
       refreshing={load?.refreshing ?? true}
-      subtitle="Which skills your agents saw in each session, which they used, and which they may have missed."
+      subtitle="What your client recorded about skill use."
       actions={
         <>
           <SelectControl
             value={harness}
-            onValueChange={setHarness}
+            onValueChange={setSelected}
             items={agents}
             ariaLabel="Agent"
+            disabled={!agents.length}
           />
-          <SelectControl
-            value={count}
-            onValueChange={setCount}
-            items={SESSION_COUNTS}
-            ariaLabel="Sessions to read"
-          />
+          {agent?.records === "listing_and_uses" && (
+            <SelectControl
+              value={count}
+              onValueChange={setCount}
+              items={SESSION_COUNTS}
+              ariaLabel="Sessions to read"
+            />
+          )}
         </>
       }
     >
       <div className="flex flex-col gap-5">
-        <Glossary />
         {load?.error && (
           <p role="alert" className="m-0 text-small text-destructive-text">
             {load.error}
           </p>
         )}
         {!agent ? (
-          report && <p className="m-0 text-small text-text-secondary">No data for this agent.</p>
+          report && (
+            <p className="m-0 text-small text-text-secondary">
+              No selected client has a session report.
+            </p>
+          )
         ) : (
           <>
-            <AgentSummary agent={agent} />
-            {FINDINGS.map((finding) => (
-              <FindingSection key={finding.flag} finding={finding} skills={skills} />
-            ))}
+            {agent.records === "listing_and_uses" && (
+              <section className="rounded-lg border border-border-subtle bg-bg-secondary p-4">
+                <h2 className="text-heading-lg font-semibold">Skills in recent work</h2>
+                <p className="mt-3 flex items-baseline gap-2">
+                  <strong className="text-display leading-none tabular-nums">
+                    {agent.sessions_with_use}
+                  </strong>
+                  <span className="text-body text-text-secondary">
+                    of {agent.sessions_read} recent {deploymentLabelFromAgentId(harness)} sessions
+                    loaded a skill
+                  </span>
+                </p>
+                <p className="mt-2 text-small text-text-tertiary">
+                  {agent.sessions_with_listing} recorded which skills were listed.
+                </p>
+              </section>
+            )}
             {agent.records === "listing_and_uses" && (
               <section aria-label="Sessions" className="flex flex-col gap-1">
                 <div className="flex items-center gap-2">
-                  <h2 className="m-0 text-body font-medium text-text-primary">Sessions</h2>
+                  <h2 className="mr-auto text-heading font-semibold">Recent sessions</h2>
                   <Button
                     variant="ghost"
                     size="sm"
                     className="rounded-sm px-2 text-text-secondary"
-                    aria-pressed={!onlyFindings}
                     onClick={() => setOnlyFindings((v) => !v)}
                   >
                     {onlyFindings
@@ -309,11 +432,42 @@ export function SessionsView() {
                 ) : (
                   <ul className="m-0 list-none divide-y divide-border-subtle p-0">
                     {shownSessions.map((session) => (
-                      <SessionRow key={session.transcript} session={session} />
+                      <SessionRow
+                        key={session.transcript}
+                        session={session}
+                        descriptions={agent.captured_descriptions ?? []}
+                      />
                     ))}
                   </ul>
                 )}
               </section>
+            )}
+            {agent.records !== "listing_and_uses" && (
+              <section className="space-y-3">
+                <AgentSummary agent={agent} />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => navigate({ kind: "listing", harness })}
+                >
+                  See skills for {deploymentLabelFromAgentId(harness)}
+                </Button>
+                <FindingSection finding={NOT_REACHABLE} skills={skills} />
+              </section>
+            )}
+            {agent.records === "listing_and_uses" && (
+              <details className="rounded-md border border-border-subtle px-3 py-2">
+                <summary className="cursor-pointer text-small">
+                  Findings and listing definitions
+                </summary>
+                <div className="mt-3 flex flex-col gap-4">
+                  <AgentSummary agent={agent} />
+                  <Glossary />
+                  {FINDINGS.map((finding) => (
+                    <FindingSection key={finding.flag} finding={finding} skills={skills} />
+                  ))}
+                </div>
+              </details>
             )}
           </>
         )}

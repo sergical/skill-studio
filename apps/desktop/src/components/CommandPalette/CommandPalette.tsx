@@ -162,7 +162,7 @@ export function CommandPalette({ snapshot, requestRescan }: CommandPaletteProps)
         { label: "Skills", icon: <Layers size={14} />, view: { kind: "skills" } },
         { label: "Plugins", icon: <Puzzle size={14} />, view: { kind: "plugins" } },
         { label: "Packs", icon: <Boxes size={14} />, view: { kind: "packs" } },
-        { label: "Model listing", icon: <ListTree size={14} />, view: { kind: "listing" } },
+        { label: "Client configuration", icon: <ListTree size={14} />, view: { kind: "listing" } },
         { label: "Sessions", icon: <MessagesSquare size={14} />, view: { kind: "sessions" } },
         { label: "Activity", icon: <ActivityIcon size={14} />, view: { kind: "activity" } },
         { label: "Learn", icon: <BookOpen size={14} />, view: { kind: "learn" } },

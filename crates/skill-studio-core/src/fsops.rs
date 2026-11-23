@@ -663,6 +663,18 @@ pub fn write_file(
     bytes: &[u8],
     expected: &ReadStamp,
 ) -> Result<(), FsOpsError> {
+    write_file_with_create_mode(root, plan, name, bytes, expected, 0o644)
+}
+
+/// Journaled replacement with a private creation mode for new configuration files.
+pub(crate) fn write_file_with_create_mode(
+    root: &Root,
+    plan: &PlanWriter<'_>,
+    name: &Path,
+    bytes: &[u8],
+    expected: &ReadStamp,
+    create_mode: u32,
+) -> Result<(), FsOpsError> {
     root.revalidate()?;
     let target = root.confine(name)?;
     // Captured once, up front: both this call's stale-read check and the
@@ -726,7 +738,7 @@ pub fn write_file(
     )
     .map_err(FsOpsError::Journal)?;
     root.writer()
-        .fsops_write_new_file_with_mode(&tmp_path, bytes, previous_mode.unwrap_or(0o644))
+        .fsops_write_new_file_with_mode(&tmp_path, bytes, previous_mode.unwrap_or(create_mode))
         .fs_err(&tmp_path)?;
     root.writer()
         .fsops_fsync_file(&tmp_path)

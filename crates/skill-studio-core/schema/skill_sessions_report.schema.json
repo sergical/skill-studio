@@ -326,6 +326,15 @@
       "description": "One entry in a session's listing.",
       "type": "object",
       "properties": {
+        "description_index": {
+          "description": "Index into this agent's captured descriptions when the session contained wording.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
         "skill": {
           "description": "Name as the session recorded it.",
           "type": "string",
@@ -453,16 +462,24 @@
       "description": "One agent's sessions and per-skill rollup.",
       "type": "object",
       "properties": {
+        "captured_descriptions": {
+          "description": "Distinct description strings read from this agent's saved listings, in first-seen order.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-untrusted": true
+        },
         "harness": {
           "description": "Agent id.",
           "$ref": "#/$defs/AgentIdentity"
         },
         "records": {
-          "description": "What this agent records.",
+          "description": "Session evidence supported by this reader.",
           "$ref": "#/$defs/SessionRecords"
         },
         "note": {
-          "description": "What this agent records, in plain words.",
+          "description": "A description of reader coverage.",
           "type": "string"
         },
         "doc": {

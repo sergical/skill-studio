@@ -293,6 +293,18 @@ export interface HarnessListing {
    */
   context_window_tokens: number | null;
   /**
+   * Effective Claude Code skillListingMaxDescChars in this scope.
+   */
+  description_char_limit?: number | null;
+  /**
+   * The layer controlling the Claude Code per-skill cap, independent of its total budget.
+   */
+  description_limit_setting?: ListingSetting | null;
+  /**
+   * Configured model, independent of the model in the last recorded session.
+   */
+  configured_model?: ConfiguredListingModel | null;
+  /**
    * Where the context window came from.
    */
   context_source: string;
@@ -347,6 +359,23 @@ export interface ListingSetting {
    * The text to put in `file` for the requested budget.
    */
   snippet: string;
+  /**
+   * Revision needed for an in-app edit. Absent for managed, linked and read-only settings.
+   */
+  edit_revision?: string | null;
+}
+/**
+ * Model selection from the winning config layer.
+ */
+export interface ConfiguredListingModel {
+  /**
+   * Model id or alias, as written.
+   */
+  name: string;
+  /**
+   * Settings layer that supplied the value.
+   */
+  file: string;
 }
 /**
  * The session the observed states come from.
@@ -424,6 +453,10 @@ export interface ListingEntry {
    */
   path: string | null;
   /**
+   * Plugin identified by the scanner. Other entries come from a skill folder or session.
+   */
+  plugin?: string | null;
+  /**
    * Model listing state for a preview. For discovery, describes the scanned entry only.
    */
   state: "described" | "truncated" | "name_only" | "omitted" | "hidden";
@@ -431,6 +464,10 @@ export interface ListingEntry {
    * Why a hidden skill is hidden.
    */
   hidden_reason: string | null;
+  /**
+   * Exact text for scanned Claude Code and Codex skills with a description.
+   */
+  description_preview?: ListingDescription | null;
   /**
    * Description characters in the preview, or in the discovered metadata for discovery rows.
    */
@@ -462,6 +499,19 @@ export interface ListingEntry {
    * Holds the skill name.
    */
   invocation_mismatch: string | null;
+}
+/**
+ * Wording from the local skill after the harness applies its listing limits.
+ */
+export interface ListingDescription {
+  /**
+   * The description in the estimated listing.
+   */
+  shown: string;
+  /**
+   * Original text beyond the cutoff.
+   */
+  remainder: string;
 }
 /**
  * Input for `listing`.
@@ -643,6 +693,10 @@ export interface SessionSummary {
  */
 export interface SessionListedSkill {
   /**
+   * Index into this agent's captured descriptions when the session contained wording.
+   */
+  description_index?: number | null;
+  /**
    * Name as the session recorded it.
    */
   skill: string;
@@ -694,15 +748,19 @@ export interface MissedSkill {
  */
 export interface AgentSessions {
   /**
+   * Distinct description strings read from this agent's saved listings, in first-seen order.
+   */
+  captured_descriptions?: string[];
+  /**
    * Agent id.
    */
   harness: string;
   /**
-   * What this agent records.
+   * Session evidence supported by this reader.
    */
   records: "listing_and_uses" | "uses_only";
   /**
-   * What this agent records, in plain words.
+   * A description of reader coverage.
    */
   note: string;
   /**

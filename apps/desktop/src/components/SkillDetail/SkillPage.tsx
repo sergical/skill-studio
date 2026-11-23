@@ -30,6 +30,7 @@ import { SkillFrontmatterRepairDialog } from "./SkillFrontmatterRepairDialog";
 import { SkillLocationsCard } from "./SkillLocationsCard";
 import { SkillMarkdownCard } from "./SkillMarkdownCard";
 import { SkillPageHeaderActions } from "./SkillPageHeaderActions";
+import { SkillVisibility } from "./SkillVisibility";
 import { SkillPropertiesRail } from "./SkillPropertiesRail";
 import { SkillRepairCard } from "./SkillRepairCard";
 import { saveSkillEditorDraft } from "./skill-editor-save";
@@ -323,6 +324,15 @@ export function SkillPage({
             onEditManually={isPluginManaged ? undefined : openEditor}
           />
 
+          {deployment && !isDeploymentBroken && (
+            <SkillVisibility
+              key={deployment.path}
+              skill={skill}
+              deployment={deployment}
+              initialClient={from.kind === "listing" ? from.harness : undefined}
+              listingScope={from.kind === "listing" ? from.scope : undefined}
+            />
+          )}
           <SkillLocationsCard skill={skill} onCompareCopies={() => setIsCompareOpen(true)} />
 
           {deployment && isDeploymentBroken ? (

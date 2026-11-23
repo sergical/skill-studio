@@ -80,12 +80,16 @@ export function SkillPropertiesRail({ skill }: SkillPropertiesRailProps) {
           <Popover>
             <PopoverTrigger
               className={`${EDIT_BUTTON_CLASS} inline-flex cursor-pointer items-center border-0 bg-transparent hover:bg-bg-hover`}
-              aria-label={`Agents: ${harnessCount} agents, edit`}
+              aria-label={`Show ${harnessCount} clients with skill locations`}
             >
               <HarnessStack skill={skill} harnessList={DEFAULT_HARNESS_LIST} />
               <span className="tabular-nums text-text-tertiary">{harnessCount}</span>
             </PopoverTrigger>
             <PopoverContent align="start" aria-label="Agents" className="w-64 gap-1.5">
+              <p className="m-0 text-small text-text-secondary">
+                Clients with their own copy or a shared folder they can read. This includes clients
+                outside your selection in Settings.
+              </p>
               {harnessEntries.length === 0 ? (
                 <p className="m-0 text-small text-text-tertiary">
                   {reach.universal.present

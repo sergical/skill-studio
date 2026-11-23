@@ -625,6 +625,19 @@ export async function skillListing(request: ListingRequest): Promise<ListingRepo
   return callCommand("skill_listing", { request });
 }
 
+export function saveListingSetting(
+  key: string,
+  projectPath: string | null,
+  value: string | null,
+  revision: string,
+): Promise<void> {
+  return callCommand("save_listing_setting", { key, projectPath, value, revision });
+}
+
+export async function openListingSetting(key: string, projectPath: string | null): Promise<void> {
+  return callCommand("open_listing_setting", { key, projectPath });
+}
+
 /**
  * For each agent's recent sessions: which skills were listed with a
  * description, by name only, or not at all, which were used, and which were

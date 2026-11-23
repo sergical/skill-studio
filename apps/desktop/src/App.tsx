@@ -244,7 +244,14 @@ function App() {
       main = <PacksView />;
       break;
     case "listing":
-      main = <ListingView snapshot={snapshot} />;
+      main = (
+        <ListingView
+          key={activeView.harness}
+          initialHarness={activeView.harness}
+          initialScope={activeView.scope}
+          snapshot={snapshot}
+        />
+      );
       break;
     case "sessions":
       main = <SessionsView />;
