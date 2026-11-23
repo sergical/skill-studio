@@ -1131,7 +1131,7 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "For each agent's recent sessions, show which skills the model saw with a description, with a name only, or not at all, which skills each session used, and which it possibly missed (a guess from the first prompt). Per skill, flags skills listed in nearly every session but never used, skills used while listed by name only, and skills the agent cannot reach, with the reason. Claude Code and Codex record listings; other agents record uses only. This writes nothing.",
+        description = "For each agent's recent sessions, show which skills the model saw with a description, with a name only, or not at all, which skills each session used, and which it possibly missed (a guess from the first prompt). Per skill, flags skills listed in nearly every session but never used, skills used while listed by name only, and skills the agent cannot reach, with the reason. When a client saves skill wording, session entries reference its captured descriptions. Check listing_recorded before interpreting a zero count. This writes nothing.",
         annotations(read_only_hint = true)
     )]
     async fn skill_sessions(

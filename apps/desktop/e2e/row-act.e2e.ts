@@ -39,30 +39,27 @@ interface BusyBox {
   top: number;
 }
 
-/** Records the button's width and its row's top in the page, in the same task that sets
- * `aria-busy="true"` on the button. Two separate reads after the act starts can miss it: on a
- * loaded runner the act can end between them. Call it before the click; await the result after. */
-async function measureWhenBusy(button: Locator, row: Locator): Promise<() => Promise<BusyBox>> {
-  const rowElement = await row.elementHandle();
-  const pending = await button.evaluateHandle(
+/** Watch before the click. The action can finish before Playwright gets control back.
+ * Update changes an existing button; Park can insert the button into an empty cell. */
+async function measureWhenBusy(row: Locator): Promise<() => Promise<BusyBox>> {
+  const pending = await row.evaluateHandle(
     // Wrapped in an object: evaluateHandle would wait for a returned promise, before the click.
-    (element, rowEl) => ({
+    (rowEl) => ({
       box: new Promise<BusyBox>((resolve) => {
         const observer = new MutationObserver(() => {
-          if (element.getAttribute("aria-busy") !== "true") return;
+          const button = rowEl.querySelector(
+            '[role="gridcell"]:last-child button[aria-busy="true"]',
+          );
+          if (!button || getComputedStyle(button).visibility !== "visible") return;
+          const { width, height } = button.getBoundingClientRect();
+          if (!width || !height) return;
           observer.disconnect();
-          resolve({
-            width: element.getBoundingClientRect().width,
-            top: Math.round(rowEl!.getBoundingClientRect().y),
-          });
+          resolve({ width, top: Math.round(rowEl.getBoundingClientRect().y) });
         });
-        observer.observe(element, { attributes: true, attributeFilter: ["aria-busy"] });
+        observer.observe(rowEl, { subtree: true, childList: true, attributeFilter: ["aria-busy"] });
       }),
     }),
-    rowElement,
   );
-  // Called right after the click: the button must turn busy within expect's default 5 s, as the
-  // `toHaveAttribute("aria-busy", "true")` check that this replaces required.
   return () =>
     pending.evaluate(
       (handle, ms) =>
@@ -89,7 +86,7 @@ test("Update on a Skills row spins in place, then the row stays in its slot and 
   const running = target.getByRole("button", { name: "Update", exact: true });
   const before = await top(target);
   const width = (await running.boundingBox())!.width;
-  const busy = await measureWhenBusy(running, target);
+  const busy = await measureWhenBusy(target);
 
   await running.click();
 
@@ -134,10 +131,11 @@ test("a row with no fix of its own spins in its fix cell while a selection-bar P
 
   await target.focus();
   await page.keyboard.press("x");
+  const busy = await measureWhenBusy(target);
   await page.getByRole("button", { name: "Park", exact: true }).click();
 
-  await expect(target.locator('[role="gridcell"]:last-child [aria-busy="true"]')).toBeVisible();
   await expect(target.getByText("Parked", { exact: true })).toBeVisible();
+  expect((await busy()).width).toBeGreaterThan(0);
 
   await page.getByRole("button", { name: "Undo" }).click();
   await expect(target.getByText("Parked", { exact: true })).toHaveCount(0);
