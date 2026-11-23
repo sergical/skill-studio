@@ -150,6 +150,15 @@ fn pi_saved_section_follows_the_branch_and_explicit_removal() {
                 .clone(),
         )
     };
+    let baseline = message(
+        "baseline",
+        None,
+        serde_json::json!({"preamble":"You are pi."}),
+    );
+    assert_eq!(
+        result(&format!("{header}\n{baseline}\n")).0,
+        serde_json::json!([])
+    );
     assert_eq!(result(&transcript).0, serde_json::json!([]));
     let (entries, descriptions) = result(&format!("{transcript}{branch}\n"));
     assert_eq!(entries[0]["locator"], "/project/tags/SKILL.md");

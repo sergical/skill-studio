@@ -1,8 +1,12 @@
 //! Read `OpenCode` 2.3.2's current session instruction blob, never its original baseline.
-use crate::opencode_db::{default_opencode_databases, open_opencode_database, OPENCODE_DATA_ROOT};
+use crate::opencode_db::{
+    default_opencode_databases, open_opencode_database, table_exists, OPENCODE_DATA_ROOT,
+};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use skill_studio_core::skill_sessions::{ParsedSession, RecordedEntry};
+use skill_studio_core::skill_sessions::{
+    temporary_session_directory, ParsedSession, RecordedEntry,
+};
 use std::path::{Path, PathBuf};
 
 #[derive(Deserialize)]
@@ -28,23 +32,30 @@ pub(crate) fn read_opencode_guidance(
         let Some(db) = open_opencode_database(&path) else {
             continue;
         };
-        // LEFT JOIN keeps sessions with missing or unrecognized state visible as unavailable.
-        let Ok(mut query) = db.prepare(
-            "SELECT s.id, s.directory, s.agent, s.time_updated, b.value
-            FROM session_v2 s LEFT JOIN instruction_state i ON i.session_id = s.id
-            LEFT JOIN instruction_blob b ON b.hash = CASE WHEN json_valid(i.current_values)
-                THEN json_extract(i.current_values, '$.\"core/skill-guidance\"') END
-            WHERE s.time_updated >= ?1 AND (?2 IS NULL OR s.directory = ?2)
-            ORDER BY s.time_updated DESC, s.id LIMIT ?3",
-        ) else {
+        let source = if table_exists(&db, "session_v2").unwrap_or(false) {
+            if table_exists(&db, "instruction_state").unwrap_or(false)
+                && table_exists(&db, "instruction_blob").unwrap_or(false)
+            {
+                r#"s.agent, b.value FROM session_v2 s
+                   LEFT JOIN instruction_state i ON i.session_id = s.id
+                   LEFT JOIN instruction_blob b ON b.hash = CASE WHEN json_valid(i.current_values)
+                       THEN json_extract(i.current_values, '$."core/skill-guidance"') END"#
+            } else {
+                "NULL, NULL FROM session_v2 s"
+            }
+        } else {
+            "NULL, NULL FROM session s"
+        };
+        let sql = format!(
+            "SELECT s.id, s.directory, s.time_updated, {source}
+             WHERE s.time_updated >= ?1 AND (?2 IS NULL OR s.directory = ?2)
+             ORDER BY s.time_updated DESC, s.id"
+        );
+        let Ok(mut query) = db.prepare(&sql) else {
             continue;
         };
         let Ok(rows) = query.query_map(
-            rusqlite::params![
-                since.timestamp_millis(),
-                project.and_then(Path::to_str),
-                i64::try_from(limit).unwrap_or(i64::MAX)
-            ],
+            rusqlite::params![since.timestamp_millis(), project.and_then(Path::to_str)],
             |row| {
                 let blob: Option<String> = row.get(4)?;
                 let listing = blob
@@ -68,8 +79,8 @@ pub(crate) fn read_opencode_guidance(
                     id: row.get(0)?,
                     transcript: path.clone(),
                     project_path: row.get(1)?,
-                    agent_name: row.get(2)?,
-                    at: DateTime::from_timestamp_millis(row.get(3)?).map(|at| at.to_rfc3339()),
+                    agent_name: row.get(3)?,
+                    at: DateTime::from_timestamp_millis(row.get(2)?).map(|at| at.to_rfc3339()),
                     listing,
                     ..ParsedSession::default()
                 })
@@ -77,7 +88,15 @@ pub(crate) fn read_opencode_guidance(
         ) else {
             continue;
         };
-        sessions.extend(rows.flatten());
+        sessions.extend(
+            rows.flatten()
+                .filter(|s| {
+                    s.project_path
+                        .as_deref()
+                        .is_none_or(|p| !temporary_session_directory(home, Path::new(p)))
+                })
+                .take(limit),
+        );
     }
     sessions.sort_by(|a, b| b.at.cmp(&a.at).then_with(|| a.id.cmp(&b.id)));
     sessions.truncate(limit);
@@ -122,5 +141,18 @@ mod tests {
             )]
         );
         assert!(sessions[1].listing.is_none());
+        let db = rusqlite::Connection::open(root.join("opencode.db")).unwrap();
+        db.execute_batch("DROP TABLE instruction_blob; DROP TABLE instruction_state;")
+            .unwrap();
+        drop(db);
+        let legacy = read_opencode_guidance(
+            dir.path(),
+            None,
+            Some(Path::new("/work")),
+            DateTime::UNIX_EPOCH,
+            10,
+        );
+        assert_eq!(legacy.len(), 2);
+        assert!(legacy.iter().all(|s| s.listing.is_none()));
     }
 }

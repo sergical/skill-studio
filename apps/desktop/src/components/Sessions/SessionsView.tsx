@@ -456,7 +456,9 @@ export function SessionsView() {
                   <p className="m-0 text-small text-text-secondary">
                     {onlyFindings && !guidance
                       ? "No session used a skill without its description or possibly missed one."
-                      : "No sessions in the last 30 days."}
+                      : guidance
+                        ? "No readable session files in the last 30 days."
+                        : "No sessions in the last 30 days."}
                   </p>
                 ) : (
                   <ul className="m-0 list-none divide-y divide-border-subtle p-0">
@@ -472,9 +474,9 @@ export function SessionsView() {
                 )}
               </section>
             )}
-            {agent.records === "uses_only" && (
+            {agent.records !== "listing_and_uses" && (
               <section className="space-y-3">
-                <AgentSummary agent={agent} />
+                {!guidance && <AgentSummary agent={agent} />}
                 <Button
                   size="sm"
                   variant="outline"

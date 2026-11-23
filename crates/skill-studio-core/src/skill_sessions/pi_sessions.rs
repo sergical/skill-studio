@@ -7,7 +7,7 @@ use crate::identity::RootScope;
 use crate::ports::{OpContext, Runtime};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 type Listing = Vec<(String, RecordedEntry)>;
@@ -65,23 +65,26 @@ enum SkillSectionPatch {
     Unavailable,
     Clear,
     Section(String),
-    RemoveMessage(String),
+    Structured,
+    EditMessage(String, bool),
 }
 impl SkillSectionPatch {
     fn from_record(row: &Value) -> Self {
         let msg = match row["type"].as_str() {
             Some("message") if row["message"]["role"] == "system" => &row["message"],
             Some("compaction") => &row["systemMessage"],
-            Some("context_edit") if row["replacement"].is_null() => {
-                return row["targetId"]
-                    .as_str()
-                    .map_or(Self::Unchanged, |id| Self::RemoveMessage(id.into()))
+            Some("context_edit") => {
+                return row["targetId"].as_str().map_or(Self::Unchanged, |id| {
+                    Self::EditMessage(id.into(), row["replacement"].is_null())
+                })
             }
             _ => return Self::Unchanged,
         };
         match msg["sections"].get("skills") {
             Some(Value::String(section)) => Self::Section(section.clone()),
             Some(Value::Null) => Self::Clear,
+            None if msg["sections"].is_object() && row["type"] == "compaction" => Self::Clear,
+            None if msg["sections"].is_object() => Self::Structured,
             None if row["type"] != "compaction"
                 && msg["content"].as_str().unwrap_or("").is_empty() =>
             {
@@ -121,9 +124,10 @@ fn read_pi_session(rt: &Runtime, path: &Path) -> Option<ParsedSession> {
         }
     });
     session.id.as_ref()?;
-    let mut removed = BTreeSet::new();
+    let mut edits = BTreeMap::new();
+    let mut structured = false;
     while let Some((parent, patch)) = leaf.as_ref().and_then(|id| nodes.remove(id)) {
-        let skip = leaf.as_ref().is_some_and(|id| removed.contains(id));
+        let skip = leaf.as_ref().and_then(|id| edits.get(id)) == Some(&true);
         leaf = parent;
         if !supported {
             break;
@@ -134,18 +138,22 @@ fn read_pi_session(rt: &Runtime, path: &Path) -> Option<ParsedSession> {
         match patch {
             SkillSectionPatch::Section(section) => {
                 session.listing = saved_pi_listing(&section);
-                break;
+                return Some(session);
             }
             SkillSectionPatch::Clear => {
                 session.listing = Some(Vec::new());
                 break;
             }
-            SkillSectionPatch::Unavailable => break,
-            SkillSectionPatch::RemoveMessage(target) => {
-                removed.insert(target);
+            SkillSectionPatch::Unavailable => return Some(session),
+            SkillSectionPatch::EditMessage(target, removed) => {
+                edits.entry(target).or_insert(removed);
             }
+            SkillSectionPatch::Structured => structured = true,
             SkillSectionPatch::Unchanged => {}
         }
+    }
+    if supported && leaf.is_none() && structured && session.listing.is_none() {
+        session.listing = Some(Vec::new());
     }
     Some(session)
 }

@@ -345,18 +345,13 @@ pub fn skill_sessions(
                             RootScope::Global => None,
                             RootScope::Project(p) => Some(p.0.as_path()),
                         };
-                        let mut sessions = rt.ports.fs.opencode_guidance(
+                        let sessions = rt.ports.fs.opencode_guidance(
                             &rt.scope.home.lexical,
                             rt.scope.raw.opencode_databases.as_deref(),
                             project,
                             since,
                             limit,
                         );
-                        sessions.retain(|s| {
-                            !s.project_path
-                                .as_deref()
-                                .is_some_and(|p| temporary_dir(rt, p))
-                        });
                         (SessionRecords::SavedGuidance, sessions)
                     }
                     Some(SessionListingReader::UsesOnly) | None => {
@@ -866,8 +861,12 @@ const TEMPORARY_DIRS: &[&str] = &[
 /// True when a session ran in a temporary folder outside the home folder.
 /// A disposable home (a test, a verify run) can itself be temporary.
 pub(crate) fn temporary_dir(rt: &Runtime, path: &str) -> bool {
-    TEMPORARY_DIRS.iter().any(|dir| path.starts_with(dir))
-        && !Path::new(path).starts_with(&rt.scope.home.lexical)
+    temporary_session_directory(&rt.scope.home.lexical, Path::new(path))
+}
+
+/// Whether a saved session is in a system temporary folder outside the selected home.
+pub fn temporary_session_directory(home: &Path, path: &Path) -> bool {
+    TEMPORARY_DIRS.iter().any(|dir| path.starts_with(dir)) && !path.starts_with(home)
 }
 
 /// True for a Claude Code project folder name of a temporary folder
