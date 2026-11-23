@@ -8,17 +8,17 @@
 // deployment.
 // ============================================================================
 
+import { HARNESS_CATALOG } from "./skill-types.generated";
 import { ownDeployments } from "./skill-plugin-partition";
 import type { AgentId, Deployment, InstalledSkill } from "./skill-types";
 
-/** The five first-class agents that read the shared `.agents/skills` root natively. */
-export const AGENTS_READING_SHARED_ROOT: readonly AgentId[] = [
-  "codex",
-  "opencode",
-  "pi",
-  "cursor",
-  "grok-build",
-];
+/** First-class agents that read the shared `.agents/skills` root natively. */
+export const AGENTS_READING_SHARED_ROOT: readonly AgentId[] = HARNESS_CATALOG.filter(
+  (row) => row.readsSharedFolder,
+).map((row) => row.id);
+
+const ID_BY_LABEL = new Map<string, AgentId>(HARNESS_CATALOG.map((row) => [row.label, row.id]));
+const LABEL_BY_ID = new Map<string, string>(HARNESS_CATALOG.map((row) => [row.id, row.label]));
 
 /** The `Deployment.agent` value for a deployment placed in the shared root, not any one agent's own folder. */
 const SHARED_AGENT_ID = "shared";
@@ -29,46 +29,14 @@ const SHARED_AGENT_ID = "shared";
  * `null` for the shared root and for agents outside the first-class set.
  */
 export function agentIdFromDeploymentLabel(label: string): AgentId | "shared" | null {
-  switch (label) {
-    case "Claude Code":
-      return "claude-code";
-    case "Codex":
-      return "codex";
-    case "OpenCode":
-      return "opencode";
-    case "pi":
-      return "pi";
-    case "Cursor":
-      return "cursor";
-    case "Grok Build":
-      return "grok-build";
-    case SHARED_AGENT_ID:
-      return "shared";
-    default:
-      return null;
-  }
+  return label === SHARED_AGENT_ID ? "shared" : (ID_BY_LABEL.get(label) ?? null);
 }
 
 /** The inverse of `agentIdFromDeploymentLabel`: a wire harness id (e.g. from
  * `DiscoverySourceSetting.harness`) to the label a deployment/agent chip
  * shows. Falls back to the id itself for one this function doesn't know. */
 export function deploymentLabelFromAgentId(id: string): string {
-  switch (id) {
-    case "claude-code":
-      return "Claude Code";
-    case "codex":
-      return "Codex";
-    case "opencode":
-      return "OpenCode";
-    case "pi":
-      return "pi";
-    case "cursor":
-      return "Cursor";
-    case "grok-build":
-      return "Grok Build";
-    default:
-      return id;
-  }
+  return LABEL_BY_ID.get(id) ?? id;
 }
 
 /**
@@ -284,26 +252,9 @@ export function skillVisibleToAgent(
 // ============================================================================
 
 /** Column order for the per-agent columns of the coverage matrix. */
-export const AGENT_MATRIX_LABELS = [
-  "Claude Code",
-  "Codex",
-  "OpenCode",
-  "pi",
-  "Cursor",
-  "Grok Build",
-] as const;
+export const AGENT_MATRIX_LABELS = HARNESS_CATALOG.map((row) => row.label);
 
 export type AgentMatrixLabel = (typeof AGENT_MATRIX_LABELS)[number];
-
-/** The `AgentId` each matrix column label corresponds to. */
-const AGENT_MATRIX_AGENT_IDS = {
-  "Claude Code": "claude-code",
-  Codex: "codex",
-  OpenCode: "opencode",
-  pi: "pi",
-  Cursor: "cursor",
-  "Grok Build": "grok-build",
-} satisfies Record<AgentMatrixLabel, AgentId>;
 
 /**
  * One matrix cell: whether the skill is visible (`state`), and whether the
@@ -380,10 +331,7 @@ export function agentMatrix(skills: InstalledSkill[]): AgentMatrixRow[] {
     // SAFETY: mapping every AGENT_MATRIX_LABELS entry produces exactly the
     // keys of Record<AgentMatrixLabel, AgentMatrixCell>.
     cells: Object.fromEntries(
-      AGENT_MATRIX_LABELS.map((label) => [
-        label,
-        cellForAgent(skill, AGENT_MATRIX_AGENT_IDS[label]),
-      ]),
+      HARNESS_CATALOG.map(({ label, id }) => [label, cellForAgent(skill, id)]),
     ) as Record<AgentMatrixLabel, AgentMatrixCell>,
   }));
 }

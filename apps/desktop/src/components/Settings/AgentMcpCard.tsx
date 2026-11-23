@@ -11,6 +11,7 @@ import { Check, Plug } from "lucide-react";
 import { Button } from "@skill-studio/ui";
 import {
   AGENT_SETUP_PROMPT,
+  HARNESS_CATALOG,
   MCP_SERVER_COMMAND_LINE,
   agentSetup,
   type AgentId,
@@ -21,17 +22,12 @@ import { HarnessIcon } from "../ui/HarnessIcon";
 import { CopyButton, SettingsCard, SettingsError, SettingsRow } from "./SettingsCard";
 
 /** Agents the desktop backend can connect, through `connect_mcp`. */
-const CONNECTABLE_AGENTS: readonly string[] = [
-  "claude-code",
-  "codex",
-  "cursor",
-  "opencode",
-  "pi",
-  "grok-build",
-] satisfies AgentId[];
+const CONNECTABLE_AGENTS = new Set<string>(
+  HARNESS_CATALOG.flatMap((row) => (row.mcpConnect ? [row.id] : [])),
+);
 
 function isConnectable(id: string): id is AgentId {
-  return CONNECTABLE_AGENTS.includes(id);
+  return CONNECTABLE_AGENTS.has(id);
 }
 
 /** Cursor is an app with an install dialog, so its row needs no CLI on PATH. */

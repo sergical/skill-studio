@@ -111,6 +111,26 @@ struct WireTypes {
 // and a malformed schema is a build-time bug worth panicking on immediately.
 #[allow(clippy::print_stdout, clippy::unwrap_used)]
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--harness-catalog") {
+        let rows: Vec<_> = skill_studio_core::harness::BUILTIN_HARNESSES.iter().map(|row| {
+            let agent = row.agent;
+            let id = agent.cli_name();
+            serde_json::json!({
+                "verifiedVisibility": row.visibility,
+                "mcpConnect": skill_studio_lib::skills::skill_mcp_connect::supports_mcp_connection(id),
+                "id": id, "label": agent.display_name(),
+                "folder": { "global": format!("~/{}", agent.global_path()), "project": agent.project_path() },
+                "readsSharedFolder": row.facts().reads_universal_root.is_yes(),
+                "supportsInstall": row.supports_install(),
+                "linksIntoOwnFolder": row.links_into_own_folder(),
+                "usageReader": skill_studio_host::has_usage_reader(id),
+                "projectDiscovery": skill_studio_host::discovery_harnesses().any(|source| source == id),
+            })
+        }).collect();
+        println!("{}", serde_json::to_string(&rows).unwrap());
+        return;
+    }
+
     // `for_serialize()` makes `required` reflect what the Rust side actually
     // writes to the wire (every field lacking `skip_serializing_if` is always
     // present), not what `#[serde(default)]` would tolerate on the way back

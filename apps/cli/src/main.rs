@@ -407,9 +407,8 @@ enum Command {
         /// How to install the skill.
         #[arg(long, value_enum, default_value_t = AddMethod::SkillsSh)]
         method: AddMethod,
-        /// Agent to install for. Repeat for more than one: universal (the
-        /// shared folder), claude-code, codex, opencode (alias open-code), cursor, pi or
-        /// grok-build. Default: universal.
+        /// Install target. Repeat for more than one agent. Defaults to the shared Universal folder.
+        #[arg(help = format!("Install target. Repeat for more than one. Choices: {}. Default: universal.", skill_studio_core::install_targets::INSTALL_TARGET_IDS.join(", ")))]
         #[arg(long = "agent", alias = "harness", value_name = "AGENT")]
         harnesses: Vec<String>,
         /// Put a real copy in each agent's folder, not a link to the shared

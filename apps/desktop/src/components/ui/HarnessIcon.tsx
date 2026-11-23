@@ -4,7 +4,7 @@
 // comments below.
 // ============================================================================
 
-import { Folder } from "lucide-react";
+import { Bot, Folder } from "lucide-react";
 import type { AgentId } from "@skill-studio/lib";
 
 interface HarnessIconProps {
@@ -135,6 +135,6 @@ function renderIcon(harness: AgentId | "shared", size: number) {
     case "shared":
       return <Folder aria-hidden="true" size={size} fill="currentColor" stroke="none" />;
     default:
-      return null;
+      return <Bot size={size} aria-hidden="true" />;
   }
 }

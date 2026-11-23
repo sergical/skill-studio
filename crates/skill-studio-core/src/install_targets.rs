@@ -45,16 +45,7 @@ use crate::scope::NormalizedScope;
 /// `skills` CLI's `universal` pseudo agent.
 pub const UNIVERSAL_TARGET: &str = "universal";
 
-/// Every id `install` accepts in `InstallRequest::harnesses`.
-pub const INSTALL_TARGET_IDS: &[&str] = &[
-    UNIVERSAL_TARGET,
-    AgentId::CLAUDE_CODE,
-    AgentId::CODEX,
-    AgentId::OPEN_CODE,
-    AgentId::CURSOR,
-    AgentId::PI,
-    AgentId::GROK_BUILD,
-];
+pub use crate::harness::INSTALL_TARGET_IDS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Folder {
@@ -67,65 +58,44 @@ enum Folder {
     },
 }
 
-/// The own folder `PerHarness` gives Codex, `OpenCode`, and Cursor, which
-/// otherwise read the shared folder.
-fn per_harness_folder(harness: &AgentId, global: bool) -> Option<&'static str> {
-    match harness.as_str() {
-        AgentId::CODEX => Some(".codex/skills"),
-        AgentId::OPEN_CODE => Some(if global {
-            ".config/opencode/skills"
-        } else {
-            ".opencode/skills"
-        }),
-        AgentId::CURSOR => Some(".cursor/skills"),
-        _ => None,
-    }
-}
-
 fn folder_for(
     harness: &AgentId,
     scope: &RootScope,
     destination: SkillDestination,
     method: InstallMethod,
 ) -> Result<Folder, CoreError> {
-    let global = matches!(scope, RootScope::Global);
-    if destination == SkillDestination::PerHarness {
-        if let Some(relative) = per_harness_folder(harness, global) {
-            return Ok(Folder::Own {
-                relative,
-                project_marker: None,
-            });
-        }
+    use crate::harness::{registered_harness, UniversalInstall};
+    if harness.as_str() == UNIVERSAL_TARGET {
+        return Ok(Folder::Shared);
     }
-    match harness.as_str() {
-        UNIVERSAL_TARGET | AgentId::CODEX | AgentId::OPEN_CODE | AgentId::CURSOR => {
-            Ok(Folder::Shared)
+    let row = registered_harness(harness.as_str())
+        .filter(|row| row.supports_install())
+        .ok_or_else(|| {
+            CoreError::new(
+                ErrorCode::InvalidRequest,
+                format!(
+                    "install cannot write for `{harness}`; use one of: {}",
+                    INSTALL_TARGET_IDS.join(", ")
+                ),
+            )
+        })?;
+    let universal = destination == SkillDestination::Universal;
+    if universal
+        && match row.universal_install {
+            Some(UniversalInstall::Shared) => true,
+            Some(UniversalInstall::Own) | None => false,
+            Some(UniversalInstall::OwnExceptSkillsCli) => method == InstallMethod::SkillsSh,
         }
-        AgentId::CLAUDE_CODE => Ok(Folder::Own {
-            relative: ".claude/skills",
-            project_marker: None,
-        }),
-        AgentId::PI if method == InstallMethod::SkillsSh => Ok(Folder::Shared),
-        AgentId::PI => Ok(Folder::Own {
-            relative: if global {
-                ".pi/agent/skills"
-            } else {
-                ".pi/skills"
-            },
-            project_marker: (destination == SkillDestination::Universal).then_some(".pi"),
-        }),
-        AgentId::GROK_BUILD => Ok(Folder::Own {
-            relative: ".grok/skills",
-            project_marker: (destination == SkillDestination::Universal).then_some(".grok"),
-        }),
-        other => Err(CoreError::new(
-            ErrorCode::InvalidRequest,
-            format!(
-                "install cannot write for `{other}`; use one of: {}",
-                INSTALL_TARGET_IDS.join(", ")
-            ),
-        )),
+    {
+        return Ok(Folder::Shared);
     }
+    Ok(Folder::Own {
+        relative: match scope {
+            RootScope::Global => row.agent.global_path(),
+            RootScope::Project(_) => row.agent.project_path(),
+        },
+        project_marker: if universal { row.project_marker } else { None },
+    })
 }
 
 /// `true` for a harness with a skills folder of its own (Claude Code, pi,
@@ -526,8 +496,8 @@ mod tests {
                 "claude-code",
                 "codex",
                 "opencode",
-                "cursor",
                 "pi",
+                "cursor",
                 "grok"
             ]
         );

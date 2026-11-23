@@ -4515,7 +4515,7 @@
         "description": "One harness listing in one scope.",
         "properties": {
           "budget": {
-            "description": "Budget, or null when the harness has no known limit.",
+            "description": "Budget when this report computed one for the client.",
             "format": "uint64",
             "minimum": 0,
             "type": [
@@ -4553,8 +4553,13 @@
             },
             "type": "array"
           },
+          "evidence": {
+            "$ref": "#/$defs/ListingEvidence",
+            "default": "discovery",
+            "description": "How this listing was produced."
+          },
           "full_size": {
-            "description": "The whole listing with every description, in `budget_unit`.",
+            "description": "Full preview size in `budget_unit`, or an estimate from discovered metadata for discovery rows.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -4687,14 +4692,14 @@
             "type": "boolean"
           },
           "shown_description_chars": {
-            "description": "Description characters the model sees.",
+            "description": "Description characters in the preview, or in the discovered metadata for discovery rows.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
           "state": {
             "$ref": "#/$defs/ListingState",
-            "description": "Predicted state."
+            "description": "Model listing state for a preview. For discovery, describes the scanned entry only."
           },
           "usage_score": {
             "description": "Claude Code's usage score: uses times a 7-day half-life decay, at least 10%.",
@@ -4713,6 +4718,21 @@
           "scanned"
         ],
         "type": "object"
+      },
+      "ListingEvidence": {
+        "description": "Evidence behind the current listing row. Session captures are reported independently.",
+        "oneOf": [
+          {
+            "const": "discovery",
+            "description": "Discovered deployments and their descriptions.",
+            "type": "string"
+          },
+          {
+            "const": "preview",
+            "description": "A prediction produced by a supported client renderer.",
+            "type": "string"
+          }
+        ]
       },
       "ListingSetting": {
         "description": "The setting that controls the budget, and how to change it.",
@@ -7350,16 +7370,16 @@
         ]
       },
       "SessionRecords": {
-        "description": "What an agent records about its sessions.",
+        "description": "Evidence Skill Studio can read from this agent\u2019s sessions.",
         "oneOf": [
           {
             "const": "listing_and_uses",
-            "description": "Each session records its skill listing and its skill uses.",
+            "description": "The reader recognizes skill listings and skill uses.",
             "type": "string"
           },
           {
             "const": "uses_only",
-            "description": "Sessions record skill uses only. The Activity page counts them.",
+            "description": "The reader recognizes skill uses. The Activity page counts them.",
             "type": "string"
           }
         ]

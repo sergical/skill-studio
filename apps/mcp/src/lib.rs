@@ -1249,7 +1249,7 @@ impl SkillStudioServer {
     }
 
     #[tool(
-        description = "Install one skill by copy, dotagents or skills.sh, for a set of agents: universal, claude-code, codex, opencode, cursor, pi, grok-build. An empty set means universal. link_mode copy writes a real folder for each agent instead of links. An untrusted dotagents source returns NeedsTrust: call again with trust_confirmed. Undo with restore_event and the event_id from the result.",
+        description = format!("Install one skill by copy, dotagents or skills.sh, for a set of agents: {}. An empty set means universal. link_mode copy writes a real folder for each agent instead of links. An untrusted dotagents source returns NeedsTrust: call again with trust_confirmed. Undo with restore_event and the event_id from the result.", skill_studio_core::install_targets::INSTALL_TARGET_IDS.join(", ")),
         annotations(read_only_hint = false, destructive_hint = false)
     )]
     async fn add(

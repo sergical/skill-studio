@@ -36,19 +36,6 @@ impl<'de> Deserialize<'de> for AgentId {
 }
 
 impl AgentId {
-    /// Claude Code.
-    pub const CLAUDE_CODE: &'static str = "claude-code";
-    /// `OpenAI` Codex CLI.
-    pub const CODEX: &'static str = "codex";
-    /// `OpenCode`.
-    pub const OPEN_CODE: &'static str = "opencode";
-    /// pi coding agent.
-    pub const PI: &'static str = "pi";
-    /// Cursor.
-    pub const CURSOR: &'static str = "cursor";
-    /// Grok Build.
-    pub const GROK_BUILD: &'static str = "grok-build";
-
     /// Parses a kebab-case id. Rejects empty strings and characters outside
     /// `a-z`, `0-9`, and `-`.
     pub fn parse(raw: &str) -> Result<Self, CoreError> {
@@ -89,25 +76,16 @@ impl AgentId {
     /// must go through this, not [`Self::parse`], so `open-code` and
     /// `opencode` (the CLI binary name) never diverge again.
     pub fn parse_harness(raw: &str) -> Result<Self, CoreError> {
-        let squashed: String = raw
-            .to_ascii_lowercase()
-            .chars()
-            .filter(|c| *c != '-' && *c != '_' && *c != ' ')
-            .collect();
-        for canonical in [
-            Self::CLAUDE_CODE,
-            Self::CODEX,
-            Self::OPEN_CODE,
-            Self::PI,
-            Self::CURSOR,
-            Self::GROK_BUILD,
-        ] {
-            let canonical_squashed: String = canonical
-                .chars()
-                .filter(|c| *c != '-' && *c != '_' && *c != ' ')
-                .collect();
-            if squashed == canonical_squashed {
-                return Ok(AgentId(canonical.to_string()));
+        let normalized = |byte: &u8| !matches!(byte, b'-' | b'_' | b' ');
+        for row in crate::harness::BUILTIN_HARNESSES {
+            let id = row.agent.cli_name();
+            if raw
+                .bytes()
+                .filter(normalized)
+                .map(|b| b.to_ascii_lowercase())
+                .eq(id.bytes().filter(normalized))
+            {
+                return Ok(Self::from(id));
             }
         }
         Self::parse(raw)

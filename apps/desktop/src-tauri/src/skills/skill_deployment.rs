@@ -163,16 +163,6 @@ pub struct ParsedDeploymentId {
     pub lexical_path: PathBuf,
 }
 
-/// Harnesses the Per-harness destination may copy into.
-pub const PER_HARNESS_INSTALL_TARGETS: &[&str] = &[
-    "claude-code",
-    "codex",
-    "opencode",
-    "pi",
-    "cursor",
-    "grok-build",
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -30,32 +30,13 @@ pub const SPLIT_UPDATE_NOTE: &str =
 /// the home default: the core reads no environment variable, and neither
 /// `CLAUDE_CONFIG_DIR` nor `GROK_HOME` reaches it through the scope.
 pub fn split_target_root(rt: &Runtime, scope: &RootScope, harness: &AgentId) -> Option<PathBuf> {
-    match scope {
-        RootScope::Global => {
-            let relative = match harness.as_str() {
-                AgentId::CLAUDE_CODE => ".claude/skills",
-                AgentId::CODEX => ".codex/skills",
-                AgentId::OPEN_CODE => ".config/opencode/skills",
-                AgentId::PI => ".pi/agent/skills",
-                AgentId::CURSOR => ".cursor/skills",
-                AgentId::GROK_BUILD => ".grok/skills",
-                _ => return None,
-            };
-            Some(rt.scope.global_root_path(Path::new(relative)))
-        }
-        RootScope::Project(project) => {
-            let dir = match harness.as_str() {
-                AgentId::CLAUDE_CODE => ".claude",
-                AgentId::CODEX => ".codex",
-                AgentId::OPEN_CODE => ".opencode",
-                AgentId::PI => ".pi",
-                AgentId::CURSOR => ".cursor",
-                AgentId::GROK_BUILD => ".grok",
-                _ => return None,
-            };
-            Some(project.0.join(dir).join("skills"))
-        }
-    }
+    let agent = crate::harness::registered_harness(harness.as_str())
+        .filter(|row| row.supports_install())?
+        .agent;
+    Some(match scope {
+        RootScope::Global => rt.scope.global_root_path(Path::new(agent.global_path())),
+        RootScope::Project(project) => project.0.join(agent.project_path()),
+    })
 }
 
 /// Splits a Universal deployment into one real copy per chosen harness.

@@ -976,7 +976,7 @@ fn fork_skill_with_storage(
     let canonical_skill = fs::canonicalize(&skill_dir).map_err(|error| error.to_string())?;
     let copies = super::agents::AgentId::all()
         .into_iter()
-        .map(|agent| agent.global_skills_dir(home).join(name))
+        .map(|agent| skill_studio_host::agent_path(home, agent.global_path()).join(name))
         .chain(std::iter::once(
             home.join(".config/opencode/skill").join(name),
         ))

@@ -6,7 +6,7 @@
 //!
 //! Claude Code records each session's listing as a `skill_listing`
 //! attachment; Codex records it in the `<skills_instructions>` developer
-//! message. The other agents record no listing. See
+//! message. Other formats currently contribute uses only. See
 //! docs/agent-skill-conventions.md "Skill sessions".
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -80,13 +80,13 @@ pub enum SessionListingState {
     Unknown,
 }
 
-/// What an agent records about its sessions.
+/// Evidence Skill Studio can read from this agent’s sessions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionRecords {
-    /// Each session records its skill listing and its skill uses.
+    /// The reader recognizes skill listings and skill uses.
     ListingAndUses,
-    /// Sessions record skill uses only. The Activity page counts them.
+    /// The reader recognizes skill uses. The Activity page counts them.
     UsesOnly,
 }
 
@@ -310,19 +310,23 @@ pub fn skill_sessions(
             let row = report.listings.iter().find(|r| r.harness == facts.id);
             let corpus = corpus(rt, &inventory, facts, &scope, row)?;
             let transcripts_started = clock.monotonic();
-            let (records, sessions) = match facts.id.as_str() {
-                AgentId::CLAUDE_CODE => {
-                    let sessions = read_claude_sessions(rt, ctx, &scope, since, limit)?;
-                    steps.push(step(clock, "claude_transcripts", transcripts_started));
-                    (SessionRecords::ListingAndUses, sessions)
-                }
-                AgentId::CODEX => {
-                    let sessions = read_codex_sessions(rt, ctx, &scope, since, limit)?;
-                    steps.push(step(clock, "codex_transcripts", transcripts_started));
-                    (SessionRecords::ListingAndUses, sessions)
-                }
-                _ => (SessionRecords::UsesOnly, Vec::new()),
-            };
+            use crate::harness::{registered_harness, SessionListingReader};
+            let (records, sessions) =
+                match registered_harness(facts.id.as_str()).map(|row| row.session_reader) {
+                    Some(SessionListingReader::Claude) => {
+                        let sessions = read_claude_sessions(rt, ctx, &scope, since, limit)?;
+                        steps.push(step(clock, "claude_transcripts", transcripts_started));
+                        (SessionRecords::ListingAndUses, sessions)
+                    }
+                    Some(SessionListingReader::Codex) => {
+                        let sessions = read_codex_sessions(rt, ctx, &scope, since, limit)?;
+                        steps.push(step(clock, "codex_transcripts", transcripts_started));
+                        (SessionRecords::ListingAndUses, sessions)
+                    }
+                    Some(SessionListingReader::UsesOnly) | None => {
+                        (SessionRecords::UsesOnly, Vec::new())
+                    }
+                };
             let built = build_agent(
                 &facts.id,
                 &facts.display_name,
@@ -1317,17 +1321,24 @@ pub fn build_agent(
         }
         sessions.push(summary);
     }
-    let entries = row.map(|r| r.entries.as_slice()).unwrap_or_default();
+    // Prefer the first visible copy when several deployments have the same name.
+    let mut entries = BTreeMap::new();
+    for entry in row.into_iter().flat_map(|row| &row.entries) {
+        let best = entries.entry(entry.name.as_str()).or_insert(entry);
+        if best.state == ListingState::Hidden && entry.state != ListingState::Hidden {
+            *best = entry;
+        }
+    }
+    let preview =
+        row.is_some_and(|row| row.evidence == crate::listing_visibility::ListingEvidence::Preview);
     for skill in rollup.values_mut() {
-        // Prefer a listed entry when one name has several deployments.
-        let entry = entries
-            .iter()
-            .filter(|e| e.name == skill.name)
-            .min_by_key(|e| e.state == ListingState::Hidden);
+        let entry = entries.get(skill.name.as_str());
         let reachable = by_name.get(skill.name.as_str()).is_none_or(|s| s.reachable);
-        skill.now = entry.map(|e| e.state);
+        skill.now = entry.filter(|_| preview).map(|e| e.state);
         skill.reach = reach_text(
-            skill.now,
+            entry
+                .map(|e| e.state)
+                .filter(|state| preview || *state == ListingState::Hidden),
             entry.and_then(|e| e.hidden_reason.as_deref()),
             reachable,
             display_name,
@@ -1362,7 +1373,7 @@ pub fn build_agent(
             crate::skill_uses::HISTORY_DAYS
         ),
         SessionRecords::UsesOnly => format!(
-            "{display_name} records skill uses but not what it listed for the model, so per-session listing states are not available. Uses are on the Activity page; the current listing is predicted."
+            "Skill Studio reads skill uses for {display_name}. See Activity for uses and Listing for current discovery or preview evidence."
         ),
     };
     AgentBuild {

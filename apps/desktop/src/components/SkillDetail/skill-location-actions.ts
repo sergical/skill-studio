@@ -8,9 +8,12 @@
 // ============================================================================
 
 import { useState } from "react";
-import { parseSkillSource, toWireParsedSkillSource } from "@skill-studio/lib";
+import {
+  deploymentLabelFromAgentId,
+  parseSkillSource,
+  toWireParsedSkillSource,
+} from "@skill-studio/lib";
 import type {
-  AgentId,
   Deployment,
   ForkRecord,
   InstalledSkill,
@@ -87,26 +90,6 @@ interface MaterializeLocationRequest {
   root: string;
 }
 
-/** Display label for a harness whose whole skills root can be materialized. */
-function materializeHarnessLabel(harness: AgentId): string {
-  switch (harness) {
-    case "claude-code":
-      return "Claude Code";
-    case "codex":
-      return "Codex";
-    case "opencode":
-      return "OpenCode";
-    case "pi":
-      return "pi";
-    case "cursor":
-      return "Cursor";
-    case "grok-build":
-      return "Grok Build";
-    default:
-      return harness;
-  }
-}
-
 /**
  * Routes the explicit "Convert to per-skill links…" action to the conversion
  * dialog. The Enabled switch never does: every harness switch writes its own
@@ -119,7 +102,7 @@ export function materializeRequestForLocationAction(
   return {
     target: action.target,
     harness: action.harness,
-    harnessLabel: materializeHarnessLabel(action.harness),
+    harnessLabel: deploymentLabelFromAgentId(action.harness),
     root: action.root,
   };
 }

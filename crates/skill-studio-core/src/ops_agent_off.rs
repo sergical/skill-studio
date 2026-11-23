@@ -26,16 +26,6 @@ use crate::ops::{self, Operation, Outcome, ParkedCopy};
 use crate::ops_split::{is_whole_folder_link, split_body, split_target_root, AgentOffHook};
 use crate::ports::{MutationSession, OpContext, Runtime};
 
-/// The harnesses `split` can write a copy for, in the split dialog's order.
-const SPLIT_HARNESSES: [&str; 6] = [
-    AgentId::CLAUDE_CODE,
-    AgentId::CODEX,
-    AgentId::OPEN_CODE,
-    AgentId::PI,
-    AgentId::CURSOR,
-    AgentId::GROK_BUILD,
-];
-
 impl Outcome for AgentOffCheck {}
 
 impl Outcome for AgentOffOutcome {
@@ -192,9 +182,10 @@ pub(crate) fn readers(
             })
             .collect::<Vec<_>>()
     };
-    SPLIT_HARNESSES
+    crate::harness::BUILTIN_HARNESSES
         .iter()
-        .filter_map(|raw| AgentId::parse(raw).ok())
+        .filter(|row| row.supports_install())
+        .map(|row| AgentId::from(row.agent.cli_name()))
         .filter(|harness| {
             let reads_root = rt.ports.catalog.get(harness).is_some_and(|facts| {
                 facts
@@ -235,9 +226,10 @@ fn cross_readers(
             RootScope::Project(project) => project.0.join(&root.relative_path),
         })
         .collect();
-    SPLIT_HARNESSES
+    crate::harness::BUILTIN_HARNESSES
         .iter()
-        .filter_map(|raw| AgentId::parse(raw).ok())
+        .filter(|row| row.supports_install())
+        .map(|row| AgentId::from(row.agent.cli_name()))
         .filter(|other| other != agent)
         .filter(|other| {
             let Some(root) = split_target_root(rt, scope, other) else {
@@ -339,9 +331,10 @@ pub(crate) fn refuse_shared_agent_roots(
         return Ok(());
     };
     let destination = resolved_destination(fs, &root, 40)?;
-    for other in SPLIT_HARNESSES
+    for other in crate::harness::BUILTIN_HARNESSES
         .iter()
-        .filter_map(|id| AgentId::parse(id).ok())
+        .filter(|row| row.supports_install())
+        .map(|row| AgentId::from(row.agent.cli_name()))
         .filter(|id| id != agent)
     {
         let Some(other_root) = split_target_root(rt, scope, &other) else {

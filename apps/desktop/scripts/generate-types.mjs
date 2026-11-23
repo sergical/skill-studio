@@ -30,15 +30,22 @@ execFileSync(
   ["build", "--quiet", "--profile", "test", "--workspace", "--all-features", "--example", "schema"],
   { cwd: workspaceRoot, stdio: ["ignore", "ignore", "inherit"] },
 );
-const schemaJson = execFileSync(
-  path.join(
-    workspaceRoot,
-    "target/debug/examples",
-    process.platform === "win32" ? "schema.exe" : "schema",
-  ),
-  { cwd: workspaceRoot, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+const schemaBinary = path.join(
+  workspaceRoot,
+  "target/debug/examples",
+  process.platform === "win32" ? "schema.exe" : "schema",
 );
-const schema = JSON.parse(schemaJson);
+function readSchemaOutput(args) {
+  return JSON.parse(
+    execFileSync(schemaBinary, args, {
+      cwd: workspaceRoot,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    }),
+  );
+}
+const schema = readSchemaOutput([]);
+const catalog = readSchemaOutput(["--harness-catalog"]);
 
 const banner = `// ============================================================================
 // GENERATED FILE - do not edit by hand.
@@ -68,7 +75,14 @@ ts = ts.replace(/export interface WireTypes \{[\s\S]*?\n\}\n\n?/, "");
 // `pnpm run format:check`.
 const scratchDir = mkdtempSync(path.join(tmpdir(), "skill-types-generate-"));
 const scratchPath = path.join(scratchDir, "skill-types.generated.ts");
-writeFileSync(scratchPath, banner + ts);
+writeFileSync(
+  scratchPath,
+  banner +
+    ts +
+    "\n/** Built-in harnesses and implemented capabilities, in picker order. */\nexport const HARNESS_CATALOG = " +
+    JSON.stringify(catalog, null, 2) +
+    " as const;\n",
+);
 execFileSync(
   path.join(workspaceRoot, "node_modules/.bin/bun"),
   ["fmt", "--no-script", scratchPath],

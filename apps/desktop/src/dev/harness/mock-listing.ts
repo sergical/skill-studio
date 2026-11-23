@@ -43,6 +43,7 @@ function row(
   const list = entries(snapshot, budget);
   return {
     harness,
+    evidence: "preview",
     scope: { scope: "global" },
     budget,
     budget_unit: unit,

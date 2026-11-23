@@ -1,7 +1,7 @@
 //! Per-skill listing state: which skills a harness shows the model with a
 //! description, with a name only, or not at all. Claude Code and Codex
 //! follow the algorithms in docs/agent-skill-conventions.md "Model listing
-//! budgets"; other harnesses have no known limit.
+//! budgets". Discovery rows summarize the metadata found on disk.
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -42,11 +42,11 @@ pub struct ListingEntry {
     /// Deployment folder. Null for entries known only from a session.
     #[schemars(extend("x-untrusted" = true))]
     pub path: Option<PathBuf>,
-    /// Predicted state.
+    /// Model listing state for a preview. For discovery, describes the scanned entry only.
     pub state: ListingState,
     /// Why a hidden skill is hidden.
     pub hidden_reason: Option<String>,
-    /// Description characters the model sees.
+    /// Description characters in the preview, or in the discovered metadata for discovery rows.
     pub shown_description_chars: u64,
     /// Description characters before any cut.
     pub full_description_chars: u64,
@@ -104,18 +104,32 @@ pub struct ObservedSession {
     pub described: usize,
 }
 
+/// Evidence behind the current listing row. Session captures are reported independently.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ListingEvidence {
+    /// Discovered deployments and their descriptions.
+    #[default]
+    Discovery,
+    /// A prediction produced by a supported client renderer.
+    Preview,
+}
+
 /// One harness listing in one scope.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HarnessListing {
+    /// How this listing was produced.
+    #[serde(default)]
+    pub evidence: ListingEvidence,
     /// Harness id.
     pub harness: AgentId,
     /// Project sessions include global skills.
     pub scope: RootScope,
-    /// Budget, or null when the harness has no known limit.
+    /// Budget when this report computed one for the client.
     pub budget: Option<u64>,
     /// `characters` or `tokens` (UTF-8 bytes divided by four).
     pub budget_unit: String,
-    /// The whole listing with every description, in `budget_unit`.
+    /// Full preview size in `budget_unit`, or an estimate from discovered metadata for discovery rows.
     pub full_size: u64,
     /// How the budget was resolved.
     #[schemars(extend("x-untrusted" = true))]
@@ -303,11 +317,20 @@ pub(crate) fn listing_rows(
     for scope in scopes {
         for facts in &rt.ports.catalog.facts {
             ctx.checkpoint()?;
-            listings.push(match facts.id.as_str() {
-                AgentId::CLAUDE_CODE => claude_listing(rt, inventory, facts, scope, req)?,
-                AgentId::CODEX => codex_listing(rt, inventory, facts, scope, req)?,
-                _ => unlimited_listing(rt, inventory, facts, scope)?,
-            });
+            use crate::harness::{registered_harness, ListingRenderer};
+            listings.push(
+                match registered_harness(facts.id.as_str()).map(|row| row.renderer) {
+                    Some(ListingRenderer::Claude) => {
+                        claude_listing(rt, inventory, facts, scope, req)?
+                    }
+                    Some(ListingRenderer::Codex) => {
+                        codex_listing(rt, inventory, facts, scope, req)?
+                    }
+                    Some(ListingRenderer::Discovery) | None => {
+                        discovery_listing(rt, inventory, facts, scope)?
+                    }
+                },
+            );
         }
     }
     Ok(ListingReport { listings })
@@ -329,7 +352,7 @@ fn hidden_entry(skill: &ListedSkill, name: String) -> ListingEntry {
     }
 }
 
-fn unlimited_listing(
+fn discovery_listing(
     rt: &Runtime,
     inventory: &crate::dto::Inventory,
     facts: &crate::harness::HarnessFacts,
@@ -364,12 +387,13 @@ fn unlimited_listing(
         .map(|e| e.name.chars().count() as u64 + e.full_description_chars + 5)
         .sum();
     Ok(HarnessListing {
+        evidence: ListingEvidence::Discovery,
         harness: facts.id.clone(),
         scope: scope.clone(),
         budget: None,
         budget_unit: "characters".into(),
         full_size,
-        budget_source: "no known limit".into(),
+        budget_source: "discovery only".into(),
         context_window_tokens: None,
         context_source: "not used".into(),
         uses_default_context_window: false,
@@ -925,6 +949,7 @@ fn claude_listing(
     };
     entries.extend(hidden);
     Ok(HarnessListing {
+        evidence: ListingEvidence::Preview,
         harness: facts.id.clone(),
         scope: scope.clone(),
         budget: Some(budget.chars),
@@ -1879,6 +1904,7 @@ fn codex_listing(
     }
     entries.extend(hidden);
     Ok(HarnessListing {
+        evidence: ListingEvidence::Preview,
         harness: facts.id.clone(),
         scope: scope.clone(),
         budget: Some(max),

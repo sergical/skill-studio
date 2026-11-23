@@ -94,9 +94,9 @@ pub use opencode_db::opencode_databases;
 pub use pack_remote::GitPackRemote;
 pub use sink::NoopSink;
 pub use skill_uses::{
-    is_skill_use_change, is_skill_use_change_with_databases, skill_use_watch_paths,
-    skill_use_watch_paths_with_databases, SkillInvocationIndex, SkillUseRefreshReport,
-    SkillUseWatchPath,
+    has_usage_reader, is_skill_use_change, is_skill_use_change_with_databases,
+    skill_use_watch_paths, skill_use_watch_paths_with_databases, SkillInvocationIndex,
+    SkillUseRefreshReport, SkillUseWatchPath,
 };
 pub use tools::{terminal_editor_command, LoginShellToolLookup, PathToolLookup};
 pub use usage_report::{
