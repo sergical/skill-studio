@@ -20,7 +20,7 @@ use crate::error::CoreError;
 use crate::identity::{AgentId, RootKind, RootScope};
 use crate::listing_visibility::{
     claude_project_slug, listing_rows, listing_scopes, parse_listing, HarnessListing,
-    ListingRequest, ListingState,
+    ListingInputs, ListingRequest, ListingState,
 };
 use crate::ops::Operation;
 use crate::ports::{FileKind, OpContext, Runtime};
@@ -295,18 +295,12 @@ pub fn skill_sessions(
         let scopes = listing_scopes(rt, &listing_req)?;
         let scope = scopes.last().cloned().unwrap_or(RootScope::Global);
         let _folder_guard = rt.ports.history.guard_read_data_folder()?;
-        let inventory = crate::ops::scan_for_listing(rt, ctx, &scopes)?;
+        let inputs = ListingInputs::read(rt, ctx, std::slice::from_ref(&scope), &listing_req)?;
         let mut steps = ctx
             .take_timing()
             .map_or_else(Vec::new, |timing| timing.steps);
         let listing_started = clock.monotonic();
-        let report = listing_rows(
-            rt,
-            ctx,
-            &inventory,
-            std::slice::from_ref(&scope),
-            &listing_req,
-        )?;
+        let report = listing_rows(rt, ctx, &inputs, std::slice::from_ref(&scope), &listing_req)?;
         steps.push(step(clock, "listing_prediction", listing_started));
         let since = history_start(clock.now());
         let mut agents = Vec::new();
@@ -315,7 +309,7 @@ pub fn skill_sessions(
         for facts in &rt.ports.catalog.facts {
             ctx.checkpoint()?;
             let row = report.listings.iter().find(|r| r.harness == facts.id);
-            let corpus = corpus(rt, &inventory, facts, &scope, row)?;
+            let corpus = corpus(rt, &inputs.inventory, facts, &scope, row)?;
             let transcripts_started = clock.monotonic();
             use crate::harness::{registered_harness, SessionListingReader};
             let (records, sessions) =

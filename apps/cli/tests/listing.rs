@@ -56,6 +56,52 @@ fn state(row: &serde_json::Value, name: &str) -> String {
 }
 
 #[test]
+fn a_project_recording_does_not_add_its_local_skill_to_the_global_estimate() {
+    let dir = tempfile::tempdir().unwrap();
+    let canonical_home = dir.path().canonicalize().unwrap();
+    let home = canonical_home.as_path();
+    let project = home.join("release");
+    skill(home, ".claude/skills", "summary", "Global description");
+    skill(
+        &project,
+        ".claude/skills",
+        "verify-packaging",
+        "Current project description",
+    );
+    let project = project.canonicalize().unwrap();
+    let slug: String = project
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let capture = serde_json::json!({
+        "type": "attachment", "cwd": project, "attachment": {
+            "type": "skill_listing", "isInitial": true,
+            "names": ["summary", "verify-packaging", "bundled"],
+            "content": "- summary: Global description\n- verify-packaging: Old wording\n- bundled: From the client"
+        }
+    });
+    write(
+        home,
+        &format!(".claude/projects/{slug}/s.jsonl"),
+        &capture.to_string(),
+    );
+    let project = project.to_str().unwrap();
+    let global = row(&listing(home, &["--project", project]), "claude-code");
+    let both = listing(home, &["--project", project, "--for-project", project]);
+    assert_eq!(global["entries"], row(&both, "claude-code")["entries"]);
+    assert_eq!(global["entries"].as_array().unwrap().len(), 2);
+    assert_eq!(state(&global, "bundled"), "described");
+    let local = both["listings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["harness"] == "claude-code" && r["scope"]["scope"] == "project")
+        .unwrap();
+    assert_eq!(state(local, "verify-packaging"), "described");
+}
+
+#[test]
 fn claude_listing_keeps_descriptions_of_used_skills_at_the_catalog_window_instead_of_a_200k_default(
 ) {
     let dir = tempfile::tempdir().unwrap();

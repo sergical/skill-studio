@@ -293,6 +293,48 @@ pub struct ListingRequest {
     pub codex_transcript: Option<PathBuf>,
 }
 
+/// One scan shared by the listing estimates and the session report.
+pub(crate) struct ListingInputs {
+    pub(crate) inventory: crate::dto::Inventory,
+    claude_history: BTreeMap<RootScope, Vec<RecordedListing>>,
+}
+
+impl ListingInputs {
+    pub(crate) fn read(
+        rt: &Runtime,
+        ctx: &OpContext,
+        scopes: &[RootScope],
+        req: &ListingRequest,
+    ) -> Result<Self, CoreError> {
+        let mut scan_scopes = scopes.to_vec();
+        let mut claude_history = BTreeMap::new();
+        if rt
+            .ports
+            .catalog
+            .facts
+            .iter()
+            .any(|facts| facts.id.as_str() == AgentId::CLAUDE_CODE)
+        {
+            for scope in scopes {
+                let history = read_claude_history(rt, scope, req)?;
+                // A global estimate borrows bundled entries from a saved session.
+                // Scan its known project too so local skills in that record can be excluded.
+                if let Some(project) = history.first().and_then(|r| r.project_scope(rt)) {
+                    if !scan_scopes.contains(&project) {
+                        scan_scopes.push(project);
+                    }
+                }
+                claude_history.insert(scope.clone(), history);
+            }
+        }
+        let inventory = crate::ops::scan_for_listing(rt, ctx, &scan_scopes)?;
+        Ok(Self {
+            inventory,
+            claude_history,
+        })
+    }
+}
+
 /// Every harness listing for the global scope and the requested project.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ListingReport {
@@ -310,8 +352,8 @@ pub fn listing(
     rt.run(Operation::Listing, ctx, || {
         let scopes = listing_scopes(rt, req)?;
         let _folder_guard = rt.ports.history.guard_read_data_folder()?;
-        let inventory = crate::ops::scan_for_listing(rt, ctx, &scopes)?;
-        listing_rows(rt, ctx, &inventory, &scopes, req)
+        let inputs = ListingInputs::read(rt, ctx, &scopes, req)?;
+        listing_rows(rt, ctx, &inputs, &scopes, req)
     })
 }
 
@@ -350,10 +392,11 @@ pub(crate) fn listing_scopes(
 pub(crate) fn listing_rows(
     rt: &Runtime,
     ctx: &OpContext,
-    inventory: &crate::dto::Inventory,
+    inputs: &ListingInputs,
     scopes: &[RootScope],
     req: &ListingRequest,
 ) -> Result<ListingReport, CoreError> {
+    let inventory = &inputs.inventory;
     let mut listings = Vec::new();
     for scope in scopes {
         for facts in &rt.ports.catalog.facts {
@@ -361,9 +404,14 @@ pub(crate) fn listing_rows(
             use crate::harness::{registered_harness, ListingRenderer};
             listings.push(
                 match registered_harness(facts.id.as_str()).map(|row| row.renderer) {
-                    Some(ListingRenderer::Claude) => {
-                        claude_listing(rt, inventory, facts, scope, req)?
-                    }
+                    Some(ListingRenderer::Claude) => claude_listing(
+                        rt,
+                        inventory,
+                        facts,
+                        scope,
+                        req,
+                        inputs.claude_history.get(scope).map_or(&[], Vec::as_slice),
+                    )?,
                     Some(ListingRenderer::Codex) => {
                         codex_listing(rt, inventory, facts, scope, req)?
                     }
@@ -566,10 +614,29 @@ fn claude_scores(rt: &Runtime) -> BTreeMap<String, f64> {
 
 /// The first full skill listing recorded in a Claude Code transcript.
 struct RecordedListing {
+    cwd: Option<PathBuf>,
     session: ObservedSession,
     /// Names in listing order, with whether each kept a description and its
     /// line width.
     lines: Vec<(String, bool, u64)>,
+}
+
+impl RecordedListing {
+    fn project_scope(&self, rt: &Runtime) -> Option<RootScope> {
+        let folder = self.session.transcript.parent()?.file_name()?.to_str()?;
+        rt.scope
+            .projects
+            .iter()
+            .filter(|p| match &self.cwd {
+                Some(cwd) => cwd.starts_with(&p.lexical) || cwd.starts_with(&p.canonical),
+                None => {
+                    claude_project_slug(&p.lexical) == folder
+                        || claude_project_slug(&p.canonical) == folder
+                }
+            })
+            .max_by_key(|p| p.lexical.components().count())
+            .map(|p| RootScope::Project(ProjectRef(p.lexical.clone())))
+    }
 }
 
 /// What recorded sessions show about one entry Skill Studio does not scan.
@@ -660,6 +727,9 @@ fn read_recorded_listing(rt: &Runtime, path: &Path) -> Option<RecordedListing> {
             }
             listing = Some((
                 attachment.clone(),
+                row.get("cwd")
+                    .and_then(serde_json::Value::as_str)
+                    .map(PathBuf::from),
                 row.get("timestamp")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string),
@@ -679,7 +749,7 @@ fn read_recorded_listing(rt: &Runtime, path: &Path) -> Option<RecordedListing> {
             break;
         }
     }
-    let (attachment, at) = listing?;
+    let (attachment, cwd, at) = listing?;
     let content = attachment.get("content")?.as_str()?;
     let names: Vec<String> = attachment
         .get("names")?
@@ -692,6 +762,7 @@ fn read_recorded_listing(rt: &Runtime, path: &Path) -> Option<RecordedListing> {
         .map(|(name, description, width)| (name, description.is_some(), width))
         .collect();
     Some(RecordedListing {
+        cwd,
         session: ObservedSession {
             transcript: path.to_path_buf(),
             at,
@@ -747,14 +818,11 @@ pub(crate) fn parse_listing(content: &str, names: &[String]) -> Vec<(String, Opt
     out
 }
 
-fn claude_listing(
+fn read_claude_history(
     rt: &Runtime,
-    inventory: &crate::dto::Inventory,
-    facts: &crate::harness::HarnessFacts,
     scope: &RootScope,
     req: &ListingRequest,
-) -> Result<HarnessListing, CoreError> {
-    let settings = claude_settings(rt, scope)?;
+) -> Result<Vec<RecordedListing>, CoreError> {
     let mut history = recorded_listings(rt, scope);
     if let Some(path) = &req.claude_transcript {
         let projects = rt.scope.global_root_path(Path::new(".claude/projects"));
@@ -781,6 +849,18 @@ fn claude_listing(
         })?;
         history.insert(0, chosen);
     }
+    Ok(history)
+}
+
+fn claude_listing(
+    rt: &Runtime,
+    inventory: &crate::dto::Inventory,
+    facts: &crate::harness::HarnessFacts,
+    scope: &RootScope,
+    req: &ListingRequest,
+    history: &[RecordedListing],
+) -> Result<HarnessListing, CoreError> {
+    let settings = claude_settings(rt, scope)?;
     let recorded = history.first();
     let budget = claude_budget(
         rt,
@@ -816,23 +896,15 @@ fn claude_listing(
     // A session recorded in another project lists that project's skills;
     // they are not this scope's entries. Names that only match a skill in
     // some other project (a built-in command, say) stay.
-    let session_dir = recorded.and_then(|r| {
-        r.session
-            .transcript
-            .parent()
-            .and_then(Path::file_name)
-            .map(|n| n.to_string_lossy().into_owned())
-    });
+    let recording_scope = recorded.and_then(|r| r.project_scope(rt));
     let other_project_names: BTreeSet<String> = inventory
         .skills
         .iter()
         .flat_map(|skill| skill.deployments.iter().map(move |d| (skill, d)))
-        .filter(|(_, d)| match &d.root.scope {
-            RootScope::Project(p) => {
-                &d.root.scope != scope
-                    && session_dir.as_deref() == Some(claude_project_slug(&p.0).as_str())
-            }
-            RootScope::Global => false,
+        .filter(|(_, d)| {
+            d.harness.as_ref() == Some(&facts.id)
+                && &d.root.scope != scope
+                && Some(&d.root.scope) == recording_scope.as_ref()
         })
         .map(|(skill, d)| {
             d.frontmatter
@@ -842,7 +914,7 @@ fn claude_listing(
         })
         .collect();
     let mut seen: BTreeMap<String, Unscanned> = BTreeMap::new();
-    for listing in &history {
+    for listing in history {
         for (name, described, width) in &listing.lines {
             let facts = seen.entry(name.clone()).or_default();
             if *described {

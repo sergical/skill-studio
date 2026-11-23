@@ -448,7 +448,9 @@ competes for the budget. The settings loader is the same as before: `yt`
 merges user `~/.claude/settings.json`, project `.claude/settings.json`, and
 project `.claude/settings.local.json`; managed settings and session flags can
 also apply. The skill directory loader removes duplicate real file paths.
-Disabled plugins do not supply skills.
+Disabled plugins do not supply skills. When an estimate uses a saved listing
+from a known project to account for bundled entries, it scans that project's
+skills as well. Entries supplied by the project stay in the project count.
 
 Codex's installed package identifies version 0.167.0. Its binary contains
 `SkillsConfig.max_context_tokens`, `SkillMetadataBudget`, and the bounded-list
