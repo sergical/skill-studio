@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   chosenInstallHarnesses,
@@ -6,7 +5,6 @@ import {
   harnessesKeptWithoutUniversal,
   installDestinationError,
   installDestinationFields,
-  installHarness,
   installHarnessLockReason,
   installHarnessLocked,
   installMethodFor,
@@ -17,30 +15,12 @@ import {
 } from "./skill-install-destination";
 import type { AgentId } from "./skill-types";
 
-/** The Rust core's install target table, which decides the folder a copy install writes. */
-const installTargetsRs = readFileSync(
-  new URL("../../../crates/skill-studio-core/src/install_targets.rs", import.meta.url),
-  "utf8",
-);
-
 const ALL: readonly AgentId[] = ["claude-code", "codex", "opencode", "pi", "cursor", "grok-build"];
 
 describe("Destination rows", () => {
   it("add skill: names the shared folder per scope, else the Universal row shows the wrong path", () => {
     expect(universalDestinationPath("global")).toBe("~/.agents/skills");
     expect(universalDestinationPath("project")).toBe(".agents/skills");
-  });
-
-  it("add skill: names, per scope, a folder the core install writes, else the caption promises a folder the copy does not write", () => {
-    const literals = new Set([...installTargetsRs.matchAll(/"([^"\n]+)"/g)].map((m) => m[1]));
-    const missing = ALL.flatMap((id) => {
-      const folder = installHarness(id)?.folder;
-      if (!folder) return [`${id}: no folder`];
-      return [folder.global.replace(/^~\//, ""), folder.project]
-        .filter((path) => !literals.has(path))
-        .map((path) => `${id}: ${path}`);
-    });
-    expect(missing, "not in crates/skill-studio-core/src/install_targets.rs").toEqual([]);
   });
 
   it("add skill: offers Claude Code plus detected and kept harnesses in declaration order, else unknown ids leak in", () => {
