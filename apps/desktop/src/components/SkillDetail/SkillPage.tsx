@@ -304,6 +304,16 @@ export function SkillPage({
     );
   }
 
+  const visibility = deployment && !isDeploymentBroken && (
+    <SkillVisibility
+      key={deployment.path}
+      skill={skill}
+      deployment={deployment}
+      initialClient={from.kind === "listing" ? from.harness : undefined}
+      listingScope={from.kind === "listing" ? from.scope : undefined}
+    />
+  );
+
   return (
     <PageShell
       title={skill.name}
@@ -324,15 +334,7 @@ export function SkillPage({
             onEditManually={isPluginManaged ? undefined : openEditor}
           />
 
-          {deployment && !isDeploymentBroken && (
-            <SkillVisibility
-              key={deployment.path}
-              skill={skill}
-              deployment={deployment}
-              initialClient={from.kind === "listing" ? from.harness : undefined}
-              listingScope={from.kind === "listing" ? from.scope : undefined}
-            />
-          )}
+          {from.kind === "listing" && visibility}
           <SkillLocationsCard skill={skill} onCompareCopies={() => setIsCompareOpen(true)} />
 
           {deployment && isDeploymentBroken ? (
@@ -370,6 +372,7 @@ export function SkillPage({
               highlightLine={editorHighlightLine}
             />
           )}
+          {from.kind !== "listing" && visibility}
         </div>
 
         <SkillPropertiesRail skill={skill} />

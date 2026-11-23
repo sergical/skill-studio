@@ -57,8 +57,11 @@ test("a Cursor-only setup can follow a scanned skill from Home and back", async 
   await page.goto("/");
   const cursor = page.getByRole("checkbox", { name: "Cursor", exact: true });
   await expect(cursor).toBeChecked();
-  for (const other of await page.getByRole("checkbox", { name: /^(?!Cursor$).+/ }).all())
-    await other.uncheck();
+  const others = page.getByRole("checkbox", { name: /^(?!Cursor$).+/, checked: true });
+  for (let count = await others.count(); count > 0; count--) {
+    await others.first().press("Space");
+    await expect(others).toHaveCount(count - 1);
+  }
   await page.getByRole("button", { name: "Continue" }).click();
   const clients = page.getByRole("region", { name: "Your clients" });
   await expect(clients.getByRole("button")).toHaveCount(1);
