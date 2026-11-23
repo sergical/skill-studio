@@ -266,17 +266,22 @@ The shared guard proposed in #531 was not built; #531 was also closed. Before yo
    (about 6 minutes). When a workflow changed, it also runs zizmor. Fix what
    fails. Do not use `--no-verify`.
 3. Open the PR with `.github/PULL_REQUEST_TEMPLATE.md`. Run
-   `scripts/gate/gate risk --json` locally before enabling auto-merge:
+   `scripts/gate/gate risk --json` locally before enabling auto-merge, **and
+   re-run it after every subsequent push**:
    - For `ship` or `show` PRs, or in an interactive thread when the owner
      explicitly asked for that `stop` change (and did not ask to hold), enable
      `gh pr merge --auto --squash` so GitHub merges when green.
    - For unasked-for `stop` rules, AFK / `full send` runs hitting `stop`, or
-     explicit `full stop` / hold requests, do not enable `--auto`; follow
+     explicit `full stop` / hold requests, do not enable `--auto` (and run
+     `gh pr merge --disable-auto` first if already enabled); follow
      `full-stop` (`babysit-pr` until real CI is green, call
-     `unwatch_pull_request`, then hand off).
+     `unwatch_pull_request`, then hand off) before posting a passing
+     `gate/review` status.
 4. Get a review from a model of another provider and post it with
    `scripts/gate/gate review-status` (see `scripts/gate/README.md`). Each push
-   needs a new review.
+   needs a new review. Before posting a passing `gate/review`, re-verify
+   `scripts/gate/gate risk --json` on the current head and ensure auto-merge is
+   disabled if an unasked `stop` rule matched.
 5. Watch the PR via `babysit-pr` (`watch_pull_request`). GitHub merges `--auto`
    PRs when required checks pass; if handing off unmerged, always call
    `unwatch_pull_request` once real CI is green.

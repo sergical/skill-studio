@@ -39,8 +39,7 @@ jobs:
           scripts/gate/gate risk --base "$BASE_SHA" --head "$HEAD_SHA" --author "$AUTHOR" --json > risk.json
           tier=$(jq -r .tier risk.json)
           ask=$(jq -r '.needs_you[0].ask // ""' risk.json)
-          # Label and status first, so a comment error cannot leave a stop PR
-          # free to merge.
+          # Label and status first, so a comment error still tags and classifies the PR.
           if [ "$tier" = stop ]; then
             # Advisory success, not pending or failure: keeps real CI honest and
             # avoids failed-workflow emails while labeling and commenting on the PR.

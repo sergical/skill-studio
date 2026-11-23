@@ -93,7 +93,7 @@ optional `GATE_UPDATE_TOKEN` secret with contents and pull-request write access
 so update pushes trigger CI. GitHub suppresses most workflows from pushes made
 with the default workflow token. Without that secret, updates can occur but a
 maintainer must trigger checks. Conflicts or head changes fail the job and leave
-the PR for a maintainer. Agents enable auto-merge when they open a PR.
+the PR for a maintainer. Agents enable auto-merge only when the local risk decision allows it.
 
 `gate-metrics.yml` runs on day 1 of each month and on manual dispatch. It reports the previous calendar month in the Actions job summary. It has read access to contents, pull requests, Actions runs, and commit statuses. It does not write to the repository.
 
