@@ -33,8 +33,8 @@ import { MenuControl, MenuRadioGroup, MenuRadioItem, MenuSeparator } from "../ui
 import { useAppStore } from "../../store/appStore";
 
 /** Harnesses with a usage reader in `crates/skill-studio-core/src/skill_uses/`, in menu order. */
-const USAGE_READER_HARNESSES: AgentId[] = HARNESS_CATALOG.filter((row) => row.usageReader).map(
-  (row) => row.id,
+const USAGE_READER_HARNESSES: AgentId[] = HARNESS_CATALOG.flatMap((row) =>
+  row.usageReader ? [row.id] : [],
 );
 
 const FILTER_TRIGGER =

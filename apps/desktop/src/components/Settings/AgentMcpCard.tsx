@@ -23,7 +23,7 @@ import { CopyButton, SettingsCard, SettingsError, SettingsRow } from "./Settings
 
 /** Agents the desktop backend can connect, through `connect_mcp`. */
 const CONNECTABLE_AGENTS = new Set<string>(
-  HARNESS_CATALOG.filter((row) => row.mcpConnect).map((row) => row.id),
+  HARNESS_CATALOG.flatMap((row) => (row.mcpConnect ? [row.id] : [])),
 );
 
 function isConnectable(id: string): id is AgentId {

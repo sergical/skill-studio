@@ -140,8 +140,8 @@ const ARCHIVED_CLIENT_PROJECT = `${HARNESS_HOME}/src/archived-client`;
 
 /** The six discovery harnesses, in the display order `discovery_harnesses()` yields on the Rust
  * side - see `crates/skill-studio-host/src/discovery.rs`'s `HISTORY_SOURCES`. */
-const DISCOVERY_HARNESSES = HARNESS_CATALOG.filter((row) => row.projectDiscovery).map(
-  (row) => row.id,
+const DISCOVERY_HARNESSES = HARNESS_CATALOG.flatMap((row) =>
+  row.projectDiscovery ? [row.id] : [],
 );
 
 /** Installs the mock Tauri IPC layer and returns the control the harness (or the marketing
