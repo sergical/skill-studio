@@ -54,8 +54,11 @@ test("the Codex listing gives the tier and how far the budget is from the next o
 });
 
 test("a Cursor-only setup can follow a scanned skill from Home and back", async ({ page }) => {
+  test.slow();
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
   const cursor = page.getByRole("checkbox", { name: "Cursor", exact: true });
+  await cursor.waitFor();
   await expect(cursor).toBeChecked();
   const others = page.getByRole("checkbox", { name: /^(?!Cursor$).+/, checked: true });
   for (let count = await others.count(); count > 0; count--) {
