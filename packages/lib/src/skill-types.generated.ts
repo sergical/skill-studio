@@ -701,7 +701,7 @@ export interface SessionSummary {
  */
 export interface SessionListedSkill {
   /**
-   * Client skill ID (OpenCode) or file location (pi), exactly as saved.
+   * Client skill ID (`OpenCode`) or file location (pi), exactly as saved.
    */
   locator?: string | null;
   /**

@@ -7450,7 +7450,7 @@
             "description": "How the session listed it."
           },
           "locator": {
-            "description": "Client skill ID (OpenCode) or file location (pi), exactly as saved.",
+            "description": "Client skill ID (`OpenCode`) or file location (pi), exactly as saved.",
             "type": [
               "string",
               "null"
