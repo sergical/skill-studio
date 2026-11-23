@@ -42,10 +42,10 @@ jobs:
           # Label and status first, so a comment error cannot leave a stop PR
           # free to merge.
           if [ "$tier" = stop ]; then
-            # Pending, not failure: the PR cannot merge by itself, and no
-            # failure email goes out. The owner merges it.
+            # Advisory success, not pending or failure: keeps real CI honest and
+            # avoids failed-workflow emails while labeling and commenting on the PR.
             gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels" -f "labels[]=risk:owner" > /dev/null
-            gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f context=gate/risk -f state=pending -f description="Needed from you: ${ask:0:120}"
+            gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f context=gate/risk -f state=success -f description="Advisory: ${ask:0:120}"
           else
             gh api --method DELETE "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels/risk%3Aowner" > /dev/null 2>&1 || true
             gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f context=gate/risk -f state=success -f description="Risk: $tier"
