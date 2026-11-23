@@ -217,6 +217,14 @@
       "description": "One recorded session.",
       "type": "object",
       "properties": {
+        "agent_name": {
+          "description": "Selected agent within the client, when recorded.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true
+        },
         "harness": {
           "description": "Agent id.",
           "$ref": "#/$defs/AgentIdentity"
@@ -326,6 +334,14 @@
       "description": "One entry in a session's listing.",
       "type": "object",
       "properties": {
+        "locator": {
+          "description": "Client skill ID (OpenCode) or file location (pi), exactly as saved.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true
+        },
         "description_index": {
           "description": "Index into this agent's captured descriptions when the session contained wording.",
           "type": [
@@ -536,6 +552,11 @@
           "description": "The reader recognizes skill uses. The Activity page counts them.",
           "type": "string",
           "const": "uses_only"
+        },
+        {
+          "description": "Latest saved skill guidance. Use counts are available separately in Activity.",
+          "type": "string",
+          "const": "saved_guidance"
         }
       ]
     }

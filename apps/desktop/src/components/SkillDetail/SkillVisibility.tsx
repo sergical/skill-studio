@@ -78,9 +78,11 @@ export function SkillVisibility({
             {project ? "Project" : "Global"} ·{" "}
             {row.evidence !== "preview"
               ? "Folder scan"
-              : hasAssumedClaudeWindow(row)
-                ? "Listing estimate with an assumed model window"
-                : "Listing estimate"}
+              : row.base_prompt_skills != null
+                ? "Base prompt preview"
+                : hasAssumedClaudeWindow(row)
+                  ? "Listing estimate with an assumed model window"
+                  : "Listing estimate"}
           </p>
         </div>
         <SelectControl

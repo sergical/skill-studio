@@ -79,6 +79,17 @@ fn to_facts(meta: &fs::Metadata) -> FileFacts {
 }
 
 impl ScopeFs for RealFs {
+    fn opencode_guidance(
+        &self,
+        home: &Path,
+        databases: Option<&[PathBuf]>,
+        project: Option<&Path>,
+        since: DateTime<Utc>,
+        limit: usize,
+    ) -> Vec<skill_studio_core::skill_sessions::ParsedSession> {
+        crate::opencode_guidance::read_opencode_guidance(home, databases, project, since, limit)
+    }
+
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
         fs::canonicalize(path)
     }

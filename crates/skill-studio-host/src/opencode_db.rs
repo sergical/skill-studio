@@ -75,7 +75,12 @@ pub fn opencode_databases(home: &Path) -> Vec<PathBuf> {
         };
     }
 
-    let Ok(entries) = fs::read_dir(&data_dir) else {
+    default_opencode_databases(&data_dir)
+}
+
+/// Channel databases at an explicitly selected data directory.
+pub(crate) fn default_opencode_databases(data_dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(data_dir) else {
         return Vec::new();
     };
     let mut databases: Vec<PathBuf> = entries

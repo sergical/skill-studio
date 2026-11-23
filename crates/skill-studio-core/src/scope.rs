@@ -88,6 +88,10 @@ pub struct RuntimeScope {
     /// this field, since the core reads no environment variable. Read by
     /// [`crate::ops::scan`] for `OpenCode`'s native per-skill deny switch.
     pub opencode_config_root: Option<PathBuf>,
+    /// Read-only `OpenCode` session databases resolved by the host for a live data-path override.
+    /// Explicit homes use their own default data directory. These files never widen write scope.
+    #[serde(skip)]
+    pub opencode_databases: Option<Vec<PathBuf>>,
     /// Codex's own directory, in place of `home_root/.codex`. `None` keeps
     /// the default. The adapter is the one place allowed to read
     /// `CODEX_HOME`; the core only ever sees the resolved path here (see
@@ -122,6 +126,7 @@ impl RuntimeScope {
             cache_root: None,
             data_root: None,
             opencode_config_root: None,
+            opencode_databases: None,
             codex_home: None,
             agent_home_roots: Default::default(),
             read_timeout_ms: DEFAULT_READ_TIMEOUT_MS,
@@ -145,6 +150,7 @@ impl RuntimeScope {
             cache_root: None,
             data_root: Some(data_root),
             opencode_config_root: None,
+            opencode_databases: None,
             codex_home: None,
             agent_home_roots: Default::default(),
             read_timeout_ms: DEFAULT_READ_TIMEOUT_MS,

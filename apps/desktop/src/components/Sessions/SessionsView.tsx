@@ -209,7 +209,8 @@ function RecordedListing({
   return (
     <details onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary className="cursor-pointer text-small">
-        Recorded listing · {session.entries.length} skills
+        Recorded listing · {session.entries.length.toLocaleString()}{" "}
+        {session.entries.length === 1 ? "skill" : "skills"}
       </summary>
       {open && (
         <>
@@ -223,6 +224,9 @@ function RecordedListing({
               return (
                 <li key={`${position}-${entry.skill}`} className="py-2">
                   <strong className="font-medium">{entry.skill}</strong>
+                  {entry.locator && (
+                    <p className="break-all text-caption text-text-tertiary">{entry.locator}</p>
+                  )}
                   {(!text || entry.listed_as !== "described") && (
                     <span className="ml-2 text-caption text-text-tertiary">
                       {LISTED_LABEL[entry.listed_as]}
@@ -251,9 +255,11 @@ function RecordedListing({
 function SessionRow({
   session,
   descriptions,
+  guidance,
 }: {
   session: SessionSummary;
   descriptions: string[];
+  guidance: boolean;
 }) {
   const folder = session.project_path?.split("/").filter(Boolean) ?? [];
   const parent = folder[folder.length - 2];
@@ -277,16 +283,23 @@ function SessionRow({
               title={session.project_path ?? undefined}
             >
               {projectName}
+              {session.agent_name && ` · ${session.agent_name}`}
             </strong>
             <span className="block truncate text-caption text-text-secondary">
-              {session.used.length
-                ? session.used.map((u) => u.skill).join(" · ")
-                : "No skill use recorded"}
+              {guidance
+                ? (session.id ?? "Saved session")
+                : session.used.length
+                  ? session.used.map((u) => u.skill).join(" · ")
+                  : "No skill use recorded"}
             </span>
           </span>
           <span className="text-right">
             <span className="block text-small tabular-nums">
-              {session.used.length} {session.used.length === 1 ? "skill" : "skills"} loaded
+              {guidance
+                ? session.listing_recorded
+                  ? `${session.listed.toLocaleString()} ${session.listed === 1 ? "skill" : "skills"} saved`
+                  : "Guidance unavailable"
+                : `${session.used.length} ${session.used.length === 1 ? "skill" : "skills"} loaded`}
             </span>
             <span className="text-caption text-text-tertiary">{formatTime(session.at)}</span>
           </span>
@@ -344,9 +357,13 @@ export function SessionsView() {
   const sessions = (report?.sessions.filter((s) => s.harness === harness) ?? []).sort((a, b) =>
     (b.at ?? "").localeCompare(a.at ?? ""),
   );
-  const shownSessions = onlyFindings
-    ? sessions.filter((s) => s.missed.length > 0 || s.used.some((u) => u.listed_as !== "described"))
-    : sessions;
+  const guidance = agent?.records === "saved_guidance";
+  const shownSessions =
+    onlyFindings && !guidance
+      ? sessions.filter(
+          (s) => s.missed.length > 0 || s.used.some((u) => u.listed_as !== "described"),
+        )
+      : sessions;
   const agents = clients.map(({ harness: id }) => ({
     value: id,
     label: deploymentLabelFromAgentId(id),
@@ -366,7 +383,7 @@ export function SessionsView() {
             ariaLabel="Agent"
             disabled={!agents.length}
           />
-          {agent?.records === "listing_and_uses" && (
+          {agent && agent.records !== "uses_only" && (
             <SelectControl
               value={count}
               onValueChange={setCount}
@@ -408,24 +425,36 @@ export function SessionsView() {
                 </p>
               </section>
             )}
-            {agent.records === "listing_and_uses" && (
+            {guidance && (
+              <section className="space-y-2">
+                <h2 className="text-heading-lg font-semibold">Saved skill guidance</h2>
+                <p>
+                  {agent.sessions_with_listing.toLocaleString()} of{" "}
+                  {agent.sessions_read.toLocaleString()} recent sessions have readable guidance.
+                </p>
+                <p className="text-small text-text-secondary">{agent.note}</p>
+              </section>
+            )}
+            {agent.records !== "uses_only" && (
               <section aria-label="Sessions" className="flex flex-col gap-1">
                 <div className="flex items-center gap-2">
                   <h2 className="mr-auto text-heading font-semibold">Recent sessions</h2>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="rounded-sm px-2 text-text-secondary"
-                    onClick={() => setOnlyFindings((v) => !v)}
-                  >
-                    {onlyFindings
-                      ? `Show all ${sessions.length}`
-                      : "Show only sessions with findings"}
-                  </Button>
+                  {!guidance && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="rounded-sm px-2 text-text-secondary"
+                      onClick={() => setOnlyFindings((v) => !v)}
+                    >
+                      {onlyFindings
+                        ? `Show all ${sessions.length}`
+                        : "Show only sessions with findings"}
+                    </Button>
+                  )}
                 </div>
                 {shownSessions.length === 0 ? (
                   <p className="m-0 text-small text-text-secondary">
-                    {onlyFindings
+                    {onlyFindings && !guidance
                       ? "No session used a skill without its description or possibly missed one."
                       : "No sessions in the last 30 days."}
                   </p>
@@ -433,7 +462,8 @@ export function SessionsView() {
                   <ul className="m-0 list-none divide-y divide-border-subtle p-0">
                     {shownSessions.map((session) => (
                       <SessionRow
-                        key={session.transcript}
+                        key={JSON.stringify([session.transcript, session.id])}
+                        guidance={guidance}
                         session={session}
                         descriptions={agent.captured_descriptions ?? []}
                       />
@@ -442,7 +472,7 @@ export function SessionsView() {
                 )}
               </section>
             )}
-            {agent.records !== "listing_and_uses" && (
+            {agent.records === "uses_only" && (
               <section className="space-y-3">
                 <AgentSummary agent={agent} />
                 <Button

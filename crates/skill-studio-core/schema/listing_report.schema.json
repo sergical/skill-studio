@@ -25,6 +25,14 @@
           "$ref": "#/$defs/ListingEvidence",
           "default": "discovery"
         },
+        "base_prompt_skills": {
+          "description": "Rendered base prompt skills section, including markup and file locations.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-untrusted": true
+        },
         "harness": {
           "description": "Harness id.",
           "$ref": "#/$defs/AgentIdentity"

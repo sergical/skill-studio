@@ -186,6 +186,7 @@ export function ClientConfiguration({
   const sources = sourceCounts(entries);
   const project = row.scope.scope === "global" ? null : row.scope.project;
   const preview = row.evidence === "preview";
+  const basePrompt = row.base_prompt_skills != null;
   const shortened = entries.filter((e) => e.state === "truncated").length;
   const namesOnly = entries.filter((e) => e.state === "name_only").length;
   const omitted = row.entries.filter((e) => e.state === "omitted").length;
@@ -195,16 +196,21 @@ export function ClientConfiguration({
     <>
       <section className="rounded-lg border border-border-subtle bg-bg-secondary p-4">
         <h2 className="text-heading font-semibold">
-          {!preview || row.budget === null ? `Skills in ${name}` : `${name} skill allocation`}
+          {basePrompt
+            ? `${row.budget_source} preview`
+            : !preview || row.budget === null
+              ? `Skills in ${name}`
+              : `${name} skill allocation`}
         </h2>
         <p className="mt-2 text-display font-semibold leading-tight tabular-nums">
           {assumedWindow ? (
             budgetRule(row)
           ) : !preview || row.budget === null ? (
             <>
-              {entries.length}{" "}
+              {entries.length.toLocaleString()}{" "}
               <span className="text-heading font-medium">
-                {entries.length === 1 ? "skill" : "skills"} {preview ? "in the estimate" : "found"}
+                {entries.length === 1 ? "skill" : "skills"}{" "}
+                {basePrompt ? "in the skills section" : preview ? "in the estimate" : "found"}
               </span>
             </>
           ) : (
@@ -228,6 +234,8 @@ export function ClientConfiguration({
               Model window unknown. {name}’s settings give a percentage. The model catalog could not
               confirm how many characters that allows.
             </>
+          ) : basePrompt ? (
+            row.notes.join(" ")
           ) : !preview ? (
             `From folders ${name} reads in this scope.`
           ) : (
@@ -241,6 +249,14 @@ export function ClientConfiguration({
           )}
         </p>
       </section>
+      {row.base_prompt_skills && (
+        <details className="rounded-md border border-border-subtle px-3 py-2">
+          <summary className="cursor-pointer text-small">Preview the skills section</summary>
+          <pre className="mt-2 whitespace-pre-wrap break-all text-caption">
+            {row.base_prompt_skills}
+          </pre>
+        </details>
+      )}
       {row.setting && (
         <section aria-label="Effective settings">
           <h3 className="mb-2 text-heading font-semibold">Effective settings</h3>

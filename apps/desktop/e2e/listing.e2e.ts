@@ -127,3 +127,15 @@ test("save and remove a personal Codex budget from client configuration", async 
   await settings.getByRole("button", { name: "Remove override" }).click();
   await expect(settings).toContainText("Client default");
 });
+
+test("read the skill guidance saved for an OpenCode session", async ({ page }) => {
+  await openApp(page);
+  await page.getByRole("navigation").getByRole("button", { name: "Sessions" }).click();
+  await page.getByRole("combobox", { name: "Agent" }).click();
+  await page.getByRole("option", { name: "OpenCode", exact: true }).click();
+  await page.getByText("app · plan", { exact: true }).click();
+  await page.getByText(/Recorded listing · 1 skill/).click();
+  const skill = page.getByRole("list", { name: "Recorded skills" }).getByRole("listitem");
+  await expect(skill).toContainText("web-design-guidelines");
+  await expect(skill).toContainText("Review UI code for Web Interface Guidelines compliance.");
+});

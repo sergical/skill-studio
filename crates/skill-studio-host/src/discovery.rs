@@ -87,6 +87,12 @@ pub fn resolve_agent_homes(
     mut scope: skill_studio_core::RuntimeScope,
 ) -> skill_studio_core::RuntimeScope {
     if scope.kind == skill_studio_core::scope::ScopeKind::Live {
+        if ["XDG_DATA_HOME", "OPENCODE_DB"]
+            .iter()
+            .any(|key| crate::opencode_db::agent_env_var(key).is_some_and(|v| !v.is_empty()))
+        {
+            scope.opencode_databases = Some(opencode_databases(&scope.home_root));
+        }
         for relative in [
             ".claude",
             ".pi/agent",

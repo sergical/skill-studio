@@ -439,3 +439,35 @@ fn listing_and_sessions_read_a_large_home_under_the_desktop_file_budget() {
         );
     }
 }
+
+#[test]
+fn pi_base_prompt_uses_the_first_project_copy_even_when_manual_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    let project = home.join("work");
+    skill(&home, ".pi/agent/skills", "brief", "Global brief");
+    skill(&project, ".agents/skills", "brief", "Shared brief");
+    skill(
+        &project,
+        ".pi/skills",
+        "brief",
+        "Local brief\ndisable-model-invocation: true",
+    );
+    skill(&project, ".pi/skills", "tags", "Compare A & B <tags>");
+    let path = project.to_str().unwrap();
+    let data = listing(&home, &["--project", path, "--for-project", path]);
+    let pi = data["listings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["harness"] == "pi" && r["scope"]["scope"] == "project")
+        .unwrap();
+    let section = pi["base_prompt_skills"].as_str().unwrap();
+    assert_eq!(pi["budget"], serde_json::Value::Null);
+    assert_eq!(state(pi, "brief"), "hidden");
+    assert!(!section.contains("<name>brief</name>"));
+    assert!(section.contains("<description>Compare A &amp; B &lt;tags&gt;</description>"));
+    assert!(section.contains(&format!(
+        "<location>{path}/.pi/skills/tags/SKILL.md</location>"
+    )));
+}

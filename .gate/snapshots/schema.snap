@@ -4534,6 +4534,14 @@
       "HarnessListing": {
         "description": "One harness listing in one scope.",
         "properties": {
+          "base_prompt_skills": {
+            "description": "Rendered base prompt skills section, including markup and file locations.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
           "budget": {
             "description": "Budget when this report computed one for the client.",
             "format": "uint64",
@@ -7441,6 +7449,14 @@
             "$ref": "#/$defs/SessionListingState",
             "description": "How the session listed it."
           },
+          "locator": {
+            "description": "Client skill ID (OpenCode) or file location (pi), exactly as saved.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
           "skill": {
             "description": "Name as the session recorded it.",
             "type": "string",
@@ -7495,6 +7511,11 @@
             "const": "uses_only",
             "description": "The reader recognizes skill uses. The Activity page counts them.",
             "type": "string"
+          },
+          {
+            "const": "saved_guidance",
+            "description": "Latest saved skill guidance. Use counts are available separately in Activity.",
+            "type": "string"
           }
         ]
       },
@@ -7525,6 +7546,14 @@
       "SessionSummary": {
         "description": "One recorded session.",
         "properties": {
+          "agent_name": {
+            "description": "Selected agent within the client, when recorded.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-untrusted": true
+          },
           "at": {
             "description": "Start time, as recorded.",
             "type": [
