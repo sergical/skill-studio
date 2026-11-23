@@ -508,15 +508,15 @@
       ]
     },
     "SessionRecords": {
-      "description": "What an agent records about its sessions.",
+      "description": "Evidence Skill Studio can read from this agent’s sessions.",
       "oneOf": [
         {
-          "description": "Each session records its skill listing and its skill uses.",
+          "description": "The reader recognizes skill listings and skill uses.",
           "type": "string",
           "const": "listing_and_uses"
         },
         {
-          "description": "Sessions record skill uses only. The Activity page counts them.",
+          "description": "The reader recognizes skill uses. The Activity page counts them.",
           "type": "string",
           "const": "uses_only"
         }

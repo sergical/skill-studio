@@ -26,30 +26,16 @@ const DOTAGENTS_BINARY: &str = "npx";
 /// CLI/app creates on first run. `OpenCode` checks both its current
 /// (`.config/opencode`) and legacy (`.opencode`) locations.
 fn harness_config_dirs(id: AgentId, home: &Path) -> Vec<PathBuf> {
-    match id {
-        AgentId::ClaudeCode => vec![skill_studio_host::agent_path(home, ".claude")],
-        AgentId::Codex => vec![home.join(".codex")],
-        AgentId::OpenCode => vec![
-            home.join(".config").join("opencode"),
-            home.join(".opencode"),
-        ],
-        AgentId::Pi => vec![skill_studio_host::agent_home(home, ".pi/agent")],
-        AgentId::Cursor => vec![home.join(".cursor")],
-        AgentId::GrokBuild => vec![skill_studio_host::agent_path(home, ".grok")],
-        _ => vec![],
+    let mut dirs: Vec<_> = skill_studio_host::agent_path(home, id.global_path())
+        .parent()
+        .map(Path::to_path_buf)
+        .into_iter()
+        .collect();
+    if id == AgentId::OpenCode {
+        dirs.push(home.join(".opencode"));
     }
+    dirs
 }
-
-/// The first-class agents checked for "installed on this machine" - the same
-/// six `skill_roots` scans for native provenance.
-const CHECKED_HARNESSES: &[AgentId] = &[
-    AgentId::ClaudeCode,
-    AgentId::Codex,
-    AgentId::OpenCode,
-    AgentId::Pi,
-    AgentId::Cursor,
-    AgentId::GrokBuild,
-];
 
 /// What the Add Skill sheet needs before it can pick sensible defaults.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -126,9 +112,9 @@ fn add_method_defaults(home: &Path, project: Option<&Path>, path_var: &str) -> A
     AddMethodDefaults {
         dotagents_installed: resolves_on_path(DOTAGENTS_BINARY, path_var),
         has_skill_lock: lock_file::lock_file_path(home).exists(),
-        installed_harnesses: CHECKED_HARNESSES
+        installed_harnesses: skill_studio_core::harness::BUILTIN_HARNESSES
             .iter()
-            .copied()
+            .map(|row| row.agent)
             .filter(|id| {
                 harness_config_dirs(*id, home)
                     .iter()

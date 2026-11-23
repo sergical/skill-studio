@@ -3,6 +3,7 @@
 // Which harnesses an install is for, and the folders that choice writes.
 // ============================================================================
 
+import { HARNESS_CATALOG } from "./skill-types.generated";
 import type { AddMethod, AddSkillRequest, AgentId, InstallScope } from "./skill-types";
 
 interface InstallHarness {
@@ -19,50 +20,7 @@ interface InstallHarness {
 }
 
 /** First-class harnesses an install can be for, in `AgentId` declaration order. */
-export const INSTALL_HARNESSES = [
-  {
-    id: "claude-code",
-    label: "Claude Code",
-    folder: { global: "~/.claude/skills", project: ".claude/skills" },
-    linksIntoOwnFolder: true,
-    readsSharedFolder: false,
-  },
-  {
-    id: "codex",
-    label: "Codex",
-    folder: { global: "~/.codex/skills", project: ".codex/skills" },
-    linksIntoOwnFolder: false,
-    readsSharedFolder: true,
-  },
-  {
-    id: "opencode",
-    label: "OpenCode",
-    folder: { global: "~/.config/opencode/skills", project: ".opencode/skills" },
-    linksIntoOwnFolder: false,
-    readsSharedFolder: true,
-  },
-  {
-    id: "pi",
-    label: "pi",
-    folder: { global: "~/.pi/agent/skills", project: ".pi/skills" },
-    linksIntoOwnFolder: true,
-    readsSharedFolder: true,
-  },
-  {
-    id: "cursor",
-    label: "Cursor",
-    folder: { global: "~/.cursor/skills", project: ".cursor/skills" },
-    linksIntoOwnFolder: false,
-    readsSharedFolder: true,
-  },
-  {
-    id: "grok-build",
-    label: "Grok Build",
-    folder: { global: "~/.grok/skills", project: ".grok/skills" },
-    linksIntoOwnFolder: true,
-    readsSharedFolder: true,
-  },
-] as const satisfies readonly InstallHarness[];
+export const INSTALL_HARNESSES = HARNESS_CATALOG.filter((row) => row.supportsInstall);
 
 const HARNESS_BY_ID = new Map<AgentId, InstallHarness>(INSTALL_HARNESSES.map((h) => [h.id, h]));
 

@@ -4,6 +4,7 @@
 // ============================================================================
 
 export * from "./skill-types";
+export { HARNESS_CATALOG } from "./skill-types.generated";
 export * from "./skill-add-operation-types";
 export * from "./skill-add-operation-policy";
 export * from "./skill-update-progress-types";

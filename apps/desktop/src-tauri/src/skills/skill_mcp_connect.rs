@@ -41,6 +41,11 @@ struct ConnectCommands {
     add: ProcessSpec,
 }
 
+/// Whether the desktop implements a connection command or install link for this harness.
+pub fn supports_mcp_connection(harness: &str) -> bool {
+    connect_commands(harness, Path::new(".")).is_some()
+}
+
 fn connect_commands(harness: &str, home: &Path) -> Option<ConnectCommands> {
     // (program, name, `mcp add` flags before the server name, whether add refuses an existing name)
     let (program, display_name, add_flags, remove_first): (&str, &'static str, &[&str], bool) =

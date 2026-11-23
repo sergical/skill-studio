@@ -114,6 +114,8 @@ fn claude_listing_keeps_descriptions_of_used_skills_at_the_catalog_window_instea
 
     let data = listing(home, &[]);
     let claude = row(&data, "claude-code");
+    assert_eq!(claude["evidence"], "preview");
+    assert_eq!(row(&data, "cursor")["evidence"], "discovery");
     assert_eq!(claude["budget"], 180);
     assert_eq!(claude["context_window_tokens"], 1_000_000);
     assert_eq!(claude["uses_default_context_window"], false);

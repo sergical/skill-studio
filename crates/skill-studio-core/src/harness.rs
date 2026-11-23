@@ -12,6 +12,13 @@ use serde::{Deserialize, Serialize};
 use crate::identity::AgentId;
 use crate::ports::{CancelToken, NeverCancel, ProcessSpawner, ProcessSpec, ScopeFs, ToolLookup};
 
+mod registration;
+pub use registration::{
+    registered_harness, CatalogAgent, HarnessRegistration, VisibilityReference, BUILTIN_HARNESSES,
+    INSTALL_TARGET_IDS,
+};
+pub(crate) use registration::{ListingRenderer, SessionListingReader, UniversalInstall};
+
 /// How sure the catalog is about a fact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -274,14 +281,7 @@ impl HarnessCatalog {
     /// mirror `docs/research/harness-primitives.md`.
     pub fn builtin() -> Self {
         HarnessCatalog {
-            facts: vec![
-                claude_code(),
-                codex(),
-                open_code(),
-                pi(),
-                cursor(),
-                grok_build(),
-            ],
+            facts: BUILTIN_HARNESSES.iter().map(|row| (row.facts)()).collect(),
         }
     }
 }
@@ -460,7 +460,7 @@ fn claude_code() -> HarnessFacts {
     let ev = || Evidence::verified(CLAUDE_SKILLS_DOC);
     HarnessFacts {
         id: AgentId::from(AgentId::CLAUDE_CODE),
-        display_name: "Claude Code".into(),
+        display_name: CatalogAgent::ClaudeCode.display_name().into(),
         // `CLAUDE_CONFIG_DIR` overrides `~/.claude` for every path below when
         // set; host root resolution honours it (crates/skill-studio-host/src/
         // discovery.rs). `.claude/skills/synced/` is reserved by the vendor
@@ -468,7 +468,7 @@ fn claude_code() -> HarnessFacts {
         roots: vec![
             root(
                 ScopeLevel::Global,
-                ".claude/skills",
+                CatalogAgent::ClaudeCode.global_path(),
                 RootRole::Own,
                 false,
                 ev(),
@@ -482,7 +482,7 @@ fn claude_code() -> HarnessFacts {
             // `false`.
             root(
                 ScopeLevel::Project,
-                ".claude/skills",
+                CatalogAgent::ClaudeCode.project_path(),
                 RootRole::Own,
                 false,
                 Evidence::verified(CLAUDE_SKILLS_DOC_2026_09_16),
@@ -533,7 +533,7 @@ fn codex() -> HarnessFacts {
     let ev = || Evidence::verified(CODEX_SKILLS_DOC);
     HarnessFacts {
         id: AgentId::from(AgentId::CODEX),
-        display_name: "Codex".into(),
+        display_name: CatalogAgent::Codex.display_name().into(),
         roots: vec![
             root(
                 ScopeLevel::Global,
@@ -551,14 +551,14 @@ fn codex() -> HarnessFacts {
             ),
             root(
                 ScopeLevel::Global,
-                ".codex/skills",
+                CatalogAgent::Codex.global_path(),
                 RootRole::Own,
                 false,
                 Evidence::inferred("https://github.com/openai/codex/issues/22590"),
             ),
             root(
                 ScopeLevel::Project,
-                ".codex/skills",
+                CatalogAgent::Codex.project_path(),
                 RootRole::Own,
                 false,
                 Evidence::inferred("https://github.com/openai/codex/issues/22590"),
@@ -610,7 +610,7 @@ fn open_code() -> HarnessFacts {
     let ev = || Evidence::verified(OPENCODE_SKILLS_DOC);
     HarnessFacts {
         id: AgentId::from(AgentId::OPEN_CODE),
-        display_name: "OpenCode".into(),
+        display_name: CatalogAgent::OpenCode.display_name().into(),
         // v2 (beta) reads root-level `*.md` and nested `SKILL.md` at any
         // depth in every source, so every non-legacy root is recursive.
         roots: vec![
@@ -644,14 +644,14 @@ fn open_code() -> HarnessFacts {
             ),
             root(
                 ScopeLevel::Global,
-                ".config/opencode/skills",
+                CatalogAgent::OpenCode.global_path(),
                 RootRole::Own,
                 true,
                 ev(),
             ),
             root(
                 ScopeLevel::Project,
-                ".opencode/skills",
+                CatalogAgent::OpenCode.project_path(),
                 RootRole::Own,
                 true,
                 ev(),
@@ -727,16 +727,22 @@ fn pi() -> HarnessFacts {
     let ev = || Evidence::verified(PI_SKILLS_DOC);
     HarnessFacts {
         id: AgentId::from(AgentId::PI),
-        display_name: "pi".into(),
+        display_name: CatalogAgent::Pi.display_name().into(),
         roots: vec![
             root(
                 ScopeLevel::Global,
-                ".pi/agent/skills",
+                CatalogAgent::Pi.global_path(),
                 RootRole::Own,
                 true,
                 ev(),
             ),
-            root(ScopeLevel::Project, ".pi/skills", RootRole::Own, true, ev()),
+            root(
+                ScopeLevel::Project,
+                CatalogAgent::Pi.project_path(),
+                RootRole::Own,
+                true,
+                ev(),
+            ),
             root(
                 ScopeLevel::Global,
                 ".agents/skills",
@@ -798,14 +804,14 @@ fn cursor() -> HarnessFacts {
     let mut roots = vec![
         root(
             ScopeLevel::Global,
-            ".cursor/skills",
+            CatalogAgent::Cursor.global_path(),
             RootRole::Own,
             false,
             doc(),
         ),
         root(
             ScopeLevel::Project,
-            ".cursor/skills",
+            CatalogAgent::Cursor.project_path(),
             RootRole::Own,
             false,
             doc(),
@@ -834,7 +840,7 @@ fn cursor() -> HarnessFacts {
     }
     HarnessFacts {
         id: AgentId::from(AgentId::CURSOR),
-        display_name: "Cursor".into(),
+        display_name: CatalogAgent::Cursor.display_name().into(),
         roots,
         reads_universal_root: Support::Yes(doc()),
         follows_per_skill_link: Support::Unknown,
@@ -873,14 +879,14 @@ fn grok_build() -> HarnessFacts {
     let mut roots = vec![
         root(
             ScopeLevel::Global,
-            ".grok/skills",
+            CatalogAgent::GrokBuild.global_path(),
             RootRole::Own,
             false,
             doc(),
         ),
         root(
             ScopeLevel::Project,
-            ".grok/skills",
+            CatalogAgent::GrokBuild.project_path(),
             RootRole::Own,
             false,
             doc(),
@@ -911,7 +917,7 @@ fn grok_build() -> HarnessFacts {
     }
     HarnessFacts {
         id: AgentId::from(AgentId::GROK_BUILD),
-        display_name: "Grok Build".into(),
+        display_name: CatalogAgent::GrokBuild.display_name().into(),
         roots,
         reads_universal_root: Support::Yes(doc()),
         follows_per_skill_link: Support::Unknown,
@@ -1288,7 +1294,7 @@ impl HarnessAdapter for ClaudeCodeAdapter {
         AgentId::from(AgentId::CLAUDE_CODE)
     }
     fn display_name(&self) -> &'static str {
-        "Claude Code"
+        CatalogAgent::ClaudeCode.display_name()
     }
     fn binary_names(&self) -> &'static [&'static str] {
         &["claude"]
@@ -1309,7 +1315,7 @@ impl HarnessAdapter for CodexAdapter {
         AgentId::from(AgentId::CODEX)
     }
     fn display_name(&self) -> &'static str {
-        "Codex"
+        CatalogAgent::Codex.display_name()
     }
     fn binary_names(&self) -> &'static [&'static str] {
         &["codex"]
@@ -1330,7 +1336,7 @@ impl HarnessAdapter for OpenCodeAdapter {
         AgentId::from(AgentId::OPEN_CODE)
     }
     fn display_name(&self) -> &'static str {
-        "OpenCode"
+        CatalogAgent::OpenCode.display_name()
     }
     fn binary_names(&self) -> &'static [&'static str] {
         &["opencode"]
@@ -1351,7 +1357,7 @@ impl HarnessAdapter for PiAdapter {
         AgentId::from(AgentId::PI)
     }
     fn display_name(&self) -> &'static str {
-        "pi"
+        CatalogAgent::Pi.display_name()
     }
     fn binary_names(&self) -> &'static [&'static str] {
         &["pi"]
@@ -1375,7 +1381,7 @@ impl HarnessAdapter for CursorAdapter {
         AgentId::from(AgentId::CURSOR)
     }
     fn display_name(&self) -> &'static str {
-        "Cursor"
+        CatalogAgent::Cursor.display_name()
     }
     /// `cursor-agent` first: it is the specific, current name, so a generic
     /// `agent` binary from another tool earlier on `PATH` cannot shadow a
@@ -1403,7 +1409,7 @@ impl HarnessAdapter for GrokBuildAdapter {
         AgentId::from(AgentId::GROK_BUILD)
     }
     fn display_name(&self) -> &'static str {
-        "Grok Build"
+        CatalogAgent::GrokBuild.display_name()
     }
     fn binary_names(&self) -> &'static [&'static str] {
         &["grok"]
@@ -1607,15 +1613,8 @@ pub fn read_claude_skill_overrides(
 
 /// One [`HarnessAdapter`] per first-class harness, in the same order as
 /// [`HarnessCatalog::builtin`].
-pub fn builtin_adapters() -> Vec<Box<dyn HarnessAdapter>> {
-    vec![
-        Box::new(ClaudeCodeAdapter),
-        Box::new(CodexAdapter),
-        Box::new(OpenCodeAdapter),
-        Box::new(PiAdapter),
-        Box::new(CursorAdapter),
-        Box::new(GrokBuildAdapter),
-    ]
+pub fn builtin_adapters() -> impl Iterator<Item = &'static dyn HarnessAdapter> {
+    BUILTIN_HARNESSES.iter().map(|row| row.adapter)
 }
 
 #[cfg(test)]

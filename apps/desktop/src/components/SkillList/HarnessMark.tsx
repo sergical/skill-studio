@@ -8,41 +8,12 @@
 // alone.
 // ============================================================================
 
-import { Bot, Layers, Link2, Link2Off } from "lucide-react";
-import type { AgentId } from "@skill-studio/lib";
+import { Layers, Link2, Link2Off } from "lucide-react";
 import { HarnessIcon } from "../ui/HarnessIcon";
 import { RichTooltip } from "../ui/RichTooltip";
 import type { HarnessReach, Universal } from "./skill-row-state";
 
-/** The ids `HarnessIcon` has a brand SVG for. */
-const KNOWN_HARNESS_IDS = new Set<AgentId | "shared">([
-  "claude-code",
-  "codex",
-  "opencode",
-  "pi",
-  "cursor",
-  "grok-build",
-  "shared",
-]);
-
-/** `HarnessIcon` renders nothing for an id it has no brand SVG for; this
- * fallback draws lucide's `Bot` instead so every harness always has an icon
- * to show. */
-export function HarnessGlyph({
-  harness,
-  size,
-  muted,
-}: {
-  harness: AgentId;
-  size: number;
-  muted?: boolean;
-}) {
-  if (KNOWN_HARNESS_IDS.has(harness))
-    return <HarnessIcon harness={harness} size={size} muted={muted} />;
-  return (
-    <Bot size={size} aria-hidden style={muted ? { color: "var(--color-icon-muted)" } : undefined} />
-  );
-}
+export { HarnessIcon as HarnessGlyph } from "../ui/HarnessIcon";
 
 function harnessMarkAriaLabel(reach: HarnessReach, parked: boolean): string {
   const how =
@@ -73,7 +44,7 @@ function harnessMarkTooltip(reach: HarnessReach, parked: boolean) {
   const state = parked ? "parked" : reach.disabled ? "disabled" : null;
   return (
     <span className="flex items-center gap-1.5 text-small">
-      <HarnessGlyph harness={reach.harness} size={14} />
+      <HarnessIcon harness={reach.harness} size={14} />
       <span>{reach.label}</span>
       <span className={how.tone}>· {how.text}</span>
       {state && <span className="text-warning">· {state}</span>}
@@ -107,7 +78,7 @@ export function HarnessMark({
         className="relative inline-flex size-5 items-center justify-center opacity-60"
         aria-hidden
       >
-        <HarnessGlyph harness={reach.harness} size={size} muted />
+        <HarnessIcon harness={reach.harness} size={size} muted />
       </span>
     );
   }
@@ -121,7 +92,7 @@ export function HarnessMark({
       aria-label={harnessMarkAriaLabel(reach, parked)}
     >
       <span className="relative inline-flex" style={{ width: size, height: size }}>
-        <HarnessGlyph harness={reach.harness} size={size} muted={glyphMuted} />
+        <HarnessIcon harness={reach.harness} size={size} muted={glyphMuted} />
         {badge && (
           <span className="absolute -right-1 -bottom-1 inline-flex size-2.5 items-center justify-center rounded-full bg-bg-primary group-hover:bg-bg-secondary">
             {badge === "linked" ? (

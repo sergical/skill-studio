@@ -9,6 +9,7 @@
 
 import {
   agentIdFromDeploymentLabel,
+  AGENTS_READING_SHARED_ROOT,
   describeSpecViolations,
   deploymentLabelFromAgentId,
   deploymentLinkKind,
@@ -248,24 +249,6 @@ export function hasUpstreamOwner(deployment: Deployment): boolean {
 
 const harnessLabelFromAgent = (agent: string): string =>
   agent === "shared" ? "Universal folder" : agent;
-
-/** Display label for a synthesized reader row - `deployment.agent` is already a display label, but a reader has no deployment, only its machine `AgentId`. */
-function readerLabel(agent: AgentId): string {
-  switch (agent) {
-    case "codex":
-      return "Codex";
-    case "opencode":
-      return "OpenCode";
-    case "pi":
-      return "pi";
-    case "cursor":
-      return "Cursor";
-    case "grok-build":
-      return "Grok Build";
-    default:
-      return agent;
-  }
-}
 
 function harnessId(agent: string): AgentId | null {
   const id = agentIdFromDeploymentLabel(agent);
@@ -684,7 +667,7 @@ export function buildScopeGroups(skill: InstalledSkill): ScopeGroup[] {
     if (shared) {
       const covered = new Set(rows.map((r) => r.harness));
       const disabledReaders = new Set(sharedDeployment?.disabled_readers ?? []);
-      for (const agent of AGENTS_READING_SHARED_ROOT_ORDER) {
+      for (const agent of AGENTS_READING_SHARED_ROOT) {
         if (covered.has(agent)) continue;
         const disabledForReader = disabledReaders.has(agent);
         const hiddenBySetting =
@@ -698,7 +681,7 @@ export function buildScopeGroups(skill: InstalledSkill): ScopeGroup[] {
         rows.push({
           kind: "reader",
           harness: agent,
-          harnessLabel: readerLabel(agent),
+          harnessLabel: deploymentLabelFromAgentId(agent),
           path: shared.path,
           caption: hiddenCaption(conditions),
           conditions,
@@ -792,15 +775,6 @@ export function folderReaders(group: ScopeGroup): LocationRow[] {
 export function siblingRows(group: ScopeGroup): LocationRow[] {
   return group.rows.filter((row) => row.kind !== "reader");
 }
-
-/** `AGENTS_READING_SHARED_ROOT`, in its documented order. */
-const AGENTS_READING_SHARED_ROOT_ORDER: AgentId[] = [
-  "codex",
-  "opencode",
-  "pi",
-  "cursor",
-  "grok-build",
-];
 
 interface LabeledCondition {
   condition: Condition;

@@ -5,6 +5,20 @@ and what the agentskills.io spec requires. Verified against the linked docs on
 2026-08-22. Re-verify a row before relying on it if the agent shipped a major
 release since then.
 
+## Adding a harness
+
+Register the harness in [the Rust catalog](../crates/skill-studio-core/src/harness/registration.rs).
+Give it its native skill folders, detection adapter, discovery facts and supported operations.
+An install policy opts the harness into per-harness writes. A format-specific reader belongs
+with the other readers. Run `pnpm --filter skill-studio run types:generate` to update the
+desktop catalog. The generated picker lists require no startup IPC.
+
+For listing views, `HarnessListing.evidence` identifies a discovery result or a rendered
+preview. A saved listing has its own session and per-entry observations. Show the budget
+control only when the report supplies the setting. The catalog's `verifiedVisibility`
+describes a specific vendor revision and cites its sources. It is reference material
+for that revision. Use the actual report to describe what Skill Studio saw.
+
 ## agentskills.io SKILL.md spec
 
 Source: https://agentskills.io/specification

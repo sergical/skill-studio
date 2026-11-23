@@ -8,23 +8,19 @@
 // folder. `scannerMismatches` names every field that disagrees with it.
 // ============================================================================
 
-import type { Deployment } from "@skill-studio/lib";
+import { HARNESS_CATALOG } from "@skill-studio/lib";
+import type { AgentMatrixLabel, Deployment } from "@skill-studio/lib";
 
 /** What core `ops.rs`'s `harness_slot` returns for each root label. */
-const SLOT_FOR_ROOT_LABEL = new Map([
-  ["Claude Code", "claude-code"],
-  ["Codex", "codex"],
-  ["OpenCode", "opencode"],
-  ["pi", "pi"],
-  ["Cursor", "cursor"],
-  ["Grok Build", "grok-build"],
+const SLOT_FOR_ROOT_LABEL = new Map<string, string>([
+  ...HARNESS_CATALOG.map(({ label, id }) => [label, id] as const),
   ["shared", "universal"],
   ["universal", "universal"],
   ["parked", "universal"],
 ]);
 
 /** A harness root label, as the scanner writes it into `Deployment.agent`. */
-type HarnessLabel = "Claude Code" | "Codex" | "OpenCode" | "pi" | "Cursor" | "Grok Build";
+type HarnessLabel = AgentMatrixLabel;
 
 /** The identity inputs of one scanned entry - `DeploymentCandidate` in Rust. */
 interface DeploymentCandidate {

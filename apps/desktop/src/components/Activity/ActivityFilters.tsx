@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import { ChevronDown, Layers } from "lucide-react";
 import {
   ALL_ACTIVITY,
+  HARNESS_CATALOG,
   dayTotals,
   deploymentLabelFromAgentId,
   formatCount,
@@ -32,14 +33,9 @@ import { MenuControl, MenuRadioGroup, MenuRadioItem, MenuSeparator } from "../ui
 import { useAppStore } from "../../store/appStore";
 
 /** Harnesses with a usage reader in `crates/skill-studio-core/src/skill_uses/`, in menu order. */
-const USAGE_READER_HARNESSES: AgentId[] = [
-  "claude-code",
-  "codex",
-  "opencode",
-  "pi",
-  "cursor",
-  "grok-build",
-];
+const USAGE_READER_HARNESSES: AgentId[] = HARNESS_CATALOG.filter((row) => row.usageReader).map(
+  (row) => row.id,
+);
 
 const FILTER_TRIGGER =
   "inline-flex h-(--control-height) cursor-pointer items-center gap-1.5 rounded-sm border border-border bg-transparent px-2.5 text-body text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary data-popup-open:bg-bg-hover";

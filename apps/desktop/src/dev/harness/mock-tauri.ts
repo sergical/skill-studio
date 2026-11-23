@@ -14,6 +14,7 @@ import { z } from "zod";
 import {
   agentIdFromDeploymentLabel,
   deploymentLabelFromAgentId,
+  HARNESS_CATALOG,
   isProjectPattern,
 } from "@skill-studio/lib";
 import type {
@@ -139,7 +140,9 @@ const ARCHIVED_CLIENT_PROJECT = `${HARNESS_HOME}/src/archived-client`;
 
 /** The six discovery harnesses, in the display order `discovery_harnesses()` yields on the Rust
  * side - see `crates/skill-studio-host/src/discovery.rs`'s `HISTORY_SOURCES`. */
-const DISCOVERY_HARNESSES = ["claude-code", "codex", "opencode", "pi", "cursor", "grok-build"];
+const DISCOVERY_HARNESSES = HARNESS_CATALOG.filter((row) => row.projectDiscovery).map(
+  (row) => row.id,
+);
 
 /** Installs the mock Tauri IPC layer and returns the control the harness (or the marketing
  * capture page) drives it with. */
@@ -611,7 +614,7 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
           return projectFolders();
         case "detect_harnesses":
           return {
-            harnesses: DISCOVERY_HARNESSES.map((id) => ({
+            harnesses: HARNESS_CATALOG.map(({ id }) => ({
               id,
               display_name: deploymentLabelFromAgentId(id),
               state: discoverySources.get(id) ? "configured" : "not_found",

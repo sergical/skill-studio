@@ -4,19 +4,12 @@
 // it offers, which start checked, and which folders the split will write.
 // ============================================================================
 
-import { deploymentLabelFromAgentId } from "@skill-studio/lib";
+import { INSTALL_HARNESSES, deploymentLabelFromAgentId } from "@skill-studio/lib";
 import type { AgentId, SplitCopy } from "@skill-studio/lib";
 import type { ScopeGroup } from "./skill-location-status";
 
 /** Every harness the core `split` op can write a copy for, in dialog order. */
-export const SPLIT_HARNESSES: AgentId[] = [
-  "claude-code",
-  "codex",
-  "opencode",
-  "pi",
-  "cursor",
-  "grok-build",
-];
+export const SPLIT_HARNESSES: AgentId[] = INSTALL_HARNESSES.map((row) => row.id);
 
 /** Same text as the core's `ops_split::SPLIT_UPDATE_NOTE`, shown before the split runs. */
 export const SPLIT_UPDATE_NOTE =

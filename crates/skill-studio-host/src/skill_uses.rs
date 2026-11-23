@@ -1153,6 +1153,11 @@ fn is_opencode_skill_use_change(home: &Path, path: &Path, databases: &[PathBuf])
     in_data_dir || is_opencode_database_path_or_wal(databases, path)
 }
 
+/// Whether the installed application has a usage reader for this harness.
+pub fn has_usage_reader(harness: &str) -> bool {
+    SOURCES.iter().any(|source| source.harness == harness)
+}
+
 /// Every directory to watch for skill-use changes, for every source
 /// (switched-off harnesses included: a refresh skips them anyway, and the
 /// watch set then doesn't depend on settings).

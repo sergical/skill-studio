@@ -1006,7 +1006,7 @@ pub fn print_extras_table(envelope: &ResultEnvelope<skill_studio_core::extras::E
 pub fn print_listing_table(
     envelope: &ResultEnvelope<skill_studio_core::listing_visibility::ListingReport>,
 ) {
-    use skill_studio_core::listing_visibility::ListingState;
+    use skill_studio_core::listing_visibility::{ListingEvidence, ListingState};
     print_errors(envelope);
     let Some(report) = &envelope.data else { return };
     for row in &report.listings {
@@ -1017,6 +1017,14 @@ pub fn print_listing_table(
             }
         };
         let count = |state: ListingState| row.entries.iter().filter(|e| e.state == state).count();
+        if row.evidence == ListingEvidence::Discovery {
+            println!(
+                "{} {scope}: {} skills found in folders this agent reads.",
+                row.harness,
+                row.entries.len()
+            );
+            continue;
+        }
         let budget = row.budget.map_or_else(
             || "no known limit".to_string(),
             |b| format!("{b} {}", row.budget_unit),
@@ -1052,9 +1060,6 @@ pub fn print_listing_table(
                 entry.name,
                 entry.invocation_mismatch.as_deref().unwrap_or_default()
             );
-        }
-        if row.budget.is_none() {
-            continue;
         }
         for entry in &row.entries {
             let observed = entry

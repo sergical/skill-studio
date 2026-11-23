@@ -20,6 +20,11 @@
       "description": "One harness listing in one scope.",
       "type": "object",
       "properties": {
+        "evidence": {
+          "description": "How this listing was produced.",
+          "$ref": "#/$defs/ListingEvidence",
+          "default": "discovery"
+        },
         "harness": {
           "description": "Harness id.",
           "$ref": "#/$defs/AgentIdentity"
@@ -29,7 +34,7 @@
           "$ref": "#/$defs/RootScope"
         },
         "budget": {
-          "description": "Budget, or null when the harness has no known limit.",
+          "description": "Budget when this report computed one for the client.",
           "type": [
             "integer",
             "null"
@@ -42,7 +47,7 @@
           "type": "string"
         },
         "full_size": {
-          "description": "The whole listing with every description, in `budget_unit`.",
+          "description": "Full preview size in `budget_unit`, or an estimate from discovered metadata for discovery rows.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
@@ -128,6 +133,21 @@
         "uses_default_context_window",
         "notes",
         "entries"
+      ]
+    },
+    "ListingEvidence": {
+      "description": "Evidence behind the current listing row. Session captures are reported independently.",
+      "oneOf": [
+        {
+          "description": "Discovered deployments and their descriptions.",
+          "type": "string",
+          "const": "discovery"
+        },
+        {
+          "description": "A prediction produced by a supported client renderer.",
+          "type": "string",
+          "const": "preview"
+        }
       ]
     },
     "AgentIdentity": {
@@ -359,7 +379,7 @@
           "x-untrusted": true
         },
         "state": {
-          "description": "Predicted state.",
+          "description": "Model listing state for a preview. For discovery, describes the scanned entry only.",
           "$ref": "#/$defs/ListingState"
         },
         "hidden_reason": {
@@ -370,7 +390,7 @@
           ]
         },
         "shown_description_chars": {
-          "description": "Description characters the model sees.",
+          "description": "Description characters in the preview, or in the discovered metadata for discovery rows.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0

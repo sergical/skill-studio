@@ -75,17 +75,18 @@ export type OriginTool = "dotagents" | "skills-sh";
 export type OpencodeConfigKind = "json" | "jsonc";
 export type BackgroundWorker = "scan" | "invocations" | "update_check";
 /**
- * Agent target identifier
+ * Desktop wire enum, including historical install destinations.
  */
 export type AgentId =
   | "claude-code"
+  | "codex"
   | "opencode"
   | "pi"
   | "cursor"
+  | "grok-build"
   | "cline"
   | "windsurf"
   | "roo-code"
-  | "codex"
   | "amp"
   | "zed"
   | "void"
@@ -119,8 +120,7 @@ export type AgentId =
   | "pieces"
   | "mintlify"
   | "swimm"
-  | "sweep"
-  | "grok-build";
+  | "sweep";
 export type ParsedSkillSourceKind = "github" | "git" | "local";
 /**
  * How `add_skill` installed a skill.
@@ -254,6 +254,10 @@ export interface ListingReport {
  */
 export interface HarnessListing {
   /**
+   * How this listing was produced.
+   */
+  evidence: "discovery" | "preview";
+  /**
    * Harness id.
    */
   harness: string;
@@ -269,7 +273,7 @@ export interface HarnessListing {
         project: ProjectRef;
       };
   /**
-   * Budget, or null when the harness has no known limit.
+   * Budget when this report computed one for the client.
    */
   budget: number | null;
   /**
@@ -277,7 +281,7 @@ export interface HarnessListing {
    */
   budget_unit: string;
   /**
-   * The whole listing with every description, in `budget_unit`.
+   * Full preview size in `budget_unit`, or an estimate from discovered metadata for discovery rows.
    */
   full_size: number;
   /**
@@ -420,7 +424,7 @@ export interface ListingEntry {
    */
   path: string | null;
   /**
-   * Predicted state.
+   * Model listing state for a preview. For discovery, describes the scanned entry only.
    */
   state: "described" | "truncated" | "name_only" | "omitted" | "hidden";
   /**
@@ -428,7 +432,7 @@ export interface ListingEntry {
    */
   hidden_reason: string | null;
   /**
-   * Description characters the model sees.
+   * Description characters in the preview, or in the discovered metadata for discovery rows.
    */
   shown_description_chars: number;
   /**
@@ -3058,3 +3062,149 @@ export interface InvocationTarget {
   name: string;
   path: string;
 }
+
+/** Built-in harnesses and implemented capabilities, in picker order. */
+export const HARNESS_CATALOG = [
+  {
+    verifiedVisibility: [
+      {
+        revision: "2.1.327",
+        exposure: "Budgeted skill descriptions",
+        savedListing: "skill_listing attachment",
+        sources: ["https://code.claude.com/docs/en/skills", "docs/agent-skill-conventions.md"],
+      },
+    ],
+    mcpConnect: true,
+    id: "claude-code",
+    label: "Claude Code",
+    folder: {
+      global: "~/.claude/skills",
+      project: ".claude/skills",
+    },
+    readsSharedFolder: false,
+    supportsInstall: true,
+    linksIntoOwnFolder: true,
+    usageReader: true,
+    projectDiscovery: true,
+  },
+  {
+    verifiedVisibility: [
+      {
+        revision: "0.170.0",
+        exposure: "Budgeted skill descriptions and paths",
+        savedListing: "skills_instructions block",
+        sources: [
+          "https://github.com/openai/codex/tree/rust-v0.170.0/codex-rs",
+          "docs/agent-skill-conventions.md",
+        ],
+      },
+    ],
+    mcpConnect: true,
+    id: "codex",
+    label: "Codex",
+    folder: {
+      global: "~/.codex/skills",
+      project: ".codex/skills",
+    },
+    readsSharedFolder: true,
+    supportsInstall: true,
+    linksIntoOwnFolder: false,
+    usageReader: true,
+    projectDiscovery: true,
+  },
+  {
+    verifiedVisibility: [
+      {
+        revision: "2.3.2",
+        exposure: "Registered skills and skill guidance",
+        savedListing: "Per-session skill guidance and instruction changes",
+        sources: [
+          "https://github.com/anomalyco/opencode/blob/v2.3.2/packages/core/src/session/instruction-state.ts",
+        ],
+      },
+    ],
+    mcpConnect: true,
+    id: "opencode",
+    label: "OpenCode",
+    folder: {
+      global: "~/.config/opencode/skills",
+      project: ".opencode/skills",
+    },
+    readsSharedFolder: true,
+    supportsInstall: true,
+    linksIntoOwnFolder: false,
+    usageReader: true,
+    projectDiscovery: true,
+  },
+  {
+    verifiedVisibility: [
+      {
+        revision: "1.6.0",
+        exposure: "Base prompt lists model-eligible skills with descriptions and paths",
+        savedListing: null,
+        sources: [
+          "https://github.com/earendil-works/pi/blob/v1.6.0/packages/coding-agent/src/core/skills.ts",
+        ],
+      },
+    ],
+    mcpConnect: true,
+    id: "pi",
+    label: "pi",
+    folder: {
+      global: "~/.pi/agent/skills",
+      project: ".pi/skills",
+    },
+    readsSharedFolder: true,
+    supportsInstall: true,
+    linksIntoOwnFolder: true,
+    usageReader: true,
+    projectDiscovery: true,
+  },
+  {
+    verifiedVisibility: [
+      {
+        revision: "2026.11.13",
+        exposure: "Native skill picker and description-based model routing",
+        savedListing: null,
+        sources: ["https://cursor.com/docs/skills"],
+      },
+    ],
+    mcpConnect: true,
+    id: "cursor",
+    label: "Cursor",
+    folder: {
+      global: "~/.cursor/skills",
+      project: ".cursor/skills",
+    },
+    readsSharedFolder: true,
+    supportsInstall: true,
+    linksIntoOwnFolder: false,
+    usageReader: true,
+    projectDiscovery: true,
+  },
+  {
+    verifiedVisibility: [
+      {
+        revision: "2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8",
+        exposure: "Template-specific skill listing and inspect output",
+        savedListing: "chat_history.jsonl can contain the listing",
+        sources: [
+          "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/08-skills.md",
+          "https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/17-sessions.md",
+        ],
+      },
+    ],
+    mcpConnect: true,
+    id: "grok-build",
+    label: "Grok Build",
+    folder: {
+      global: "~/.grok/skills",
+      project: ".grok/skills",
+    },
+    readsSharedFolder: true,
+    supportsInstall: true,
+    linksIntoOwnFolder: true,
+    usageReader: true,
+    projectDiscovery: true,
+  },
+] as const;

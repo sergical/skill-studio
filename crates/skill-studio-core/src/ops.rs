@@ -4414,7 +4414,6 @@ fn harnesses_body(
         spawner: rt.ports.spawner.as_deref(),
     };
     let harnesses = builtin_adapters()
-        .iter()
         .map(|adapter| {
             ctx.checkpoint()?;
             let detected = adapter.detect_with_cancel(&ports, ctx.cancel.as_ref());
@@ -4451,9 +4450,7 @@ fn observe_harness(rt: &Runtime, facts: &HarnessFacts) -> HarnessObserved {
                 .symlink_metadata(&rt.scope.home.canonical.join(&root.relative_path))
                 .is_ok()
     });
-    let adapter = builtin_adapters()
-        .into_iter()
-        .find(|adapter| adapter.id() == facts.id);
+    let adapter = builtin_adapters().find(|adapter| adapter.id() == facts.id);
     let runner_binary = rt.ports.tools.as_deref().and_then(|lookup| {
         if let Some(adapter) = adapter.as_ref() {
             adapter

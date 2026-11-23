@@ -8,7 +8,7 @@
 // agent can screenshot every row treatment without a real disk scan.
 // ============================================================================
 
-import type { Deployment, InstalledSkill, SkillSnapshot } from "@skill-studio/lib";
+import type { HARNESS_CATALOG, Deployment, InstalledSkill, SkillSnapshot } from "@skill-studio/lib";
 import { withScannerIdentity } from "./scanned-deployment";
 
 export const HARNESS_HOME = "/Users/demo";
@@ -971,7 +971,7 @@ const INVOCATION_PROJECTS = [
 ];
 
 type FixtureTrigger = "user" | "agent" | "file_read";
-type FixtureHarness = "claude-code" | "codex" | "opencode" | "pi" | "cursor" | "grok-build";
+type FixtureHarness = (typeof HARNESS_CATALOG)[number]["id"];
 
 /** The 30-day history `HISTORY_DAYS` names; older uses are not counted. */
 const DAY_COUNT = 30;
