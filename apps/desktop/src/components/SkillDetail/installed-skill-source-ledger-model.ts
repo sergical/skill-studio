@@ -4,7 +4,7 @@
 // ============================================================================
 
 import { formatBytes, formatTokens, pluginSourceLabel } from "@skill-studio/lib";
-import type { Deployment, InstalledSkill, LifecycleOwnerKind } from "@skill-studio/lib";
+import type { Deployment, InstalledSkill, LifecycleOwnerKind, PluginInfo } from "@skill-studio/lib";
 
 /** Text rendered by the installed skill source ledger. */
 interface InstalledSkillSourceLedgerModel {
@@ -37,9 +37,12 @@ function displayLedgerDate(value: string | null | undefined): string | undefined
   return date.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
 
-export function sourceLedgerLabel(skill: InstalledSkill): string {
-  if (skill.source_kind === "plugin") {
-    return pluginSourceLabel(skill) ?? "Agent plugin";
+export function sourceLedgerLabel(
+  skill: InstalledSkill,
+  selectedPlugin?: PluginInfo | null,
+): string {
+  if (selectedPlugin || skill.source_kind === "plugin") {
+    return pluginSourceLabel(skill, selectedPlugin ?? undefined) ?? "Agent plugin";
   }
   if (skill.source_kind === "in-repo") return "Local repository";
   if (skill.source_kind === "fork") return skill.fork?.origin_source ?? "Local fork";
@@ -115,12 +118,13 @@ function updateStateLabel(skill: InstalledSkill): string {
 /** Builds source ledger text from exact deployment ownership, with linked readers deduplicated. */
 export function buildInstalledSkillSourceLedgerModel(
   skill: InstalledSkill,
+  selectedPlugin?: PluginInfo | null,
 ): InstalledSkillSourceLedgerModel {
   const contentHashes = new Set(skill.content_hashes.filter(Boolean));
   const hasOneReadableContent = contentHashes.size === 1;
 
   return {
-    source: sourceLedgerLabel(skill),
+    source: sourceLedgerLabel(skill, selectedPlugin),
     lifecycleOwner: lifecycleOwnerLabel(skill.deployments),
     lifecycleManagement: lifecycleManagementLabel(skill.deployments),
     installed: displayLedgerDate(skill.installed_at) ?? "Unknown",

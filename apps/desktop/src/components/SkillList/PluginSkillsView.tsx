@@ -6,8 +6,8 @@ import { FirstScanState, type FirstScanStateProps } from "../SkillList/FirstScan
 // install, edit, or bulk affordances here.
 // ============================================================================
 
-import { formatTokens, groupPluginSkills, pluginSkillsView } from "@skill-studio/lib";
-import type { InstalledSkill, PluginGroup, SkillSnapshot } from "@skill-studio/lib";
+import { formatTokens, groupPluginSkills } from "@skill-studio/lib";
+import type { SkillSnapshot } from "@skill-studio/lib";
 import { Button } from "@skill-studio/ui";
 import { PageShell } from "../Shell/PageShell";
 import { HarnessIcon, harnessIdFromLabel } from "../ui/HarnessIcon";
@@ -17,11 +17,6 @@ interface PluginSkillsViewProps extends FirstScanStateProps {
   onSelectSkill: (name: string, deploymentPath?: string) => void;
 }
 
-/** The deployment of `skill` that belongs to `group`'s plugin, for the skill page. */
-function deploymentPathInGroup(skill: InstalledSkill, group: PluginGroup): string | undefined {
-  return skill.deployments.find((d) => d.plugin?.name === group.pluginName)?.path;
-}
-
 export function PluginSkillsView({
   snapshot,
   onSelectSkill,
@@ -29,8 +24,8 @@ export function PluginSkillsView({
   error,
   onRetry,
 }: PluginSkillsViewProps) {
-  const groups = groupPluginSkills(pluginSkillsView(snapshot?.skills ?? []));
-  const skillCount = new Set(groups.flatMap((g) => g.skills.map((s) => s.name))).size;
+  const groups = groupPluginSkills(snapshot?.skills ?? []);
+  const skillCount = new Set(groups.flatMap((g) => g.skills.map(({ skill }) => skill.name))).size;
 
   if (!snapshot) {
     return (
@@ -54,9 +49,15 @@ export function PluginSkillsView({
           <span className="sr-only">{skillCount} plugin skills</span>
           {groups.map((group) => {
             const harnessId = harnessIdFromLabel(group.harness);
-            const skills = [...group.skills].sort((a, b) => a.name.localeCompare(b.name));
+            const skills = [...group.skills].sort((a, b) =>
+              a.skill.name.localeCompare(b.skill.name),
+            );
             return (
-              <section key={`${group.harness}-${group.pluginName}`} className="flex flex-col gap-2">
+              <section
+                key={`${group.harness}-${group.pluginName}`}
+                aria-label={`${group.pluginName} for ${group.harness}`}
+                className="flex flex-col gap-2"
+              >
                 <header className="flex items-baseline gap-2 px-3">
                   {harnessId && (
                     <span className="self-center">
@@ -66,6 +67,7 @@ export function PluginSkillsView({
                   <h2 className="m-0 text-body font-semibold text-text-primary">
                     {group.pluginName}
                   </h2>
+                  <span className="text-caption text-text-secondary">{group.harness}</span>
                   {group.version && (
                     <span className="text-caption text-text-tertiary">v{group.version}</span>
                   )}
@@ -74,12 +76,12 @@ export function PluginSkillsView({
                   </span>
                 </header>
                 <div className="flex flex-col">
-                  {skills.map((skill) => (
+                  {skills.map(({ skill, deploymentPath }) => (
                     <Button
                       key={skill.name}
                       variant="ghost"
                       className="grid h-8 min-w-0 justify-start gap-3 overflow-hidden rounded-none border-0 border-b border-border-subtle px-3 text-left font-normal last:border-b-0 [grid-template-columns:minmax(0,1fr)_minmax(0,2fr)_64px]"
-                      onClick={() => onSelectSkill(skill.name, deploymentPathInGroup(skill, group))}
+                      onClick={() => onSelectSkill(skill.name, deploymentPath)}
                     >
                       <span className="truncate text-body text-text-primary">{skill.name}</span>
                       <span className="select-text truncate text-small text-text-tertiary">

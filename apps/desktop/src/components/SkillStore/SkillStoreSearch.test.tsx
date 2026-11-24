@@ -5,6 +5,8 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { PaginatedSkillsResponse, SkillSearchResult } from "@skill-studio/lib";
 import { SkillStore } from "./SkillStore";
+import { useAppStore } from "../../store/appStore";
+import { skill } from "../../dev/harness/skill-fixture";
 
 // Fake timers that still advance with real time, so Testing Library's polling works while a test
 // can jump past the search box's debounce without sleeping.
@@ -14,6 +16,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useAppStore.getState().setTrackedProjects({ added: [], excluded: [] });
   clearMocks();
   vi.useRealTimers();
 });
@@ -125,4 +128,32 @@ it("a late initial failure cannot replace an active search or stop its spinner",
   expect(screen.getByText("Searching skills.sh…")).toBeTruthy();
   await act(async () => resolveSearch({ skills: [result("current-result")], has_more: false }));
   expect(screen.getByText("current-result")).toBeTruthy();
+});
+
+it("tracking a project refreshes Installed and keeps the current search until the query is cleared", async () => {
+  mockIPC((command) => {
+    if (command === "get_installed_skills") {
+      return useAppStore.getState().userAddedProjects.length
+        ? [skill({ name: "project-skill", deployments: [] })]
+        : [];
+    }
+    if (command === "get_popular_skills")
+      return { skills: [result("popular-skill")], has_more: false };
+    if (command === "search_skills") return { skills: [result("git-guide")], has_more: false };
+    return null;
+  });
+  const user = typist();
+  render(<SkillStore />);
+  expect(await screen.findByText("popular-skill")).toBeTruthy();
+  const box = screen.getByRole("textbox", { name: "Search skills.sh" });
+  await user.type(box, "git");
+  await act(() => vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS));
+  await act(async () =>
+    useAppStore.getState().setTrackedProjects({ added: ["/project"], excluded: [] }),
+  );
+  expect(await screen.findByText("git-guide")).toBeTruthy();
+  expect(await screen.findByRole("tab", { name: "Installed (1)" })).toBeTruthy();
+  await user.clear(box);
+  await act(() => vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS));
+  expect(await screen.findByText("popular-skill")).toBeTruthy();
 });

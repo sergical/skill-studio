@@ -13,7 +13,7 @@ export interface PluginGroup {
   harness: string;
   pluginName: string;
   version: string | null;
-  skills: InstalledSkill[];
+  skills: { skill: InstalledSkill; deploymentPath: string }[];
 }
 
 /** `skill`'s deployments that are not plugin-managed. */
@@ -73,8 +73,10 @@ export function pluginInfoForSkill(skill: InstalledSkill): Deployment["plugin"] 
  * `Claude Code plugin · codex · v1.0.6`. `undefined` when `skill` has no
  * plugin deployment.
  */
-export function pluginSourceLabel(skill: InstalledSkill): string | undefined {
-  const plugin = pluginInfoForSkill(skill);
+export function pluginSourceLabel(
+  skill: InstalledSkill,
+  plugin = pluginInfoForSkill(skill),
+): string | undefined {
   if (!plugin) return undefined;
   const version = plugin.version ? ` · v${plugin.version}` : "";
   return `${plugin.harness} plugin · ${plugin.name}${version}`;
@@ -93,9 +95,12 @@ export function groupPluginSkills(skills: InstalledSkill[]): PluginGroup[] {
   const groups = new Map<string, PluginGroup>();
 
   for (const skill of skills) {
+    const seenGroups = new Set<string>();
     for (const deployment of skill.deployments) {
       if (!deployment.plugin) continue;
       const key = `${deployment.plugin.harness}::${deployment.plugin.name}`;
+      if (seenGroups.has(key)) continue;
+      seenGroups.add(key);
       let group = groups.get(key);
       if (!group) {
         group = {
@@ -106,9 +111,7 @@ export function groupPluginSkills(skills: InstalledSkill[]): PluginGroup[] {
         };
         groups.set(key, group);
       }
-      if (!group.skills.includes(skill)) {
-        group.skills.push(skill);
-      }
+      group.skills.push({ skill, deploymentPath: deployment.path });
     }
   }
 

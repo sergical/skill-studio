@@ -10,7 +10,7 @@ import type { ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import { Button, Popover, PopoverContent, PopoverTrigger } from "@skill-studio/ui";
 import { formatTokens } from "@skill-studio/lib";
-import type { InstalledSkill } from "@skill-studio/lib";
+import type { InstalledSkill, PluginInfo } from "@skill-studio/lib";
 import { HarnessStack } from "../SkillList/HarnessStack";
 import { DEFAULT_HARNESS_LIST, whereFacts } from "../SkillList/skill-row-state";
 import { buildInstalledSkillSourceLedgerModel } from "./installed-skill-source-ledger-model";
@@ -19,6 +19,7 @@ import { railHarnessEntries } from "./skill-properties-rail-model";
 
 interface SkillPropertiesRailProps {
   skill: InstalledSkill;
+  selectedPlugin?: PluginInfo | null;
 }
 
 /** One property row: a 96px label column and a value column, min height 28px. */
@@ -50,9 +51,9 @@ function showLocations() {
   heading?.focus();
 }
 
-export function SkillPropertiesRail({ skill }: SkillPropertiesRailProps) {
+export function SkillPropertiesRail({ skill, selectedPlugin }: SkillPropertiesRailProps) {
   const groups = buildScopeGroups(skill);
-  const ledger = buildInstalledSkillSourceLedgerModel(skill);
+  const ledger = buildInstalledSkillSourceLedgerModel(skill, selectedPlugin);
   const hasDrift = scopeGroupsHaveDrift(groups);
 
   const reach = whereFacts(skill, DEFAULT_HARNESS_LIST);

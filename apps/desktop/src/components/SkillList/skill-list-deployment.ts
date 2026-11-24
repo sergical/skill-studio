@@ -3,21 +3,42 @@
 // scope filter.
 // ============================================================================
 
-import { deploymentWithSpecViolations, isProjectScope } from "@skill-studio/lib";
-import type { InstalledSkill, SkillListFilter } from "@skill-studio/lib";
+import {
+  deploymentMatchesHarness,
+  deploymentWithSpecViolations,
+  isProjectScope,
+  isUnresolvedDeployment,
+  skillForCoverageScope,
+} from "@skill-studio/lib";
+import type { Deployment, InstalledSkill, SkillListFilter } from "@skill-studio/lib";
 
-/** The deployment the current scope shows for `skill`, so the detail drawer opens on that copy.
- * With no scope, the copy carrying spec violations, so the row's badge and the page agree. */
+function selectListDeployment(
+  skill: InstalledSkill,
+  scope: SkillListFilter["scope"],
+  harness?: string,
+): Deployment | undefined {
+  if (scope === "all" && !harness) return deploymentWithSpecViolations(skill);
+  const { deployments } = skillForCoverageScope(skill, scope);
+  if (!harness) return deployments[0];
+  const matches = deployments.filter((d) => deploymentMatchesHarness(d, harness));
+  const local = isProjectScope(scope)
+    ? matches.filter((d) => d.project_path === scope.project)
+    : matches;
+  const choices = local.length ? local : matches;
+  return choices.find((d) => d.agent === harness) ?? choices[0];
+}
+
+/** Open the selected copy's physical file, or the broken link itself for repair. */
 export function deploymentForScope(
   skill: InstalledSkill,
   scope: SkillListFilter["scope"],
+  harness?: string,
 ): string | undefined {
-  if (scope === "global") {
-    return skill.deployments.find((d) => d.scope === "global" || d.scope === "plugin")?.path;
+  const selected = selectListDeployment(skill, scope, harness);
+  if (!selected || isUnresolvedDeployment(selected)) return selected?.path;
+  const backing = selected.backing;
+  if (backing.kind === "linked-to") {
+    return skill.deployments.find((d) => d.id === backing.deployment_id)?.path ?? selected.path;
   }
-  if (scope === "parked") return skill.deployments.find((d) => d.scope === "parked")?.path;
-  if (isProjectScope(scope)) {
-    return skill.deployments.find((d) => d.project_path === scope.project)?.path;
-  }
-  return deploymentWithSpecViolations(skill)?.path;
+  return selected.path;
 }

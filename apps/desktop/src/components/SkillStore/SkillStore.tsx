@@ -21,9 +21,12 @@ import type {
   InstallProgressState,
 } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
-import { isSearchQuery, loadBrowseInitialData } from "./browse-initial-load";
 
 const LIMIT = 50;
+
+function isSearchQuery(query: string): boolean {
+  return query.trim() !== "" && query.length >= 2;
+}
 
 /**
  * Extract GitHub owner/repo from a URL or source string
@@ -48,17 +51,19 @@ function extractGitHubRepo(
   return undefined;
 }
 
-/** Merges installed status into a page of search results - a module-level pure function of its own arguments, so callers can `useMemo` it without a hook dependency. */
+/** A matching name identifies an installed catalog result only within the same repository. */
 function mergeWithInstalledStatus(
   results: SkillSearchResult[],
   installed: InstalledSkill[],
 ): SkillWithStatus[] {
-  const installedMap = new Map(installed.map((s) => [s.name, s]));
-  return results.map((skill) => ({
-    ...skill,
-    is_installed: installedMap.has(skill.name),
-    installed_info: installedMap.get(skill.name),
-  }));
+  const byName = new Map(installed.map((skill) => [skill.name, skill]));
+  return results.map((skill) => {
+    const local = byName.get(skill.name);
+    const source = local && extractGitHubRepo(local.source, local.source_url);
+    const match =
+      source && source.toLowerCase() === skill.top_source?.toLowerCase() ? local : undefined;
+    return { ...skill, is_installed: !!match, installed_info: match };
+  });
 }
 
 const TAB_TRIGGER_CLASS =
@@ -69,7 +74,7 @@ function SkillStoreTabList({
   installedCount,
   tabsPadding,
 }: {
-  installedCount: number;
+  installedCount: number | null;
   tabsPadding: string;
 }) {
   return (
@@ -78,39 +83,68 @@ function SkillStoreTabList({
         Browse
       </TabsTrigger>
       <TabsTrigger value="installed" className={TAB_TRIGGER_CLASS}>
-        Installed ({installedCount})
+        {installedCount === null ? "Installed" : `Installed (${installedCount})`}
       </TabsTrigger>
     </TabsList>
   );
 }
 
-/**
- * Shown in place of Browse's results when a fetch fails - most commonly the
- * Skill Studio server not running (see `api::SkillsShAccess::Server`'s
- * connection-error message). `min-h` matches `SkillBrowser`'s own
- * loading/empty states so retrying doesn't shift the sheet around it.
- */
-function BrowseErrorEmptyState({ error, onRetry }: { error: string; onRetry: () => void }) {
+function LoadError({
+  title,
+  error,
+  onRetry,
+}: {
+  title: string;
+  error: string;
+  onRetry: () => void;
+}) {
   return (
     <div className="flex min-h-[280px] flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
-      <h3 className="m-0 text-body font-semibold text-text-primary">
-        Browsing isn't available right now
-      </h3>
-      <p className="m-0 max-w-sm text-small text-text-tertiary">{error}</p>
+      <h3 className="m-0 text-body font-semibold text-text-primary">{title}</h3>
+      <p role="alert" className="m-0 max-w-sm text-small text-text-tertiary">
+        {error}
+      </p>
       <Button onClick={onRetry}>Try again</Button>
     </div>
   );
 }
 
-/**
- * Owns the Browse tab's data pipeline: the popular-skills/search fetch, its
- * loading flags and pagination, and the installed-status merge every result
- * gets rendered with. `loadInstalledSkills` is also called from outside the
- * hook (after an install/remove completes), so it's returned alongside the
- * rest rather than kept as a private effect dependency.
- */
+type InstalledInventory =
+  | { kind: "loading" }
+  | { kind: "ready"; skills: InstalledSkill[] }
+  | { kind: "failed"; message: string };
+
+function useInstalledInventory() {
+  const projects = useAppStore((state) => state.userAddedProjects);
+  const [inventory, setInventory] = useState<InstalledInventory>({ kind: "loading" });
+  const latestRequest = useRef(0);
+
+  // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- project changes and explicit retries use the same local scan
+  const loadInstalledSkills = useCallback(() => {
+    const request = ++latestRequest.current;
+    setInventory((current) => (current.kind === "failed" ? { kind: "loading" } : current));
+    return getInstalledSkills().then(
+      (skills) => {
+        if (latestRequest.current === request) setInventory({ kind: "ready", skills });
+      },
+      (error) => {
+        if (latestRequest.current === request)
+          setInventory({ kind: "failed", message: invokeErrorMessage(error) });
+      },
+    );
+  }, []);
+
+  useEffect(() => {
+    // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- the scan reads the tracked projects through the Tauri host
+    void loadInstalledSkills();
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- the host reads the tracked project list; rescan when it changes
+  }, [loadInstalledSkills, projects]);
+
+  return { inventory, loadInstalledSkills };
+}
+
 function useSkillStoreData(
-  projects: string[],
+  installedSkills: InstalledSkill[],
   addToast: ReturnType<typeof useAppStore.getState>["addToast"],
 ) {
   const [searchQuery, setSearchQuery] = useState("");
@@ -118,7 +152,6 @@ function useSkillStoreData(
   // below derives that at render time, so an `installedSkills` refresh (after
   // install/remove) can't leave this stale behind a second effect.
   const [rawResults, setRawResults] = useState<SkillSearchResult[]>([]);
-  const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([]);
   // Starts true: the mount effect below fetches immediately, so the first
   // render already reflects that instead of flipping it on synchronously
   // inside the effect (which the compiler flags as an avoidable extra render).
@@ -127,117 +160,54 @@ function useSkillStoreData(
   const [hasMore, setHasMore] = useState(false);
   // Set when the results area itself couldn't be loaded (most commonly the
   // Skill Studio server not running) - replaces the results area with
-  // `BrowseErrorEmptyState` instead of a toast, since there's nothing to show
+  // `LoadError` instead of a toast, since there's nothing to show
   // behind it. Cleared at the start of every new attempt.
   const [browseError, setBrowseError] = useState<string | null>(null);
   // Never read during render - only `loadMore`'s paging math needs it, so a
   // ref avoids a re-render on every page bump.
   const pageRef = useRef(0);
-  // The query `handleSearch` last ran, so the results on screen belong to it. `loadInitialData`
-  // reads it when its requests land; as a dependency it would rerun that load on every search.
+  const browseRequest = useRef(0);
   const searchQueryRef = useRef("");
-
-  // A Promise chain, not a try/finally statement, so the compiler can still
-  // optimize this component (it doesn't support `finally` clauses yet).
-  // Kept memoized (not stripped like the other handlers below): the mount
-  // effect further down depends on this callback's identity to run exactly
-  // once instead of on every render.
-  // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- the mount effect below depends on this callback's identity to run exactly once
-  const loadInitialData = useCallback(() => {
-    const query = searchQueryRef.current;
-    setBrowseError(null);
-    return loadBrowseInitialData(
-      { getInstalled: getInstalledSkills, getPopular: () => getPopularSkills(0, LIMIT) },
-      () => searchQueryRef.current,
-    )
-      .then(({ installed, popular }) => {
-        setInstalledSkills(installed);
-        if (!popular || searchQueryRef.current !== query) return;
-        pageRef.current = 0;
-        setHasMore(popular.has_more);
-        setRawResults(popular.skills);
-      })
-      .catch((err) => {
-        if (searchQueryRef.current === query) setBrowseError(invokeErrorMessage(err));
-      })
-      .finally(() => {
-        if (searchQueryRef.current === query) setIsLoading(false);
-      });
-    // `projects` is not read here - `getInstalledSkills` covers every tracked project on its
-    // own - but it stays a dependency purely to retrigger this callback (and the mount effect
-    // below, which depends on its identity) when the tracked project list changes.
-    // oxlint-disable-next-line react/memo-dependencies, react-hooks/exhaustive-deps -- retrigger-only dependency, not read in the body
-  }, [projects]);
-
-  const loadInstalledSkills = async () => {
-    try {
-      const installed = await getInstalledSkills();
-      setInstalledSkills(installed);
-    } catch (err) {
-      addToast({
-        type: "error",
-        title: "Failed to Load Installed Skills",
-        message: invokeErrorMessage(err),
-      });
-    }
-  };
-
-  // Load installed and popular skills on mount.
-  useEffect(() => {
-    // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- starts the external Tauri and skills.sh reads for the current project set
-    void loadInitialData();
-  }, [loadInitialData]);
 
   // Every result merged with the current installed status - recomputed
   // whenever either input changes, so an install/remove refreshing
   // `installedSkills` shows up here with no second effect to keep in sync.
   const searchResultsWithStatus = mergeWithInstalledStatus(rawResults, installedSkills);
 
-  // A Promise chain, not a try/finally statement, so the compiler can still
-  // optimize this component (it doesn't support `finally` clauses yet).
-  const handleSearch = (query: string) => {
-    setSearchQuery(query);
+  // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- the mount effect loads the initial page once
+  const handleSearch = useCallback((query: string) => {
+    const request = ++browseRequest.current;
     searchQueryRef.current = query;
+    setSearchQuery(query);
     pageRef.current = 0;
+    setIsLoadingMore(false);
+    setHasMore(false);
     setBrowseError(null);
     setIsLoading(true);
 
-    if (!isSearchQuery(query)) {
-      // Show popular skills when no search query
-      return getPopularSkills(0, LIMIT)
-        .then((response) => {
-          if (searchQueryRef.current !== query) return;
-          setRawResults(response.skills);
-          setHasMore(response.has_more);
-        })
-        .catch((err) => {
-          if (searchQueryRef.current !== query) return;
-          setBrowseError(err instanceof Error ? err.message : "Failed to load popular skills");
-        })
-        .finally(() => {
-          if (searchQueryRef.current === query) setIsLoading(false);
-        });
-    }
-
-    // The v1 search endpoint has no pagination - a single call returns
-    // everything up to LIMIT.
-    return searchSkills(query, LIMIT)
-      .then((response) => {
-        if (searchQueryRef.current !== query) return;
-        setRawResults(response.skills);
-        setHasMore(false);
+    const searching = isSearchQuery(query);
+    const response = searching ? searchSkills(query, LIMIT) : getPopularSkills(0, LIMIT);
+    return response
+      .then((page) => {
+        if (browseRequest.current !== request) return;
+        setRawResults(page.skills);
+        setHasMore(!searching && page.has_more);
       })
-      .catch((err) => {
-        if (searchQueryRef.current !== query) return;
-        setBrowseError(err instanceof Error ? err.message : "Failed to search skills");
+      .catch((error) => {
+        if (browseRequest.current === request) setBrowseError(invokeErrorMessage(error));
       })
       .finally(() => {
-        if (searchQueryRef.current === query) setIsLoading(false);
+        if (browseRequest.current === request) setIsLoading(false);
       });
-  };
+  }, []);
+
+  useEffect(() => {
+    // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- starts the initial skills.sh request
+    void handleSearch("");
+  }, [handleSearch]);
 
   // Re-runs whichever fetch last populated the results area - the
-  // `BrowseErrorEmptyState`'s "Try again" button.
+  // `LoadError`'s "Try again" button.
   const retry = () => handleSearch(searchQuery);
 
   // A Promise chain, not a try/finally statement, so the compiler can still
@@ -247,20 +217,20 @@ function useSkillStoreData(
     // returns everything up to LIMIT in one shot), so this only ever pages
     // through popular skills.
     if (isLoadingMore || !hasMore || isSearchQuery(searchQueryRef.current)) return;
-    const query = searchQueryRef.current;
+    const request = browseRequest.current;
 
     setIsLoadingMore(true);
     const nextPage = pageRef.current + 1;
 
     return getPopularSkills(nextPage, LIMIT)
       .then((response) => {
-        if (searchQueryRef.current !== query) return;
+        if (browseRequest.current !== request) return;
         setRawResults((prev) => [...prev, ...response.skills]);
         setHasMore(response.has_more);
         pageRef.current = nextPage;
       })
       .catch((err) => {
-        if (searchQueryRef.current !== query) return;
+        if (browseRequest.current !== request) return;
         addToast({
           type: "error",
           title: "Load More Failed",
@@ -268,14 +238,13 @@ function useSkillStoreData(
         });
       })
       .finally(() => {
-        setIsLoadingMore(false);
+        if (browseRequest.current === request) setIsLoadingMore(false);
       });
   };
 
   return {
     searchQuery,
     setSearchQuery,
-    installedSkills,
     isLoading,
     isLoadingMore,
     hasMore,
@@ -284,7 +253,6 @@ function useSkillStoreData(
     searchResultsWithStatus,
     handleSearch,
     loadMore,
-    loadInstalledSkills,
   };
 }
 
@@ -296,29 +264,37 @@ interface SkillStoreProps {
 
 export function SkillStore({ compact = false }: SkillStoreProps = {}) {
   const [activeTab, setActiveTab] = useState<"browse" | "installed">("browse");
-  // The selected skill's name only - its full `SkillWithStatus` is looked up
-  // from whichever list (browse or installed) is current each render, so a
-  // status change (e.g. install completing) is reflected without a sync effect.
-  const [selectedSkillName, setSelectedSkillName] = useState<string | null>(null);
+  const [selection, setSelection] = useState<string | null>(null);
   const [installProgress, setInstallProgress] = useState<InstallProgressState | null>(null);
 
   const addToast = useAppStore((state) => state.addToast);
-  const projects = useAppStore((state) => state.userAddedProjects);
+  const { inventory, loadInstalledSkills } = useInstalledInventory();
+  const installedSkills = inventory.kind === "ready" ? inventory.skills : [];
+  const inventoryNotice =
+    inventory.kind === "failed" ? (
+      <LoadError
+        title="Couldn’t load installed skills"
+        error={inventory.message}
+        onRetry={loadInstalledSkills}
+      />
+    ) : inventory.kind === "loading" ? (
+      <p role="status" className="m-auto p-5 text-body text-text-tertiary">
+        Loading installed skills…
+      </p>
+    ) : null;
 
   const {
     searchQuery,
     setSearchQuery,
-    installedSkills,
     isLoading,
     isLoadingMore,
     hasMore,
     searchResultsWithStatus,
     handleSearch,
     loadMore,
-    loadInstalledSkills,
     browseError,
     retry,
-  } = useSkillStoreData(projects, addToast);
+  } = useSkillStoreData(installedSkills, addToast);
 
   const handleInstallStart = (skillName: string) => {
     setInstallProgress({
@@ -375,13 +351,16 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
     });
     // Refresh installed skills - `installedSkillsWithStatus`/`searchResultsWithStatus` re-derive from it.
     void loadInstalledSkills();
-    setSelectedSkillName(null);
+    setSelection(null);
   };
 
-  // Get installed skills with full status for Installed tab
+  const catalogMatches = new Map(
+    searchResultsWithStatus.flatMap((skill) =>
+      skill.is_installed ? [[skill.name, skill] as const] : [],
+    ),
+  );
   const installedSkillsWithStatus: SkillWithStatus[] = installedSkills.map((skill) => {
-    // Try to find matching skill from search results for extra metadata
-    const found = searchResultsWithStatus.find((s) => s.name === skill.name);
+    const found = catalogMatches.get(skill.name);
     if (found) return found;
 
     // Extract GitHub owner/repo from source_url (more reliable) or source
@@ -400,13 +379,10 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
     };
   });
 
-  // Looked up by name from whichever list is current, so a status change
-  // (e.g. install completing) shows up with no sync effect.
-  const selectedSkill: SkillWithStatus | null = selectedSkillName
-    ? (searchResultsWithStatus.find((s) => s.name === selectedSkillName) ??
-      installedSkillsWithStatus.find((s) => s.name === selectedSkillName) ??
-      null)
-    : null;
+  const selectedSkill =
+    (activeTab === "installed"
+      ? installedSkillsWithStatus.find((skill) => skill.name === selection)
+      : searchResultsWithStatus.find((skill) => skill.id === selection)) ?? null;
 
   const tabsPadding = compact ? "px-5" : "px-7";
 
@@ -434,11 +410,14 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
         value={activeTab}
         onValueChange={(tab) => {
           setActiveTab(tab);
-          setSelectedSkillName(null);
+          setSelection(null);
         }}
         className="flex flex-1 flex-col gap-0 overflow-hidden"
       >
-        <SkillStoreTabList installedCount={installedSkills.length} tabsPadding={tabsPadding} />
+        <SkillStoreTabList
+          installedCount={inventory.kind === "ready" ? installedSkills.length : null}
+          tabsPadding={tabsPadding}
+        />
 
         <TabsContent value="browse" className="flex flex-1 flex-col overflow-hidden">
           <div className={`flex items-center gap-4 border-b border-border py-4 ${tabsPadding}`}>
@@ -448,7 +427,7 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
               onSearch={handleSearch}
               isLoading={isLoading}
             />
-            {!browseError && (
+            {!browseError && !isLoading && (
               <div className="ml-auto flex items-center gap-4">
                 <span className="text-small tabular-nums text-text-tertiary">
                   {searchResultsWithStatus.length} skill
@@ -459,13 +438,17 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
           </div>
 
           {browseError ? (
-            <BrowseErrorEmptyState error={browseError} onRetry={retry} />
+            <LoadError
+              title="Browsing isn't available right now"
+              error={browseError}
+              onRetry={retry}
+            />
           ) : (
             <div className={`flex flex-1 overflow-hidden ${compact ? "flex-col" : ""}`}>
               <SkillBrowser
                 skills={searchResultsWithStatus}
                 selectedSkill={selectedSkill}
-                onSelectSkill={(skill) => setSelectedSkillName(skill.name)}
+                onSelectSkill={(skill) => setSelection(skill.id)}
                 mode={{ kind: "browse", isLoading, isLoadingMore, hasMore, onLoadMore: loadMore }}
                 emptyMessage={
                   searchQuery ? "No skills found matching your search" : "Loading popular skills…"
@@ -476,32 +459,34 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
         </TabsContent>
 
         <TabsContent value="installed" className="flex flex-1 flex-col overflow-hidden">
-          <div className={`flex items-center gap-4 border-b border-border py-4 ${tabsPadding}`}>
-            <span className="text-small tabular-nums text-text-tertiary">
-              {installedSkills.length} installed skill{installedSkills.length !== 1 ? "s" : ""}
-            </span>
-          </div>
+          {inventoryNotice ?? (
+            <>
+              <div className={`flex items-center gap-4 border-b border-border py-4 ${tabsPadding}`}>
+                <span className="text-small tabular-nums text-text-tertiary">
+                  {installedSkills.length} installed skill{installedSkills.length !== 1 ? "s" : ""}
+                </span>
+              </div>
 
-          <div className={`flex flex-1 overflow-hidden ${compact ? "flex-col" : ""}`}>
-            <SkillBrowser
-              skills={installedSkillsWithStatus}
-              selectedSkill={selectedSkill}
-              onSelectSkill={(skill) => setSelectedSkillName(skill.name)}
-              mode={{ kind: "installed" }}
-              emptyMessage="No skills installed yet"
-            />
-          </div>
+              <div className={`flex flex-1 overflow-hidden ${compact ? "flex-col" : ""}`}>
+                <SkillBrowser
+                  skills={installedSkillsWithStatus}
+                  selectedSkill={selectedSkill}
+                  onSelectSkill={(skill) => setSelection(skill.name)}
+                  mode={{ kind: "installed" }}
+                  emptyMessage="No skills installed yet"
+                />
+              </div>
+            </>
+          )}
         </TabsContent>
       </Tabs>
 
-      <Drawer
-        open={selectedSkill !== null}
-        onOpenChange={(open) => !open && setSelectedSkillName(null)}
-      >
+      <Drawer open={selectedSkill !== null} onOpenChange={(open) => !open && setSelection(null)}>
         {selectedSkill && (
           <SkillDetailPanel
             skill={selectedSkill}
-            onClose={() => setSelectedSkillName(null)}
+            inventoryNotice={inventoryNotice}
+            onClose={() => setSelection(null)}
             onInstallStart={handleInstallStart}
             onInstallPaused={handleInstallPaused}
             onInstallComplete={handleInstallComplete}

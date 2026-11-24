@@ -9,7 +9,7 @@ import {
   observeElementRect as observeDefaultElementRect,
   useVirtualizer,
 } from "@tanstack/react-virtual";
-import type { InstalledSkill, SkillInvocationStats } from "@skill-studio/lib";
+import type { InstalledSkill, SkillInvocationStats, SkillListFilterScope } from "@skill-studio/lib";
 import { groupSkillRows } from "../../lib/skill-list-model";
 import { useHeldLayout } from "../../lib/held-layout";
 import type { SortMode } from "../../lib/skill-list-sort";
@@ -111,6 +111,7 @@ function buildListItems(
 }
 
 interface SkillListTableProps {
+  scope: SkillListFilterScope;
   skills: InstalledSkill[];
   stats: SkillInvocationStats[];
   /** Sort order - the Sort select lives in `SkillListFilterBar`; the search box there narrows `skills` before it reaches this table. It applies inside each state group, not across the whole list. */
@@ -148,6 +149,7 @@ interface SkillListTableProps {
  * selection mode - and the selection bar shows once anything is checked.
  */
 export function SkillListTable({
+  scope,
   skills,
   stats,
   sort,
@@ -325,6 +327,7 @@ export function SkillListTable({
       <SkillListRow
         key={skill.name}
         skill={skill}
+        scope={scope}
         index={index}
         style={{
           position: "absolute",

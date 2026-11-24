@@ -341,8 +341,6 @@ export function SkillPage({
             <SkillRepairCard skill={skill} deployment={deployment} />
           ) : (
             <SkillMarkdownCard
-              skill={skill}
-              isPluginManaged={isPluginManaged}
               deploymentUnresolved={deploymentUnresolved}
               ownDeploymentOptions={editableDeployments(skill)}
               deployment={deployment ?? undefined}
@@ -375,7 +373,7 @@ export function SkillPage({
           {from.kind !== "listing" && visibility}
         </div>
 
-        <SkillPropertiesRail skill={skill} />
+        <SkillPropertiesRail skill={skill} selectedPlugin={deployment?.plugin} />
       </div>
 
       {isCompareOpen && (

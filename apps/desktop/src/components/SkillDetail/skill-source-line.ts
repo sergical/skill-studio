@@ -4,7 +4,7 @@
 // Numbers only: no "official" or "verified" claim.
 // ============================================================================
 
-import type { InstalledSkill } from "@skill-studio/lib";
+import type { InstalledSkill, PluginInfo } from "@skill-studio/lib";
 import { formatInstalls } from "../../lib/skill-installs-format";
 import { sourceLedgerLabel } from "./installed-skill-source-ledger-model";
 
@@ -41,9 +41,15 @@ export function hasSkillsShSource(skill: InstalledSkill): boolean {
 export function skillSourceLine(
   skill: InstalledSkill,
   installs: number | null | undefined,
+  selectedPlugin?: PluginInfo | null,
 ): SkillSourceLine {
-  if (!hasSkillsShSource(skill)) {
-    return { prefix: "", label: sourceLedgerLabel(skill), href: null, installs: null };
+  if (selectedPlugin || !hasSkillsShSource(skill)) {
+    return {
+      prefix: "",
+      label: sourceLedgerLabel(skill, selectedPlugin),
+      href: null,
+      installs: null,
+    };
   }
   return {
     prefix: "by ",

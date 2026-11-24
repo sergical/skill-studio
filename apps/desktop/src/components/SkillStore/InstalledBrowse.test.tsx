@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { Toaster, toast } from "sonner";
@@ -40,26 +40,34 @@ afterEach(() => {
   // Each test renders a fresh Home; the store outlives it, so drop the last test's "Updated".
   useAppStore.getState().clearRowActs();
 });
-function ipc(afterHash: string) {
+function ipc(
+  afterHash: string,
+  popularSkills: unknown[] | Promise<unknown[]> = [],
+  readmeReady = Promise.resolve(),
+) {
   const ids: unknown[] = [];
   const commands: string[] = [];
   mockIPC(
     (command, args) => {
       commands.push(command);
       if (command === "get_installed_skills") return [fixture];
-      if (command === "get_popular_skills") return { skills: [], has_more: false };
+      if (command === "get_popular_skills")
+        return Promise.resolve(popularSkills).then((skills) => ({ skills, has_more: false }));
       if (command === "get_skill_details") {
         ids.push(args);
+        if (args && "skillId" in args && args.skillId === "other/repo/sample") {
+          return { id: args.skillId, source: "other/repo", skill_md: "Other repository content" };
+        }
         if (!args || !("skillId" in args) || args.skillId !== "owner/repo/sample")
           throw new Error("Details need owner/repo/slug");
-        return {
+        return readmeReady.then(() => ({
           id: "owner/repo/sample",
           slug: "sample",
           source: "owner/repo",
           hash: "same",
           installs: 0,
           skill_md: "Installed sample content",
-        };
+        }));
       }
       if (command === "skill_local_edits") return [{ edited: false, checked: true }];
       if (command === "update_plugin") return { outcome: "up_to_date", message: null };
@@ -89,14 +97,110 @@ async function openInstalled() {
   await user.click(await screen.findByText("sample"));
   return user;
 }
-it("Installed Browse loads owner/repo/slug details or sends a bare name and leaves the panel empty", async () => {
-  const { ids } = ipc("new");
-  const user = await openInstalled();
+it("Installed shows local skills while the catalog is slow and after it goes offline", async () => {
+  let failCatalog: (error: Error) => void = () => {};
+  mockIPC((command) => {
+    if (command === "get_installed_skills") return [fixture];
+    if (command === "get_popular_skills")
+      return new Promise((_, reject) => {
+        failCatalog = reject;
+      });
+    return null;
+  });
+  const user = userEvent.setup();
+  render(<SkillStore />);
+  await user.click(screen.getByRole("tab", { name: /Installed/ }));
+  expect(await screen.findByText("sample")).toBeTruthy();
+  await act(async () => failCatalog(new Error("Offline")));
+  await user.click(screen.getByRole("tab", { name: "Browse" }));
+  expect(await screen.findByText("Offline")).toBeTruthy();
+  await user.click(screen.getByRole("tab", { name: /Installed/ }));
+  expect(screen.getByText("sample")).toBeTruthy();
+});
+
+it("Installed reports a pending or failed scan and retries locally while Browse stays available", async () => {
+  let failInventory: (error: Error) => void = () => {};
+  let retried = false;
+  let catalogRequests = 0;
+  mockIPC((command) => {
+    if (command === "get_installed_skills") {
+      if (retried) return [fixture];
+      return new Promise((_, reject) => {
+        failInventory = reject;
+      });
+    }
+    if (command === "get_popular_skills") {
+      catalogRequests += 1;
+      return {
+        skills: [{ id: "owner/repo/popular", name: "popular", installs: 1 }],
+        has_more: false,
+      };
+    }
+    return null;
+  });
+  const user = userEvent.setup();
+  render(<SkillStore />);
+  await user.click(screen.getByRole("tab", { name: "Installed" }));
+  expect(screen.getByRole("status").textContent).toContain("Loading installed skills");
+  await user.click(screen.getByRole("tab", { name: "Browse" }));
+  await user.click(await screen.findByText("popular"));
+  const drawer = within(screen.getByRole("dialog"));
+  expect(drawer.getByRole("status").textContent).toContain("Loading installed skills");
+  await act(async () => failInventory(new Error("Cannot read installed skills")));
+  expect(await drawer.findByRole("button", { name: "Try again" })).toBeTruthy();
+  await user.keyboard("{Escape}");
+  await user.click(screen.getByRole("tab", { name: "Installed" }));
+  expect(screen.queryByText("No skills installed yet")).toBeNull();
+  expect(await screen.findByText("Cannot read installed skills")).toBeTruthy();
+  retried = true;
+  await user.click(screen.getByRole("button", { name: "Try again" }));
+  expect(await screen.findByText("sample")).toBeTruthy();
+  expect(catalogRequests).toBe(1);
+});
+
+it("Browse distinguishes same-named repositories and Installed opens the local source", async () => {
+  const { ids } = ipc("new", [
+    { id: "other/repo/sample", name: "sample", top_source: "other/repo", installs: 10 },
+    { id: "owner/repo/sample", name: "sample", top_source: "owner/repo", installs: 4 },
+  ]);
+  const user = userEvent.setup();
+  render(<SkillStore />);
+  const local = await screen.findByRole("button", { name: /owner\/repo/ });
+  const other = screen.getByRole("button", { name: /other\/repo/ });
+  expect(within(local).getByTitle("Update available")).toBeTruthy();
+  expect(within(other).queryByTitle(/Installed|Update available/)).toBeNull();
+  await user.click(other);
+  expect(await screen.findByText("Other repository content")).toBeTruthy();
+  await user.keyboard("{Escape}");
+  await user.click(screen.getByRole("tab", { name: /Installed/ }));
+  await user.click(await screen.findByText("sample"));
   expect(await screen.findByText("Installed sample content")).toBeTruthy();
-  expect(ids).toEqual([{ skillId: "owner/repo/sample" }]);
+  expect(ids).toEqual([{ skillId: "other/repo/sample" }, { skillId: "owner/repo/sample" }]);
   await user.keyboard("{Escape}");
   expect(screen.queryByRole("dialog")).toBeNull();
 });
+it("keeps the open installed skill when the catalog returns its canonical id", async () => {
+  let showCatalog!: (skills: unknown[]) => void;
+  const catalog = new Promise<unknown[]>((resolve) => {
+    showCatalog = resolve;
+  });
+  let finishReadme!: () => void;
+  const readme = new Promise<void>((resolve) => {
+    finishReadme = resolve;
+  });
+  const { ids } = ipc("new", catalog, readme);
+  await openInstalled();
+  expect(ids).toEqual([{ skillId: "owner/repo/sample" }]);
+  await act(async () =>
+    showCatalog([
+      { id: "Owner/Repo/sample", name: "sample", top_source: "Owner/Repo", installs: 10 },
+    ]),
+  );
+  await act(async () => finishReadme());
+  expect(ids).toEqual([{ skillId: "owner/repo/sample" }]);
+  expect(await screen.findByText("Installed sample content")).toBeTruthy();
+});
+
 it("an unchanged installed update says already up to date or reports a new installation", async () => {
   ipc("same");
   const user = await openInstalled();

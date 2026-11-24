@@ -2,7 +2,7 @@
 // SkillDetailPanel - Detail view for a selected skill
 // ============================================================================
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Button, DrawerContent } from "@skill-studio/ui";
 import { SkillDetailHeader } from "./SkillDetailHeader";
 import { SkillContent } from "./SkillContent";
@@ -13,6 +13,7 @@ import type { SkillDetails, SkillWithStatus } from "@skill-studio/lib";
 
 interface SkillDetailPanelProps {
   skill: SkillWithStatus;
+  inventoryNotice?: ReactNode;
   onClose: () => void;
   onInstallStart: (skillName: string) => void;
   onInstallPaused: () => void;
@@ -27,16 +28,19 @@ interface SkillDetailPanelProps {
 }
 
 type DetailsLoad =
-  | { kind: "loading" }
+  | { kind: "loading"; skillId: string }
   | { kind: "loaded"; details: SkillDetails }
   | { kind: "failed"; message: string };
 
 export function SkillDetailPanel(props: SkillDetailPanelProps) {
-  return <SkillDetailsContent key={props.skill.id} {...props} />;
+  // GitHub owner/repository casing can change when the catalog joins a local record.
+  const key = props.skill.id.replace(/^[^/]+\/[^/]+(?=\/)/, (repo) => repo.toLowerCase());
+  return <SkillDetailsContent key={key} {...props} />;
 }
 
 function SkillDetailsContent({
   skill,
+  inventoryNotice,
   onClose,
   onInstallStart,
   onInstallPaused,
@@ -47,7 +51,7 @@ function SkillDetailsContent({
   const hasRemoteSource = skill.id.split("/").length >= 3;
   const [load, setLoad] = useState<DetailsLoad>(() =>
     hasRemoteSource
-      ? { kind: "loading" }
+      ? { kind: "loading", skillId: skill.id }
       : { kind: "failed", message: "This skill has no skills.sh source." },
   );
   const details = load.kind === "loaded" ? load.details : null;
@@ -56,7 +60,7 @@ function SkillDetailsContent({
   useEffect(() => {
     if (load.kind !== "loading") return;
     let cancelled = false;
-    getSkillDetails(skill.id).then(
+    getSkillDetails(load.skillId).then(
       (details) => {
         if (!cancelled) setLoad({ kind: "loaded", details });
       },
@@ -71,7 +75,7 @@ function SkillDetailsContent({
     return () => {
       cancelled = true;
     };
-  }, [load.kind, skill.id]);
+  }, [load]);
 
   return (
     <DrawerContent
@@ -86,7 +90,11 @@ function SkillDetailsContent({
             {load.message}
           </p>
           {hasRemoteSource && (
-            <Button variant="outline" size="sm" onClick={() => setLoad({ kind: "loading" })}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setLoad({ kind: "loading", skillId: skill.id })}
+            >
               Retry
             </Button>
           )}
@@ -107,15 +115,17 @@ function SkillDetailsContent({
         Add with more options…
       </Button>
       <div className="my-2 h-px bg-border" />
-      <InstallControls
-        skill={skill}
-        resolvedTopSource={resolvedTopSource}
-        onInstallStart={onInstallStart}
-        onInstallPaused={onInstallPaused}
-        onInstallComplete={onInstallComplete}
-        onUpdateComplete={onUpdateComplete}
-        onRemoveComplete={onRemoveComplete}
-      />
+      {inventoryNotice ?? (
+        <InstallControls
+          skill={skill}
+          resolvedTopSource={resolvedTopSource}
+          onInstallStart={onInstallStart}
+          onInstallPaused={onInstallPaused}
+          onInstallComplete={onInstallComplete}
+          onUpdateComplete={onUpdateComplete}
+          onRemoveComplete={onRemoveComplete}
+        />
+      )}
     </DrawerContent>
   );
 }
