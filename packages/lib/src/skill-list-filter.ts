@@ -9,7 +9,12 @@
 import type { HealthIssueKind } from "./skill-health";
 import { agentsCoveredByDeployment, collectDashboardIssues } from "./skill-health";
 import { pluginDeployments } from "./skill-plugin-partition";
-import type { InstalledSkill, SkillInvocationStats, SkillSourceKind } from "./skill-types";
+import type {
+  Deployment,
+  InstalledSkill,
+  SkillInvocationStats,
+  SkillSourceKind,
+} from "./skill-types";
 import { hasUpdate } from "./skill-updates";
 
 /** Which own skills `applySkillListFilter` considers before the other fields narrow it further. */
@@ -42,22 +47,45 @@ export function isProjectScope(scope: SkillListFilterScope): scope is { project:
   return scope !== "all" && scope !== "global" && scope !== "parked";
 }
 
+function isGlobalDeployment(deployment: Deployment): boolean {
+  return deployment.scope === "global" || deployment.scope === "plugin";
+}
+
+/** Project rows require a local install; their client coverage also includes inherited global copies.
+ * Use this projection for display only. Lifecycle actions need the complete skill. */
+export function skillForCoverageScope(
+  skill: InstalledSkill,
+  scope: SkillListFilterScope,
+): InstalledSkill {
+  if (scope === "all") return skill;
+  let deployments: Deployment[];
+  if (isProjectScope(scope)) {
+    deployments = [
+      ...skill.deployments.filter((d) => d.project_path === scope.project),
+      ...skill.deployments.filter(isGlobalDeployment),
+    ];
+  } else if (scope === "global") {
+    deployments = skill.deployments.filter(isGlobalDeployment);
+  } else {
+    deployments = skill.deployments.filter((d) => d.scope === "parked");
+  }
+  return { ...skill, deployments };
+}
+
 /** Whether `skill` belongs to `scope`. `all` and `global` never include parked skills. */
 function matchesScope(skill: InstalledSkill, scope: SkillListFilterScope): boolean {
   if (scope === "parked") return skill.parked;
   if (skill.parked) return false;
   if (scope === "all") return true;
   if (scope === "global") {
-    return skill.deployments.some((d) => d.scope === "global" || d.scope === "plugin");
+    return skill.deployments.some(isGlobalDeployment);
   }
   return skill.deployments.some((d) => d.project_path === scope.project);
 }
 
-/** Whether `skill` is readable by the harness display label `harness` - coverage semantics, so a shared-root deployment matches every shared-root reader (see `agentsCoveredByDeployment`). */
-function matchesHarness(skill: InstalledSkill, harness: string): boolean {
-  return skill.deployments.some((d) =>
-    agentsCoveredByDeployment(d.agent).some((agent) => agent === harness),
-  );
+/** The client filter matches its own install folder and the shared folder for its native readers. */
+export function deploymentMatchesHarness(deployment: Deployment, harness: string): boolean {
+  return agentsCoveredByDeployment(deployment.agent).includes(harness);
 }
 
 /** Hyphens, underscores, slashes, dots, and spaces all count as one word break. */
@@ -114,7 +142,15 @@ export function applySkillListFilter(
 
   return skills.filter((skill) => {
     if (!matchesScope(skill, filter.scope)) return false;
-    if (filter.harness && !matchesHarness(skill, filter.harness)) return false;
+    const harness = filter.harness;
+    if (
+      harness &&
+      !skillForCoverageScope(skill, filter.scope).deployments.some((d) =>
+        deploymentMatchesHarness(d, harness),
+      )
+    ) {
+      return false;
+    }
     // "plugin" reaches outside a skill's own source_kind: it means "has at
     // least one plugin deployment", tested against whatever deployments the
     // caller passed in (the pluginSkillsView) rather than the aggregate

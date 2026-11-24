@@ -5,7 +5,8 @@
 // ============================================================================
 
 import type { CSSProperties } from "react";
-import type { InstalledSkill } from "@skill-studio/lib";
+import { skillForCoverageScope } from "@skill-studio/lib";
+import type { InstalledSkill, SkillListFilterScope } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
 import { HarnessStack } from "./HarnessStack";
 import { RowFixButton } from "./RowFixButton";
@@ -18,6 +19,7 @@ import type { RowState } from "./skill-row-state";
 
 interface SkillListRowProps {
   skill: InstalledSkill;
+  scope: SkillListFilterScope;
   /** This row's position in the grouped `rows` array - `aria-rowindex` and shift-click. */
   index: number;
   /** The virtualizer's absolute positioning within the row's group container. */
@@ -37,6 +39,7 @@ interface SkillListRowProps {
 
 export function SkillListRow({
   skill,
+  scope,
   index,
   style,
   state,
@@ -49,6 +52,7 @@ export function SkillListRow({
   onAct,
   onCheckedChange,
 }: SkillListRowProps) {
+  const scopedSkill = skillForCoverageScope(skill, scope);
   const note = state ? [state.label, state.detail].filter(Boolean).join(" · ") : undefined;
   const busy = useAppStore((s) => s.rowActs.get(skill.name) === null);
   return (
@@ -88,10 +92,10 @@ export function SkillListRow({
         <SkillNameCell skill={skill} />
       </div>
       <div role="gridcell" className="contents">
-        <SkillLocationCell locations={whereFacts(skill, DEFAULT_HARNESS_LIST).locations} />
+        <SkillLocationCell locations={whereFacts(scopedSkill, DEFAULT_HARNESS_LIST).locations} />
       </div>
       <div role="gridcell" className="contents">
-        <HarnessStack skill={skill} harnessList={DEFAULT_HARNESS_LIST} />
+        <HarnessStack skill={scopedSkill} harnessList={DEFAULT_HARNESS_LIST} />
       </div>
       <div role="gridcell" className="contents">
         <NoteCell skill={skill} note={note} />

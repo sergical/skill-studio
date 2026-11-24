@@ -15,7 +15,7 @@ import type { SortMode } from "../../lib/skill-list-sort";
 import { SkillListActiveFilters, SkillListFilterBar } from "./SkillListFilterBar";
 import { useProjectFolderActions } from "../../hooks/useProjectFolderActions";
 import { collectDashboardIssues } from "@skill-studio/lib";
-import { applySkillListFilter, isProjectScope } from "@skill-studio/lib";
+import { applySkillListFilter, isProjectScope, skillForCoverageScope } from "@skill-studio/lib";
 import { ownSkillsView, ownSkillsWithPluginUpdates } from "@skill-studio/lib";
 import type { SkillSnapshot } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
@@ -121,12 +121,15 @@ export function SkillsView({
       )}
       {showCoverage ? (
         <SkillCoverageMatrix
-          skills={matches}
+          skills={matches.map((skill) => skillForCoverageScope(skill, filter.scope))}
           onSelectSkill={onSelectSkill}
-          deploymentPathForSkill={(skill) => deploymentForScope(skill, filter.scope)}
+          deploymentPathForSkill={(skill) =>
+            deploymentForScope(skill, filter.scope, filter.harness)
+          }
         />
       ) : (
         <SkillListTable
+          scope={filter.scope}
           skills={matches}
           stats={snapshot?.invocations ?? []}
           sort={sort}
@@ -134,7 +137,9 @@ export function SkillsView({
           selectedSkillName={selectedSkillName}
           initialCursorSkillName={lastClosedSkillName}
           active={active}
-          deploymentPathForSkill={(skill) => deploymentForScope(skill, filter.scope)}
+          deploymentPathForSkill={(skill) =>
+            deploymentForScope(skill, filter.scope, filter.harness)
+          }
           packProjectPath={isProjectScope(filter.scope) ? filter.scope.project : null}
           hasAnySkills={baseSkills.length > 0}
           onClearFilters={resetSkillListFilter}
