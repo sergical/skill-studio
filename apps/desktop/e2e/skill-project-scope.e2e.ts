@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { deployment, HARNESS_HOME, HARNESS_PROJECT } from "../src/dev/harness/skill-fixture";
 import { openApp, openSkillsPage, skillRow } from "./app-harness";
 
-test("editing through a Claude Code link forks and saves the project's Universal copy", async ({
+test("Claude Code links open the project's Universal copy and fork the global copy in Global scope", async ({
   page,
 }) => {
   await openApp(page);
@@ -13,14 +13,17 @@ test("editing through a Claude Code link forks and saves the project's Universal
   await page.getByRole("menuitemradio", { name: "Claude Code" }).click();
   await skillRow(page, "commit").getByText("commit", { exact: true }).click();
 
-  await expect(page.getByRole("combobox", { name: "Copy to show and edit" })).toContainText(
-    "agent-studio · Universal folder",
-  );
+  const selectedCopy = page.getByRole("combobox", { name: "Copy to show and edit" });
+  await expect(selectedCopy).toContainText("agent-studio · Universal folder");
+  await page.keyboard.press("Escape");
+  await page.getByRole("group", { name: "Scope" }).getByText("Global", { exact: true }).click();
+  await skillRow(page, "commit").getByText("commit", { exact: true }).click();
+  await expect(selectedCopy).toContainText("Global · Universal folder");
   await page.getByRole("button", { name: "Edit", exact: true }).click();
   const editor = page.getByRole("textbox", { name: "SKILL.md" });
-  await editor.fill(`${await editor.inputValue()}\nReview the project changes first.\n`);
+  await editor.fill(`${await editor.inputValue()}\nReview the staged changes first.\n`);
   await page.getByRole("button", { name: "Fork and save" }).click();
-  await expect(page.getByText("Review the project changes first.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Review the staged changes first.", { exact: true })).toBeVisible();
 });
 
 test("a project's client filter, coverage and open file use that project's copies and its global copies", async ({
