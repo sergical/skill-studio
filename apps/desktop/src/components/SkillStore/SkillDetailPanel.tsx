@@ -2,7 +2,7 @@
 // SkillDetailPanel - Detail view for a selected skill
 // ============================================================================
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button, DrawerContent } from "@skill-studio/ui";
 import { SkillDetailHeader } from "./SkillDetailHeader";
 import { SkillContent } from "./SkillContent";
@@ -48,6 +48,8 @@ function SkillDetailsContent({
   onUpdateComplete,
   onRemoveComplete,
 }: SkillDetailPanelProps) {
+  // Preserve the original request spelling until a different repository or skill opens.
+  const requestId = useRef(skill.id);
   const hasRemoteSource = skill.id.split("/").length >= 3;
   const [load, setLoad] = useState<DetailsLoad>(() =>
     hasRemoteSource
@@ -60,7 +62,7 @@ function SkillDetailsContent({
   useEffect(() => {
     if (load.kind !== "loading") return;
     let cancelled = false;
-    getSkillDetails(skill.id).then(
+    getSkillDetails(requestId.current).then(
       (details) => {
         if (!cancelled) setLoad({ kind: "loaded", details });
       },
@@ -75,7 +77,7 @@ function SkillDetailsContent({
     return () => {
       cancelled = true;
     };
-  }, [load.kind, skill.id]);
+  }, [load.kind]);
 
   return (
     <DrawerContent

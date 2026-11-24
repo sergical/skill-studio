@@ -40,7 +40,11 @@ afterEach(() => {
   // Each test renders a fresh Home; the store outlives it, so drop the last test's "Updated".
   useAppStore.getState().clearRowActs();
 });
-function ipc(afterHash: string, popularSkills: unknown[] | Promise<unknown[]> = []) {
+function ipc(
+  afterHash: string,
+  popularSkills: unknown[] | Promise<unknown[]> = [],
+  readmeReady = Promise.resolve(),
+) {
   const ids: unknown[] = [];
   const commands: string[] = [];
   mockIPC(
@@ -53,14 +57,14 @@ function ipc(afterHash: string, popularSkills: unknown[] | Promise<unknown[]> = 
         ids.push(args);
         if (!args || !("skillId" in args) || args.skillId !== "owner/repo/sample")
           throw new Error("Details need owner/repo/slug");
-        return {
+        return readmeReady.then(() => ({
           id: "owner/repo/sample",
           slug: "sample",
           source: "owner/repo",
           hash: "same",
           installs: 0,
           skill_md: "Installed sample content",
-        };
+        }));
       }
       if (command === "skill_local_edits") return [{ edited: false, checked: true }];
       if (command === "update_plugin") return { outcome: "up_to_date", message: null };
@@ -160,16 +164,21 @@ it("keeps the open installed skill when the catalog returns its canonical id", a
   const catalog = new Promise<unknown[]>((resolve) => {
     showCatalog = resolve;
   });
-  ipc("new", catalog);
+  let finishReadme!: () => void;
+  const readme = new Promise<void>((resolve) => {
+    finishReadme = resolve;
+  });
+  const { ids } = ipc("new", catalog, readme);
   await openInstalled();
-  expect(await screen.findByText("Installed sample content")).toBeTruthy();
+  expect(ids).toEqual([{ skillId: "owner/repo/sample" }]);
   await act(async () =>
     showCatalog([
       { id: "Owner/Repo/sample", name: "sample", top_source: "Owner/Repo", installs: 10 },
     ]),
   );
-  expect(screen.getByRole("dialog")).toBeTruthy();
-  expect(screen.getByText("Installed sample content")).toBeTruthy();
+  await act(async () => finishReadme());
+  expect(ids).toEqual([{ skillId: "owner/repo/sample" }]);
+  expect(await screen.findByText("Installed sample content")).toBeTruthy();
 });
 
 it("an unchanged installed update says already up to date or reports a new installation", async () => {

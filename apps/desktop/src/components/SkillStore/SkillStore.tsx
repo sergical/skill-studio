@@ -355,9 +355,9 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
   };
 
   const catalogMatches = new Map(
-    searchResultsWithStatus
-      .filter((skill) => skill.is_installed)
-      .map((skill) => [skill.name, skill]),
+    searchResultsWithStatus.flatMap((skill) =>
+      skill.is_installed ? [[skill.name, skill] as const] : [],
+    ),
   );
   const installedSkillsWithStatus: SkillWithStatus[] = installedSkills.map((skill) => {
     const found = catalogMatches.get(skill.name);
