@@ -2,7 +2,7 @@
 // SkillDetailPanel - Detail view for a selected skill
 // ============================================================================
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Button, DrawerContent } from "@skill-studio/ui";
 import { SkillDetailHeader } from "./SkillDetailHeader";
 import { SkillContent } from "./SkillContent";
@@ -28,7 +28,7 @@ interface SkillDetailPanelProps {
 }
 
 type DetailsLoad =
-  | { kind: "loading" }
+  | { kind: "loading"; skillId: string }
   | { kind: "loaded"; details: SkillDetails }
   | { kind: "failed"; message: string };
 
@@ -48,12 +48,10 @@ function SkillDetailsContent({
   onUpdateComplete,
   onRemoveComplete,
 }: SkillDetailPanelProps) {
-  // Preserve the original request spelling until a different repository or skill opens.
-  const requestId = useRef(skill.id);
   const hasRemoteSource = skill.id.split("/").length >= 3;
   const [load, setLoad] = useState<DetailsLoad>(() =>
     hasRemoteSource
-      ? { kind: "loading" }
+      ? { kind: "loading", skillId: skill.id }
       : { kind: "failed", message: "This skill has no skills.sh source." },
   );
   const details = load.kind === "loaded" ? load.details : null;
@@ -62,7 +60,7 @@ function SkillDetailsContent({
   useEffect(() => {
     if (load.kind !== "loading") return;
     let cancelled = false;
-    getSkillDetails(requestId.current).then(
+    getSkillDetails(load.skillId).then(
       (details) => {
         if (!cancelled) setLoad({ kind: "loaded", details });
       },
@@ -77,7 +75,7 @@ function SkillDetailsContent({
     return () => {
       cancelled = true;
     };
-  }, [load.kind]);
+  }, [load]);
 
   return (
     <DrawerContent
@@ -92,7 +90,11 @@ function SkillDetailsContent({
             {load.message}
           </p>
           {hasRemoteSource && (
-            <Button variant="outline" size="sm" onClick={() => setLoad({ kind: "loading" })}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setLoad({ kind: "loading", skillId: skill.id })}
+            >
               Retry
             </Button>
           )}

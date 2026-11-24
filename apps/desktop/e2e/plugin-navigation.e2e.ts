@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { deployment, HARNESS_HOME } from "../src/dev/harness/skill-fixture";
+import { deployment, HARNESS_HOME, HARNESS_PROJECT } from "../src/dev/harness/skill-fixture";
 import { openApp } from "./app-harness";
 
 test("opening a plugin skill uses the copy from its client group", async ({ page }) => {
@@ -19,13 +19,26 @@ test("opening a plugin skill uses the copy from its client group", async ({ page
       version: "2.0.0",
     },
   });
+  const ownCopies = [
+    deployment({
+      agent: "shared",
+      scope: "global",
+      path: `${HARNESS_HOME}/.agents/skills/${name}`,
+    }),
+    deployment({
+      agent: "shared",
+      scope: "project",
+      project_path: HARNESS_PROJECT,
+      path: `${HARNESS_PROJECT}/.agents/skills/${name}`,
+    }),
+  ];
   await page.evaluate(
-    ([name, copy]) =>
+    ([name, copies]) =>
       window.__harness?.updateSkill(name, (skill) => ({
         ...skill,
-        deployments: [...skill.deployments, copy],
+        deployments: [...skill.deployments, ...copies],
       })),
-    [name, copy] as const,
+    [name, [copy, ...ownCopies]] as const,
   );
 
   await page
@@ -37,6 +50,7 @@ test("opening a plugin skill uses the copy from its client group", async ({ page
     .getByRole("button", { name: new RegExp(name) })
     .click();
   await expect(page.getByText(`Managed by the ${name} plugin for Codex.`)).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Copy to show and edit" })).toHaveCount(0);
   const source = `Codex plugin · ${name} · v2.0.0`;
   await expect(page.getByRole("paragraph").filter({ hasText: source })).toBeVisible();
   await expect(

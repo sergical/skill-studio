@@ -2,6 +2,27 @@ import { expect, test } from "@playwright/test";
 import { deployment, HARNESS_HOME, HARNESS_PROJECT } from "../src/dev/harness/skill-fixture";
 import { openApp, openSkillsPage, skillRow } from "./app-harness";
 
+test("editing through a Claude Code link forks and saves the project's Universal copy", async ({
+  page,
+}) => {
+  await openApp(page);
+  await openSkillsPage(page, "Skills", "commit");
+  await page.getByRole("button", { name: /^Project:/ }).click();
+  await page.getByRole("menuitemradio", { name: /^agent-studio/ }).click();
+  await page.getByRole("button", { name: /^Filter,/ }).click();
+  await page.getByRole("menuitemradio", { name: "Claude Code" }).click();
+  await skillRow(page, "commit").getByText("commit", { exact: true }).click();
+
+  await expect(page.getByRole("combobox", { name: "Copy to show and edit" })).toContainText(
+    "agent-studio · Universal folder",
+  );
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  const editor = page.getByRole("textbox", { name: "SKILL.md" });
+  await editor.fill(`${await editor.inputValue()}\nReview the project changes first.\n`);
+  await page.getByRole("button", { name: "Fork and save" }).click();
+  await expect(page.getByText("Review the project changes first.", { exact: true })).toBeVisible();
+});
+
 test("a project's client filter, coverage and open file use that project's copies and its global copies", async ({
   page,
 }) => {

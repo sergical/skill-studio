@@ -7,6 +7,7 @@ import {
   deploymentMatchesHarness,
   deploymentWithSpecViolations,
   isProjectScope,
+  isUnresolvedDeployment,
   skillForCoverageScope,
 } from "@skill-studio/lib";
 import type { InstalledSkill, SkillListFilter } from "@skill-studio/lib";
@@ -26,5 +27,11 @@ export function deploymentForScope(
     ? matches.filter((d) => d.project_path === scope.project)
     : matches;
   const choices = local.length ? local : matches;
-  return (choices.find((d) => d.agent === harness) ?? choices[0])?.path;
+  const selected = choices.find((d) => d.agent === harness) ?? choices[0];
+  if (!selected || isUnresolvedDeployment(selected)) return selected?.path;
+  const backing = selected.backing;
+  if (backing.kind === "linked-to") {
+    return skill.deployments.find((d) => d.id === backing.deployment_id)?.path ?? selected.path;
+  }
+  return selected.path;
 }

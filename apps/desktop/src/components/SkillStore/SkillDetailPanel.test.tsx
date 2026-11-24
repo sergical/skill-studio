@@ -44,11 +44,11 @@ it.each([
 ])(
   "Browse shows a details error and Retry works with $label or a failed server leaves an empty panel",
   async ({ key }) => {
-    let attempts = 0;
-    mockIPC((command) => {
+    const attempts: unknown[] = [];
+    mockIPC((command, args) => {
       if (command === "get_skill_details") {
-        attempts += 1;
-        if (attempts === 1) throw new Error("The server is unavailable");
+        attempts.push(args);
+        if (attempts.length === 1) throw new Error("The server is unavailable");
         return {
           id: skill.id,
           slug: skill.name,
@@ -69,14 +69,15 @@ it.each([
       throw new Error(`Unexpected ${command}`);
     });
     const user = userEvent.setup();
-    render(<Details />);
+    const { rerender } = render(<Details />);
     expect((await screen.findByRole("alert")).textContent).toContain("The server is unavailable");
+    rerender(<Details selected={{ ...skill, id: "Owner/Repo/sample" }} />);
     const retry = screen.getByRole("button", { name: "Retry" });
     for (let i = 0; i < 20 && document.activeElement !== retry; i += 1) await user.tab();
     expect(document.activeElement).toBe(retry);
     await user.keyboard(key);
     expect(await screen.findByText("# Sample skill body")).toBeTruthy();
-    expect(attempts).toBe(2);
+    expect(attempts).toEqual([{ skillId: skill.id }, { skillId: "Owner/Repo/sample" }]);
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   },

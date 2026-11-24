@@ -99,7 +99,8 @@ function CardHeader({
       <span className="flex min-w-0 items-center gap-2">
         {deployment &&
           !deploymentUnresolved &&
-          (ownDeploymentOptions.length > 1 ? (
+          (ownDeploymentOptions.length > 1 &&
+          ownDeploymentOptions.some((d) => d.path === deployment.path) ? (
             <SelectControl
               ariaLabel="Copy to show and edit"
               disabled={isEditing}
