@@ -1,7 +1,7 @@
-// PROTO(home-calc): the hero's pointer engine. One passive pointermove stores the position and
-// velocity; one requestAnimationFrame loop writes transforms, opacity and two leaf CSS
-// variables, and sleeps when everything has settled. No React state changes per move.
-// Off for touch and coarse pointers, for reduced motion, and while the hero is off screen.
+// The hero's pointer engine. One passive pointermove stores the position and velocity; one
+// requestAnimationFrame loop writes transforms, opacity and two leaf CSS variables, and sleeps
+// when everything has settled. No React state changes per move. Off for touch and coarse
+// pointers, for reduced motion, and while the hero is off screen.
 import { useEffect, type RefObject } from "react";
 
 import { useReducedMotion } from "../../use-reduced-motion";

@@ -115,10 +115,24 @@ interface Hold {
   samples: Array<{ t: number; x: number; y: number }>;
 }
 
-// PROTO: production plays the intro once per session. Here it plays on every mount, so the
-// picker and the replay key can re-run it.
-const introSeen = () => false;
-const rememberIntro = () => undefined;
+const INTRO_SEEN_KEY = "skill-studio:hero-intro";
+
+// The intro plays once per session. Storage can be blocked, and then it plays on each visit.
+function introSeen() {
+  try {
+    return sessionStorage.getItem(INTRO_SEEN_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
+function rememberIntro() {
+  try {
+    sessionStorage.setItem(INTRO_SEEN_KEY, "1");
+  } catch {
+    return;
+  }
+}
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const wrapAngle = (degrees: number) => ((((degrees + 180) % 360) + 360) % 360) - 180;

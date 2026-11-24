@@ -146,6 +146,14 @@ export function FirstScanSteps() {
             <li>Park moves a skill away from every agent. Undo puts it back.</li>
             <li>It runs on your Mac. Free and open source.</li>
           </ul>
+          <div {...stylex.props(styles.introLinks)}>
+            <a href="#download" {...stylex.props(homeSectionStyles.textLink)}>
+              Get the Mac app <span aria-hidden="true">→</span>
+            </a>
+            <a href="/docs/get-started/" {...stylex.props(homeSectionStyles.textLink)}>
+              First-run guide <span aria-hidden="true">→</span>
+            </a>
+          </div>
         </div>
         <ol {...stylex.props(styles.steps)}>
           <Step
@@ -195,7 +203,17 @@ const styles = stylex.create({
     listStyle: "none",
     margin: 0,
     padding: 0,
-    "@media (max-width: 760px)": { marginBottom: 32 },
+  },
+  introLinks: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-start",
+    "@media (max-width: 760px)": {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: "0 20px",
+      marginBottom: 24,
+    },
   },
   steps: {
     display: "grid",

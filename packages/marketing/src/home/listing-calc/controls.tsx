@@ -1,6 +1,7 @@
-// PROTO(home-calc): throwaway calculator controls. Keyboard and pointer both work: the radio
-// group moves with arrow keys, the slider takes arrows, Page keys, Home and End.
+// Calculator controls. Keyboard and pointer both work: the radio group moves with arrow keys,
+// the slider takes arrows, Page keys, Home and End.
 import {
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -11,11 +12,156 @@ import {
   type ReactNode,
 } from "react";
 import * as stylex from "@stylexjs/stylex";
+import { Info } from "lucide-react";
 
 import { siteTokens } from "../../SiteTheme.stylex";
 
+const HOVER = "@media (hover: hover) and (pointer: fine)";
 const SETTLE = "cubic-bezier(0.32, 0.72, 0, 1)";
 const SPRINGY = "cubic-bezier(0.34, 1.56, 0.64, 1)";
+const hintPopIn = stylex.keyframes({
+  from: { opacity: 0, transform: "translateY(4px) scale(0.97)" },
+  to: { opacity: 1, transform: "none" },
+});
+// First open waits; once one tip is open, the next opens at once until the group goes quiet.
+const HINT_OPEN_MS = 500;
+const HINT_GROUP_IDLE_MS = 300;
+// iOS fires an emulated mouse pointerenter right after a touch tap; ignore it within 50ms.
+const TOUCH_MOUSE_GUARD_MS = 50;
+
+let hintGroupOpen = false;
+let hintGroupIdle: ReturnType<typeof setTimeout> | null = null;
+let lastTouchEndAt = 0;
+
+function markHintGroupOpen() {
+  hintGroupOpen = true;
+  if (hintGroupIdle) {
+    clearTimeout(hintGroupIdle);
+    hintGroupIdle = null;
+  }
+}
+
+function markHintGroupClosed() {
+  if (hintGroupIdle) clearTimeout(hintGroupIdle);
+  hintGroupIdle = setTimeout(() => {
+    hintGroupOpen = false;
+    hintGroupIdle = null;
+  }, HINT_GROUP_IDLE_MS);
+}
+
+/** Footnotes stay behind this icon so the panel only shows the control. */
+export function InfoHint({
+  label,
+  align = "center",
+  children,
+}: {
+  label: string;
+  align?: "center" | "end";
+  children: ReactNode;
+}) {
+  const id = useId();
+  const wrapRef = useRef<HTMLSpanElement>(null);
+  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [open, setOpen] = useState(false);
+  const [instant, setInstant] = useState(false);
+
+  const show = useCallback((immediate = false) => {
+    markHintGroupOpen();
+    setInstant(immediate);
+    setOpen(true);
+  }, []);
+
+  const hide = useCallback(() => {
+    setOpen(false);
+    setInstant(false);
+    markHintGroupClosed();
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (openTimer.current) clearTimeout(openTimer.current);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") hide();
+    };
+    const onPointer = (event: globalThis.PointerEvent) => {
+      if (event.target instanceof Node && wrapRef.current?.contains(event.target)) return;
+      hide();
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("pointerdown", onPointer);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("pointerdown", onPointer);
+    };
+  }, [open, hide]);
+
+  const clearOpenTimer = () => {
+    if (!openTimer.current) return;
+    clearTimeout(openTimer.current);
+    openTimer.current = null;
+  };
+
+  const onPointerEnter = (event: PointerEvent<HTMLSpanElement>) => {
+    if (event.pointerType !== "mouse" || performance.now() - lastTouchEndAt < TOUCH_MOUSE_GUARD_MS)
+      return;
+    clearOpenTimer();
+    if (hintGroupOpen) {
+      show(true);
+      return;
+    }
+    openTimer.current = setTimeout(() => show(false), HINT_OPEN_MS);
+  };
+
+  const onPointerLeave = (event: PointerEvent<HTMLSpanElement>) => {
+    if (event.pointerType !== "mouse") return;
+    clearOpenTimer();
+    hide();
+  };
+
+  const onPointerUp = (event: PointerEvent<HTMLSpanElement>) => {
+    if (event.pointerType === "touch") lastTouchEndAt = performance.now();
+  };
+
+  return (
+    <span
+      ref={wrapRef}
+      onPointerEnter={onPointerEnter}
+      onPointerLeave={onPointerLeave}
+      onPointerUp={onPointerUp}
+      {...stylex.props(styles.hintWrap)}
+    >
+      <button
+        type="button"
+        aria-label={label}
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => (open ? hide() : show(false))}
+        {...stylex.props(styles.hintButton)}
+      >
+        <Info aria-hidden="true" size={14} strokeWidth={2.25} />
+      </button>
+      {open && (
+        <span
+          role="tooltip"
+          id={id}
+          {...stylex.props(
+            styles.hintPopup,
+            align === "end" ? styles.hintPopupEnd : styles.hintPopupCenter,
+            instant && styles.hintPopupInstant,
+          )}
+        >
+          {children}
+        </span>
+      )}
+    </span>
+  );
+}
 
 interface Option<T> {
   value: T;
@@ -134,6 +280,7 @@ export function Slider({
   springy = false,
   marks,
   hideHeading = false,
+  hint,
 }: {
   label: string;
   value: number;
@@ -146,12 +293,16 @@ export function Slider({
   springy?: boolean;
   marks?: ReadonlyArray<string>;
   hideHeading?: boolean;
+  /** Optional footnote icon next to the label (limits, unit math). */
+  hint?: ReactNode;
 }) {
   const labelId = useId();
   const frame = useRef(0);
   const bounds = useRef({ left: 0, width: 1 });
   const pending = useRef(value);
+  const pointerDown = useRef(false);
   const [dragging, setDragging] = useState(false);
+  const [keyboardFocus, setKeyboardFocus] = useState(false);
   // Detents spring under the pointer; a key press lands at once.
   const [byPointer, setByPointer] = useState(false);
   const spring = springy && byPointer;
@@ -176,7 +327,12 @@ export function Slider({
     const slider = event.currentTarget;
     const box = slider.getBoundingClientRect();
     bounds.current = { left: box.left + 11, width: Math.max(1, box.width - 22) };
+    // Keep keyboard focus on the slider so arrows work right after a click, without showing a
+    // keyboard focus ring during pointer drags.
+    pointerDown.current = true;
     slider.focus({ preventScroll: true });
+    pointerDown.current = false;
+    setKeyboardFocus(false);
     slider.setPointerCapture(event.pointerId);
     setDragging(true);
     setByPointer(true);
@@ -214,6 +370,7 @@ export function Slider({
     if (offset === undefined && event.key !== "Home" && event.key !== "End") return;
     event.preventDefault();
     setByPointer(false);
+    setKeyboardFocus(true);
     if (offset === undefined) update(event.key === "Home" ? min : max);
     else update(round(value + offset));
   };
@@ -221,7 +378,10 @@ export function Slider({
   return (
     <div>
       <div {...stylex.props(styles.sliderHeading, hideHeading && styles.visuallyHidden)}>
-        <span id={labelId}>{label}</span>
+        <span {...stylex.props(styles.sliderLabel)}>
+          <span id={labelId}>{label}</span>
+          {hint}
+        </span>
         <span {...stylex.props(styles.sliderValue)}>{valueText}</span>
       </div>
       <div
@@ -232,12 +392,16 @@ export function Slider({
         aria-valuemax={max}
         aria-valuenow={value}
         aria-valuetext={valueText}
+        onFocus={() => {
+          if (!pointerDown.current) setKeyboardFocus(true);
+        }}
+        onBlur={() => setKeyboardFocus(false)}
         onKeyDown={onKeyDown}
         onPointerDown={startDrag}
         onPointerMove={moveDrag}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
-        {...stylex.props(styles.slider)}
+        {...stylex.props(stylex.defaultMarker(), styles.slider)}
       >
         <span {...stylex.props(styles.track)}>
           <span
@@ -257,20 +421,33 @@ export function Slider({
               styles.thumbAt(position),
             )}
           >
-            <span {...stylex.props(styles.thumb, dragging && styles.thumbPressed)} />
+            <span
+              {...stylex.props(
+                styles.thumb,
+                dragging && styles.thumbPressed,
+                keyboardFocus && styles.thumbFocused,
+              )}
+            />
           </span>
         </span>
       </div>
       {marks && (
-        // An empty mark is a tick without a label. The labelled stops must be evenly spaced,
-        // because the labels are spread across the row, not placed under their ticks.
         <div aria-hidden="true" {...stylex.props(styles.marks)}>
           {marks.map(
             (mark, i) =>
               mark && (
                 <span
                   key={i}
-                  {...stylex.props(styles.mark, i === Math.round(value - min) && styles.markOn)}
+                  {...stylex.props(
+                    styles.mark,
+                    styles.markAt((i / (marks.length - 1)) * 100),
+                    i === 0
+                      ? styles.markStart
+                      : i === marks.length - 1
+                        ? styles.markEnd
+                        : styles.markMid,
+                    i === Math.round(value - min) && styles.markOn,
+                  )}
                 >
                   {mark}
                 </span>
@@ -284,29 +461,40 @@ export function Slider({
 
 export function Switch({
   label,
+  hint,
   checked,
   onChange,
 }: {
   label: ReactNode;
+  hint?: ReactNode;
   checked: boolean;
   onChange: (checked: boolean) => void;
 }) {
+  const id = useId();
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      onClick={() => onChange(!checked)}
-      {...stylex.props(styles.switchButton)}
-    >
-      <span
-        aria-hidden="true"
-        {...stylex.props(styles.switchTrack, checked && styles.switchTrackOn)}
-      >
-        <span {...stylex.props(styles.switchKnob, checked && styles.switchKnobOn)} />
+    <div {...stylex.props(styles.switchRow)}>
+      <span {...stylex.props(styles.sliderLabel)}>
+        <label htmlFor={id} {...stylex.props(styles.switchLabel)}>
+          {label}
+        </label>
+        {hint}
       </span>
-      <span>{label}</span>
-    </button>
+      <button
+        id={id}
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        {...stylex.props(styles.switchButton)}
+      >
+        <span
+          aria-hidden="true"
+          {...stylex.props(styles.switchTrack, checked && styles.switchTrackOn)}
+        >
+          <span {...stylex.props(styles.switchKnob, checked && styles.switchKnobOn)} />
+        </span>
+      </button>
+    </div>
   );
 }
 
@@ -320,6 +508,60 @@ const styles = stylex.create({
     whiteSpace: "nowrap",
     width: 1,
   },
+  hintWrap: { display: "inline-flex", position: "relative", verticalAlign: "middle" },
+  hintButton: {
+    alignItems: "center",
+    backgroundColor: "transparent",
+    borderRadius: 999,
+    borderWidth: 0,
+    color: siteTokens.muted,
+    cursor: "pointer",
+    display: "inline-flex",
+    flexShrink: 0,
+    height: 22,
+    justifyContent: "center",
+    margin: 0,
+    padding: 0,
+    position: "relative",
+    touchAction: "manipulation",
+    transition: "color 150ms ease-out",
+    width: 22,
+    // 22px icon with 40px effective target (emil-ui-polish).
+    "::before": { content: '""', inset: -9, position: "absolute" },
+    ":hover": { color: siteTokens.text },
+    ":focus-visible": { outline: `2px solid ${siteTokens.muted}`, outlineOffset: 2 },
+  },
+  hintPopup: {
+    animationDuration: "140ms",
+    animationName: { default: hintPopIn, "@media (prefers-reduced-motion: reduce)": "none" },
+    animationTimingFunction: "ease-out",
+    backgroundColor: siteTokens.background,
+    borderRadius: 10,
+    bottom: "calc(100% + 8px)",
+    boxShadow: `0 0 0 1px ${siteTokens.border}, 0 12px 32px oklch(0 0 0 / .32)`,
+    color: siteTokens.muted,
+    display: "flex",
+    flexDirection: "column",
+    fontSize: 12,
+    fontWeight: 500,
+    gap: 6,
+    lineHeight: 1.45,
+    maxWidth: 248,
+    padding: "10px 12px",
+    position: "absolute",
+    whiteSpace: "normal",
+    width: "max-content",
+    zIndex: 10,
+  },
+  hintPopupCenter: { left: "50%", transformOrigin: "bottom center", translate: "-50% 0" },
+  hintPopupEnd: { right: -8, transformOrigin: "bottom right" },
+  hintPopupInstant: { animationName: "none" },
+  sliderLabel: {
+    alignItems: "center",
+    display: "inline-flex",
+    gap: 4,
+    minWidth: 0,
+  },
   group: {
     backgroundColor: siteTokens.background,
     borderColor: siteTokens.border,
@@ -331,7 +573,12 @@ const styles = stylex.create({
     padding: 3,
     position: "relative",
   },
-  groupEqual: { display: "flex", width: "100%" },
+  // Grid, not flex: label length ("Claude Code" vs "Codex") must not change column width.
+  groupEqual: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    width: "100%",
+  },
   groupCompact: { borderRadius: 9 },
   highlight: {
     backgroundColor: siteTokens.text,
@@ -375,7 +622,7 @@ const styles = stylex.create({
     minHeight: { default: 34, "@media (pointer: coarse)": 44 },
     paddingInline: 11,
   },
-  optionEqual: { flex: 1, minWidth: 0 },
+  optionEqual: { minWidth: 0, width: "100%", paddingInline: 8 },
   optionOn: {
     backgroundColor: siteTokens.text,
     color: siteTokens.background,
@@ -402,10 +649,13 @@ const styles = stylex.create({
     cursor: "pointer",
     display: "flex",
     minHeight: 44,
+    outline: "none",
     paddingInline: 11,
     touchAction: "pan-y",
     userSelect: "none",
-    ":focus-visible": { outline: `2px solid ${siteTokens.muted}`, outlineOffset: 2 },
+    // Keyboard focus renders as a circular ring on the thumb itself so the 44px touch box never
+    // overlaps the slider heading above.
+    ":focus-visible": { outline: "none" },
   },
   track: {
     backgroundColor: siteTokens.border,
@@ -452,42 +702,76 @@ const styles = stylex.create({
     left: -10,
     position: "absolute",
     top: "50%",
-    transform: "translateY(-50%)",
+    transform: {
+      default: "translateY(-50%)",
+      [HOVER]: {
+        [stylex.when.ancestor(":hover")]: "translateY(-50%) scale(1.08)",
+      },
+    },
     transition: {
-      default: `transform 160ms ${SETTLE}`,
+      default: `transform 160ms ${SETTLE}, box-shadow 150ms ease-out`,
       "@media (prefers-reduced-motion: reduce)": "none",
     },
     width: 20,
   },
   thumbPressed: { transform: "translateY(-50%) scale(1.15)" },
+  thumbFocused: {
+    boxShadow: `0 0 0 2px ${siteTokens.background}, 0 0 0 4px ${siteTokens.text}`,
+  },
   marks: {
     color: siteTokens.muted,
-    display: "flex",
     fontSize: 12,
     fontVariantNumeric: "tabular-nums",
-    justifyContent: "space-between",
-    paddingInline: 2,
+    height: 18,
+    marginInline: 11,
+    marginTop: -6,
+    position: "relative",
   },
-  mark: { minWidth: 32, textAlign: "center", transition: "color 150ms ease-out" },
-  markOn: { color: siteTokens.text, fontWeight: 600 },
+  mark: {
+    fontWeight: 500,
+    position: "absolute",
+    top: 0,
+    transition: "color 150ms ease-out",
+    whiteSpace: "nowrap",
+  },
+  markAt: (percent: number) => ({ left: `${percent}%` }),
+  markStart: { transform: "none" },
+  markMid: { transform: "translateX(-50%)" },
+  markEnd: { transform: "translateX(-100%)" },
+  // Constant font-weight on selection avoids reflow; color alone signals active stop (emil-ui-polish).
+  markOn: { color: siteTokens.text },
+  switchRow: {
+    alignItems: "center",
+    display: "flex",
+    gap: 12,
+    justifyContent: "space-between",
+    minHeight: 36,
+    width: "100%",
+  },
+  switchLabel: {
+    color: siteTokens.text,
+    cursor: "pointer",
+    fontSize: 14,
+    fontWeight: 600,
+    userSelect: "none",
+  },
   switchButton: {
     alignItems: "center",
     backgroundColor: "transparent",
+    borderRadius: 999,
     borderWidth: 0,
-    color: siteTokens.text,
     cursor: "pointer",
     display: "inline-flex",
-    fontFamily: "inherit",
-    fontSize: 14,
-    fontWeight: 600,
-    gap: 10,
-    minHeight: 44,
+    flexShrink: 0,
+    justifyContent: "center",
     padding: 0,
+    position: "relative",
     touchAction: "manipulation",
+    // 38x22 visual track with >=44px vertical touch target (emil-ui-polish).
+    "::before": { content: '""', inset: "-11px -4px", position: "absolute" },
     ":focus-visible": {
       outline: `2px solid ${siteTokens.muted}`,
-      outlineOffset: 4,
-      borderRadius: 6,
+      outlineOffset: 3,
     },
   },
   switchTrack: {

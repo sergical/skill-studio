@@ -8,7 +8,7 @@ import * as stylex from "@stylexjs/stylex";
 import { AppWindow, Check, Copy, Plug, RotateCcw, Terminal, type LucideIcon } from "lucide-react";
 
 import { siteTokens } from "../SiteTheme.stylex";
-import { CLI_DOCS_URL, DOWNLOAD_URL, MCP_DOCS_URL } from "../site-links";
+import { CLI_DOCS_URL, MCP_DOCS_URL } from "../site-links";
 import { homeSectionStyles } from "./HomeSection.stylex";
 import { useCopyFlash } from "./useCopyFlash";
 import { AGENT_SETUP_PROMPT } from "@skill-studio/lib/agent-setup";
@@ -312,7 +312,7 @@ function CopyCommand({ text, copy, label }: { text: string; copy: string; label:
         type="button"
         aria-label={copied ? "Copied" : label}
         onClick={() => copyText(copy)}
-        {...stylex.props(styles.copyButton)}
+        {...stylex.props(styles.copyButton, copied && styles.copyButtonCopied)}
       >
         {copied ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
       </button>
@@ -457,8 +457,8 @@ export function UsageSection() {
                 )}
               >
                 {id === "app" ? (
-                  <a href={DOWNLOAD_URL} {...stylex.props(homeSectionStyles.textLink)}>
-                    Download for macOS
+                  <a href="#download" {...stylex.props(homeSectionStyles.textLink)}>
+                    Get the Mac app
                     <span aria-hidden="true">→</span>
                   </a>
                 ) : (
@@ -480,6 +480,9 @@ export function UsageSection() {
 }
 
 const settle = "cubic-bezier(0.32, 0.72, 0, 1)";
+const HOVER = "@media (hover: hover) and (pointer: fine)";
+const REDUCED = "@media (prefers-reduced-motion: reduce)";
+const PRESS_EASE = "cubic-bezier(0.25, 0.46, 0.45, 0.94)";
 const blink = stylex.keyframes({ "50%": { opacity: 0 } });
 
 const styles = stylex.create({
@@ -508,9 +511,9 @@ const styles = stylex.create({
     minHeight: 64,
     padding: "10px 12px",
     textAlign: "left",
-    transition:
-      "background-color 150ms ease-out, border-color 150ms ease-out, color 150ms ease-out",
-    ":hover": { backgroundColor: siteTokens.surface, color: siteTokens.text },
+    transition: `background-color 150ms ease, border-color 150ms ease, color 150ms ease, transform 150ms ${PRESS_EASE}`,
+    [HOVER]: { ":hover": { backgroundColor: siteTokens.surface, color: siteTokens.text } },
+    ":active": { transform: "scale(.985)" },
     ":focus-visible": { outline: `2px solid ${siteTokens.text}`, outlineOffset: 2 },
     "@media (max-width: 760px)": { justifyContent: "center", minHeight: 48 },
   },
@@ -577,9 +580,9 @@ const styles = stylex.create({
     justifySelf: "end",
     minHeight: 32,
     paddingInline: 10,
-    transition: "background-color 150ms ease-out, color 150ms ease-out",
-    ":hover": { backgroundColor: "oklch(1 0 0 / .08)", color: "oklch(0.97 0 0)" },
-    ":active": { transform: "scale(.96)" },
+    transition: `background-color 150ms ease, color 150ms ease, transform 150ms ${PRESS_EASE}`,
+    [HOVER]: { ":hover": { backgroundColor: "oklch(1 0 0 / .08)", color: "oklch(0.97 0 0)" } },
+    ":active": { transform: "scale(.97)" },
     ":focus-visible": { outline: "2px solid oklch(0.97 0 0)", outlineOffset: 1 },
   },
   screen: {
@@ -661,7 +664,7 @@ const styles = stylex.create({
   },
   appRowParked: { opacity: 0.45 },
   appDot: { borderRadius: 999, height: 8, width: 8 },
-  dotUsed: { backgroundColor: "oklch(0.75 0.17 150)" },
+  dotUsed: { backgroundColor: siteTokens.success },
   dotIdle: { backgroundColor: "oklch(0.6 0.02 290)" },
   appName: { fontWeight: 560, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   appMeta: { color: siteTokens.muted, fontSize: 12 },
@@ -701,8 +704,11 @@ const styles = stylex.create({
     padding: "6px 6px 6px 14px",
     pointerEvents: "none",
     position: "absolute",
-    transform: "translate(-50%, 12px)",
-    transition: `opacity 200ms ease-out, transform 400ms ${settle}`,
+    transform: { default: "translate(-50%, 12px)", [REDUCED]: "translate(-50%, 0)" },
+    transition: {
+      default: `opacity 200ms ease-out, transform 360ms ${settle}`,
+      [REDUCED]: "opacity 160ms ease",
+    },
     whiteSpace: "nowrap",
   },
   toastOn: { opacity: 1, pointerEvents: "auto", transform: "translate(-50%, 0)" },
@@ -718,8 +724,9 @@ const styles = stylex.create({
     minHeight: 32,
     paddingInline: 10,
     textDecoration: "underline",
+    transition: `transform 150ms ${PRESS_EASE}`,
     ":focus-visible": { outline: "2px solid currentColor", outlineOffset: 2 },
-    ":active": { transform: "scale(.96)" },
+    ":active": { transform: "scale(.97)" },
   },
   footer: {
     alignContent: "start",
@@ -752,16 +759,18 @@ const styles = stylex.create({
     backgroundColor: "transparent",
     borderRadius: 8,
     borderWidth: 0,
-    color: siteTokens.muted,
+    color: { default: siteTokens.muted, [HOVER]: { ":hover": siteTokens.text } },
     cursor: "pointer",
     display: "flex",
     flexShrink: 0,
     height: 44,
     justifyContent: "center",
-    transition: "color 150ms ease-out",
+    transition: `color 150ms ease, transform 150ms ${PRESS_EASE}`,
     width: 44,
-    ":hover": { color: siteTokens.text },
-    ":active": { transform: "scale(.96)" },
+    ":active": { transform: "scale(.97)" },
     ":focus-visible": { outline: `2px solid ${siteTokens.text}`, outlineOffset: -4 },
+  },
+  copyButtonCopied: {
+    color: { default: siteTokens.success, [HOVER]: { ":hover": siteTokens.success } },
   },
 });

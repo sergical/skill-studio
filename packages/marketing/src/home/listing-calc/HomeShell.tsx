@@ -1,25 +1,22 @@
-// PROTO(home-calc): the homepage around each variant's hero and calculator. Everything that is
-// not the axis under test is the production section, imported as is, except Jobs and the FAQ
-// (forked for the content brief) and the agent strip (its note moved to the FAQ).
 import type { ReactNode } from "react";
 import * as stylex from "@stylexjs/stylex";
 
 import { AgentIcon, type AgentId } from "../../AgentIcon";
-import { BenchmarkSection } from "../../home/BenchmarkSection";
-import { ClosingFinale } from "../../home/ClosingFinale";
-import { finaleCtaMarker } from "../../home/ClosingFinale.stylex";
-import { FirstScanSteps } from "../../home/FirstScanSteps";
-import { homeSectionStyles } from "../../home/HomeSection.stylex";
-import { UsageSection } from "../../home/UsageSection";
-import { ProductMock, type ThemeToggleOrigin } from "../../ProductMock";
+import { BenchmarkSection } from "../BenchmarkSection";
+import { ClosingFinale } from "../ClosingFinale";
+import { finaleCtaMarker } from "../ClosingFinale.stylex";
+import { FaqSection } from "../FaqSection";
+import { FirstScanSteps } from "../FirstScanSteps";
+import { homeSectionStyles } from "../HomeSection.stylex";
+import { JobsSection } from "../JobsSection";
+import { UsageSection } from "../UsageSection";
+import type { ThemeToggleOrigin } from "../../ProductMock";
 import { SiteFooter, SiteHeader, siteLayout } from "../../SiteChrome";
 import { lightSiteTheme, siteTokens, type SiteTheme } from "../../SiteTheme.stylex";
 import { SidecarWalkthrough } from "../../walkthrough/SidecarWalkthrough";
 import { DownloadButton, HERO_TITLE, HeaderDownload, TrustLine } from "./HeroParts";
-import { ProtoFaq } from "./ProtoFaq";
-import { ProtoJobs } from "./ProtoJobs";
 
-export interface VariantProps {
+export interface HomePageProps {
   theme: SiteTheme;
   onToggleTheme: (origin: ThemeToggleOrigin) => void;
 }
@@ -70,19 +67,15 @@ function AgentStrip() {
   );
 }
 
-export function ProtoPage({
+export function HomeShell({
   theme,
-  onToggleTheme,
   hero,
   calculator,
   product,
-  display = false,
-}: VariantProps & {
+}: HomePageProps & {
   hero: ReactNode;
   calculator: ReactNode;
-  /** A product section of the variant's own. It goes right under the hero, before Jobs. */
-  product?: ReactNode;
-  display?: boolean;
+  product: ReactNode;
 }) {
   return (
     <div id="top" {...stylex.props(siteLayout.page, theme === "light" && lightSiteTheme)}>
@@ -92,26 +85,20 @@ export function ProtoPage({
 
         {product}
 
-        <section id="jobs" {...stylex.props(siteLayout.container, styles.jobs, styles.anchor)}>
-          <ProtoJobs display={display} />
+        <section
+          id="listing"
+          {...stylex.props(siteLayout.container, styles.listing, styles.anchor)}
+        >
+          {calculator}
         </section>
-
-        {!product && (
-          <section
-            id="product"
-            {...stylex.props(siteLayout.container, styles.product, styles.anchor)}
-          >
-            <ProductMock theme={theme} onToggleTheme={onToggleTheme} />
-          </section>
-        )}
 
         <AgentStrip />
 
         <section
-          id="listing"
+          id="jobs"
           {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}
         >
-          {calculator}
+          <JobsSection />
         </section>
 
         <section
@@ -122,7 +109,7 @@ export function ProtoPage({
         </section>
 
         <section {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}>
-          <SidecarWalkthrough theme={theme} title="Then, day to day." />
+          <SidecarWalkthrough theme={theme} title="See it in action." />
         </section>
 
         <section
@@ -143,7 +130,7 @@ export function ProtoPage({
           id="faq"
           {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}
         >
-          <ProtoFaq />
+          <FaqSection />
         </section>
       </main>
 
@@ -177,15 +164,9 @@ export function ProtoPage({
 
 const styles = stylex.create({
   anchor: { scrollMarginTop: 72 },
-  jobs: {
-    paddingBlock: "56px 96px",
-    "@media (max-width: 600px)": { paddingBlock: "40px 72px" },
-  },
-  product: {
-    paddingBottom: 96,
-    position: "relative",
-    zIndex: 1,
-    "@media (max-width: 600px)": { paddingBottom: 64 },
+  listing: {
+    paddingBlock: "64px 96px",
+    "@media (max-width: 600px)": { paddingBlock: "44px 72px" },
   },
   agentProof: {
     alignItems: "center",

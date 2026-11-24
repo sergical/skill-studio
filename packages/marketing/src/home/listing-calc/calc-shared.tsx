@@ -1,9 +1,7 @@
-// PROTO(home-calc): calculator state and the controls every variant shares.
 import { useMemo, useState } from "react";
 import * as stylex from "@stylexjs/stylex";
 
 import { AgentIcon } from "../../AgentIcon";
-import { siteTokens } from "../../SiteTheme.stylex";
 import {
   CLAUDE_DEFAULT_FRACTION_INDEX,
   CLAUDE_FRACTIONS,
@@ -15,19 +13,16 @@ import {
   MAX_PROJECT_SKILLS,
   MAX_SKILLS,
   MIN_SKILLS,
+  claudeBudgetLine,
+  codexBudgetLine,
   estimateClaude,
   estimateCodex,
   format,
   formatPercent,
 } from "./budget";
-import { Segmented, Slider, Switch } from "./controls";
+import { InfoHint, Slider, Switch } from "./controls";
 
 export type Agent = "claude" | "codex";
-
-export const STATE_FILL = {
-  described: "oklch(0.75 0.17 150)",
-  nameOnly: "oklch(0.8 0.15 80)",
-} as const;
 
 export function useCalculator() {
   const [agent, setAgent] = useState<Agent>("claude");
@@ -99,37 +94,6 @@ export const AGENT_OPTIONS = [
   },
 ];
 
-export const WINDOW_OPTIONS = CONTEXT_WINDOWS.map((option, index) => ({
-  value: index,
-  label: option.label,
-}));
-
-export function WindowControl({
-  calc,
-  size,
-  sliding,
-}: {
-  calc: Calculator;
-  size?: "regular" | "compact";
-  sliding?: boolean;
-}) {
-  return (
-    <div {...stylex.props(styles.field)}>
-      <span {...stylex.props(styles.fieldLabel)} id="context-window-label">
-        Context window
-      </span>
-      <Segmented
-        label="Context window"
-        options={WINDOW_OPTIONS}
-        value={calc.windowIndex}
-        onChange={calc.setWindowIndex}
-        size={size}
-        sliding={sliding}
-      />
-    </div>
-  );
-}
-
 export function SkillsControl({ calc }: { calc: Calculator }) {
   return (
     <Slider
@@ -148,14 +112,10 @@ export function SkillsControl({ calc }: { calc: Calculator }) {
 export function ProjectSkillsControl({ calc }: { calc: Calculator }) {
   return (
     <div {...stylex.props(styles.project)}>
-      <Switch
-        label="Plus project skills"
-        checked={calc.withProject}
-        onChange={calc.setWithProject}
-      />
+      <Switch label="Project skills" checked={calc.withProject} onChange={calc.setWithProject} />
       {calc.withProject && (
         <Slider
-          label="Project skills"
+          label="Added from project"
           value={calc.project}
           valueText={`+${format(calc.project)}`}
           min={5}
@@ -178,21 +138,25 @@ export function ClaudeFractionControl({ calc }: { calc: Calculator }) {
   const fraction = CLAUDE_FRACTIONS[calc.fractionIndex];
   const isDefault = calc.fractionIndex === CLAUDE_DEFAULT_FRACTION_INDEX;
   return (
-    <>
-      <Slider
-        label="Listing budget"
-        value={calc.fractionIndex}
-        valueText={`${formatPercent(fraction)}${isDefault ? " (default)" : ""}`}
-        min={0}
-        max={CLAUDE_FRACTIONS.length - 1}
-        onChange={calc.setFractionIndex}
-        springy
-        marks={FRACTION_MARKS}
-      />
-      <p {...stylex.props(styles.budgetNote)}>
-        Claude Code accepts up to 100%. This calculator stops at 10%.
-      </p>
-    </>
+    <Slider
+      label="Listing budget"
+      value={calc.fractionIndex}
+      valueText={`${formatPercent(fraction)}${isDefault ? " (default)" : ""}`}
+      min={0}
+      max={CLAUDE_FRACTIONS.length - 1}
+      onChange={calc.setFractionIndex}
+      springy
+      marks={FRACTION_MARKS}
+      hint={
+        <InfoHint label="About the listing budget">
+          <span>
+            <code {...stylex.props(styles.hintCode)}>skillListingBudgetFraction</code> accepts up to
+            100%. This calculator stops at 10%.
+          </span>
+          <span>{claudeBudgetLine(calc.claude, calc.contextWindow.label)}</span>
+        </InfoHint>
+      }
+    />
   );
 }
 
@@ -201,10 +165,15 @@ export function CodexOverrideControl({ calc }: { calc: Calculator }) {
   return (
     <div {...stylex.props(styles.project)}>
       <Switch
-        label={
-          <>
-            Set <code {...stylex.props(styles.code)}>skills.max_context_tokens</code>
-          </>
+        label="Custom token cap"
+        hint={
+          <InfoHint label="About Codex listing size">
+            <span>
+              <code {...stylex.props(styles.hintCode)}>skills.max_context_tokens</code> replaces
+              Codex’s 2% default, up to 10,000 tokens.
+            </span>
+            <span>{codexBudgetLine(calc.codex, calc.contextWindow.label)}</span>
+          </InfoHint>
         }
         checked={calc.withCodexOverride}
         onChange={calc.setWithCodexOverride}
@@ -225,14 +194,6 @@ export function CodexOverrideControl({ calc }: { calc: Calculator }) {
 }
 
 const styles = stylex.create({
-  budgetNote: {
-    color: siteTokens.muted,
-    fontSize: 12,
-    lineHeight: 1.4,
-    margin: 0,
-  },
-  code: { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 13 },
-  field: { display: "flex", flexDirection: "column", gap: 8 },
-  fieldLabel: { color: siteTokens.text, fontSize: 14, fontWeight: 600 },
-  project: { display: "flex", flexDirection: "column", gap: 4 },
+  hintCode: { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 11.5 },
+  project: { display: "flex", flexDirection: "column", gap: 8 },
 });

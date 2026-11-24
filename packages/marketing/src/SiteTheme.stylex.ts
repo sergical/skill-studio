@@ -12,8 +12,10 @@ export const siteTokens = stylex.defineVars({
   background: paletteVars.darkBackground,
   border: paletteVars.darkBorder,
   muted: paletteVars.darkMuted,
+  success: "oklch(0.75 0.17 150)",
   surface: paletteVars.darkSurface,
   text: paletteVars.darkText,
+  warning: "oklch(0.8 0.15 80)",
 });
 
 export const lightSiteTheme = stylex.createTheme(siteTokens, {
@@ -24,6 +26,8 @@ export const lightSiteTheme = stylex.createTheme(siteTokens, {
   background: paletteVars.lightBackground,
   border: paletteVars.lightBorder,
   muted: paletteVars.lightMuted,
+  success: "oklch(0.46 0.16 150)",
   surface: paletteVars.lightSurface,
   text: paletteVars.lightText,
+  warning: "oklch(0.64 0.16 75)",
 });

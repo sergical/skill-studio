@@ -1,19 +1,16 @@
-// PROTO(home-calc) variant "Baseline Plus+": the Baseline Plus hero, then the product preview
-// right under it in a large dither frame, opening on Home. The calculator is Kinetic's dot
-// field with Claude Code's skillListingBudgetFraction and Codex's skills.max_context_tokens.
 import * as stylex from "@stylexjs/stylex";
 
-import { DITHER_COLORS } from "../../home/ClosingFinale";
-import { WarpDither } from "../../home/WarpDither";
+import { DITHER_COLORS } from "../ClosingFinale";
+import { WarpDither } from "../WarpDither";
 import { ProductMock } from "../../ProductMock";
 import { siteTokens } from "../../SiteTheme.stylex";
-import { BaselineHero } from "./BaselinePlus";
-import { KineticCalculator } from "./Kinetic";
-import { ProtoPage, type VariantProps } from "./ProtoPage";
+import { BaselineHero } from "./BaselineHero";
+import { KineticCalculator } from "./KineticCalculator";
+import { HomeShell, type HomePageProps } from "./HomeShell";
 
 const MOBILE = "@media (max-width: 680px)";
 
-function ImmersiveProduct({ theme, onToggleTheme }: VariantProps) {
+function ImmersiveProduct({ theme, onToggleTheme }: HomePageProps) {
   return (
     <section id="product" {...stylex.props(styles.section)}>
       <div {...stylex.props(styles.frame, styles.frameBack(DITHER_COLORS[theme].back))}>
@@ -31,13 +28,13 @@ function ImmersiveProduct({ theme, onToggleTheme }: VariantProps) {
   );
 }
 
-export function BaselinePlusPlus(props: VariantProps) {
+export function HomePage(props: HomePageProps) {
   return (
-    <ProtoPage
+    <HomeShell
       {...props}
       hero={<BaselineHero theme={props.theme} />}
       product={<ImmersiveProduct {...props} />}
-      calculator={<KineticCalculator budgets />}
+      calculator={<KineticCalculator />}
     />
   );
 }

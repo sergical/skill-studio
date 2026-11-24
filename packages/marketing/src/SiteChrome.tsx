@@ -138,6 +138,8 @@ export const siteLayout = stylex.create({
   },
 });
 
+const HOVER = "@media (hover: hover) and (pointer: fine)";
+
 const styles = stylex.create({
   header: {
     alignItems: "center",
@@ -168,8 +170,8 @@ const styles = stylex.create({
     minHeight: 44,
     padding: "0 8px",
     textDecoration: "none",
-    transition: "color 150ms ease-out",
-    ":hover": { color: siteTokens.text },
+    transition: "color 150ms ease",
+    [HOVER]: { ":hover": { color: siteTokens.text } },
   },
   navLinkCurrent: { color: siteTokens.text },
   iconLink: {
@@ -180,9 +182,9 @@ const styles = stylex.create({
     height: 40,
     justifyContent: "center",
     marginInline: -11,
-    transition: "color 150ms ease-out",
+    transition: "color 150ms ease",
     width: 40,
-    ":hover": { color: siteTokens.text },
+    [HOVER]: { ":hover": { color: siteTokens.text } },
   },
   themeToggle: {
     alignItems: "center",
@@ -196,10 +198,11 @@ const styles = stylex.create({
     height: 40,
     justifyContent: "center",
     padding: 0,
-    transition: "color 150ms ease-out, border-color 150ms ease-out, transform 150ms ease-out",
+    transition:
+      "color 150ms ease, border-color 150ms ease, transform 150ms cubic-bezier(0.25, 0.46, 0.45, 0.94)",
     width: 40,
-    ":hover": { borderColor: siteTokens.muted, color: siteTokens.text },
-    ":active": { transform: "scale(.94)" },
+    [HOVER]: { ":hover": { borderColor: siteTokens.muted, color: siteTokens.text } },
+    ":active": { transform: "scale(.97)" },
   },
   footer: {
     alignItems: "center",
@@ -221,7 +224,7 @@ const styles = stylex.create({
     alignItems: "center",
     display: "inline-flex",
     textDecoration: "none",
-    transition: "color 150ms ease-out",
-    ":hover": { color: siteTokens.text },
+    transition: "color 150ms ease",
+    [HOVER]: { ":hover": { color: siteTokens.text } },
   },
 });

@@ -76,46 +76,51 @@ export function SidecarWalkthrough({ theme, title = "How it works." }: Walkthrou
     <div data-walkthrough="sidecar">
       <h2 {...stylex.props(homeSectionStyles.title)}>{title}</h2>
       <div {...stylex.props(homeSectionStyles.columns)}>
-        <div ref={list} {...stylex.props(s.sidecarList)}>
-          {chapters.map((chapter, index) => (
-            <div key={chapter.id} {...stylex.props(s.sidecarItem)}>
-              <button
-                id={`sidecar-${index}`}
-                aria-expanded={compact ? active === index : undefined}
-                aria-pressed={compact ? undefined : active === index}
-                aria-controls={compact ? `sidecar-panel-${index}` : "sidecar-video"}
-                onClick={(event) => selectChapter(index, event.detail !== 0)}
-                {...stylex.props(
-                  s.sidecarButton,
-                  active === index && s.selectedText,
-                  !selection.animate && s.instant,
-                )}
-              >
-                {chapter.title.replace(/\.$/, "")}
-                <ChevronDown
-                  size={14}
-                  aria-hidden="true"
+        <div>
+          <div ref={list} {...stylex.props(s.sidecarList)}>
+            {chapters.map((chapter, index) => (
+              <div key={chapter.id} {...stylex.props(s.sidecarItem)}>
+                <button
+                  id={`sidecar-${index}`}
+                  aria-expanded={compact ? active === index : undefined}
+                  aria-pressed={compact ? undefined : active === index}
+                  aria-controls={compact ? `sidecar-panel-${index}` : "sidecar-video"}
+                  onClick={(event) => selectChapter(index, event.detail !== 0)}
                   {...stylex.props(
-                    s.chevron,
-                    active === index && s.chevronOpen,
-                    selection.animate && s.chevronMotion,
+                    s.sidecarButton,
+                    active === index && s.selectedText,
+                    !selection.animate && s.instant,
                   )}
-                />
-              </button>
-              <div
-                id={`sidecar-panel-${index}`}
-                hidden={active !== index}
-                {...stylex.props(active === index && s.sidecarDetail)}
-              >
-                {active === index && (
-                  <>
-                    <p {...stylex.props(s.copy)}>{chapter.copy}</p>
-                    {compact && video}
-                  </>
-                )}
+                >
+                  {chapter.title.replace(/\.$/, "")}
+                  <ChevronDown
+                    size={14}
+                    aria-hidden="true"
+                    {...stylex.props(
+                      s.chevron,
+                      active === index && s.chevronOpen,
+                      selection.animate && s.chevronMotion,
+                    )}
+                  />
+                </button>
+                <div
+                  id={`sidecar-panel-${index}`}
+                  hidden={active !== index}
+                  {...stylex.props(active === index && s.sidecarDetail)}
+                >
+                  {active === index && (
+                    <>
+                      <p {...stylex.props(s.copy)}>{chapter.copy}</p>
+                      {compact && video}
+                    </>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
+          <a href="#download" {...stylex.props(homeSectionStyles.textLink, s.ctaLink)}>
+            Get the Mac app <span aria-hidden="true">→</span>
+          </a>
         </div>
         {!compact && (
           <div id="sidecar-video" role="region" aria-labelledby={`sidecar-${active}`}>

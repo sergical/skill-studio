@@ -1,6 +1,5 @@
-// PROTO(home-calc): throwaway listing budget estimate shared by the three calculator variants.
-// Same shape as listing-budget-model.ts on t3/skill-budget-calculator, reduced to what the
-// prototype shows: equal-length example skills, no model names, a context window only.
+// Listing budget estimate for the homepage calculator. Equal-length example skills, no model
+// names, a context window only.
 
 export const CONTEXT_WINDOWS = [
   { tokens: 128_000, label: "128K" },
@@ -9,8 +8,8 @@ export const CONTEXT_WINDOWS = [
   { tokens: 1_000_000, label: "1M" },
 ] as const;
 
-export const DEFAULT_WINDOW = 1;
-export const DEFAULT_SKILLS = 120;
+export const DEFAULT_WINDOW = 3;
+export const DEFAULT_SKILLS = 215;
 export const DEFAULT_PROJECT_SKILLS = 30;
 export const MIN_SKILLS = 10;
 export const MAX_SKILLS = 400;
@@ -18,19 +17,21 @@ export const MAX_PROJECT_SKILLS = 100;
 
 const CHARS_PER_TOKEN = 4;
 const NAME = 20;
-export const DESCRIPTION = 240;
+const DESCRIPTION = 240;
 // `- name: (file: r0/name/SKILL.md)` plus its newline, with Codex's short root alias.
 const CODEX_LINE = 66;
 
 /** `skillListingBudgetFraction`: Claude Code's default, and the stops the calculator offers. */
-export const CLAUDE_DEFAULT_FRACTION = 0.01;
-// Claude Code accepts any fraction > 0 and ≤ 1 (100%). The calculator stops at 10%: above that
-// the listing usually costs more than it helps, and the page is teaching a budget, not a sink.
+const CLAUDE_DEFAULT_FRACTION = 0.01;
+// Official Claude Code settings: fraction > 0 and ≤ 1 (100%), default 0.01.
+// https://code.claude.com/docs/en/settings-reference#skilllistingbudgetfraction
+// Skill Studio mirrors that filter in listing_cost.rs. The calculator soft-caps at 10%:
+// above that the listing usually costs more than it helps; this page teaches a budget, not a sink.
 export const CLAUDE_FRACTIONS = [0.001, 0.0025, 0.005, 0.01, 0.02, 0.05, 0.1];
 export const CLAUDE_DEFAULT_FRACTION_INDEX = CLAUDE_FRACTIONS.indexOf(CLAUDE_DEFAULT_FRACTION);
 // Codex sizes its list at 2% of the window. Only an explicit `skills.max_context_tokens`
 // replaces that, and Codex caps that setting, not the 2% default, at 10,000 tokens.
-export const CODEX_SHARE = 0.02;
+const CODEX_SHARE = 0.02;
 export const CODEX_MAX_CONTEXT_TOKENS = 10_000;
 
 export interface ClaudeEstimate {
@@ -77,7 +78,7 @@ export function estimateClaude(
   return { ...base, needed, described, nameOnly: total - described };
 }
 
-export function codexBudget(contextTokens: number, override: number | null) {
+function codexBudget(contextTokens: number, override: number | null) {
   if (override !== null) return Math.min(CODEX_MAX_CONTEXT_TOKENS, Math.max(1, override));
   return Math.max(1, Math.floor(contextTokens * CODEX_SHARE));
 }
@@ -105,15 +106,14 @@ export const format = (value: number) => NUMBER.format(value);
 
 export function claudeSentence(result: ClaudeEstimate) {
   if (result.nameOnly === 0) return `All ${format(result.total)} skills keep their description.`;
-  if (result.described === 0)
-    return `Every one of your ${format(result.total)} skills shows by name only.`;
-  return `${format(result.described)} of ${format(result.total)} skills keep their description.`;
+  if (result.described === 0) return `Every skill shows by name only.`;
+  return `${format(result.nameOnly)} ${result.nameOnly === 1 ? "skill shows" : "skills show"} by name only.`;
 }
 
 export function claudeFollowUp(result: ClaudeEstimate) {
   if (result.nameOnly === 0) return "The model can pick any of them from what you ask.";
   if (result.described === 0) return "The model has to guess which to run from the name alone.";
-  return `The other ${format(result.nameOnly)} show by name only, so the model has to guess from the name.`;
+  return `The model has to guess when to run ${result.nameOnly === 1 ? "it" : "them"} from the name alone.`;
 }
 
 export function codexSentence(result: CodexEstimate) {
@@ -143,6 +143,4 @@ export function codexBudgetLine(result: CodexEstimate, windowLabel: string) {
   return `${format(result.budget)} tokens at any context window. Codex caps this setting at ${format(CODEX_MAX_CONTEXT_TOKENS)}.`;
 }
 
-export const CLAUDE_LINE = "Claude Code lists skills in 1% of the context window by default.";
-export const CODEX_LINE_COPY = "Codex lists skills in 2% of the context window.";
-export const ESTIMATE_NOTE = `Estimated with a short name and a ${format(DESCRIPTION)}-character description per skill. Skill Studio measures your real list.`;
+export const ESTIMATE_NOTE = `Estimated with a short name and a ${format(DESCRIPTION)}-character description per skill.`;

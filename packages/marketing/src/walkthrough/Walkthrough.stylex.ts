@@ -2,6 +2,8 @@ import * as stylex from "@stylexjs/stylex";
 
 import { siteTokens } from "../SiteTheme.stylex";
 
+const HOVER = "@media (hover: hover) and (pointer: fine)";
+
 export const walkthroughStyles = stylex.create({
   sidecarList: { borderTopWidth: 1, borderTopStyle: "solid", borderTopColor: siteTokens.border },
   sidecarItem: {
@@ -26,8 +28,8 @@ export const walkthroughStyles = stylex.create({
     fontSize: 16,
     fontWeight: 550,
     letterSpacing: "-.02em",
-    transition: "color 150ms ease-out",
-    ":hover": { color: siteTokens.text },
+    transition: "color 150ms ease",
+    [HOVER]: { ":hover": { color: siteTokens.text } },
     ":focus-visible": {
       outlineWidth: 2,
       outlineStyle: "solid",
@@ -80,14 +82,14 @@ export const walkthroughStyles = stylex.create({
     minWidth: 44,
     padding: "8px 4px",
     transition: "color 150ms ease-out, transform 150ms ease-out",
-    ":active": { transform: "scale(.96)" },
+    ":active": { transform: "scale(.97)" },
     ":focus-visible": {
       outlineColor: siteTokens.muted,
       outlineOffset: 2,
       outlineStyle: "solid",
       outlineWidth: 2,
     },
-    ":hover": { color: siteTokens.text },
+    [HOVER]: { ":hover": { color: siteTokens.text } },
     "@media (prefers-reduced-motion: reduce)": {
       transition: "none",
       ":active": { transform: "none" },
@@ -111,5 +113,8 @@ export const walkthroughStyles = stylex.create({
   dialogTitle: { fontSize: 22, fontWeight: 550, letterSpacing: "-.03em", margin: 0 },
   dialogHint: { color: siteTokens.muted, fontSize: 12, lineHeight: 1.6, margin: "8px 0 20px" },
   expandedScroll: { overflow: "auto", padding: 4 },
+  ctaLink: {
+    marginTop: 12,
+  },
   expandedVideo: { display: "block", minWidth: 900, width: "100%" },
 });

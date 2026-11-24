@@ -1,16 +1,15 @@
-// PROTO(home-calc): hero pieces copied from variants/CommandCenter.tsx (not exported there),
-// plus the dither layer whose glow rises while the download button is hovered or focused.
+// Hero CTAs, trust line, and the dither layer whose glow rises while the download button is hovered.
 import type { Ref } from "react";
 import * as stylex from "@stylexjs/stylex";
 import { Check, Copy, Download } from "lucide-react";
 import { AGENT_SETUP_PROMPT } from "@skill-studio/lib/agent-setup";
 
 import { Arrow } from "../../MarketingBrand";
-import { DITHER_COLORS } from "../../home/ClosingFinale";
-import { finaleCtaMarker } from "../../home/ClosingFinale.stylex";
-import { homeSectionStyles } from "../../home/HomeSection.stylex";
-import { useCopyFlash } from "../../home/useCopyFlash";
-import { WarpDither } from "../../home/WarpDither";
+import { DITHER_COLORS } from "../ClosingFinale";
+import { finaleCtaMarker } from "../ClosingFinale.stylex";
+import { homeSectionStyles } from "../HomeSection.stylex";
+import { useCopyFlash } from "../useCopyFlash";
+import { WarpDither } from "../WarpDither";
 import {
   CLI_DOCS_URL,
   DOWNLOAD_INTEL_URL,
@@ -186,7 +185,7 @@ export function HeroDither({
 const glowIn = `--hero-glow-alpha 500ms ${SETTLE}, --hero-glow-reach 600ms ${SETTLE}, --hero-glow-x 600ms ${SETTLE}`;
 const glowOut = `--hero-glow-alpha 300ms ${SETTLE}, --hero-glow-reach 350ms ${SETTLE}, --hero-glow-x 350ms ${SETTLE}`;
 
-/** How far the dither glows at rest and toward the hovered download button, per variant. */
+/** How far the dither glows at rest and toward the hovered download button. */
 export const heroGlow = stylex.create({
   baseline: {
     "--hero-glow-alpha": {
@@ -203,50 +202,6 @@ export const heroGlow = stylex.create({
       default: "70%",
       [stylex.when.descendant(":focus-visible", heroCtaMarker)]: "30%",
       [HOVER]: { default: "70%", [stylex.when.descendant(":hover", heroCtaMarker)]: "30%" },
-    },
-    transition: {
-      default: glowOut,
-      [stylex.when.descendant(":focus-visible", heroCtaMarker)]: glowIn,
-      [HOVER]: { default: glowOut, [stylex.when.descendant(":hover", heroCtaMarker)]: glowIn },
-    },
-  },
-  kinetic: {
-    "--hero-glow-alpha": {
-      default: 0.55,
-      [stylex.when.descendant(":focus-visible", heroCtaMarker)]: 1,
-      [HOVER]: { default: 0.55, [stylex.when.descendant(":hover", heroCtaMarker)]: 1 },
-    },
-    "--hero-glow-reach": {
-      default: "80%",
-      [stylex.when.descendant(":focus-visible", heroCtaMarker)]: "150%",
-      [HOVER]: { default: "80%", [stylex.when.descendant(":hover", heroCtaMarker)]: "150%" },
-    },
-    "--hero-glow-x": {
-      default: "70%",
-      [stylex.when.descendant(":focus-visible", heroCtaMarker)]: "25%",
-      [HOVER]: { default: "70%", [stylex.when.descendant(":hover", heroCtaMarker)]: "25%" },
-    },
-    transition: {
-      default: glowOut,
-      [stylex.when.descendant(":focus-visible", heroCtaMarker)]: glowIn,
-      [HOVER]: { default: glowOut, [stylex.when.descendant(":hover", heroCtaMarker)]: glowIn },
-    },
-  },
-  editorial: {
-    "--hero-glow-alpha": {
-      default: 0.3,
-      [stylex.when.descendant(":focus-visible", heroCtaMarker)]: 0.8,
-      [HOVER]: { default: 0.3, [stylex.when.descendant(":hover", heroCtaMarker)]: 0.8 },
-    },
-    "--hero-glow-reach": {
-      default: "60%",
-      [stylex.when.descendant(":focus-visible", heroCtaMarker)]: "120%",
-      [HOVER]: { default: "60%", [stylex.when.descendant(":hover", heroCtaMarker)]: "120%" },
-    },
-    "--hero-glow-x": {
-      default: "75%",
-      [stylex.when.descendant(":focus-visible", heroCtaMarker)]: "20%",
-      [HOVER]: { default: "75%", [stylex.when.descendant(":hover", heroCtaMarker)]: "20%" },
     },
     transition: {
       default: glowOut,
@@ -287,18 +242,18 @@ const styles = stylex.create({
   },
   headerCta: {
     alignItems: "center",
-    backgroundColor: { default: siteTokens.accent, ":hover": siteTokens.accentHover },
+    backgroundColor: { default: siteTokens.accent, [HOVER]: { ":hover": siteTokens.accentHover } },
     borderRadius: 8,
     color: siteTokens.accentText,
     fontSize: 13,
     fontWeight: 640,
     gap: 7,
     height: 36,
-    paddingInline: 14,
+    paddingInline: "12px 14px",
     position: "relative",
     textDecoration: "none",
-    transition: "background-color 150ms ease-out, transform 150ms ease-out",
-    ":active": { transform: "scale(.96)" },
+    transition: "background-color 150ms ease, transform 150ms cubic-bezier(0.25, 0.46, 0.45, 0.94)",
+    ":active": { transform: "scale(.97)" },
     "::before": { content: '""', inset: "-4px 0", position: "absolute" },
   },
   fineprint: {
@@ -328,9 +283,8 @@ const styles = stylex.create({
     textDecoration: "none",
     alignItems: "center",
     backgroundColor: siteTokens.accent,
-    border: 0,
     borderColor: "oklch(1 0 0 / .28)",
-    borderRadius: 10,
+    borderRadius: 12,
     borderStyle: "solid",
     borderWidth: 1,
     boxShadow: "0 1px 0 oklch(1 0 0 / .3) inset, 0 10px 30px oklch(0 0 0 / .3)",
@@ -343,7 +297,7 @@ const styles = stylex.create({
     justifyContent: "space-between",
     minHeight: 54,
     minWidth: 248,
-    padding: "7px 8px 7px 18px",
+    padding: "6px 6px 6px 18px",
     transition:
       "background-color 150ms ease-out, box-shadow 150ms ease-out, transform 150ms ease-out",
     [HOVER]: {
@@ -354,43 +308,46 @@ const styles = stylex.create({
       },
       ":hover:active": {
         boxShadow: "0 1px 0 oklch(1 0 0 / .18) inset, 0 4px 12px oklch(0 0 0 / .24)",
-        transform: "translateY(2px) scale(.96)",
+        transform: "translateY(1px) scale(.97)",
       },
     },
     ":active": {
       boxShadow: "0 1px 0 oklch(1 0 0 / .18) inset, 0 4px 12px oklch(0 0 0 / .24)",
-      transform: "translateY(2px) scale(.96)",
+      transform: "translateY(1px) scale(.97)",
     },
     "@media (max-width: 600px)": { fontSize: 16, minHeight: 56, width: "100%" },
   },
   primaryButtonArrow: {
     alignItems: "center",
     backgroundColor: siteTokens.accentText,
-    borderRadius: 7,
+    borderRadius: 6,
     color: siteTokens.text,
     display: "flex",
-    height: 38,
+    height: 40,
     justifyContent: "center",
     overflow: "hidden",
     position: "relative",
-    width: 38,
+    width: 40,
   },
   // The arrow leans toward where the button goes while it is hovered.
   arrowNudge: {
     display: "flex",
     transform: {
       default: "none",
-      [HOVER]: { [stylex.when.ancestor(":hover", heroCtaMarker)]: "translateX(3px)" },
+      [HOVER]: {
+        [stylex.when.ancestor(":hover", heroCtaMarker)]: "translateX(3px)",
+        [stylex.when.ancestor(":hover", finaleCtaMarker)]: "translateX(3px)",
+      },
     },
     transition: `transform 200ms ${SETTLE}`,
   },
   sourceLink: {
     alignItems: "center",
-    backgroundColor: "transparent",
+    backgroundColor: { default: "transparent", [HOVER]: { ":hover": siteTokens.surface } },
     cursor: "pointer",
     fontFamily: "inherit",
-    borderColor: siteTokens.border,
-    borderRadius: 10,
+    borderColor: { default: siteTokens.border, [HOVER]: { ":hover": siteTokens.muted } },
+    borderRadius: 12,
     borderStyle: "solid",
     borderWidth: 1,
     color: siteTokens.text,
@@ -405,14 +362,13 @@ const styles = stylex.create({
     transitionProperty: "background-color, border-color, color, transform",
     transitionDuration: "180ms",
     transitionTimingFunction: "ease-out",
-    ":hover": { backgroundColor: siteTokens.surface, borderColor: siteTokens.muted },
     // Press feedback stays at 0.97 — below that reads as exaggeration (emil-animations).
     ":active": { transform: "scale(.97)" },
     "@media (max-width: 600px)": { minHeight: 48, width: "100%" },
   },
   sourceLinkCopied: {
-    borderColor: "oklch(0.72 0.14 150)",
-    color: "oklch(0.78 0.14 150)",
+    borderColor: { default: siteTokens.success, [HOVER]: { ":hover": siteTokens.success } },
+    color: siteTokens.success,
   },
   // Fixed slots so the idle → copied swap never changes the button width or wraps.
   copyVisual: {
