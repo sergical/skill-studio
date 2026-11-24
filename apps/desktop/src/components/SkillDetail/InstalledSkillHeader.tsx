@@ -82,7 +82,7 @@ export function InstalledSkillHeader({
 }: InstalledSkillHeaderProps) {
   // Notes from the skill's own copies only, as on list rows - a plugin copy's notes are not the
   // user's to fix. A plugin-only skill has no own copy, so it counts every copy.
-  const sourceLine = skillSourceLine(skill, useSkillInstalls(skill));
+  const sourceLine = skillSourceLine(skill, useSkillInstalls(skill), deployment?.plugin);
   const own = ownDeployments(skill);
   const noteSources = own.length > 0 ? own : skill.deployments;
   const nonBlockingNotes = [

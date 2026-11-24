@@ -5,8 +5,8 @@
 // ============================================================================
 
 import { Button } from "@skill-studio/ui";
-import { deploymentLabel, pluginInfoForSkill } from "@skill-studio/lib";
-import type { Deployment, InstalledSkill } from "@skill-studio/lib";
+import { deploymentLabel } from "@skill-studio/lib";
+import type { Deployment } from "@skill-studio/lib";
 import { SelectControl } from "../ui/SelectControl";
 import { TooltipControl } from "../ui/TooltipControl";
 import { SkillMarkdown } from "./SkillMarkdown";
@@ -23,8 +23,6 @@ type SkillMarkdownEditState =
   | { kind: "editing"; openedContent: string; isDirty: boolean; isSaving: boolean };
 
 interface SkillMarkdownCardProps {
-  skill: InstalledSkill;
-  isPluginManaged: boolean;
   /** True when the caller opened a specific deployment that's no longer installed. */
   deploymentUnresolved: boolean;
   /** Own deployments to offer as a fallback when `deploymentUnresolved` - each opens that copy instead. */
@@ -140,8 +138,7 @@ interface CardBodyProps {
   deploymentUnresolved: boolean;
   ownDeploymentOptions: Deployment[];
   onSelectDeployment: (path: string) => void;
-  isPluginManaged: boolean;
-  pluginManagedText: string;
+  pluginManagedText?: string;
   editState: SkillMarkdownEditState;
   rawContent: string | null;
   saveLabel: string;
@@ -159,7 +156,6 @@ function CardBody({
   deploymentUnresolved,
   ownDeploymentOptions,
   onSelectDeployment,
-  isPluginManaged,
   pluginManagedText,
   editState,
   rawContent,
@@ -193,7 +189,7 @@ function CardBody({
       </div>
     );
   }
-  if (isPluginManaged) {
+  if (pluginManagedText) {
     return (
       <p className="m-0 select-text p-3 text-body leading-[1.5] text-text-secondary">
         {pluginManagedText}
@@ -231,8 +227,6 @@ function CardBody({
 }
 
 export function SkillMarkdownCard({
-  skill,
-  isPluginManaged,
   deploymentUnresolved,
   ownDeploymentOptions,
   deployment,
@@ -250,12 +244,12 @@ export function SkillMarkdownCard({
   highlightLine,
 }: SkillMarkdownCardProps) {
   const isEditing = editState.kind === "editing";
-  const editable = !isPluginManaged && !deploymentUnresolved;
+  const plugin = deployment?.plugin;
+  const editable = !plugin && !deploymentUnresolved;
   const canEdit = editable && !isEditing && rawContent !== null;
-  const plugin = isPluginManaged ? pluginInfoForSkill(skill) : undefined;
   const pluginManagedText = plugin
     ? `Managed by the ${plugin.name} plugin for ${plugin.harness}.`
-    : "Managed by a plugin.";
+    : undefined;
 
   return (
     <div className="flex flex-col gap-1 rounded-lg border border-border-subtle p-4">
@@ -273,7 +267,6 @@ export function SkillMarkdownCard({
         deploymentUnresolved={deploymentUnresolved}
         ownDeploymentOptions={ownDeploymentOptions}
         onSelectDeployment={onSelectDeployment}
-        isPluginManaged={isPluginManaged}
         pluginManagedText={pluginManagedText}
         editState={editState}
         rawContent={rawContent}
