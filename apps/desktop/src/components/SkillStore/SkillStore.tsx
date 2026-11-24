@@ -51,17 +51,19 @@ function extractGitHubRepo(
   return undefined;
 }
 
-/** Merges installed status into a page of search results - a module-level pure function of its own arguments, so callers can `useMemo` it without a hook dependency. */
+/** A matching name identifies an installed catalog result only within the same repository. */
 function mergeWithInstalledStatus(
   results: SkillSearchResult[],
   installed: InstalledSkill[],
 ): SkillWithStatus[] {
-  const installedMap = new Map(installed.map((s) => [s.name, s]));
-  return results.map((skill) => ({
-    ...skill,
-    is_installed: installedMap.has(skill.name),
-    installed_info: installedMap.get(skill.name),
-  }));
+  const byName = new Map(installed.map((skill) => [skill.name, skill]));
+  return results.map((skill) => {
+    const local = byName.get(skill.name);
+    const source = local && extractGitHubRepo(local.source, local.source_url);
+    const match =
+      source && source.toLowerCase() === skill.top_source?.toLowerCase() ? local : undefined;
+    return { ...skill, is_installed: !!match, installed_info: match };
+  });
 }
 
 const TAB_TRIGGER_CLASS =
@@ -262,10 +264,7 @@ interface SkillStoreProps {
 
 export function SkillStore({ compact = false }: SkillStoreProps = {}) {
   const [activeTab, setActiveTab] = useState<"browse" | "installed">("browse");
-  // The selected skill's name only - its full `SkillWithStatus` is looked up
-  // from whichever list (browse or installed) is current each render, so a
-  // status change (e.g. install completing) is reflected without a sync effect.
-  const [selectedSkillName, setSelectedSkillName] = useState<string | null>(null);
+  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
   const [installProgress, setInstallProgress] = useState<InstallProgressState | null>(null);
 
   const addToast = useAppStore((state) => state.addToast);
@@ -352,13 +351,16 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
     });
     // Refresh installed skills - `installedSkillsWithStatus`/`searchResultsWithStatus` re-derive from it.
     void loadInstalledSkills();
-    setSelectedSkillName(null);
+    setSelectedSkillId(null);
   };
 
-  // Get installed skills with full status for Installed tab
+  const catalogMatches = new Map(
+    searchResultsWithStatus
+      .filter((skill) => skill.is_installed)
+      .map((skill) => [skill.name, skill]),
+  );
   const installedSkillsWithStatus: SkillWithStatus[] = installedSkills.map((skill) => {
-    // Try to find matching skill from search results for extra metadata
-    const found = searchResultsWithStatus.find((s) => s.name === skill.name);
+    const found = catalogMatches.get(skill.name);
     if (found) return found;
 
     // Extract GitHub owner/repo from source_url (more reliable) or source
@@ -377,13 +379,9 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
     };
   });
 
-  // Looked up by name from whichever list is current, so a status change
-  // (e.g. install completing) shows up with no sync effect.
-  const selectedSkill: SkillWithStatus | null = selectedSkillName
-    ? (searchResultsWithStatus.find((s) => s.name === selectedSkillName) ??
-      installedSkillsWithStatus.find((s) => s.name === selectedSkillName) ??
-      null)
-    : null;
+  const currentSkills =
+    activeTab === "installed" ? installedSkillsWithStatus : searchResultsWithStatus;
+  const selectedSkill = currentSkills.find((skill) => skill.id === selectedSkillId) ?? null;
 
   const tabsPadding = compact ? "px-5" : "px-7";
 
@@ -411,7 +409,7 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
         value={activeTab}
         onValueChange={(tab) => {
           setActiveTab(tab);
-          setSelectedSkillName(null);
+          setSelectedSkillId(null);
         }}
         className="flex flex-1 flex-col gap-0 overflow-hidden"
       >
@@ -449,7 +447,7 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
               <SkillBrowser
                 skills={searchResultsWithStatus}
                 selectedSkill={selectedSkill}
-                onSelectSkill={(skill) => setSelectedSkillName(skill.name)}
+                onSelectSkill={(skill) => setSelectedSkillId(skill.id)}
                 mode={{ kind: "browse", isLoading, isLoadingMore, hasMore, onLoadMore: loadMore }}
                 emptyMessage={
                   searchQuery ? "No skills found matching your search" : "Loading popular skills…"
@@ -472,7 +470,7 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
                 <SkillBrowser
                   skills={installedSkillsWithStatus}
                   selectedSkill={selectedSkill}
-                  onSelectSkill={(skill) => setSelectedSkillName(skill.name)}
+                  onSelectSkill={(skill) => setSelectedSkillId(skill.id)}
                   mode={{ kind: "installed" }}
                   emptyMessage="No skills installed yet"
                 />
@@ -484,13 +482,13 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
 
       <Drawer
         open={selectedSkill !== null}
-        onOpenChange={(open) => !open && setSelectedSkillName(null)}
+        onOpenChange={(open) => !open && setSelectedSkillId(null)}
       >
         {selectedSkill && (
           <SkillDetailPanel
             skill={selectedSkill}
             inventoryNotice={inventoryNotice}
-            onClose={() => setSelectedSkillName(null)}
+            onClose={() => setSelectedSkillId(null)}
             onInstallStart={handleInstallStart}
             onInstallPaused={handleInstallPaused}
             onInstallComplete={handleInstallComplete}

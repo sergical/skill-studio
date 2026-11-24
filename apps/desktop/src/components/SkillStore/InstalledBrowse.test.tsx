@@ -40,14 +40,14 @@ afterEach(() => {
   // Each test renders a fresh Home; the store outlives it, so drop the last test's "Updated".
   useAppStore.getState().clearRowActs();
 });
-function ipc(afterHash: string) {
+function ipc(afterHash: string, popularSkills: unknown[] = []) {
   const ids: unknown[] = [];
   const commands: string[] = [];
   mockIPC(
     (command, args) => {
       commands.push(command);
       if (command === "get_installed_skills") return [fixture];
-      if (command === "get_popular_skills") return { skills: [], has_more: false };
+      if (command === "get_popular_skills") return { skills: popularSkills, has_more: false };
       if (command === "get_skill_details") {
         ids.push(args);
         if (!args || !("skillId" in args) || args.skillId !== "owner/repo/sample")
@@ -144,8 +144,10 @@ it("Installed reports a pending or failed scan and retries locally while Browse 
   expect(catalogRequests).toBe(1);
 });
 
-it("Installed Browse loads owner/repo/slug details or sends a bare name and leaves the panel empty", async () => {
-  const { ids } = ipc("new");
+it("Installed opens the local source when another repository publishes the same name", async () => {
+  const { ids } = ipc("new", [
+    { id: "other/repo/sample", name: "sample", top_source: "other/repo", installs: 10 },
+  ]);
   const user = await openInstalled();
   expect(await screen.findByText("Installed sample content")).toBeTruthy();
   expect(ids).toEqual([{ skillId: "owner/repo/sample" }]);

@@ -37,7 +37,10 @@ test("a project's client filter, coverage and open file use that project's copie
 
   await page.getByRole("button", { name: /^Filter,/ }).click();
   await page.getByRole("menuitemradio", { name: "pi", exact: true }).click();
-  await expect(skillRow(page, name)).toBeVisible();
+  await skillRow(page, name).getByText(name, { exact: true }).click();
+  const selectedCopy = page.getByRole("combobox", { name: "Copy to show and edit" });
+  await expect(selectedCopy).toContainText("Global · pi");
+  await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Coverage matrix view" }).click();
   const row = page
     .getByRole("row")
@@ -47,7 +50,5 @@ test("a project's client filter, coverage and open file use that project's copie
     .evaluate((header) => header.closest("th")!.cellIndex);
   await expect(row.getByRole("cell").nth(claudeColumn)).toHaveAttribute("title", "Not deployed");
   await row.getByRole("button", { name, exact: true }).click();
-  await expect(page.getByRole("combobox", { name: "Copy to show and edit" })).toContainText(
-    "Global · pi",
-  );
+  await expect(selectedCopy).toContainText("Global · pi");
 });
