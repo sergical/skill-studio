@@ -66,7 +66,7 @@ export function SkillBrowser({
       <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
         {skills.map((skill) => (
           <SkillCard
-            key={skill.id}
+            key={mode.kind === "installed" ? skill.name : skill.id}
             skill={skill}
             isSelected={selectedSkill?.id === skill.id}
             onClick={() => onSelectSkill(skill)}

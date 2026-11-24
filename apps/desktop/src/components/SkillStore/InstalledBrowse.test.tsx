@@ -40,14 +40,15 @@ afterEach(() => {
   // Each test renders a fresh Home; the store outlives it, so drop the last test's "Updated".
   useAppStore.getState().clearRowActs();
 });
-function ipc(afterHash: string, popularSkills: unknown[] = []) {
+function ipc(afterHash: string, popularSkills: unknown[] | Promise<unknown[]> = []) {
   const ids: unknown[] = [];
   const commands: string[] = [];
   mockIPC(
     (command, args) => {
       commands.push(command);
       if (command === "get_installed_skills") return [fixture];
-      if (command === "get_popular_skills") return { skills: popularSkills, has_more: false };
+      if (command === "get_popular_skills")
+        return Promise.resolve(popularSkills).then((skills) => ({ skills, has_more: false }));
       if (command === "get_skill_details") {
         ids.push(args);
         if (!args || !("skillId" in args) || args.skillId !== "owner/repo/sample")
@@ -154,6 +155,23 @@ it("Installed opens the local source when another repository publishes the same 
   await user.keyboard("{Escape}");
   expect(screen.queryByRole("dialog")).toBeNull();
 });
+it("keeps the open installed skill when the catalog returns its canonical id", async () => {
+  let showCatalog!: (skills: unknown[]) => void;
+  const catalog = new Promise<unknown[]>((resolve) => {
+    showCatalog = resolve;
+  });
+  ipc("new", catalog);
+  await openInstalled();
+  expect(await screen.findByText("Installed sample content")).toBeTruthy();
+  await act(async () =>
+    showCatalog([
+      { id: "Owner/Repo/sample", name: "sample", top_source: "Owner/Repo", installs: 10 },
+    ]),
+  );
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  expect(screen.getByText("Installed sample content")).toBeTruthy();
+});
+
 it("an unchanged installed update says already up to date or reports a new installation", async () => {
   ipc("same");
   const user = await openInstalled();

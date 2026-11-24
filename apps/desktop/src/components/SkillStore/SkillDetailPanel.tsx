@@ -33,7 +33,9 @@ type DetailsLoad =
   | { kind: "failed"; message: string };
 
 export function SkillDetailPanel(props: SkillDetailPanelProps) {
-  return <SkillDetailsContent key={props.skill.id} {...props} />;
+  // GitHub owner/repository casing can change when the catalog joins a local record.
+  const key = props.skill.id.replace(/^[^/]+\/[^/]+(?=\/)/, (repo) => repo.toLowerCase());
+  return <SkillDetailsContent key={key} {...props} />;
 }
 
 function SkillDetailsContent({

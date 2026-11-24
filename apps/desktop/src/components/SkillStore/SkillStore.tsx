@@ -264,7 +264,7 @@ interface SkillStoreProps {
 
 export function SkillStore({ compact = false }: SkillStoreProps = {}) {
   const [activeTab, setActiveTab] = useState<"browse" | "installed">("browse");
-  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
+  const [selection, setSelection] = useState<string | null>(null);
   const [installProgress, setInstallProgress] = useState<InstallProgressState | null>(null);
 
   const addToast = useAppStore((state) => state.addToast);
@@ -351,7 +351,7 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
     });
     // Refresh installed skills - `installedSkillsWithStatus`/`searchResultsWithStatus` re-derive from it.
     void loadInstalledSkills();
-    setSelectedSkillId(null);
+    setSelection(null);
   };
 
   const catalogMatches = new Map(
@@ -379,9 +379,10 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
     };
   });
 
-  const currentSkills =
-    activeTab === "installed" ? installedSkillsWithStatus : searchResultsWithStatus;
-  const selectedSkill = currentSkills.find((skill) => skill.id === selectedSkillId) ?? null;
+  const selectedSkill =
+    (activeTab === "installed"
+      ? installedSkillsWithStatus.find((skill) => skill.name === selection)
+      : searchResultsWithStatus.find((skill) => skill.id === selection)) ?? null;
 
   const tabsPadding = compact ? "px-5" : "px-7";
 
@@ -409,7 +410,7 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
         value={activeTab}
         onValueChange={(tab) => {
           setActiveTab(tab);
-          setSelectedSkillId(null);
+          setSelection(null);
         }}
         className="flex flex-1 flex-col gap-0 overflow-hidden"
       >
@@ -447,7 +448,7 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
               <SkillBrowser
                 skills={searchResultsWithStatus}
                 selectedSkill={selectedSkill}
-                onSelectSkill={(skill) => setSelectedSkillId(skill.id)}
+                onSelectSkill={(skill) => setSelection(skill.id)}
                 mode={{ kind: "browse", isLoading, isLoadingMore, hasMore, onLoadMore: loadMore }}
                 emptyMessage={
                   searchQuery ? "No skills found matching your search" : "Loading popular skills…"
@@ -470,7 +471,7 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
                 <SkillBrowser
                   skills={installedSkillsWithStatus}
                   selectedSkill={selectedSkill}
-                  onSelectSkill={(skill) => setSelectedSkillId(skill.id)}
+                  onSelectSkill={(skill) => setSelection(skill.name)}
                   mode={{ kind: "installed" }}
                   emptyMessage="No skills installed yet"
                 />
@@ -480,15 +481,12 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
         </TabsContent>
       </Tabs>
 
-      <Drawer
-        open={selectedSkill !== null}
-        onOpenChange={(open) => !open && setSelectedSkillId(null)}
-      >
+      <Drawer open={selectedSkill !== null} onOpenChange={(open) => !open && setSelection(null)}>
         {selectedSkill && (
           <SkillDetailPanel
             skill={selectedSkill}
             inventoryNotice={inventoryNotice}
-            onClose={() => setSelectedSkillId(null)}
+            onClose={() => setSelection(null)}
             onInstallStart={handleInstallStart}
             onInstallPaused={handleInstallPaused}
             onInstallComplete={handleInstallComplete}
