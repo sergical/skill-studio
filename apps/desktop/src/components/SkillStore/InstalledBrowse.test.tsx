@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { Toaster, toast } from "sonner";
@@ -89,6 +89,61 @@ async function openInstalled() {
   await user.click(await screen.findByText("sample"));
   return user;
 }
+it("Installed shows local skills while the catalog is slow and after it goes offline", async () => {
+  let failCatalog: (error: Error) => void = () => {};
+  mockIPC((command) => {
+    if (command === "get_installed_skills") return [fixture];
+    if (command === "get_popular_skills")
+      return new Promise((_, reject) => {
+        failCatalog = reject;
+      });
+    return null;
+  });
+  const user = userEvent.setup();
+  render(<SkillStore />);
+  await user.click(screen.getByRole("tab", { name: /Installed/ }));
+  expect(await screen.findByText("sample")).toBeTruthy();
+  await act(async () => failCatalog(new Error("Offline")));
+  await user.click(screen.getByRole("tab", { name: "Browse" }));
+  expect(await screen.findByText("Offline")).toBeTruthy();
+  await user.click(screen.getByRole("tab", { name: /Installed/ }));
+  expect(screen.getByText("sample")).toBeTruthy();
+});
+
+it("Installed reports a pending or failed scan and retries locally while Browse stays available", async () => {
+  let failInventory: (error: Error) => void = () => {};
+  let retried = false;
+  let catalogRequests = 0;
+  mockIPC((command) => {
+    if (command === "get_installed_skills") {
+      if (retried) return [fixture];
+      return new Promise((_, reject) => {
+        failInventory = reject;
+      });
+    }
+    if (command === "get_popular_skills") {
+      catalogRequests += 1;
+      return {
+        skills: [{ id: "owner/repo/popular", name: "popular", installs: 1 }],
+        has_more: false,
+      };
+    }
+    return null;
+  });
+  const user = userEvent.setup();
+  render(<SkillStore />);
+  expect(await screen.findByText("popular")).toBeTruthy();
+  await user.click(screen.getByRole("tab", { name: "Installed" }));
+  expect(screen.getByRole("status").textContent).toContain("Loading installed skills");
+  expect(screen.queryByText("No skills installed yet")).toBeNull();
+  await act(async () => failInventory(new Error("Cannot read installed skills")));
+  expect(await screen.findByText("Cannot read installed skills")).toBeTruthy();
+  retried = true;
+  await user.click(screen.getByRole("button", { name: "Try again" }));
+  expect(await screen.findByText("sample")).toBeTruthy();
+  expect(catalogRequests).toBe(1);
+});
+
 it("Installed Browse loads owner/repo/slug details or sends a bare name and leaves the panel empty", async () => {
   const { ids } = ipc("new");
   const user = await openInstalled();

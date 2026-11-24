@@ -2,7 +2,7 @@
 // SkillDetailPanel - Detail view for a selected skill
 // ============================================================================
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Button, DrawerContent } from "@skill-studio/ui";
 import { SkillDetailHeader } from "./SkillDetailHeader";
 import { SkillContent } from "./SkillContent";
@@ -13,6 +13,7 @@ import type { SkillDetails, SkillWithStatus } from "@skill-studio/lib";
 
 interface SkillDetailPanelProps {
   skill: SkillWithStatus;
+  inventoryNotice?: ReactNode;
   onClose: () => void;
   onInstallStart: (skillName: string) => void;
   onInstallPaused: () => void;
@@ -37,6 +38,7 @@ export function SkillDetailPanel(props: SkillDetailPanelProps) {
 
 function SkillDetailsContent({
   skill,
+  inventoryNotice,
   onClose,
   onInstallStart,
   onInstallPaused,
@@ -107,15 +109,17 @@ function SkillDetailsContent({
         Add with more options…
       </Button>
       <div className="my-2 h-px bg-border" />
-      <InstallControls
-        skill={skill}
-        resolvedTopSource={resolvedTopSource}
-        onInstallStart={onInstallStart}
-        onInstallPaused={onInstallPaused}
-        onInstallComplete={onInstallComplete}
-        onUpdateComplete={onUpdateComplete}
-        onRemoveComplete={onRemoveComplete}
-      />
+      {inventoryNotice ?? (
+        <InstallControls
+          skill={skill}
+          resolvedTopSource={resolvedTopSource}
+          onInstallStart={onInstallStart}
+          onInstallPaused={onInstallPaused}
+          onInstallComplete={onInstallComplete}
+          onUpdateComplete={onUpdateComplete}
+          onRemoveComplete={onRemoveComplete}
+        />
+      )}
     </DrawerContent>
   );
 }
