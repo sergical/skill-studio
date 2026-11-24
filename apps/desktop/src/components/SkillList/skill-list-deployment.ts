@@ -10,24 +10,31 @@ import {
   isUnresolvedDeployment,
   skillForCoverageScope,
 } from "@skill-studio/lib";
-import type { InstalledSkill, SkillListFilter } from "@skill-studio/lib";
+import type { Deployment, InstalledSkill, SkillListFilter } from "@skill-studio/lib";
 
-/** The deployment the current scope shows for `skill`, so the detail drawer opens on that copy.
- * With no scope, the copy carrying spec violations, so the row's badge and the page agree. */
-export function deploymentForScope(
+function selectListDeployment(
   skill: InstalledSkill,
   scope: SkillListFilter["scope"],
   harness?: string,
-): string | undefined {
-  if (scope === "all" && !harness) return deploymentWithSpecViolations(skill)?.path;
+): Deployment | undefined {
+  if (scope === "all" && !harness) return deploymentWithSpecViolations(skill);
   const { deployments } = skillForCoverageScope(skill, scope);
-  if (!harness) return deployments[0]?.path;
+  if (!harness) return deployments[0];
   const matches = deployments.filter((d) => deploymentMatchesHarness(d, harness));
   const local = isProjectScope(scope)
     ? matches.filter((d) => d.project_path === scope.project)
     : matches;
   const choices = local.length ? local : matches;
-  const selected = choices.find((d) => d.agent === harness) ?? choices[0];
+  return choices.find((d) => d.agent === harness) ?? choices[0];
+}
+
+/** Open the selected copy's physical file, or the broken link itself for repair. */
+export function deploymentForScope(
+  skill: InstalledSkill,
+  scope: SkillListFilter["scope"],
+  harness?: string,
+): string | undefined {
+  const selected = selectListDeployment(skill, scope, harness);
   if (!selected || isUnresolvedDeployment(selected)) return selected?.path;
   const backing = selected.backing;
   if (backing.kind === "linked-to") {

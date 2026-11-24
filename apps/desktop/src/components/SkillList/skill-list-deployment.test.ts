@@ -17,6 +17,7 @@ function fixtureDeployment(overrides: Partial<Deployment> = {}): Deployment {
     path: "/home/.agents/skills/find-bugs",
     is_symlink: false,
     symlink_is_broken: false,
+    backing: { kind: "canonical" },
     spec_violations: [],
     ...overrides,
   } as Deployment;
@@ -56,7 +57,20 @@ describe("deploymentForScope", () => {
 
   it("a_project_scope_opens_that_projects_copy_even_when_another_scope_has_the_warning", () => {
     const skill = fixtureSkill([
-      fixtureDeployment({ path: "/p/clean", scope: "project", project_path: "/p" }),
+      fixtureDeployment({
+        path: "/p/link",
+        scope: "project",
+        project_path: "/p",
+        agent: "Claude Code",
+        is_symlink: true,
+        backing: { kind: "linked-to", deployment_id: "project-copy" },
+      }),
+      fixtureDeployment({
+        id: "project-copy",
+        path: "/p/clean",
+        scope: "project",
+        project_path: "/p",
+      }),
       fixtureDeployment({ path: "/g/warned", spec_violations: [ERROR] }),
     ]);
     expect(deploymentForScope(skill, { project: "/p" })).toBe("/p/clean");

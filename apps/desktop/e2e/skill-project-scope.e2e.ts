@@ -6,6 +6,15 @@ test("Claude Code links open the project's Universal copy and fork the global co
   page,
 }) => {
   await openApp(page);
+  // The scanner visits the Claude Code root before the Universal folder in each scope.
+  await page.evaluate(() =>
+    window.__harness!.updateSkill("commit", (skill) => ({
+      ...skill,
+      deployments: [...skill.deployments].sort(
+        (a, b) => Number(b.is_symlink) - Number(a.is_symlink),
+      ),
+    })),
+  );
   await openSkillsPage(page, "Skills", "commit");
   await page.getByRole("button", { name: /^Project:/ }).click();
   await page.getByRole("menuitemradio", { name: /^agent-studio/ }).click();
@@ -17,6 +26,8 @@ test("Claude Code links open the project's Universal copy and fork the global co
   await expect(selectedCopy).toContainText("agent-studio · Universal folder");
   await page.keyboard.press("Escape");
   await page.getByRole("group", { name: "Scope" }).getByText("Global", { exact: true }).click();
+  await page.getByRole("button", { name: /^Filter,/ }).click();
+  await page.getByRole("menuitemradio", { name: "Any agent" }).click();
   await skillRow(page, "commit").getByText("commit", { exact: true }).click();
   await expect(selectedCopy).toContainText("Global · Universal folder");
   await page.getByRole("button", { name: "Edit", exact: true }).click();
