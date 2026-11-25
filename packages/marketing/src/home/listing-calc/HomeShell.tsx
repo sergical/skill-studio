@@ -9,7 +9,6 @@ import { FaqSection } from "../FaqSection";
 import { FirstScanSteps } from "../FirstScanSteps";
 import { homeSectionStyles } from "../HomeSection.stylex";
 import { JobsSection } from "../JobsSection";
-import { UsageSection } from "../UsageSection";
 import type { ThemeToggleOrigin } from "../../ProductMock";
 import { SiteFooter, SiteHeader, siteLayout } from "../../SiteChrome";
 import { lightSiteTheme, siteTokens, type SiteTheme } from "../../SiteTheme.stylex";
@@ -110,13 +109,6 @@ export function HomeShell({
 
         <section {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}>
           <SidecarWalkthrough theme={theme} title="See it in action." />
-        </section>
-
-        <section
-          id="use-it"
-          {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}
-        >
-          <UsageSection />
         </section>
 
         <section

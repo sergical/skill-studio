@@ -227,7 +227,7 @@ export function KineticCalculator() {
                 Get the Mac app <span aria-hidden="true">→</span>
               </a>
               <a
-                href="#use-it"
+                href="#product"
                 {...stylex.props(homeSectionStyles.textLink, styles.ctaLink, styles.touchOnly)}
               >
                 See CLI &amp; MCP <span aria-hidden="true">→</span>

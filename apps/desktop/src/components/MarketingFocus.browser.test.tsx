@@ -4,7 +4,7 @@ import { cleanup, render } from "vitest-browser-react";
 import * as stylex from "@stylexjs/stylex";
 import { lightSiteTheme } from "../../../../packages/marketing/src/SiteTheme.stylex";
 import { FaqSection } from "../../../../packages/marketing/src/home/FaqSection";
-import { UsageSection } from "../../../../packages/marketing/src/home/UsageSection";
+import { HeroSurfaceShowcase } from "../../../../packages/marketing/src/home/listing-calc/HeroSurfaceShowcase";
 import { SidecarWalkthrough } from "../../../../packages/marketing/src/walkthrough/SidecarWalkthrough";
 import "../../../../packages/marketing/src/marketing-site.css";
 
@@ -25,7 +25,7 @@ it.each(["dark", "light"] as const)(
     await render(
       <div {...stylex.props(theme === "light" && lightSiteTheme)}>
         <FaqSection />
-        <UsageSection />
+        <HeroSurfaceShowcase theme={theme} onToggleTheme={() => {}} />
         <SidecarWalkthrough theme={theme} />
       </div>,
     );
@@ -33,6 +33,7 @@ it.each(["dark", "light"] as const)(
     await summary.click();
     await userEvent.keyboard("{Tab}{Shift>}{Tab}{/Shift}");
     expect(getComputedStyle(summary.element()).outlineOffset).toBe("4px");
+    await page.getByRole("tab", { name: "CLI" }).click();
     const replay = page.getByRole("button", { name: "Replay" });
     await replay.click();
     await userEvent.keyboard("{Tab}{Shift>}{Tab}{/Shift}");
@@ -46,15 +47,15 @@ it.each(["dark", "light"] as const)(
     document.documentElement.dataset.siteTheme = theme;
     await render(
       <div {...stylex.props(theme === "light" && lightSiteTheme)}>
-        <UsageSection />
+        <HeroSurfaceShowcase theme={theme} onToggleTheme={() => {}} />
         <SidecarWalkthrough theme={theme} />
       </div>,
     );
-    await page.getByRole("tab", { name: /CLI/ }).click();
-    const copy = page.getByRole("button", { name: /copy/i });
+    await page.getByRole("tab", { name: "CLI" }).click();
+    const copy = page.getByRole("button", { name: /copy command/i });
     await copy.click();
     await userEvent.keyboard("{Tab}{Shift>}{Tab}{/Shift}");
-    expect(getComputedStyle(copy.element()).outlineOffset).toBe("-4px");
+    expect(getComputedStyle(copy.element()).outlineOffset).toBe("2px");
     const expand = page.getByRole("button", { name: "Expand walkthrough" });
     await expand.click();
     await userEvent.keyboard("{Tab}");
@@ -72,27 +73,23 @@ it.each(["dark", "light"] as const)(
 );
 
 it.each(["dark", "light"] as const)(
-  "Undo keeps a visible ring and toast edge in %s theme instead of blending into the window",
+  "MCP undo action keeps a visible focus ring in %s theme",
   async (theme) => {
     document.documentElement.dataset.siteTheme = theme;
     await render(
       <div {...stylex.props(theme === "light" && lightSiteTheme)}>
-        <UsageSection />
+        <HeroSurfaceShowcase theme={theme} onToggleTheme={() => {}} />
       </div>,
     );
-    await page.getByRole("tab", { name: /^App/ }).click();
-    await page.getByRole("button", { name: "Replay" }).click();
-    const undo = page.getByRole("button", { name: "Undo" });
+    await page.getByRole("tab", { name: "MCP Server" }).click();
+    const undo = page.getByRole("button", { name: "Undo park" });
     await expect.element(undo).toBeVisible();
     await undo.click();
-    await page.getByRole("button", { name: "Replay" }).click();
-    await expect.element(undo).toBeVisible();
-    await userEvent.keyboard("{Tab}");
-    expect(getComputedStyle(undo.element()).outlineColor).toBe(
-      getComputedStyle(undo.element()).color,
+    const restored = page.getByRole("button", { name: "Restored 12 skills" });
+    await expect.element(restored).toBeVisible();
+    await userEvent.keyboard("{Tab}{Shift>}{Tab}{/Shift}");
+    expect(getComputedStyle(restored.element()).outlineColor).toBe(
+      getComputedStyle(restored.element()).color,
     );
-    const toast = undo.element().parentElement;
-    if (!toast) throw new Error("toast is missing");
-    expect(getComputedStyle(toast).boxShadow).toContain("1px");
   },
 );
