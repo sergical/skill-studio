@@ -56,7 +56,7 @@ export function HomeDirections(props: ComponentProps<typeof HomeView> & FirstSca
       ) : variant === 2 ? (
         <ClientDirectory revision={snapshot.revision} active={active} />
       ) : variant === 3 ? (
-        <RecentWork snapshot={snapshot} open={onSelectSkill} />
+        <RecentWork snapshot={snapshot} open={onSelectSkill} active={active} />
       ) : (
         <LibraryOverview
           snapshot={snapshot}

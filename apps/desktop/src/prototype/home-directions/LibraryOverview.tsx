@@ -10,7 +10,7 @@ import type { HarnessListing, SkillSnapshot } from "@skill-studio/lib";
 import { Button } from "@skill-studio/ui";
 import { issueDeploymentPath } from "../../components/Home/home-inbox-data";
 import { hasAssumedClaudeWindow } from "../../components/Listing/client-allocation";
-import { useHomeListing } from "./useHomeListing";
+import { useHomeListing } from "./useHomeReports";
 import { ScanPartialBanner } from "../../components/SkillList/ScanPartialBanner";
 import { issueRowState } from "../../components/SkillList/skill-row-state";
 import { HarnessIcon, harnessIdFromLabel } from "../../components/ui/HarnessIcon";

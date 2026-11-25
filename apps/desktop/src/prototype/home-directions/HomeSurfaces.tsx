@@ -1,14 +1,14 @@
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { ArrowRight, Check, ChevronRight, CircleAlert, Clock3 } from "lucide-react";
 import { Button } from "@skill-studio/ui";
 import { deploymentLabel, deploymentLabelFromAgentId } from "@skill-studio/lib";
 import type { HealthIssue, SkillSnapshot } from "@skill-studio/lib";
 import { computeHomeGroups, issueDeploymentPath } from "../../components/Home/home-inbox-data";
 import { issueRowState } from "../../components/SkillList/skill-row-state";
-import { useHomeListing } from "./useHomeListing";
+import { useHomeListing, useRecentSessions } from "./useHomeReports";
 import { HarnessIcon, harnessIdFromLabel } from "../../components/ui/HarnessIcon";
 import { useClientIds } from "../../hooks/useClientRows";
-import { sessionsReportKey, useAppStore } from "../../store/appStore";
+import { useAppStore } from "../../store/appStore";
 
 interface HomeData {
   snapshot: SkillSnapshot;
@@ -206,8 +206,6 @@ export function ClientDirectory({ revision, active }: { revision: number; active
   );
 }
 
-const sessionRequest = { project_path: null, sessions: 10 };
-const sessionKey = sessionsReportKey(sessionRequest);
 const day = new Intl.DateTimeFormat(undefined, { month: "long", day: "numeric", year: "numeric" });
 const clock = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 const dateOf = (at: string | null) => {
@@ -215,14 +213,10 @@ const dateOf = (at: string | null) => {
   return Number.isNaN(stamp) ? null : new Date(stamp);
 };
 
-export function RecentWork({ snapshot, open }: HomeData) {
+export function RecentWork({ snapshot, open, active }: HomeData & { active: boolean }) {
   const navigate = useAppStore((s) => s.setActiveView);
   const clients = useClientIds();
-  const load = useAppStore((s) => s.sessionsReports[sessionKey]);
-  const refresh = useAppStore((s) => s.refreshSkillSessions);
-  useEffect(() => {
-    if (!useAppStore.getState().sessionsReports[sessionKey]) refresh(sessionRequest);
-  }, [refresh]);
+  const { load, retry } = useRecentSessions(snapshot.revision, active);
   const sessions = useMemo(() => {
     const rows = (load?.data?.sessions ?? []).filter(
       (s) => !clients || clients.includes(s.harness),
@@ -252,7 +246,7 @@ export function RecentWork({ snapshot, open }: HomeData) {
       {load?.error && (
         <div className="flex flex-wrap items-center gap-2">
           <p role="alert">{load.error}</p>
-          <Button variant="outline" onClick={() => refresh(sessionRequest)}>
+          <Button variant="outline" onClick={retry}>
             Try again
           </Button>
         </div>

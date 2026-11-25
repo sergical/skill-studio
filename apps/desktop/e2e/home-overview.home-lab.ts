@@ -46,3 +46,24 @@ test("open a client report and compare the native Home designs", async ({ page }
   await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { name: "Activity", exact: true })).toBeVisible();
 });
+
+test("Recent work shows the next session report while the view stays open", async ({ page }) => {
+  await page.goto("/?v=4");
+  const view = page.getByRole("region", { name: "Recent sessions" });
+  await expect(view.locator("summary").first()).toBeVisible();
+  const [previous, next] = await page.evaluate(() =>
+    window
+      .__harness!.snapshot()
+      .skills.slice(0, 2)
+      .map((skill) => skill.name),
+  );
+  await expect(view.locator("summary").getByText(previous, { exact: true })).toBeVisible();
+  await page.evaluate(async () => {
+    const harness = window.__harness!;
+    const snapshot = harness.snapshot();
+    // The session fixture uses the first skill as the latest recorded load.
+    const [first, second, ...rest] = snapshot.skills;
+    await harness.publish({ ...snapshot, skills: [second, first, ...rest] });
+  });
+  await expect(view.locator("summary").getByText(next, { exact: true })).toBeVisible();
+});
