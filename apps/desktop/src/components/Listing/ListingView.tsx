@@ -154,7 +154,7 @@ function Summary({ row, budget }: { row: HarnessListing; budget: number }) {
       </p>
       <p className="m-0">
         Budget {budget.toLocaleString()} {row.budget_unit}.{" "}
-        {!row.thresholds && `The full listing is ${row.full_size.toLocaleString()}. `}
+        {!row.thresholds && `The full skill list is ${row.full_size.toLocaleString()}. `}
         {row.budget_source}.
       </p>
       {row.description_char_limit != null && (
@@ -172,12 +172,12 @@ function Summary({ row, budget }: { row: HarnessListing; budget: number }) {
       )}
       {row.thresholds && (
         <section
-          aria-label="Listing tier"
+          aria-label="Skill list tier"
           className="mt-1 flex max-w-[68ch] flex-col gap-1 rounded-md border border-border-subtle p-3"
         >
           <p className="m-0 text-body text-text-primary">{TIER_LABEL[row.thresholds.tier]}</p>
           <p className="m-0 tabular-nums">
-            Full listing {row.thresholds.full_cost.toLocaleString()} {row.budget_unit}. Names and
+            Full skill list {row.thresholds.full_cost.toLocaleString()} {row.budget_unit}. Names and
             paths only {row.thresholds.names_only_cost.toLocaleString()}, of which the skill roots
             table is {row.thresholds.roots_table_cost.toLocaleString()}.
           </p>
@@ -203,7 +203,7 @@ function SettingCard({ row, tried }: { row: HarnessListing; tried: HarnessListin
   };
   return (
     <section
-      aria-label="Listing setting"
+      aria-label="Setting to paste"
       className="flex flex-col gap-2 rounded-md border border-border-subtle p-3 text-small"
     >
       <p className="m-0 text-text-secondary">
@@ -617,7 +617,7 @@ export function ListingView({ snapshot, initialHarness, initialScope }: ListingV
                   <span className="text-right">Characters</span>
                 </div>
               )}
-              <ul aria-label="Listing" className="m-0 list-none p-0">
+              <ul aria-label="Skill list" className="m-0 list-none p-0">
                 {shown.slice(0, limit).map((entry) => {
                   const owner = entry.path && byPath.get(entry.path);
                   return (

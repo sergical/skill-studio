@@ -4,27 +4,52 @@
 // keeps the chosen agent, so switching never resets the agent menu.
 // ============================================================================
 
-import { ToggleGroup, ToggleGroupItem } from "@skill-studio/ui";
-import { singleSelectToggleValue } from "../../lib/single-select-toggle-group";
+import { useEffect, useRef } from "react";
+import { Tabs, TabsList, TabsTrigger } from "@skill-studio/ui";
 import { useAppStore } from "../../store/appStore";
 
-type AgentTab = "listing" | "sessions";
+const AGENT_TABS = ["listing", "sessions"] as const;
+type AgentTab = (typeof AGENT_TABS)[number];
+
+/** px-0 so the first tab's label starts on the page's left edge, like the section titles. */
+const TRIGGER =
+  "px-0 text-body font-medium text-text-tertiary after:bg-text-primary data-active:text-text-primary hover:text-text-secondary";
+
+/** Each tab is its own page, so a switch unmounts the selected tab. The next page's tabs take
+ * focus back when the switch came from here, and only then. */
+let switchedHere = false;
 
 export function AgentTabs({ tab, harness }: { tab: AgentTab; harness: string }) {
   const navigate = useAppStore((s) => s.setActiveView);
+  const list = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!switchedHere) return;
+    // A frame later: Base UI moves its arrow-key highlight to the selected tab only while focus
+    // is outside the list, and it registers the tabs after this effect runs.
+    const frame = requestAnimationFrame(() => {
+      switchedHere = false;
+      list.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, []);
   return (
-    <ToggleGroup
-      variant="segmented"
-      aria-label="Agent report"
-      value={[tab]}
-      onValueChange={(next) =>
-        singleSelectToggleValue<AgentTab>(next, (kind) =>
-          navigate({ kind, harness: harness || undefined }),
-        )
-      }
+    <Tabs
+      value={tab}
+      onValueChange={(value) => {
+        const kind = AGENT_TABS.find((item) => item === value);
+        if (!kind || kind === tab) return;
+        switchedHere = true;
+        navigate({ kind, harness: harness || undefined });
+      }}
     >
-      <ToggleGroupItem value="listing">What it sees</ToggleGroupItem>
-      <ToggleGroupItem value="sessions">What it used</ToggleGroupItem>
-    </ToggleGroup>
+      <TabsList ref={list} variant="line" aria-label="Agent report" className="gap-5">
+        <TabsTrigger value="listing" className={TRIGGER}>
+          What it sees
+        </TabsTrigger>
+        <TabsTrigger value="sessions" className={TRIGGER}>
+          What it used
+        </TabsTrigger>
+      </TabsList>
+    </Tabs>
   );
 }

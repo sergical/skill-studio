@@ -7,7 +7,7 @@ test("a larger budget marks the skills that gain a description and gives the set
   await openApp(page);
   await page.getByRole("navigation").getByRole("button", { name: "Agents" }).click();
   await page.getByText("Every skill", { exact: true }).click();
-  const rows = page.getByRole("list", { name: "Listing" }).getByRole("listitem");
+  const rows = page.getByRole("list", { name: "Skill list" }).getByRole("listitem");
   await expect(rows.first()).toBeVisible();
   const nameOnly = rows.filter({ hasText: "Name only" }).first();
   await expect(nameOnly).toBeVisible();
@@ -27,7 +27,7 @@ test("a larger budget marks the skills that gain a description and gives the set
   await expect(changed).toContainText("Name only");
   await expect(changed).toContainText("Full description");
 
-  const setting = page.getByRole("region", { name: "Listing setting" });
+  const setting = page.getByRole("region", { name: "Setting to paste" });
   await expect(setting).toContainText('"skillListingBudgetFraction": 0.02');
   await expect(setting).toContainText("chezmoi apply");
 });
@@ -45,7 +45,7 @@ test("the Codex listing gives the tier and how far the budget is from the next o
     page.getByRole("region", { name: /^Where the \d+ skills come from$/ }),
   ).toBeVisible();
   await page.getByText("How the estimate was calculated", { exact: true }).click();
-  const tier = page.getByRole("region", { name: "Listing tier" });
+  const tier = page.getByRole("region", { name: "Skill list tier" });
   await expect(tier).toContainText("Descriptions are shortened");
   await expect(
     tier.getByText(/Names and paths only 3,214, of which the skill roots table is 212\./),
@@ -80,7 +80,7 @@ test("a Cursor-only setup can follow a scanned skill from Home and back", async 
   );
   await page.getByRole("textbox", { name: "Find an entry" }).fill("code-review");
   await page
-    .getByRole("list", { name: "Listing", exact: true })
+    .getByRole("list", { name: "Skill list", exact: true })
     .getByRole("button", { name: "code-review", exact: true })
     .click();
   const preview = page.getByRole("region", { name: "What agents see of this skill" });
@@ -91,7 +91,7 @@ test("a Cursor-only setup can follow a scanned skill from Home and back", async 
   await expect(preview).not.toContainText("Full description");
   await page.getByRole("button", { name: "Agents", exact: true }).last().click();
   await expect(agent).toContainText("Cursor");
-  await page.getByRole("button", { name: "What it used", exact: true }).click();
+  await page.getByRole("tab", { name: "What it used" }).click();
   await expect(agent).toContainText("Cursor");
   await page.getByRole("button", { name: "See what Cursor sees" }).click();
   await expect(page.getByRole("textbox", { name: "Find an entry" })).toBeVisible();
@@ -131,7 +131,7 @@ test("save and remove a personal Codex budget from the agent's settings", async 
 test("read the skill guidance saved for an OpenCode session", async ({ page }) => {
   await openApp(page);
   await page.getByRole("navigation").getByRole("button", { name: "Agents" }).click();
-  await page.getByRole("button", { name: "What it used", exact: true }).click();
+  await page.getByRole("tab", { name: "What it used" }).click();
   await page.getByRole("combobox", { name: "Agent" }).click();
   await page.getByRole("option", { name: "OpenCode", exact: true }).click();
   await page.getByText("app · plan", { exact: true }).click();

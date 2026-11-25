@@ -30,6 +30,11 @@ The state labels live in
 `LISTING_STATE_LABEL` or `SESSION_LISTED_LABEL`; never write a local map. Three
 local maps had drifted to three names for one state.
 
+Known gap: notes the core writes (`crates/skill-studio-core/src/skill_sessions.rs`,
+`listing_visibility.rs`) still say "listing". The CLI and MCP print the same
+notes next to a command named `listing`, so they change with the CLI's words,
+in their own change.
+
 Agent names come from `HARNESS_CATALOG` or `deploymentLabelFromAgentId`. Never
 type a list of agent names into copy: the next agent added would be missing.
 
@@ -42,7 +47,8 @@ in the line under it ("Budget 300 characters · 0.01% of context").
 ## Page anatomy
 
 - Every page is a `PageShell`. Its title is the sidebar label. Tabs within a
-  place go in `toolbar` (see `AgentTabs`); filters go in `actions`.
+  place are line `Tabs` in `toolbar` (see `AgentTabs`), with the first label
+  on the page's left edge; filters go in `actions`.
 - Every titled part of a page is a `PageSection`
   ([PageSection.tsx](src/components/Shell/PageSection.tsx)): the title on the
   page's left edge, its controls or a note on the right, content 12px below.

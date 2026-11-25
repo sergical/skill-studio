@@ -4,7 +4,7 @@ import { openApp } from "./app-harness";
 test.beforeEach(async ({ page }) => {
   await openApp(page);
   await page.getByRole("navigation").getByRole("button", { name: "Agents" }).click();
-  await page.getByRole("button", { name: "What it used", exact: true }).click();
+  await page.getByRole("tab", { name: "What it used" }).click();
   await expect(page.getByRole("heading", { name: "Agents", level: 1 })).toBeVisible();
 });
 

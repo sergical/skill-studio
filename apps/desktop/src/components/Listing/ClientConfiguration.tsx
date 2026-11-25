@@ -193,6 +193,8 @@ export function ClientConfiguration({
   const namesOnly = entries.filter((e) => e.state === "name_only").length;
   const omitted = row.entries.filter((e) => e.state === "omitted").length;
   const described = entries.length - namesOnly;
+  // Skills the budget left out still count: the agent would have listed them.
+  const offered = entries.length + omitted;
   const session = row.observed_session;
   const assumedWindow = preview && hasAssumedClaudeWindow(row);
   return (
@@ -214,7 +216,7 @@ export function ClientConfiguration({
         ) : (
           <SummaryMetric
             value={described.toLocaleString()}
-            unit={`of ${entries.length.toLocaleString()} skills keep a description`}
+            unit={`of ${offered.toLocaleString()} skills keep a description`}
           />
         )}
         {preview && row.budget !== null && !assumedWindow && (
@@ -238,10 +240,12 @@ export function ClientConfiguration({
             `${name} lists skills from these folders. Skill Studio can’t estimate how it shortens them yet.`
           ) : (
             <>
-              Estimate · <strong>{entries.length} skills</strong>
+              Estimate · <strong>{offered} skills</strong>
               {shortened ? ` · ${shortened} shortened` : ""}
               {namesOnly ? ` · ${namesOnly} name only` : ""}
-              {!shortened && !namesOnly && entries.length > 0 ? " · Every description fits" : ""}
+              {!shortened && !namesOnly && !omitted && entries.length > 0
+                ? " · Every description fits"
+                : ""}
               {omitted ? ` · ${omitted} not listed` : ""}
             </>
           )}

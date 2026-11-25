@@ -29,3 +29,16 @@ it("shows a budget-free preview and a saved listing independently", () => {
   expect(screen.queryByRole("region", { name: /Where the \d+ skills come from/ })).toBeNull();
   expect(screen.getByText(/Last session listed 3 skills.*recorded-model/)).toBeTruthy();
 });
+
+it("counts skills the budget left out in the headline, so a full budget never reads as every description fits", () => {
+  const row = mockListingReport(buildHarnessSnapshot(), {}).listings[0];
+  const [first] = row.entries;
+  const entries = [
+    { ...first, name: "a", path: "/a", state: "described" as const },
+    { ...first, name: "b", path: "/b", state: "described" as const },
+    { ...first, name: "c", path: "/c", state: "omitted" as const },
+  ];
+  render(<ClientConfiguration row={{ ...row, entries }} onSaved={() => {}} />);
+  expect(screen.getByText("of 3 skills keep a description")).toBeTruthy();
+  expect(screen.queryByText(/Every description fits/)).toBeNull();
+});
