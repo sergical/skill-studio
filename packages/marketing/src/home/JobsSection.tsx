@@ -998,7 +998,7 @@ const styles = stylex.create({
     padding: "13px 14px",
   },
   termLine: { overflowWrap: "anywhere", whiteSpace: "pre-wrap" },
-  termErr: { color: "oklch(0.72 0.18 25)" },
+  termErr: { color: siteTokens.danger },
   termWarn: { color: siteTokens.warning },
   termDim: { color: siteTokens.muted },
   painList: {

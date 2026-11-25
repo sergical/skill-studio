@@ -69,11 +69,13 @@ function SmoothHeightStage({
   activeKey,
   direction,
   instant,
+  theme,
   children,
 }: {
-  activeKey: string;
+  activeKey: HeroSurfaceId;
   direction: "forward" | "backward" | "none";
   instant: boolean;
+  theme: SiteTheme;
   children: ReactNode;
 }) {
   const outerRef = useRef<HTMLDivElement>(null);
@@ -119,7 +121,14 @@ function SmoothHeightStage({
   }, []);
 
   return (
-    <div ref={outerRef} {...stylex.props(styles.stageOuter)}>
+    <div
+      ref={outerRef}
+      {...stylex.props(
+        styles.stageOuter,
+        activeKey === "app" ? styles.stageAppRadius : styles.stagePanelRadius,
+        theme === "light" ? styles.stageShadowLight : styles.stageShadowDark,
+      )}
+    >
       <div ref={innerRef}>
         <div
           key={activeKey}
@@ -299,7 +308,12 @@ export function HeroSurfaceShowcase({
 
         {/* Main interactive window with jump-free height interpolation */}
         <div id="surface-panel" role="tabpanel" aria-labelledby={`surface-tab-${surface}`}>
-          <SmoothHeightStage activeKey={surface} direction={direction} instant={instant}>
+          <SmoothHeightStage
+            activeKey={surface}
+            direction={direction}
+            instant={instant}
+            theme={theme}
+          >
             {surface === "app" ? (
               <ProductMock
                 theme={theme}
@@ -371,7 +385,9 @@ const styles = stylex.create({
   },
   frameBack: (color: string) => ({ backgroundColor: color }),
   dither: {
-    inset: 0,
+    height: { default: "100vh", "@supports (height: 100lvh)": "100lvh" },
+    insetInline: 0,
+    top: 0,
     maskImage: "radial-gradient(ellipse 110% 85% at 50% 0%, black 30%, transparent 92%)",
     pointerEvents: "none",
     position: "absolute",
@@ -581,11 +597,23 @@ const styles = stylex.create({
 
   // SmoothHeightStage
   stageOuter: {
+    marginInline: "auto",
+    maxWidth: 1240,
     overflow: "hidden",
     transition: {
       default: "height 260ms cubic-bezier(0.25, 1, 0.5, 1)",
       [REDUCED]: "none",
     },
+  },
+  stageAppRadius: { borderRadius: { default: 10, [MOBILE]: "min(3vw, 10px)" } },
+  stagePanelRadius: { borderRadius: 14 },
+  stageShadowDark: {
+    boxShadow:
+      "0 0 0 1px oklch(1 0 0 / .1), 0 2px 6px oklch(0 0 0 / .26), 0 32px 84px oklch(0 0 0 / .5)",
+  },
+  stageShadowLight: {
+    boxShadow:
+      "0 0 0 1px oklch(0 0 0 / .08), 0 1px 3px oklch(0 0 0 / .06), 0 12px 32px -8px oklch(0 0 0 / .14), 0 32px 64px -24px oklch(0 0 0 / .18)",
   },
   paneForward: {
     animationDuration: { default: "220ms", [REDUCED]: "120ms" },
@@ -600,8 +628,7 @@ const styles = stylex.create({
     animationTimingFunction: "cubic-bezier(0.25, 1, 0.5, 1)",
   },
   appWindow: {
-    boxShadow:
-      "0 0 0 1px oklch(0 0 0 / .12), 0 2px 6px oklch(0 0 0 / .24), 0 32px 90px oklch(0 0 0 / .5)",
+    boxShadow: "none",
     height: { default: "clamp(600px, calc(100svh - 200px), 780px)", [MOBILE]: 560 },
     marginInline: "auto",
     maxWidth: 1240,

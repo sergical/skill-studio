@@ -883,8 +883,6 @@ const styles = stylex.create({
   },
   window: {
     borderRadius: 14,
-    boxShadow:
-      "0 0 0 1px oklch(1 0 0 / .11), 0 2px 6px oklch(0 0 0 / .28), 0 32px 84px oklch(0 0 0 / .52)",
     display: "flex",
     flexDirection: "column",
     marginInline: "auto",

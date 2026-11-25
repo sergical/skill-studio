@@ -85,7 +85,9 @@ function AgentRows() {
           <span {...stylex.props(styles.rowIconSlot, !row.kept && styles.rowOff)}>
             <AgentIcon agent={row.id} size={14} />
           </span>
-          <span {...stylex.props(styles.rowLabel, !row.kept && styles.rowOff)}>{row.name}</span>
+          <span {...stylex.props(styles.rowLabel, !row.kept && styles.rowLabelOff)}>
+            {row.name}
+          </span>
           {row.note && <span {...stylex.props(styles.rowNote)}>{row.note}</span>}
         </li>
       ))}
@@ -284,6 +286,7 @@ const styles = stylex.create({
   },
   rowOff: { opacity: 0.5 },
   rowIconSlot: { display: "inline-flex", flexShrink: 0 },
+  rowLabelOff: { color: siteTokens.muted },
   rowIcon: { color: siteTokens.muted, flexShrink: 0 },
   rowLabel: {
     color: siteTokens.text,

@@ -382,7 +382,7 @@ const styles = stylex.create({
   dotMuted: { backgroundColor: siteTokens.muted },
   tagMuted: { color: siteTokens.muted, flexShrink: 0, fontSize: 11.5 },
   tagWarn: { color: siteTokens.warning, flexShrink: 0, fontSize: 11.5, fontWeight: 560 },
-  tagError: { color: "oklch(0.72 0.18 25)", flexShrink: 0, fontSize: 11.5, fontWeight: 560 },
+  tagError: { color: siteTokens.danger, flexShrink: 0, fontSize: 11.5, fontWeight: 560 },
   tagSuccess: { color: siteTokens.success, flexShrink: 0, fontSize: 11.5, fontWeight: 580 },
   textSuccess: { color: siteTokens.success },
   textWarn: { color: siteTokens.warning },
