@@ -196,10 +196,10 @@ export function HeroSurfaceShowcase({
 
   const bottomSummary =
     surface === "app"
-      ? "Interactive macOS app preview — inspect skills, check listing budgets, or switch views."
+      ? "Interactive macOS app preview. Inspect skills, check listing budgets, or switch views."
       : surface === "cli"
         ? `${activeCli.summary}. Runs in any shell with zero install.`
-        : "Local stdio MCP server — works with Claude Code, Codex, Cursor, OpenCode, and pi.";
+        : "Local stdio MCP server. Works with Claude Code, Codex, Cursor, OpenCode, and pi.";
 
   return (
     <section id="product" {...stylex.props(styles.section)}>
@@ -291,6 +291,9 @@ export function HeroSurfaceShowcase({
                 </span>
               </button>
             )}
+            <span aria-live="polite" {...stylex.props(styles.visuallyHidden)}>
+              {copied ? (surface === "cli" ? "Copied command" : "Copied MCP setup prompt") : ""}
+            </span>
           </div>
         </div>
 
@@ -642,5 +645,16 @@ const styles = stylex.create({
       },
     },
     ":focus-visible": { outline: `2px solid ${siteTokens.text}`, outlineOffset: 3 },
+  },
+  visuallyHidden: {
+    border: 0,
+    clipPath: "inset(50%)",
+    height: 1,
+    margin: -1,
+    overflow: "hidden",
+    padding: 0,
+    position: "absolute",
+    whiteSpace: "nowrap",
+    width: 1,
   },
 });

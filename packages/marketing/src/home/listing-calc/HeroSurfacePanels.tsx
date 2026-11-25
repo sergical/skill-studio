@@ -5,15 +5,7 @@
 // ============================================================================
 import { useState } from "react";
 import * as stylex from "@stylexjs/stylex";
-import {
-  Check,
-  ChevronDown,
-  ChevronRight,
-  CornerDownRight,
-  RotateCcw,
-  Sparkles,
-  Wrench,
-} from "lucide-react";
+import { Check, ChevronDown, ChevronRight, CornerDownRight, RotateCcw, Wrench } from "lucide-react";
 
 import { AgentIcon } from "../../AgentIcon";
 import { siteTokens } from "../../SiteTheme.stylex";
@@ -48,7 +40,7 @@ export const CLI_COMMANDS: ReadonlyArray<CliCommandSpec> = [
     label: "diagnose",
     cmd: "npx skill-studio@latest diagnose",
     timing: "31ms",
-    summary: "2 errors · 1 warning — all auto-fixable",
+    summary: "2 errors · 1 warning, all auto-fixable",
   },
   {
     id: "usage",
@@ -484,7 +476,7 @@ export function HeroCliWindow({
             </div>
 
             <div {...stylex.props(styles.diagFoot, styles.lineReveal, dynamic.delay("150ms"))}>
-              <span>Reversible — every file stays intact locally.</span>
+              <span>Reversible. Every file stays intact locally.</span>
               <span {...stylex.props(styles.toneAccent)}>
                 Undo any time: `npx skill-studio@latest undo`
               </span>
@@ -583,7 +575,7 @@ const MCP_SCENARIOS: ReadonlyArray<{
       { label: "op_01JV8X2K undone", tone: "muted" },
     ],
     reply:
-      "Done. I parked 12 idle skills into ~/.skill-studio/parked/. Your agents now load 19 skills with 16 full descriptions and 0 hidden — up from 5 described before.",
+      "Done. I parked 12 idle skills into ~/.skill-studio/parked/. Your agents now load 19 skills with 16 full descriptions and 0 hidden, up from 5 described before.",
     followUp: "motion/SKILL.md also has an unclosed frontmatter header. Want me to repair it?",
     actionLabel: "Undo park",
     actionDoneLabel: "Restored 12 skills",
@@ -618,7 +610,7 @@ const MCP_SCENARIOS: ReadonlyArray<{
       { label: "writing-skills described", tone: "ok" },
     ],
     reply:
-      "Claude Code only received the bare name writing-skills — its trigger description was dropped because 12 unused skills ahead of it consumed the 16,000-character listing budget.",
+      "Claude Code only received the bare name writing-skills. Its trigger description was dropped because 12 unused skills ahead of it consumed the 16,000-character listing budget.",
     followUp: "Parking 4 unused skills gives writing-skills its full description back immediately.",
     actionLabel: "Park top 4 blockers",
     actionDoneLabel: "writing-skills restored",
@@ -711,11 +703,12 @@ export function HeroMcpWindow() {
                 }}
                 {...stylex.props(styles.cmdTab, on && styles.cmdTabOn)}
               >
-                <Sparkles
-                  size={12}
+                <span
                   aria-hidden="true"
                   {...stylex.props(on ? styles.cmdTabPrefixOn : styles.cmdTabPrefix)}
-                />
+                >
+                  ›
+                </span>
                 <span>{item.label}</span>
               </button>
             );

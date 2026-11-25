@@ -9,6 +9,7 @@ import * as stylex from "@stylexjs/stylex";
 import { Check, FolderOpen, History } from "lucide-react";
 
 import { AgentIcon, type AgentId } from "../AgentIcon";
+import { DOCS_URL } from "../site-links";
 import { siteTokens } from "../SiteTheme.stylex";
 import { homeSectionStyles } from "./HomeSection.stylex";
 import { PILE_COUNTS, STATE_COLOR } from "./skill-pile-data";
@@ -71,12 +72,20 @@ function AgentRows() {
   return (
     <ul {...stylex.props(styles.rows)}>
       {AGENT_ROWS.map((row) => (
-        <li key={row.id} {...stylex.props(styles.row, !row.kept && styles.rowOff)}>
-          <span {...stylex.props(styles.checkbox, row.kept && styles.checkboxOn)}>
+        <li key={row.id} {...stylex.props(styles.row)}>
+          <span
+            {...stylex.props(
+              styles.checkbox,
+              row.kept && styles.checkboxOn,
+              !row.kept && styles.rowOff,
+            )}
+          >
             {row.kept && <Check size={10} strokeWidth={3} />}
           </span>
-          <AgentIcon agent={row.id} size={14} />
-          <span {...stylex.props(styles.rowLabel)}>{row.name}</span>
+          <span {...stylex.props(styles.rowIconSlot, !row.kept && styles.rowOff)}>
+            <AgentIcon agent={row.id} size={14} />
+          </span>
+          <span {...stylex.props(styles.rowLabel, !row.kept && styles.rowOff)}>{row.name}</span>
           {row.note && <span {...stylex.props(styles.rowNote)}>{row.note}</span>}
         </li>
       ))}
@@ -150,7 +159,7 @@ export function FirstScanSteps() {
             <a href="#download" {...stylex.props(homeSectionStyles.textLink)}>
               Get the Mac app <span aria-hidden="true">→</span>
             </a>
-            <a href="/docs/get-started/" {...stylex.props(homeSectionStyles.textLink)}>
+            <a href={DOCS_URL} {...stylex.props(homeSectionStyles.textLink)}>
               First-run guide <span aria-hidden="true">→</span>
             </a>
           </div>
@@ -274,6 +283,7 @@ const styles = stylex.create({
     paddingInline: 10,
   },
   rowOff: { opacity: 0.5 },
+  rowIconSlot: { display: "inline-flex", flexShrink: 0 },
   rowIcon: { color: siteTokens.muted, flexShrink: 0 },
   rowLabel: {
     color: siteTokens.text,

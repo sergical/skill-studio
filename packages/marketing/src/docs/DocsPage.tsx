@@ -78,7 +78,7 @@ export function DocsPage({ page }: DocsPageProps) {
             ))}
           </div>
         </nav>
-        <main {...stylex.props(styles.article, styles.colors)}>
+        <main id="main" {...stylex.props(styles.article, styles.colors)}>
           <div className="docs-page-actions">
             <button
               type="button"

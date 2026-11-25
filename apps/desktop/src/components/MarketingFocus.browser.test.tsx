@@ -5,7 +5,6 @@ import * as stylex from "@stylexjs/stylex";
 import { lightSiteTheme } from "../../../../packages/marketing/src/SiteTheme.stylex";
 import { FaqSection } from "../../../../packages/marketing/src/home/FaqSection";
 import { HeroSurfaceShowcase } from "../../../../packages/marketing/src/home/listing-calc/HeroSurfaceShowcase";
-import { SidecarWalkthrough } from "../../../../packages/marketing/src/walkthrough/SidecarWalkthrough";
 import "../../../../packages/marketing/src/marketing-site.css";
 
 const componentStyles = document.createElement("style");
@@ -26,7 +25,6 @@ it.each(["dark", "light"] as const)(
       <div {...stylex.props(theme === "light" && lightSiteTheme)}>
         <FaqSection />
         <HeroSurfaceShowcase theme={theme} onToggleTheme={() => {}} />
-        <SidecarWalkthrough theme={theme} />
       </div>,
     );
     const summary = page.getByText("Which agents does it work with?", { exact: true });
@@ -42,13 +40,12 @@ it.each(["dark", "light"] as const)(
 );
 
 it.each(["dark", "light"] as const)(
-  "copy and walkthrough controls keep their component ring in %s theme instead of the global color",
+  "CLI copy command keeps its component ring in %s theme instead of the global color",
   async (theme) => {
     document.documentElement.dataset.siteTheme = theme;
     await render(
       <div {...stylex.props(theme === "light" && lightSiteTheme)}>
         <HeroSurfaceShowcase theme={theme} onToggleTheme={() => {}} />
-        <SidecarWalkthrough theme={theme} />
       </div>,
     );
     await page.getByRole("tab", { name: "CLI" }).click();
@@ -56,19 +53,6 @@ it.each(["dark", "light"] as const)(
     await copy.click();
     await userEvent.keyboard("{Tab}{Shift>}{Tab}{/Shift}");
     expect(getComputedStyle(copy.element()).outlineOffset).toBe("2px");
-    const expand = page.getByRole("button", { name: "Expand walkthrough" });
-    await expand.click();
-    await userEvent.keyboard("{Tab}");
-    const dialog = page.getByRole("dialog").element();
-    const video = dialog.querySelector("video");
-    if (!video || !video.parentElement) throw new Error("expanded video is missing");
-    const ring = getComputedStyle(video);
-    expect(parseFloat(getComputedStyle(video.parentElement).paddingLeft)).toBeGreaterThanOrEqual(
-      parseFloat(ring.outlineWidth) + parseFloat(ring.outlineOffset),
-    );
-    await userEvent.keyboard("{Escape}");
-    await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
-    expect(getComputedStyle(expand.element()).outlineOffset).toBe("2px");
   },
 );
 

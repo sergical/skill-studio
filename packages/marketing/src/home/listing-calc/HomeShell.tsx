@@ -12,7 +12,6 @@ import { JobsSection } from "../JobsSection";
 import type { ThemeToggleOrigin } from "../../ProductMock";
 import { SiteFooter, SiteHeader, siteLayout } from "../../SiteChrome";
 import { lightSiteTheme, siteTokens, type SiteTheme } from "../../SiteTheme.stylex";
-import { SidecarWalkthrough } from "../../walkthrough/SidecarWalkthrough";
 import { DownloadButton, HERO_TITLE, HeaderDownload, TrustLine } from "./HeroParts";
 
 export interface HomePageProps {
@@ -79,7 +78,7 @@ export function HomeShell({
   return (
     <div id="top" {...stylex.props(siteLayout.page, theme === "light" && lightSiteTheme)}>
       <SiteHeader page="home" sticky cta={<HeaderDownload />} />
-      <main>
+      <main id="main">
         {hero}
 
         {product}
@@ -105,10 +104,6 @@ export function HomeShell({
           {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}
         >
           <FirstScanSteps />
-        </section>
-
-        <section {...stylex.props(siteLayout.container, homeSectionStyles.section, styles.anchor)}>
-          <SidecarWalkthrough theme={theme} title="See it in action." />
         </section>
 
         <section
@@ -252,7 +247,10 @@ const styles = stylex.create({
         [stylex.when.anySibling(":hover", finaleCtaMarker)]: "translateY(-6px) rotate(-6deg)",
       },
     },
-    transition: "transform 300ms cubic-bezier(0.34, 1.56, 0.64, 1)",
+    transition: {
+      default: "transform 300ms cubic-bezier(0.34, 1.56, 0.64, 1)",
+      "@media (prefers-reduced-motion: reduce)": "none",
+    },
     width: 96,
     "@media (max-width: 600px)": { width: 80 },
   },

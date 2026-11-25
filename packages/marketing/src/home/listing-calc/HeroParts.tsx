@@ -271,7 +271,7 @@ const styles = stylex.create({
     textDecorationThickness: 1,
     textUnderlineOffset: 3,
     transition: "color 150ms ease-out, text-decoration-color 150ms ease-out",
-    ":hover": { color: siteTokens.accent, textDecorationColor: "currentColor" },
+    [HOVER]: { ":hover": { color: siteTokens.accent, textDecorationColor: "currentColor" } },
   },
   pointerOnly: { display: { default: "inline-flex", [TOUCH_DEVICE]: "none" } },
   touchOnly: { display: { default: "none", [TOUCH_DEVICE]: "inline-flex" } },

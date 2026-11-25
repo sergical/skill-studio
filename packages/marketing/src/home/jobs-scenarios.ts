@@ -23,7 +23,7 @@ export const SCENARIOS: ReadonlyArray<Scenario> = [
     id: "ignored",
     question: "“Why did Claude ignore my skill?”",
     painSummary:
-      "You installed a skill, asked for it, and the agent ignored it. No error—just silence.",
+      "You installed a skill, asked for it, and the agent ignored it. No error, just silence.",
     painCost: "4 folders · 5 manual checks",
     painSteps: [
       "Check ~/.claude/skills, ~/.codex/skills, ~/.agents/skills",
@@ -35,7 +35,7 @@ export const SCENARIOS: ReadonlyArray<Scenario> = [
       { text: "$ ls -la ~/.claude/skills/pdf-tools", tone: "cmd" },
       { text: "pdf-tools -> /Users/you/old-repo/pdf-tools  (broken)", tone: "err" },
       { text: "$ grep -rn 'writing-skills' ~/.claude/projects/", tone: "cmd" },
-      { text: "(no description in prompt — cut by 1% budget?)", tone: "warn" },
+      { text: "(no description in prompt; cut by 1% budget?)", tone: "warn" },
       { text: "$ head -n 12 ~/.claude/skills/motion/SKILL.md", tone: "cmd" },
       { text: "# still guessing which session saw what…", tone: "dim" },
     ],
@@ -50,7 +50,7 @@ export const SCENARIOS: ReadonlyArray<Scenario> = [
     id: "unused",
     question: "“Which skills are wasting my budget?”",
     painSummary:
-      "Dozens of skills you tried once still eat listing budget every session—pushing the skills you actually need down to name-only.",
+      "Dozens of skills you tried once still eat listing budget every session, pushing the skills you actually need down to name-only.",
     painCost: "30 days of logs · 6 agent folders",
     painSteps: [
       "Parse session logs across Claude Code, Codex and Cursor",
@@ -63,7 +63,7 @@ export const SCENARIOS: ReadonlyArray<Scenario> = [
       { text: "412 files found (no usage summary)", tone: "dim" },
       { text: "$ mv ~/.claude/skills/release-notes ~/skills-bak/", tone: "cmd" },
       { text: "$ mv ~/.codex/skills/release-notes ~/skills-bak/", tone: "cmd" },
-      { text: "mv: rename failed — symlink in ~/.cursor/skills still points here", tone: "err" },
+      { text: "mv: rename failed: symlink in ~/.cursor/skills still points here", tone: "err" },
     ],
     fixVerb: "Park 3 idle skills",
     solutionHeadline: "Spot skills that never run and park them across every agent.",
