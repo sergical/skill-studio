@@ -45,6 +45,7 @@ export function useFirstRunGate(): FirstRunGateState {
   useEffect(() => {
     let cancelled = false;
     void loadLaunchChoice({
+      previewDetectedClients: import.meta.env.VITE_HOME_DIRECTIONS === "1",
       readChoice: getHarnessesChoice,
       detect: detectAtLaunch,
       onChoice: (choice) => setHarnessDetection({ choice }),
@@ -65,6 +66,7 @@ export function useFirstRunGate(): FirstRunGateState {
 }
 
 export async function loadLaunchChoice(effects: {
+  previewDetectedClients?: boolean;
   readChoice: () => Promise<HarnessesChoice | null>;
   detect: () => Promise<HarnessReport>;
   onChoice: (choice: HarnessesChoice | null) => void;
@@ -75,8 +77,11 @@ export async function loadLaunchChoice(effects: {
   try {
     const choice = await effects.readChoice();
     effects.onChoice(choice);
-    effects.onGate(showScreenForChoiceRead({ ok: true, choice }));
-    if (choice === null) return;
+    // Home Lab opens the real dashboard with detected clients without saving onboarding preferences.
+    const showWelcome =
+      !effects.previewDetectedClients && showScreenForChoiceRead({ ok: true, choice });
+    effects.onGate(showWelcome);
+    if (showWelcome) return;
   } catch (cause) {
     effects.onChoice(null);
     effects.onGate(showScreenForChoiceRead({ ok: false }));
