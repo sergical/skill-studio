@@ -922,6 +922,7 @@ const styles = stylex.create({
   lights: {
     display: "flex",
     gap: 7,
+    [MOBILE]: { display: "none" },
   },
   light: {
     backgroundColor: "oklch(1 0 0 / .18)",
@@ -1129,7 +1130,7 @@ const styles = stylex.create({
     gridTemplateColumns: "92px minmax(0, 1fr) 168px",
     letterSpacing: "0.04em",
     padding: "8px 14px",
-    [MOBILE]: { gridTemplateColumns: "82px minmax(0, 1fr) 76px" },
+    [MOBILE]: { gap: 8, gridTemplateColumns: "78px minmax(0, 1fr) auto", padding: "8px 10px" },
   },
   cliTableRow: {
     alignItems: "center",
@@ -1140,7 +1141,7 @@ const styles = stylex.create({
     gap: 12,
     gridTemplateColumns: "92px minmax(0, 1fr) 168px",
     padding: "9px 14px",
-    [MOBILE]: { gridTemplateColumns: "82px minmax(0, 1fr) 76px" },
+    [MOBILE]: { gap: 8, gridTemplateColumns: "78px minmax(0, 1fr) auto", padding: "9px 10px" },
   },
   stateTag: {
     borderRadius: 5,
@@ -1190,8 +1191,9 @@ const styles = stylex.create({
   charsNum: {
     color: "oklch(0.74 0.02 290)",
     fontVariantNumeric: "tabular-nums",
-    minWidth: 74,
+    minWidth: { default: 74, [MOBILE]: "auto" },
     textAlign: "right",
+    whiteSpace: "nowrap",
   },
   alignRight: { textAlign: "right" },
   hideMobile: { [MOBILE]: { display: "none" } },
@@ -1415,11 +1417,12 @@ const styles = stylex.create({
     overflow: "hidden",
     whiteSpace: "nowrap",
   },
-  agentSep: { color: "oklch(0.5 0.02 290)" },
+  agentSep: { color: "oklch(0.5 0.02 290)", [MOBILE]: { display: "none" } },
   agentServer: {
     color: "oklch(0.78 0.08 293)",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontSize: 12,
+    [MOBILE]: { display: "none" },
   },
   mcpBody: {
     display: "flex",

@@ -27,6 +27,7 @@ const SURFACE_ORDER = {
 const SURFACES: ReadonlyArray<{
   id: HeroSurfaceId;
   label: string;
+  mobileLabel: string;
   icon: LucideIcon;
   docsHref: string;
   docsLabel: string;
@@ -34,6 +35,7 @@ const SURFACES: ReadonlyArray<{
   {
     id: "app",
     label: "Desktop App",
+    mobileLabel: "App",
     icon: AppWindow,
     docsHref: DOCS_URL,
     docsLabel: "Read getting started docs",
@@ -41,6 +43,7 @@ const SURFACES: ReadonlyArray<{
   {
     id: "cli",
     label: "CLI",
+    mobileLabel: "CLI",
     icon: Terminal,
     docsHref: CLI_DOCS_URL,
     docsLabel: "Read CLI docs",
@@ -48,6 +51,7 @@ const SURFACES: ReadonlyArray<{
   {
     id: "mcp",
     label: "MCP Server",
+    mobileLabel: "MCP",
     icon: Plug,
     docsHref: MCP_DOCS_URL,
     docsLabel: "Read MCP docs",
@@ -232,7 +236,8 @@ export function HeroSurfaceShowcase({
                   {...stylex.props(styles.tabBtn, selected && styles.tabBtnOn)}
                 >
                   <Icon size={16} aria-hidden="true" />
-                  <span>{item.label}</span>
+                  <span {...stylex.props(styles.desktopLabel)}>{item.label}</span>
+                  <span {...stylex.props(styles.mobileLabel)}>{item.mobileLabel}</span>
                 </button>
               );
             })}
@@ -387,11 +392,21 @@ const styles = stylex.create({
     backgroundColor: "oklch(0.11 0.02 288 / .84)",
     borderRadius: 14,
     boxShadow: "inset 0 0 0 1px oklch(1 0 0 / .18), 0 12px 32px oklch(0 0 0 / .36)",
-    display: "inline-flex",
-    flexWrap: "wrap",
+    display: { default: "inline-flex", "@media (max-width: 520px)": "grid" },
     gap: 3,
+    gridTemplateColumns: {
+      default: "none",
+      "@media (max-width: 520px)": "repeat(3, minmax(0, 1fr))",
+    },
     padding: 5,
     position: "relative",
+    width: { default: "auto", "@media (max-width: 520px)": "100%" },
+  },
+  desktopLabel: {
+    "@media (max-width: 520px)": { display: "none" },
+  },
+  mobileLabel: {
+    display: { default: "none", "@media (max-width: 520px)": "inline" },
   },
   tabPill: {
     backgroundColor: "oklch(0.985 0.004 290)",
@@ -420,6 +435,7 @@ const styles = stylex.create({
     fontSize: 14.5,
     fontWeight: 600,
     gap: 8,
+    justifyContent: "center",
     minHeight: 42,
     paddingInline: 16,
     position: "relative",
@@ -429,7 +445,7 @@ const styles = stylex.create({
     [HOVER]: { ":hover": { color: "#fff" } },
     ":active": { transform: "scale(.97)" },
     ":focus-visible": { outline: "2px solid oklch(0.97 0 0)", outlineOffset: 2 },
-    [MOBILE]: { fontSize: 13.5, minHeight: 40, paddingInline: 12 },
+    [MOBILE]: { fontSize: 13.5, gap: 6, minHeight: 40, paddingInline: 10 },
   },
   tabBtnOn: {
     color: "oklch(0.14 0.02 290)",
@@ -440,6 +456,7 @@ const styles = stylex.create({
     alignItems: "center",
     display: "flex",
     maxWidth: "100%",
+    "@media (max-width: 520px)": { width: "100%" },
   },
   topActionLink: {
     alignItems: "center",
@@ -461,6 +478,7 @@ const styles = stylex.create({
     fontSize: 13.5,
     fontWeight: 600,
     gap: 9,
+    justifyContent: "center",
     minHeight: 46,
     paddingInline: 16,
     textDecoration: "none",
@@ -468,6 +486,7 @@ const styles = stylex.create({
     transition: `background-color 150ms ease, border-color 150ms ease, transform 150ms ${PRESS_EASE}`,
     ":active": { transform: "scale(.97)" },
     ":focus-visible": { outline: "2px solid oklch(0.97 0 0)", outlineOffset: 2 },
+    "@media (max-width: 520px)": { width: "100%" },
   },
   topActionMeta: {
     backgroundColor: "oklch(1 0 0 / .1)",
@@ -497,6 +516,7 @@ const styles = stylex.create({
     display: "inline-flex",
     fontFamily: "inherit",
     gap: 10,
+    justifyContent: "space-between",
     maxWidth: "100%",
     minHeight: 46,
     padding: "4px 5px 4px 15px",
@@ -504,6 +524,7 @@ const styles = stylex.create({
     transition: `background-color 150ms ease, border-color 150ms ease, color 150ms ease, transform 150ms ${PRESS_EASE}`,
     ":active": { transform: "scale(.985)" },
     ":focus-visible": { outline: "2px solid oklch(0.97 0 0)", outlineOffset: 2 },
+    "@media (max-width: 520px)": { width: "100%" },
   },
   commandBarCopied: {
     borderColor: {
@@ -583,7 +604,7 @@ const styles = stylex.create({
     maxWidth: 1240,
   },
 
-  // Bottom bar inside dithered mat
+  // Bottom bar inside dithered mat — theme tokens ensure full contrast in both light & dark modes
   bottomBar: {
     alignItems: "center",
     display: "flex",
@@ -596,19 +617,19 @@ const styles = stylex.create({
     paddingInline: 4,
   },
   bottomSummary: {
-    color: "oklch(0.84 0.015 290)",
+    color: siteTokens.muted,
     fontSize: 13.5,
     lineHeight: 1.45,
   },
   bottomDocsLink: {
     alignItems: "center",
-    color: "#fff",
+    color: siteTokens.text,
     display: "inline-flex",
     fontSize: 13.5,
     fontWeight: 620,
     gap: 6,
     minHeight: 36,
-    textDecorationColor: "oklch(1 0 0 / .35)",
+    textDecorationColor: siteTokens.border,
     textDecorationLine: "underline",
     textDecorationThickness: 1,
     textUnderlineOffset: 4,
@@ -616,10 +637,10 @@ const styles = stylex.create({
     whiteSpace: "nowrap",
     [HOVER]: {
       ":hover": {
-        color: "oklch(0.92 0.1 293)",
+        color: siteTokens.accent,
         textDecorationColor: "currentColor",
       },
     },
-    ":focus-visible": { outline: "2px solid oklch(0.97 0 0)", outlineOffset: 3 },
+    ":focus-visible": { outline: `2px solid ${siteTokens.text}`, outlineOffset: 3 },
   },
 });
