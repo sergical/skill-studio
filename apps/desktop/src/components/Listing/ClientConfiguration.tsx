@@ -4,6 +4,8 @@ import { Button, Input } from "@skill-studio/ui";
 import { deploymentLabelFromAgentId, homeRelativePath } from "@skill-studio/lib";
 import type { HarnessListing, ListingEntry } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
+import { PageSection } from "../Shell/PageSection";
+import { SummaryCard, SummaryMetric } from "../ui/SummaryCard";
 import {
   budgetRule,
   entrySource,
@@ -55,7 +57,7 @@ function SettingRow({
       onSaved();
       addToast({
         type: "success",
-        title: reset ? "Override removed" : "Client configuration saved",
+        title: reset ? "Override removed" : "Setting saved",
       });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -84,7 +86,7 @@ function SettingRow({
       <span>
         <strong className="block text-small font-medium">{value}</strong>
         <span title={setting.file} className="block break-all text-caption text-text-secondary">
-          {setting.current == null ? "Client default" : homeRelativePath(setting.file)}
+          {setting.current == null ? "Default" : homeRelativePath(setting.file)}
         </span>
       </span>
       {setting.edit_revision ? (
@@ -105,6 +107,8 @@ function SettingRow({
         <Button
           size="sm"
           variant="ghost"
+          // -mr-2.5 cancels the ghost padding, so the icon ends on the section's right edge.
+          className="-mr-2.5"
           onClick={() => void open()}
           disabled={opening}
           aria-label={`Open configuration source for ${setting.key}`}
@@ -169,9 +173,7 @@ function SettingRow({
 }
 
 function sourceExample(entry: ListingEntry) {
-  return (
-    entry.plugin ?? (entry.path && homeRelativePath(entry.path)) ?? "Recorded in the client listing"
-  );
+  return entry.plugin ?? (entry.path && homeRelativePath(entry.path)) ?? "Seen only in a session";
 }
 
 export function ClientConfiguration({
@@ -190,39 +192,35 @@ export function ClientConfiguration({
   const shortened = entries.filter((e) => e.state === "truncated").length;
   const namesOnly = entries.filter((e) => e.state === "name_only").length;
   const omitted = row.entries.filter((e) => e.state === "omitted").length;
+  const described = entries.length - namesOnly;
   const session = row.observed_session;
   const assumedWindow = preview && hasAssumedClaudeWindow(row);
   return (
     <>
-      <section className="rounded-lg border border-border-subtle bg-bg-secondary p-4">
-        <h2 className="text-heading font-semibold">
-          {basePrompt
-            ? `${row.budget_source} preview`
-            : !preview || row.budget === null
-              ? `Skills in ${name}`
-              : `${name} skill allocation`}
-        </h2>
-        <p className="mt-2 text-display font-semibold leading-tight tabular-nums">
-          {assumedWindow ? (
-            budgetRule(row)
-          ) : !preview || row.budget === null ? (
-            <>
-              {entries.length.toLocaleString()}{" "}
-              <span className="text-heading font-medium">
-                {entries.length === 1 ? "skill" : "skills"}{" "}
-                {basePrompt ? "in the skills section" : preview ? "in the estimate" : "found"}
-              </span>
-            </>
-          ) : (
-            <>
-              {row.budget.toLocaleString()}{" "}
-              <span className="text-heading font-medium">{row.budget_unit}</span>
-            </>
-          )}
-        </p>
+      <SummaryCard title={basePrompt ? `${row.budget_source} preview` : `What ${name} sees`}>
+        {assumedWindow ? (
+          <SummaryMetric value={budgetRule(row)} unit="budget, model window unknown" />
+        ) : !preview || row.budget === null ? (
+          <SummaryMetric
+            value={entries.length.toLocaleString()}
+            unit={`${entries.length === 1 ? "skill" : "skills"} ${
+              basePrompt
+                ? "in the skills section"
+                : preview
+                  ? "in the estimate"
+                  : `in folders ${name} reads`
+            }`}
+          />
+        ) : (
+          <SummaryMetric
+            value={described.toLocaleString()}
+            unit={`of ${entries.length.toLocaleString()} skills keep a description`}
+          />
+        )}
         {preview && row.budget !== null && !assumedWindow && (
-          <p className="mt-1 text-small text-text-secondary">
-            {budgetRule(row)}
+          <p className="mt-2 text-small text-text-secondary">
+            Budget {row.budget.toLocaleString()} {row.budget_unit}
+            {budgetRule(row).startsWith(row.budget.toLocaleString()) ? "" : ` · ${budgetRule(row)}`}
             {row.context_window_tokens
               ? ` · ${row.context_window_tokens.toLocaleString()}-token context window`
               : ""}
@@ -231,24 +229,33 @@ export function ClientConfiguration({
         <p className="mt-3 border-t border-border-subtle pt-2.5 text-small">
           {assumedWindow ? (
             <>
-              Model window unknown. {name}’s settings give a percentage. The model catalog could not
-              confirm how many characters that allows.
+              {name}’s settings give a percentage. The model catalog could not confirm how many
+              characters that allows.
             </>
           ) : basePrompt ? (
             row.notes.join(" ")
           ) : !preview ? (
-            `From folders ${name} reads in this scope.`
+            `${name} lists skills from these folders. Skill Studio can’t estimate how it shortens them yet.`
           ) : (
             <>
-              Estimated listing · <strong>{entries.length} entries</strong>
+              Estimate · <strong>{entries.length} skills</strong>
               {shortened ? ` · ${shortened} shortened` : ""}
               {namesOnly ? ` · ${namesOnly} name only` : ""}
-              {!shortened && !namesOnly && entries.length > 0 ? " · All descriptions fit" : ""}
-              {omitted ? ` · ${omitted} left out` : ""}
+              {!shortened && !namesOnly && entries.length > 0 ? " · Every description fits" : ""}
+              {omitted ? ` · ${omitted} not listed` : ""}
             </>
           )}
         </p>
-      </section>
+        {session && (
+          <p className="mt-1 text-small text-text-secondary">
+            Last session listed {session.listed} skills
+            {session.model ? ` · ${session.model}` : ""}
+            {session.at && Number.isFinite(Date.parse(session.at))
+              ? ` · ${new Date(session.at).toLocaleString()}`
+              : ""}
+          </p>
+        )}
+      </SummaryCard>
       {row.base_prompt_skills && (
         <details className="rounded-md border border-border-subtle px-3 py-2">
           <summary className="cursor-pointer text-small">Preview the skills section</summary>
@@ -258,8 +265,7 @@ export function ClientConfiguration({
         </details>
       )}
       {row.setting && (
-        <section aria-label="Effective settings">
-          <h3 className="mb-2 text-heading font-semibold">Effective settings</h3>
+        <PageSection title={`${name} settings`}>
           {row.configured_model && (
             <div className="grid grid-cols-[minmax(9rem,1fr)_minmax(9rem,1.1fr)_auto] gap-3 border-t border-border-subtle py-2.5 text-small">
               <span>Configured model</span>
@@ -284,7 +290,7 @@ export function ClientConfiguration({
                     : null
             }
             setting={row.setting}
-            label="Listing budget"
+            label="Skill list budget"
             value={budgetRule(row)}
             project={project}
           />
@@ -296,7 +302,7 @@ export function ClientConfiguration({
               onSaved={onSaved}
               inputValue={row.description_char_limit}
               setting={row.description_limit_setting}
-              label="Per-skill description"
+              label="Description limit"
               value={`${row.description_char_limit.toLocaleString()} characters`}
               project={project}
             />
@@ -306,20 +312,17 @@ export function ClientConfiguration({
               Managed by chezmoi. Edit the source, then run <code>chezmoi apply</code>.
             </p>
           )}
-        </section>
+        </PageSection>
       )}
       {preview && (
-        <section aria-label="Listing sources">
-          <h3 className="text-heading font-semibold">
-            Where the {entries.length} entries come from
-          </h3>
-          <div className="mt-2 divide-y divide-border-subtle rounded-md border border-border-subtle px-3">
+        <PageSection title={`Where the ${entries.length} skills come from`}>
+          <div className="divide-y divide-border-subtle rounded-md border border-border-subtle px-3">
             {(["Skill folder", "Plugin", "Session record"] as const).map((source) => {
               const count = sources[source];
               const title = {
-                "Skill folder": "Scanned skill folders",
-                Plugin: "Scanned plugin entries",
-                "Session record": "Added from session records",
+                "Skill folder": "Skill folders",
+                Plugin: "Plugins",
+                "Session record": "Seen only in sessions",
               }[source];
               const heading = (
                 <span className="inline-flex w-[calc(100%-1.5rem)] justify-between text-small">
@@ -339,8 +342,8 @@ export function ClientConfiguration({
                   <div className="my-2 ml-4 space-y-1.5">
                     {source === "Session record" && (
                       <p className="text-caption text-text-secondary">
-                        The client listed these entries in a recorded session. The folder scan could
-                        not attribute them to an installation.
+                        A recorded session listed these skills. The folder scan could not match them
+                        to an installed copy.
                       </p>
                     )}
                     {entries
@@ -356,7 +359,7 @@ export function ClientConfiguration({
                       ))}
                     {count > 3 && (
                       <p className="text-caption text-text-secondary">
-                        3 of {count} shown. Browse all entries below.
+                        3 of {count} shown. See every skill below.
                       </p>
                     )}
                   </div>
@@ -364,16 +367,7 @@ export function ClientConfiguration({
               );
             })}
           </div>
-        </section>
-      )}
-      {session && (
-        <p className="text-small text-text-secondary">
-          Last recorded listing · {session.listed} entries
-          {session.model ? ` · ${session.model}` : ""}
-          {session.at && Number.isFinite(Date.parse(session.at))
-            ? ` · ${new Date(session.at).toLocaleString()}`
-            : ""}
-        </p>
+        </PageSection>
       )}
     </>
   );

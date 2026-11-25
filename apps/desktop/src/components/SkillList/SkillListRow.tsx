@@ -98,7 +98,7 @@ export function SkillListRow({
         <HarnessStack skill={scopedSkill} harnessList={DEFAULT_HARNESS_LIST} />
       </div>
       <div role="gridcell" className="contents">
-        <NoteCell skill={skill} note={note} />
+        <NoteCell skill={skill} note={note} title={note} />
       </div>
       <div role="gridcell" className="flex min-w-0 justify-end">
         <RowFixButton skill={skill} label={state?.action ?? null} onAct={onAct} />

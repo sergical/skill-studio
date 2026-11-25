@@ -80,7 +80,7 @@ export type ActiveView =
   | { kind: "plugins" }
   | { kind: "packs" }
   | { kind: "listing"; harness?: string; scope?: string }
-  | { kind: "sessions" }
+  | { kind: "sessions"; harness?: string }
   | { kind: "activity" }
   | { kind: "learn"; section?: LearnSection }
   | { kind: "settings" }

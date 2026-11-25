@@ -12,7 +12,6 @@ import { FirstRunGate } from "./components/FirstRun/FirstRunScreen";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { SkillActivityView } from "./components/Activity/SkillActivityView";
-import { HomeDirections } from "./prototype/home-directions/HomeDirections";
 import { HomeView } from "./components/Home/HomeView";
 import { ListingView } from "./components/Listing/ListingView";
 import { SessionsView } from "./components/Sessions/SessionsView";
@@ -171,11 +170,8 @@ function App() {
     const isShown = skillView === null;
     let list: React.ReactNode;
     if (kind === "home") {
-      const Home = import.meta.env.VITE_HOME_DIRECTIONS === "1" ? HomeDirections : HomeView;
       list = (
-        <Home
-          error={snapshotError}
-          onRetry={() => void requestRescan().catch(() => {})}
+        <HomeView
           snapshot={snapshot}
           usageRefreshing={usageRefreshing}
           isLoading={isLoading}
@@ -258,7 +254,7 @@ function App() {
       );
       break;
     case "sessions":
-      main = <SessionsView />;
+      main = <SessionsView key={activeView.harness} initialHarness={activeView.harness} />;
       break;
     case "skill": {
       // Opened from Learn or Settings: neither keeps a list worth reviving, so the

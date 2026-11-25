@@ -23,6 +23,6 @@ it("a skill only in the Universal folder counts every agent that reads that fold
 
   render(<SkillPropertiesRail skill={universalOnly} />);
   expect(
-    screen.getByRole("button", { name: `Show ${listed} clients with skill locations` }),
+    screen.getByRole("button", { name: `Show ${listed} agents with skill locations` }),
   ).toBeTruthy();
 });

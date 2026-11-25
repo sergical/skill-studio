@@ -233,8 +233,8 @@ function useSkillStoreData(
         if (browseRequest.current !== request) return;
         addToast({
           type: "error",
-          title: "Load More Failed",
-          message: err instanceof Error ? err.message : "Failed to load more skills",
+          title: "Couldn’t load more skills",
+          message: err instanceof Error ? err.message : "The skills.sh request failed.",
         });
       })
       .finally(() => {

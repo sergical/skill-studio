@@ -1,6 +1,6 @@
 // ============================================================================
-// Sidebar - Left-hand navigation: places only (Home, Skills, Activity,
-// Parked). Filters (scope, harness, source, issue) live in the Skills view's
+// Sidebar - Left-hand navigation: places only (Home, Skills, Plugins, Packs,
+// Agents, Activity, Parked). Filters (scope, harness, source, issue) live in the Skills view's
 // filter bar instead - see the design rule in spec-ux-1.md section B.
 // ============================================================================
 
@@ -9,11 +9,10 @@ import {
   Activity as ActivityIcon,
   AlertTriangle,
   BookOpen,
+  Bot,
   Boxes,
   Layers,
   LayoutDashboard,
-  ListTree,
-  MessagesSquare,
   Moon,
   PackageOpen,
   Plus,
@@ -94,7 +93,7 @@ interface SidebarNavItemsProps {
   replaceSkillListFilter: (patch: Partial<SkillListFilter>) => void;
 }
 
-/** The places: Home, Skills (with an optional Plugins place beside it), Packs, Activity. */
+/** The places: Home, Skills (with an optional Plugins place beside it), Packs, Agents, Activity. */
 function SidebarNavItems({
   anchorView,
   skillsActive,
@@ -104,6 +103,8 @@ function SidebarNavItems({
   setActiveView,
   replaceSkillListFilter,
 }: SidebarNavItemsProps) {
+  // Agents is one place with two tabs: what each agent sees and what it used.
+  const agentsActive = anchorView.kind === "listing" || anchorView.kind === "sessions";
   return (
     <div className="flex flex-col gap-px pt-2.5">
       <Button
@@ -157,21 +158,12 @@ function SidebarNavItems({
       </Button>
       <Button
         variant="ghost"
-        className={itemClass(anchorView.kind === "listing")}
-        aria-current={anchorView.kind === "listing" ? "page" : undefined}
+        className={itemClass(agentsActive)}
+        aria-current={agentsActive ? "page" : undefined}
         onClick={() => setActiveView({ kind: "listing" })}
       >
-        <ListTree size={14} />
-        <span className="min-w-0 truncate">Client configuration</span>
-      </Button>
-      <Button
-        variant="ghost"
-        className={itemClass(anchorView.kind === "sessions")}
-        aria-current={anchorView.kind === "sessions" ? "page" : undefined}
-        onClick={() => setActiveView({ kind: "sessions" })}
-      >
-        <MessagesSquare size={14} />
-        <span className="min-w-0 truncate">Sessions</span>
+        <Bot size={14} />
+        <span className="min-w-0 truncate">Agents</span>
       </Button>
       <Button
         variant="ghost"
@@ -392,7 +384,7 @@ function SidebarFooter({
 
 /**
  * Left-hand navigation: a search box that jumps into Skills with a query,
- * Add skill, the three places (Home, Skills, Activity), Parked (when
+ * Add skill, the places (Home, Skills, Packs, Agents, Activity), Parked (when
  * non-empty), and a footer with the snapshot's age and a manual rescan
  * button.
  */

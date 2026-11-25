@@ -1,0 +1,90 @@
+# Skill Studio desktop design rules
+
+Skill Studio answers three questions about a person's skills: did an agent use
+it, did the agent see its description, and is anything broken. Every page
+answers one of them, in the same words and the same shapes as the others.
+Read this before you add a page, a card or a string.
+
+## Words
+
+Use these words in every string a person reads. Code identifiers may keep
+`harness`, `client` and `listing`; UI text may not.
+
+| Say                                                        | Never say                             | Means                                                  |
+| ---------------------------------------------------------- | ------------------------------------- | ------------------------------------------------------ |
+| agent                                                      | client, harness                       | Claude Code, Codex, OpenCode, pi, Cursor, Grok Build   |
+| use, used                                                  | load, loaded, invocation (as a count) | the model ran a skill in a recorded session            |
+| skill list                                                 | listing, allocation                   | the names and descriptions an agent puts in the prompt |
+| What it sees                                               | visibility, configuration             | an agent's skill list for one scope                    |
+| What it used                                               | sessions report                       | an agent's recorded sessions                           |
+| budget                                                     | allocation                            | the size limit of the skill list                       |
+| Full description, Shortened, Name only, Not listed, Hidden | Described, Omitted, Truncated         | a skill's state in a skill list                        |
+| Global, Project                                            | global scope                          | where a skill is installed                             |
+| session                                                    | transcript, capture                   | one recorded conversation with an agent                |
+
+"Loads" keeps one meaning: an agent accepts a SKILL.md file ("Claude Code still
+loads it"). It never counts uses.
+
+The state labels live in
+[`listing-words.ts`](../../packages/lib/src/listing-words.ts). Import
+`LISTING_STATE_LABEL` or `SESSION_LISTED_LABEL`; never write a local map. Three
+local maps had drifted to three names for one state.
+
+Agent names come from `HARNESS_CATALOG` or `deploymentLabelFromAgentId`. Never
+type a list of agent names into copy: the next agent added would be missing.
+
+## Headlines name the consequence
+
+A summary card's number says what the person gets, not the input that caused
+it. "0 of 35 skills keep a description", not "300 characters". The input goes
+in the line under it ("Budget 300 characters · 0.01% of context").
+
+## Page anatomy
+
+- Every page is a `PageShell`. Its title is the sidebar label. Tabs within a
+  place go in `toolbar` (see `AgentTabs`); filters go in `actions`.
+- Every titled part of a page is a `PageSection`
+  ([PageSection.tsx](src/components/Shell/PageSection.tsx)): the title on the
+  page's left edge, its controls or a note on the right, content 12px below.
+  Never write a section heading by hand; a hand-made one lands on its own edge
+  and its own gap.
+- A report opens with one `SummaryCard` and one `SummaryMetric`
+  ([SummaryCard.tsx](src/components/ui/SummaryCard.tsx)). The card's title is
+  a `PageSection` title outside the box, so it lines up with the sections
+  below; only the answer sits in the card.
+- Space says what belongs together: 12px from a title to its content and
+  between items of one section, 32px between sections (`gap-8` on the page's
+  section column). Equal gaps everywhere erase the grouping.
+- A trailing ghost button on a title row or a row's right edge takes `-mr-2.5`
+  (`-mr-2` for `px-2`), so its text, not its padding, ends on the right edge.
+- Section titles are `text-heading font-semibold`. A summary number is
+  `text-display`. Everything else is `text-body`, `text-small` or
+  `text-caption`. Do not add `text-heading-lg`, `text-title` or arbitrary
+  sizes to a report page: each extra size is one more level to parse.
+- A `<details>` gets its chevron from `App.css`. Do not add
+  `list-none` or a marker of your own unless the summary is a row with its own
+  chevron, and then set `data-own-marker`.
+
+## Places
+
+Home, Skills, Plugins, Packs, Agents, Activity, then Parked. Agents has two
+tabs: What it sees (`kind: "listing"`) and What it used
+(`kind: "sessions"`); both keep the `harness` in the view, so a tab switch
+keeps the chosen agent. Home rows link to the page that answers in full: a day
+opens Activity, an agent opens its What it sees tab, an issue opens the skill.
+
+## Color
+
+- `accent` is for things a person can press or has selected: buttons, focus
+  rings, toggles.
+- `data` (`--color-data`) is for counts drawn as shapes: Home's bars and the
+  Activity heatmap. It shares the accent hue today; use the `data` name so the
+  two jobs can split in one place.
+- `error`, `warning` and `success` mean broken, drifted and done. Never use
+  them for decoration.
+
+## Action weight
+
+One row leads with one action. The action that takes skills away (Remove)
+is `ghost`, the one that keeps them current (Update) is `outline`. Anything
+destructive opens a plan or a confirmation before it runs.

@@ -164,11 +164,22 @@ export function SlotCell({ skill, state, checked, hasSelection, onCheckedChange 
   );
 }
 
-/** The row's note: why the row is here, then its token pair at the right edge. */
-export function NoteCell({ skill, note }: { skill: InstalledSkill; note?: ReactNode }) {
+/** The row's note: why the row is here, then its token pair at the right edge. `title` shows a
+ * note the column cuts short. */
+export function NoteCell({
+  skill,
+  note,
+  title,
+}: {
+  skill: InstalledSkill;
+  note?: ReactNode;
+  title?: string;
+}) {
   return (
     <span className="flex min-w-0 items-center justify-between gap-2">
-      <span className="min-w-0 truncate text-small text-text-secondary select-text">{note}</span>
+      <span className="min-w-0 truncate text-small text-text-secondary select-text" title={title}>
+        {note}
+      </span>
       <TokenPairCell skill={skill} />
     </span>
   );

@@ -40,18 +40,21 @@ function ownerReason(pack: Pack, action: "update" | "remove"): string | null {
   return null;
 }
 
+/** A row action. `quiet` for the one that takes skills away, so the row leads with Update. */
 function RowButton({
   disabledReason,
   onClick,
+  quiet = false,
   children,
 }: {
   disabledReason: string | null;
   onClick: () => void;
+  quiet?: boolean;
   children: ReactNode;
 }) {
   const button = (
     <Button
-      variant="outline"
+      variant={quiet ? "ghost" : "outline"}
       size="sm"
       className="rounded-sm px-2 text-text-secondary"
       onClick={onClick}
@@ -100,6 +103,7 @@ function PackRow({ pack, onAct }: { pack: Pack; onAct: (intent: PackIntent) => v
           Update
         </RowButton>
         <RowButton
+          quiet
           disabledReason={ownerReason(pack, "remove")}
           onClick={() => onAct({ kind: "remove", source: pack.source })}
         >

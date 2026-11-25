@@ -1,7 +1,12 @@
 import { useEffect, useReducer, useState } from "react";
 import { Copy } from "lucide-react";
 import { Button, Input } from "@skill-studio/ui";
-import { HARNESS_CATALOG, deploymentLabelFromAgentId, homeRelativePath } from "@skill-studio/lib";
+import {
+  HARNESS_CATALOG,
+  LISTING_STATE_LABEL,
+  deploymentLabelFromAgentId,
+  homeRelativePath,
+} from "@skill-studio/lib";
 import type {
   HarnessListing,
   ListingEntry,
@@ -11,6 +16,7 @@ import type {
   SkillSnapshot,
 } from "@skill-studio/lib";
 import { useClientRows } from "../../hooks/useClientRows";
+import { AgentTabs } from "./AgentTabs";
 import { CompareClients } from "./CompareClients";
 import { PageShell } from "../Shell/PageShell";
 import { SelectControl } from "../ui/SelectControl";
@@ -18,14 +24,6 @@ import { ClientConfiguration } from "./ClientConfiguration";
 import { entrySource, hasAssumedClaudeWindow } from "./client-allocation";
 import { currentListingRequest } from "./useSkillVisibility";
 import { listingReportKey, useAppStore } from "../../store/appStore";
-
-const STATE_LABEL = {
-  described: "Described",
-  truncated: "Shortened",
-  name_only: "Name only",
-  omitted: "Omitted",
-  hidden: "Hidden",
-} satisfies Record<ListingState, string>;
 
 const STATE_CLASS = {
   described: "text-text-primary",
@@ -88,7 +86,7 @@ const BUDGET_INPUTS = new Map<
 
 function StateText({ state }: { state: ListingState | null | undefined }) {
   if (!state) return <span className="text-caption text-text-quaternary">-</span>;
-  return <span className={`text-caption ${STATE_CLASS[state]}`}>{STATE_LABEL[state]}</span>;
+  return <span className={`text-caption ${STATE_CLASS[state]}`}>{LISTING_STATE_LABEL[state]}</span>;
 }
 
 const TIER_LABEL = {
@@ -101,7 +99,7 @@ function ClientReference({ harness }: { harness: string }) {
   const client = HARNESS_CATALOG.find((item) => item.id === harness);
   if (!client?.verifiedVisibility.length) return null;
   return (
-    <details className="border-t border-border-subtle py-2">
+    <details className="rounded-md border border-border-subtle px-3 py-2">
       <summary className="cursor-pointer text-small">How {client.label} lists skills</summary>
       {client.verifiedVisibility.map((reference) => (
         <div key={reference.revision} className="mt-3 space-y-1 text-small">
@@ -151,7 +149,7 @@ function Summary({ row, budget }: { row: HarnessListing; budget: number }) {
         {count("described") + count("truncated")} of {listed} listed skills keep a description.{" "}
         {count("truncated") > 0 && `${count("truncated")} are shortened. `}
         {count("name_only") > 0 && `${count("name_only")} show a name only. `}
-        {count("omitted") > 0 && `${count("omitted")} are left out. `}
+        {count("omitted") > 0 && `${count("omitted")} are not listed. `}
         {count("hidden") > 0 && `${count("hidden")} are hidden.`}
       </p>
       <p className="m-0">
@@ -290,7 +288,7 @@ function EntryRow({
         <span className="truncate text-caption text-text-secondary" title={entry.path ?? undefined}>
           {entry.path && homeRelativePath(entry.path)}
           {hasRecording && entry.observed && (
-            <span className="block">Last recorded listing · {STATE_LABEL[entry.observed]}</span>
+            <span className="block">Last session · {LISTING_STATE_LABEL[entry.observed]}</span>
           )}
         </span>
       ) : (
@@ -355,8 +353,8 @@ function BudgetComparison({
     <details className="rounded-md border border-border-subtle px-3 py-2">
       <summary className="cursor-pointer text-small">Preview a different budget</summary>
       <p className="my-2 text-caption text-text-secondary">
-        This preview estimates a different budget. Changes to your client are made under Effective
-        settings.
+        This only estimates. To change the budget {deploymentLabelFromAgentId(row.harness)} uses,
+        edit it under Settings above.
       </p>
       <form
         className="flex flex-wrap items-center gap-2"
@@ -503,9 +501,9 @@ export function ListingView({ snapshot, initialHarness, initialScope }: ListingV
 
   return (
     <PageShell
-      title="Client configuration"
+      title="Agents"
       refreshing={refreshing}
-      subtitle="Skills available to each client"
+      toolbar={<AgentTabs tab="listing" harness={harness} />}
       actions={
         <>
           <Button
@@ -549,11 +547,11 @@ export function ListingView({ snapshot, initialHarness, initialScope }: ListingV
       {!row ? (
         current?.data && (
           <p className="m-0 text-small text-text-secondary">
-            No selected client has a report in this scope. Choose clients in Settings.
+            None of your agents has a report for this scope. Choose agents in Settings.
           </p>
         )
       ) : (
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-8">
           <ClientConfiguration
             row={row}
             onSaved={() => {
@@ -561,108 +559,111 @@ export function ListingView({ snapshot, initialHarness, initialScope }: ListingV
               refreshListing(base);
             }}
           />
-          {preview && row.budget !== null && (
-            <BudgetComparison
-              key={scope + harness}
-              row={row}
-              tried={tried}
-              changes={changes}
-              triedByKey={triedByKey}
-              onlyChanges={onlyChanges}
-              onToggle={() => change({ onlyChanges: !onlyChanges })}
-              onTry={(request) => {
-                change({ tryRequest: request });
-                refreshListing({ ...base, ...request });
-              }}
-            />
-          )}
-          {preview && row.budget !== null && (
-            <details className="rounded-md border border-border-subtle px-3 py-2">
-              <summary className="cursor-pointer text-small text-text-secondary">
-                How the estimate was calculated
+          {/* The tools for digging further sit together, 12px apart, below the sections. */}
+          <div className="flex flex-col gap-3">
+            {preview && row.budget !== null && (
+              <BudgetComparison
+                key={scope + harness}
+                row={row}
+                tried={tried}
+                changes={changes}
+                triedByKey={triedByKey}
+                onlyChanges={onlyChanges}
+                onToggle={() => change({ onlyChanges: !onlyChanges })}
+                onTry={(request) => {
+                  change({ tryRequest: request });
+                  refreshListing({ ...base, ...request });
+                }}
+              />
+            )}
+            {preview && row.budget !== null && (
+              <details className="rounded-md border border-border-subtle px-3 py-2">
+                <summary className="cursor-pointer text-small text-text-secondary">
+                  How the estimate was calculated
+                </summary>
+                <div className="mt-3 flex flex-col gap-3">
+                  <Summary row={row} budget={row.budget} />
+                </div>
+              </details>
+            )}
+            <details
+              open={!preview || undefined}
+              key={scope + harness + "entries"}
+              className="rounded-md border border-border-subtle px-3 py-2"
+            >
+              <summary className="cursor-pointer text-small">
+                {!preview ? "Skills found in folders" : "Every skill"}
               </summary>
-              <div className="mt-3 flex flex-col gap-3">
-                <Summary row={row} budget={row.budget} />
-              </div>
-            </details>
-          )}
-          <details
-            open={!preview || undefined}
-            key={scope + harness + "entries"}
-            className="rounded-md border border-border-subtle px-3 py-2"
-          >
-            <summary className="cursor-pointer text-small">
-              {!preview ? "Skills found in folders" : "Browse individual entries"}
-            </summary>
-            <Input
-              aria-label="Find an entry"
-              placeholder={
-                !preview ? "Search by name or path" : "Search by name, plugin, source, or path"
-              }
-              value={query}
-              onChange={(event) => {
-                change({ query: event.target.value, limit: 25 });
-              }}
-              className="my-2"
-            />
+              <Input
+                aria-label="Find an entry"
+                placeholder={
+                  !preview ? "Search by name or path" : "Search by name, plugin, source, or path"
+                }
+                value={query}
+                onChange={(event) => {
+                  change({ query: event.target.value, limit: 25 });
+                }}
+                className="my-2"
+              />
 
-            {preview && (
-              <div
-                className={`grid h-8 items-center border-b border-border-subtle text-caption text-text-tertiary ${GRID}`}
-              >
-                <span>Skill</span>
-                <span>Now</span>
-                <span>{tried ? "At new budget" : ""}</span>
-                <span>{row.observed_session ? "Last session" : ""}</span>
-                <span className="text-right">Chars shown</span>
-              </div>
-            )}
-            <ul aria-label="Listing" className="m-0 list-none p-0">
-              {shown.slice(0, limit).map((entry) => {
-                const owner = entry.path && byPath.get(entry.path);
-                return (
-                  <EntryRow
-                    key={entryKey(entry)}
-                    entry={entry}
-                    tried={triedByKey.get(entryKey(entry))}
-                    scanOnly={!preview}
-                    hasRecording={Boolean(row.observed_session)}
-                    onOpen={
-                      owner && entry.path
-                        ? () =>
-                            openSkill(owner, entry.path ?? undefined, undefined, {
-                              kind: "listing",
-                              harness,
-                              scope,
-                            })
-                        : undefined
-                    }
-                  />
-                );
-              })}
-            </ul>
-            {!shown.length && (
-              <p className="my-2 text-small text-text-secondary">No matching entries.</p>
-            )}
-            {shown.length > limit && (
-              <Button size="sm" variant="ghost" onClick={() => change({ limit: limit + 25 })}>
-                Show more ({limit} of {shown.length})
-              </Button>
-            )}
-            {hiddenCount > 0 && !onlyChanges && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="mt-1 rounded-sm px-2 text-text-secondary"
-                aria-pressed={showHidden}
-                onClick={() => change({ showHidden: !showHidden })}
-              >
-                {showHidden ? "Hide hidden skills" : `Show ${hiddenCount} hidden skills`}
-              </Button>
-            )}
-          </details>
-          <ClientReference key={row.harness} harness={row.harness} />
-          <CompareClients row={row} clients={clients} />
+              {preview && (
+                <div
+                  className={`grid h-8 items-center border-b border-border-subtle text-caption text-text-tertiary ${GRID}`}
+                >
+                  <span>Skill</span>
+                  <span>Now</span>
+                  <span>{tried ? "At new budget" : ""}</span>
+                  <span>{row.observed_session ? "Last session" : ""}</span>
+                  <span className="text-right">Characters</span>
+                </div>
+              )}
+              <ul aria-label="Listing" className="m-0 list-none p-0">
+                {shown.slice(0, limit).map((entry) => {
+                  const owner = entry.path && byPath.get(entry.path);
+                  return (
+                    <EntryRow
+                      key={entryKey(entry)}
+                      entry={entry}
+                      tried={triedByKey.get(entryKey(entry))}
+                      scanOnly={!preview}
+                      hasRecording={Boolean(row.observed_session)}
+                      onOpen={
+                        owner && entry.path
+                          ? () =>
+                              openSkill(owner, entry.path ?? undefined, undefined, {
+                                kind: "listing",
+                                harness,
+                                scope,
+                              })
+                          : undefined
+                      }
+                    />
+                  );
+                })}
+              </ul>
+              {!shown.length && (
+                <p className="my-2 text-small text-text-secondary">No matching entries.</p>
+              )}
+              {shown.length > limit && (
+                <Button size="sm" variant="ghost" onClick={() => change({ limit: limit + 25 })}>
+                  Show more ({limit} of {shown.length})
+                </Button>
+              )}
+              {hiddenCount > 0 && !onlyChanges && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="mt-1 rounded-sm px-2 text-text-secondary"
+                  aria-pressed={showHidden}
+                  onClick={() => change({ showHidden: !showHidden })}
+                >
+                  {showHidden ? "Hide hidden skills" : `Show ${hiddenCount} hidden skills`}
+                </Button>
+              )}
+            </details>
+            <ClientReference key={row.harness} harness={row.harness} />
+            <CompareClients row={row} clients={clients} />
+          </div>
         </div>
       )}
     </PageShell>

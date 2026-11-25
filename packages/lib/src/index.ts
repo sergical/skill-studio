@@ -12,6 +12,7 @@ export * from "./skill-install-destination";
 export * from "./skill-coverage";
 export * from "./skill-health";
 export * from "./home-summary";
+export * from "./listing-words";
 export * from "./skill-list-filter";
 export * from "./skill-stats";
 export * from "./skill-activity";

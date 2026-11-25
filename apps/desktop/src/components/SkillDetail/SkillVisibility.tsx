@@ -3,6 +3,7 @@ import {
   agentIdFromDeploymentLabel,
   deploymentLabelFromAgentId,
   homeRelativePath,
+  LISTING_STATE_LABEL,
 } from "@skill-studio/lib";
 import type { Deployment, InstalledSkill } from "@skill-studio/lib";
 import { useClientRows } from "../../hooks/useClientRows";
@@ -16,14 +17,6 @@ interface SkillVisibilityProps {
   initialClient?: string;
   listingScope?: string;
 }
-
-const STATE_LABEL = {
-  described: "Full description",
-  truncated: "Shortened",
-  name_only: "Name only",
-  hidden: "Hidden",
-  omitted: "Omitted",
-};
 
 export function SkillVisibility({
   skill,
@@ -68,25 +61,25 @@ export function SkillVisibility({
     sessionAgent?.records === "listing_and_uses" ? sessionAgent.sessions_read : undefined;
   return (
     <section
-      aria-label="Skill listing preview"
+      aria-label="What agents see of this skill"
       className="rounded-lg border border-border-subtle bg-bg-secondary p-4"
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h3 className="text-heading font-semibold">Skill visibility</h3>
+          <h3 className="text-heading font-semibold">What agents see</h3>
           <p className="mt-0.5 text-caption text-text-tertiary">
             {project ? "Project" : "Global"} ·{" "}
             {row.evidence !== "preview"
-              ? "Folder scan"
+              ? "Folders only"
               : row.base_prompt_skills != null
                 ? "Base prompt preview"
                 : hasAssumedClaudeWindow(row)
-                  ? "Listing estimate with an assumed model window"
-                  : "Listing estimate"}
+                  ? "Estimate, model window assumed"
+                  : "Estimate"}
           </p>
         </div>
         <SelectControl
-          ariaLabel="Client for this skill"
+          ariaLabel="Agent for this skill"
           value={harness}
           onValueChange={setSelected}
           items={clients.map((r) => ({
@@ -125,7 +118,7 @@ export function SkillVisibility({
             <strong
               className={entry.state === "truncated" ? "text-warning" : "text-text-secondary"}
             >
-              {STATE_LABEL[entry.state]}
+              {LISTING_STATE_LABEL[entry.state]}
             </strong>
             <span className="tabular-nums text-text-tertiary">
               {entry.shown_description_chars} of {entry.full_description_chars} characters
@@ -133,7 +126,7 @@ export function SkillVisibility({
           </div>
           <div className="mt-2 rounded-md border border-border-subtle bg-bg-primary px-3 py-3 text-body leading-relaxed">
             {entry.state === "hidden" || entry.state === "omitted" ? (
-              <p>{entry.hidden_reason ?? "The skill is absent from this listing."}</p>
+              <p>{entry.hidden_reason ?? "The model does not see this skill."}</p>
             ) : (
               <p className="select-text">
                 <strong className="font-mono text-small">{entry.name}</strong>
@@ -157,13 +150,13 @@ export function SkillVisibility({
       )}
       {row.observed_session && entry?.observed && (
         <p className="mt-3 text-small text-text-secondary">
-          Last recorded listing · <strong>{STATE_LABEL[entry.observed]}</strong>
+          Seen in the last session · <strong>{LISTING_STATE_LABEL[entry.observed]}</strong>
           {row.observed_session.model && ` · ${row.observed_session.model}`}
         </p>
       )}
       {use && sessions !== undefined && sessions > 0 && (
         <p className="mt-3 text-small text-text-secondary">
-          {deploymentLabelFromAgentId(harness)} loaded this skill in{" "}
+          {deploymentLabelFromAgentId(harness)} used this skill in{" "}
           <strong className="text-text-primary">
             {use.used} of {sessions}
           </strong>{" "}

@@ -3,14 +3,15 @@ import { openApp } from "./app-harness";
 
 test.beforeEach(async ({ page }) => {
   await openApp(page);
-  await page.getByRole("navigation").getByRole("button", { name: "Sessions" }).click();
-  await expect(page.getByRole("heading", { name: "Sessions", level: 1 })).toBeVisible();
+  await page.getByRole("navigation").getByRole("button", { name: "Agents" }).click();
+  await page.getByRole("button", { name: "What it used", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Agents", level: 1 })).toBeVisible();
 });
 
-test("the Sessions page groups skills by finding and lists the sessions behind them", async ({
+test("the What it used tab groups skills by finding and lists the sessions behind them", async ({
   page,
 }) => {
-  await page.getByText("Findings and listing definitions", { exact: true }).click();
+  await page.getByText("Findings and what the words mean", { exact: true }).click();
   await expect(page.getByRole("region", { name: "What the words mean" })).toContainText(
     "Name only",
   );
@@ -29,13 +30,15 @@ test("the Sessions page groups skills by finding and lists the sessions behind t
   ).toHaveCount(1);
 
   // Open the recorded work, then narrow the list to sessions with a finding.
-  const sessions = page.getByRole("region", { name: "Sessions" }).locator(":scope > ul > li");
+  const sessions = page
+    .getByRole("region", { name: "Recent sessions" })
+    .locator(":scope > ul > li");
   await expect(sessions).toHaveCount(3);
   await sessions.first().locator("summary").first().click();
-  await expect(sessions.first().getByText(/skills listed/)).toBeVisible();
+  await expect(sessions.first().getByText(/Listed \d+ skills/)).toBeVisible();
   await sessions
     .first()
-    .getByText(/Recorded listing ·/)
+    .getByText(/Skill list in this session ·/)
     .click();
   await expect(page.getByRole("list", { name: "Recorded skills" })).toContainText(
     "Original wording from the session.",
@@ -44,11 +47,11 @@ test("the Sessions page groups skills by finding and lists the sessions behind t
     .getByRole("listitem")
     .filter({ has: page.getByText("Original wording from the session.", { exact: true }) })
     .last();
-  await expect(captured).toContainText("shortened");
+  await expect(captured).toContainText("Shortened");
   await page.getByRole("button", { name: "Show only sessions with findings" }).click();
   await expect(sessions).toHaveCount(2);
 
-  await page.getByText("Findings and listing definitions", { exact: true }).click();
+  await page.getByText("Findings and what the words mean", { exact: true }).click();
 
   // An agent that records no listing says so instead of showing empty sessions.
   await page.getByRole("combobox", { name: "Agent" }).click();
@@ -56,5 +59,5 @@ test("the Sessions page groups skills by finding and lists the sessions behind t
   await expect(
     page.getByText("Skill Studio does not yet read saved listings for Cursor."),
   ).toBeVisible();
-  await expect(page.getByRole("region", { name: "Sessions" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Recent sessions" })).toHaveCount(0);
 });

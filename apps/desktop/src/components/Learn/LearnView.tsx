@@ -5,6 +5,7 @@
 // ============================================================================
 
 import { useEffect, useRef } from "react";
+import { HARNESS_CATALOG } from "@skill-studio/lib";
 import { HarnessIcon } from "../ui/HarnessIcon";
 import { PageShell } from "../Shell/PageShell";
 import type { LearnSection } from "../../store/appStore";
@@ -12,6 +13,11 @@ import type { LearnSection } from "../../store/appStore";
 interface LearnViewProps {
   section?: LearnSection;
 }
+
+const READER_LABELS: string[] = HARNESS_CATALOG.filter((row) => row.usageReader).map(
+  (row) => row.label,
+);
+const USAGE_READERS = `${READER_LABELS.slice(0, -1).join(", ")}, and ${READER_LABELS[READER_LABELS.length - 1]}`;
 
 const SECTIONS: { key: LearnSection; title: string }[] = [
   { key: "broken", title: "Broken and warnings" },
@@ -115,8 +121,8 @@ export function LearnView({ section }: LearnViewProps) {
               Every agent auto-invokes a skill when its description matches the task, and lets you
               call it by name. The agentskills.io spec has no field to limit either side; the limits
               below are agent extensions. Skill Studio reads the frontmatter ones, so the Home
-              numbers reflect what Claude Code sees. <i>Model only</i> exists in Claude Code alone
-              and is meant for background knowledge that makes no sense as a command.
+              numbers reflect what Claude Code sees. Only Claude Code has <i>model only</i>. It is
+              meant for background knowledge that makes no sense as a command.
             </p>
             <table className="my-1 w-full border-collapse text-small">
               <thead>
@@ -272,10 +278,10 @@ export function LearnView({ section }: LearnViewProps) {
               Not used in the last 30 days
             </h3>
             <p className="m-0">
-              Uses come from the history files of Claude Code, Codex, OpenCode, pi, Cursor, and Grok
-              Build. An agent you turn off under “Search history from” in Settings is left out of
-              every count. Each use also records how it started: you typed the skill’s name, the
-              model called the skill, or the model only opened its SKILL.md.
+              Uses come from the history files of {USAGE_READERS}. An agent you turn off under
+              “Search history from” in Settings is left out of every count. Each use also records
+              how it started: you typed the skill’s name, the model called the skill, or the model
+              only opened its SKILL.md.
             </p>
           </section>
         </div>

@@ -10,7 +10,7 @@ function AdditionalCopies({ name, entries }: { name: string; entries: ListingEnt
   return (
     <details>
       <summary className="cursor-pointer text-small">
-        {entries.length} additional {entries.length === 1 ? "entry" : "entries"} in {name}
+        {entries.length} {entries.length === 1 ? "skill" : "skills"} only in {name}
       </summary>
       <ul className="my-2 list-none divide-y divide-border-subtle pl-3">
         {entries.slice(0, limit).map((entry) => (
@@ -50,8 +50,8 @@ export function CompareClients({
   }));
   const extra = sides.map((s, i) => additionalEntries(s.entries, sides[1 - i].entries));
   return (
-    <details className="border-t border-border-subtle py-2">
-      <summary className="cursor-pointer text-small">Compare clients</summary>
+    <details className="rounded-md border border-border-subtle px-3 py-2">
+      <summary className="cursor-pointer text-small">Compare with another agent</summary>
       <div className="mt-3 flex flex-wrap items-center gap-2 text-small">
         <span>{sides[0].name} and</span>
         <SelectControl
@@ -65,13 +65,13 @@ export function CompareClients({
         />
       </div>
       <p className="my-2 text-small">
-        {sides[0].entries.length - extra[0].length} entries match by name. Each copy counts once.
+        {sides[0].entries.length - extra[0].length} skills match by name. Each copy counts once.
       </p>
       {sides.map((s, i) => (
         <div key={s.name} className="my-2">
           <p className="m-0 text-small text-text-secondary">
             <strong>{s.name}</strong> · {s.entries.length}{" "}
-            {s.scanned ? "found in folders" : "in the estimated listing"}
+            {s.scanned ? "found in folders" : "in the estimate"}
           </p>
           {extra[i].length > 0 && (
             <AdditionalCopies key={other.harness} name={s.name} entries={extra[i]} />

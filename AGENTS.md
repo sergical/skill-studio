@@ -199,6 +199,9 @@ removed; do not list individual source files here.
 
 - Use form controls and buttons from [@skill-studio/ui](packages/ui/src/index.ts).
   Raw form elements belong inside that package.
+- Before you add or change desktop UI text, a page section or a card, read
+  [apps/desktop/DESIGN.md](apps/desktop/DESIGN.md): the words, page anatomy,
+  spacing and color roles every page shares.
 - Group imports by React, external libraries, internal modules and types.
   Use explicit prop interfaces and type guards. Keep hooks prefixed with
   `use` and use selectors on the [Zustand store](apps/desktop/src/store/appStore.ts).

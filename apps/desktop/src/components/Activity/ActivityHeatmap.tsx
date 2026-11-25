@@ -120,7 +120,7 @@ export function ActivityHeatmap({
   tint: tintProp,
 }: ActivityHeatmapProps) {
   const selected = selectedProp ?? null;
-  const tint = tintProp ?? "var(--color-accent)";
+  const tint = tintProp ?? "var(--color-data)";
   const idPrefix = useId().replace(/:/g, "");
   const [hoverKey, setHoverKey] = useState<string | null>(null);
   const [activeKey, setActiveKey] = useActiveKey(dates, selected);

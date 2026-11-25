@@ -1,9 +1,8 @@
 // ============================================================================
-// HomeView - "What needs doing" for the user's own skills: stat tiles for
-// broken/warnings/updates, a lane card for invocation and prompt cost, and a
-// grouped inbox list (Broken, Warnings, Updates, Not used in 30 days,
-// Recently used). See popover-spec.md for the markup and copy this is built
-// from.
+// HomeView - Skill use and what each agent sees (HomeOverview), then "what
+// needs doing" for the user's own skills: stat tiles for broken/warnings/
+// updates, a lane card for invocation and prompt cost, and a grouped inbox
+// list (Broken, Warnings, Updates, Not used in 30 days, Recently used).
 // ============================================================================
 
 import { useState } from "react";
@@ -21,6 +20,7 @@ import type {
 import { useHeldLayout } from "../../lib/held-layout";
 import { lifecycleTargetForHarnessRoot } from "../../lib/skill-lifecycle-target";
 import { useAppStore } from "../../store/appStore";
+import { PageSection } from "../Shell/PageSection";
 import { PageShell } from "../Shell/PageShell";
 import { SkillListSelectionBar } from "../SkillList/SkillListSelectionBar";
 import { useSkillListAct } from "../SkillList/useSkillListAct";
@@ -28,7 +28,7 @@ import { InfoPopover } from "../ui/InfoPopover";
 import { MaterializeRootDialog } from "../ui/MaterializeRootDialog";
 import { TooltipControl } from "../ui/TooltipControl";
 import { useUpdateCheck } from "./useUpdateCheck";
-import { HomeVisibility } from "./HomeVisibility";
+import { HomeOverview } from "./HomeOverview";
 import { HomeInboxGrid } from "./HomeInboxGroups";
 import { buildHomeRowPlan, computeHomeGroups } from "./home-inbox-data";
 import type { HomeFilter, HomeInboxLists } from "./home-inbox-data";
@@ -481,64 +481,75 @@ export function HomeView({
 
   return (
     <PageShell title="Home">
-      <HomeVisibility />
-      <h2 className="text-heading font-semibold -mb-2">Library maintenance</h2>
-      <HomeStatTiles
-        broken={broken}
-        warnings={warnings}
-        updates={updates}
-        updateCheckSummary={snapshot.update_check}
-        filter={filter}
-        toggleFilter={toggleFilter}
-        onLearnMore={() => setActiveView({ kind: "learn", section: "broken" })}
-      />
+      {/* Sections sit 32px apart and keep 12px inside, so the gaps say what belongs together. */}
+      <div className="flex flex-col gap-8">
+        <HomeOverview
+          snapshot={snapshot}
+          active={active}
+          usageRefreshing={usageRefreshing}
+          open={onSelectSkill}
+        />
+        <PageSection title="Library maintenance">
+          <div className="flex flex-col gap-3">
+            <HomeStatTiles
+              broken={broken}
+              warnings={warnings}
+              updates={updates}
+              updateCheckSummary={snapshot.update_check}
+              filter={filter}
+              toggleFilter={toggleFilter}
+              onLearnMore={() => setActiveView({ kind: "learn", section: "broken" })}
+            />
 
-      <InvocationCostCard
-        inv={inv}
-        cost={cost}
-        usageRefreshing={usageRefreshing}
-        filter={filter}
-        onLearnMoreInvoke={() => setActiveView({ kind: "learn", section: "invoke" })}
-        onLearnMoreCost={() => setActiveView({ kind: "learn", section: "cost" })}
-        goToInvocation={goToInvocation}
-        goToSkills={goToSkills}
-        toggleFilter={toggleFilter}
-      />
+            <InvocationCostCard
+              inv={inv}
+              cost={cost}
+              usageRefreshing={usageRefreshing}
+              filter={filter}
+              onLearnMoreInvoke={() => setActiveView({ kind: "learn", section: "invoke" })}
+              onLearnMoreCost={() => setActiveView({ kind: "learn", section: "cost" })}
+              goToInvocation={goToInvocation}
+              goToSkills={goToSkills}
+              toggleFilter={toggleFilter}
+            />
 
-      <HomeInboxGrid
-        groups={shown}
-        live={groups}
-        starts={starts}
-        filter={filter}
-        onClearFilter={() => setFilter(null)}
-        isGroupVisible={isGroupVisible}
-        isGroupExpanded={isGroupExpanded}
-        toggleGroup={toggleGroup}
-        onSelectSkill={onSelectSkill}
-        onShowAllIssues={() => goToSkills({ issue: "any" })}
-        onShowAllUpdates={() => goToSkills({ update: "available" })}
-        onShowAllUnused={() => goToSkills({ usage: "unused-30d" })}
-        onShowAllRecent={() => setActiveView({ kind: "activity" })}
-        onConvertLinkedRoot={(skill, harness, harnessLabel, root) =>
-          setLinkedRootDialog({
-            target: lifecycleTargetForHarnessRoot(skill, harness, root),
-            harness,
-            harnessLabel,
-            root,
-          })
-        }
-        containerRef={containerRef}
-        onGridKeyDown={onGridKeyDown}
-        followRow={followRow}
-        wiring={{
-          rowRef,
-          tabIndexFor,
-          isChecked,
-          hasSelection: selectedSkills.length > 0,
-          onToggle: toggleSkill,
-          act: (label, skill) => void handleAct(label, skill),
-        }}
-      />
+            <HomeInboxGrid
+              groups={shown}
+              live={groups}
+              starts={starts}
+              filter={filter}
+              onClearFilter={() => setFilter(null)}
+              isGroupVisible={isGroupVisible}
+              isGroupExpanded={isGroupExpanded}
+              toggleGroup={toggleGroup}
+              onSelectSkill={onSelectSkill}
+              onShowAllIssues={() => goToSkills({ issue: "any" })}
+              onShowAllUpdates={() => goToSkills({ update: "available" })}
+              onShowAllUnused={() => goToSkills({ usage: "unused-30d" })}
+              onShowAllRecent={() => setActiveView({ kind: "activity" })}
+              onConvertLinkedRoot={(skill, harness, harnessLabel, root) =>
+                setLinkedRootDialog({
+                  target: lifecycleTargetForHarnessRoot(skill, harness, root),
+                  harness,
+                  harnessLabel,
+                  root,
+                })
+              }
+              containerRef={containerRef}
+              onGridKeyDown={onGridKeyDown}
+              followRow={followRow}
+              wiring={{
+                rowRef,
+                tabIndexFor,
+                isChecked,
+                hasSelection: selectedSkills.length > 0,
+                onToggle: toggleSkill,
+                act: (label, skill) => void handleAct(label, skill),
+              }}
+            />
+          </div>
+        </PageSection>
+      </div>
       {/* Visually-hidden live region: announces the cursor's position, debounced to the last move. */}
       <div role="status" aria-live="polite" className="sr-only">
         {statusText}

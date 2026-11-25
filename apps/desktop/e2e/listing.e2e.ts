@@ -5,8 +5,8 @@ test("a larger budget marks the skills that gain a description and gives the set
   page,
 }) => {
   await openApp(page);
-  await page.getByRole("navigation").getByRole("button", { name: "Client configuration" }).click();
-  await page.getByText("Browse individual entries", { exact: true }).click();
+  await page.getByRole("navigation").getByRole("button", { name: "Agents" }).click();
+  await page.getByText("Every skill", { exact: true }).click();
   const rows = page.getByRole("list", { name: "Listing" }).getByRole("listitem");
   await expect(rows.first()).toBeVisible();
   const nameOnly = rows.filter({ hasText: "Name only" }).first();
@@ -25,7 +25,7 @@ test("a larger budget marks the skills that gain a description and gives the set
   await page.getByRole("textbox", { name: "Find an entry" }).fill(name);
   const changed = rows.and(page.getByLabel(name, { exact: true }));
   await expect(changed).toContainText("Name only");
-  await expect(changed).toContainText("Described");
+  await expect(changed).toContainText("Full description");
 
   const setting = page.getByRole("region", { name: "Listing setting" });
   await expect(setting).toContainText('"skillListingBudgetFraction": 0.02');
@@ -37,11 +37,13 @@ test("the Codex listing gives the tier and how far the budget is from the next o
 }) => {
   await openApp(page);
   await page
-    .getByRole("region", { name: "Your clients" })
+    .getByRole("region", { name: "What your agents see" })
     .getByRole("button", { name: /Codex/ })
     .click();
   await expect(page.getByRole("combobox", { name: "Agent" })).toContainText("Codex");
-  await expect(page.getByRole("region", { name: "Listing sources" })).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: /^Where the \d+ skills come from$/ }),
+  ).toBeVisible();
   await page.getByText("How the estimate was calculated", { exact: true }).click();
   const tier = page.getByRole("region", { name: "Listing tier" });
   await expect(tier).toContainText("Descriptions are shortened");
@@ -66,9 +68,9 @@ test("a Cursor-only setup can follow a scanned skill from Home and back", async 
     await expect(others).toHaveCount(count - 1);
   }
   await page.getByRole("button", { name: "Continue" }).click();
-  const clients = page.getByRole("region", { name: "Your clients" });
-  await expect(clients.getByRole("button")).toHaveCount(1);
-  await clients.getByRole("button", { name: "Cursor" }).click();
+  const agents = page.getByRole("region", { name: "What your agents see" });
+  await expect(agents.getByRole("row")).toHaveCount(2);
+  await agents.getByRole("button", { name: "Cursor" }).click();
   const agent = page.getByRole("combobox", { name: "Agent", exact: true });
   await expect(agent).toContainText("Cursor");
   await page.getByText("How Cursor lists skills", { exact: true }).click();
@@ -81,60 +83,59 @@ test("a Cursor-only setup can follow a scanned skill from Home and back", async 
     .getByRole("list", { name: "Listing", exact: true })
     .getByRole("button", { name: "code-review", exact: true })
     .click();
-  const preview = page.getByRole("region", { name: "Skill listing preview" });
-  await expect(preview.getByRole("combobox", { name: "Client for this skill" })).toContainText(
+  const preview = page.getByRole("region", { name: "What agents see of this skill" });
+  await expect(preview.getByRole("combobox", { name: "Agent for this skill" })).toContainText(
     "Cursor",
   );
   await expect(preview).toContainText(".agents/skills/code-review");
   await expect(preview).not.toContainText("Full description");
-  await page.getByRole("button", { name: "Client configuration", exact: true }).last().click();
+  await page.getByRole("button", { name: "Agents", exact: true }).last().click();
   await expect(agent).toContainText("Cursor");
-  await page.getByRole("navigation").getByRole("button", { name: "Sessions" }).click();
+  await page.getByRole("button", { name: "What it used", exact: true }).click();
   await expect(agent).toContainText("Cursor");
-  await page.getByRole("button", { name: "See skills for Cursor" }).click();
+  await page.getByRole("button", { name: "See what Cursor sees" }).click();
   await expect(page.getByRole("textbox", { name: "Find an entry" })).toBeVisible();
 });
 
-test("a client comparison shows the source of the entries behind a difference", async ({
-  page,
-}) => {
+test("an agent comparison shows the source of the skills behind a difference", async ({ page }) => {
   await openApp(page);
   await page
-    .getByRole("region", { name: "Your clients" })
+    .getByRole("region", { name: "What your agents see" })
     .getByRole("button", { name: "Cursor" })
     .click();
-  await page.getByText("Compare clients", { exact: true }).click();
+  await page.getByText("Compare with another agent", { exact: true }).click();
   await page.getByRole("combobox", { name: "Compare with" }).click();
   await page.getByRole("option", { name: "Codex", exact: true }).click();
-  await page.getByText(/\d+ additional entr(?:y|ies) in Codex/).click();
+  await page.getByText(/\d+ skills? only in Codex/).click();
   const extra = page.getByRole("listitem").filter({ hasText: "skill-installer" });
   await expect(extra).toContainText("Session record");
   await expect(extra).toContainText(".codex/skills/.system/skill-installer");
 });
 
-test("save and remove a personal Codex budget from client configuration", async ({ page }) => {
+test("save and remove a personal Codex budget from the agent's settings", async ({ page }) => {
   await openApp(page);
   await page
-    .getByRole("region", { name: "Your clients" })
+    .getByRole("region", { name: "What your agents see" })
     .getByRole("button", { name: "Codex", exact: true })
     .click();
-  const settings = page.getByRole("region", { name: "Effective settings" });
-  await settings.getByRole("button", { name: "Edit Listing budget" }).click();
+  const settings = page.getByRole("region", { name: "Codex settings", exact: true });
+  await settings.getByRole("button", { name: "Edit Skill list budget" }).click();
   await settings.getByRole("textbox", { name: "Tokens" }).fill("6300");
   await settings.getByRole("button", { name: "Save", exact: true }).click();
   await expect(settings).toContainText("6,300 tokens configured");
-  await settings.getByRole("button", { name: "Edit Listing budget" }).click();
+  await settings.getByRole("button", { name: "Edit Skill list budget" }).click();
   await settings.getByRole("button", { name: "Remove override" }).click();
-  await expect(settings).toContainText("Client default");
+  await expect(settings).toContainText("Default");
 });
 
 test("read the skill guidance saved for an OpenCode session", async ({ page }) => {
   await openApp(page);
-  await page.getByRole("navigation").getByRole("button", { name: "Sessions" }).click();
+  await page.getByRole("navigation").getByRole("button", { name: "Agents" }).click();
+  await page.getByRole("button", { name: "What it used", exact: true }).click();
   await page.getByRole("combobox", { name: "Agent" }).click();
   await page.getByRole("option", { name: "OpenCode", exact: true }).click();
   await page.getByText("app · plan", { exact: true }).click();
-  await page.getByText(/Recorded listing · 1 skill/).click();
+  await page.getByText(/Skill list in this session · 1 skill/).click();
   const skill = page.getByRole("list", { name: "Recorded skills" }).getByRole("listitem");
   await expect(skill).toContainText("web-design-guidelines");
   await expect(skill).toContainText("Review UI code for Web Interface Guidelines compliance.");

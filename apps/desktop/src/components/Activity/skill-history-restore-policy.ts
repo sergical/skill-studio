@@ -39,7 +39,7 @@ const EVENT_LABELS = new Map([
   ["harness_enable", "Turned on"],
   ["move_aside_disable", "Moved aside"],
   ["move_aside_restore", "Moved back"],
-  ["listing_setting_change", "Client configuration changed"],
+  ["listing_setting_change", "Agent setting changed"],
   ["invocation_change", "Invocation changed"],
   ["fork", "Forked"],
   ["unlink_harness", "Agent link removed"],

@@ -151,9 +151,17 @@ test("Update all on Home keeps every Updates row in its slot and marks each one 
   const names = await rows.evaluateAll((els) =>
     els.map((el) => el.querySelector('[role="gridcell"]:nth-child(2) span.truncate')!.textContent),
   );
-  const tops = await rows.evaluateAll((els) =>
-    els.map((el) => Math.round(el.getBoundingClientRect().top)),
-  );
+  // Offsets within the group, so the scroll that brings Update all into view doesn't count as a move.
+  const offsets = () =>
+    rows.evaluateAll((els) =>
+      els.map((el) =>
+        Math.round(
+          el.getBoundingClientRect().top -
+            el.closest('[data-group="upd"]')!.getBoundingClientRect().top,
+        ),
+      ),
+    );
+  const tops = await offsets();
 
   await group.getByRole("button", { name: "Update all" }).click();
 
@@ -165,9 +173,7 @@ test("Update all on Home keeps every Updates row in its slot and marks each one 
       ),
     ),
   ).toEqual(names);
-  expect(
-    await rows.evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top))),
-  ).toEqual(tops);
+  expect(await offsets()).toEqual(tops);
 });
 
 test("a selection-bar Park leaves a row that is still updating to its Update, and parks the rest", async ({

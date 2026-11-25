@@ -88,7 +88,7 @@ export function SkillBrowser({
                 Loading…
               </>
             ) : (
-              "Load More"
+              "Load more"
             )}
           </Button>
         </div>

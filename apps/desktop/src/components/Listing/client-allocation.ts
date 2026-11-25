@@ -27,7 +27,7 @@ export function additionalEntries(entries: ListingEntry[], other: ListingEntry[]
   });
 }
 
-// Claude's allocation depends on the model window. Without a catalog match the
+// Claude's budget depends on the model window. Without a catalog match the
 // simulator still works, but its result cannot describe the user's configuration.
 export function hasAssumedClaudeWindow(row: HarnessListing) {
   return row.harness === "claude-code" && row.uses_default_context_window;
@@ -41,7 +41,7 @@ export function budgetRule(row: HarnessListing) {
   if (row.harness === "codex") {
     if (row.setting?.current != null)
       return `${Number(row.setting.current).toLocaleString()} tokens configured`;
-    return row.context_window_tokens ? "2% of context" : "Fallback for unknown context";
+    return row.context_window_tokens ? "2% of context" : "Default for an unknown context window";
   }
-  return "Allocation rule unknown";
+  return "Budget rule unknown";
 }
