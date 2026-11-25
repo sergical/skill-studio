@@ -60,11 +60,12 @@ export function slotPose(g: Geometry, slot: number): Pose {
   const perColumn = Math.ceil(ACTIVE_PILE_CHIPS.length / 2);
   const column = slot < perColumn ? 0 : 1;
   const row = slot % perColumn;
-  if (g.narrow) return { x: column === 0 ? 0 : g.w / 2 + 4, y: 128 + row * 32, ax: 0 };
+  const mirrored = { x: g.w / 2 + (column === 0 ? -5 : 5), ax: column === 0 ? -100 : 0 };
+  if (g.narrow) return { ...mirrored, y: 128 + row * 32 };
   if (g.stacked) {
     const top = g.mascot.y + g.mascotSize / 2 + 22;
     const step = Math.min(34, (g.drawer.y - 22 - top) / perColumn);
-    return { x: g.w / 2 + (column === 0 ? -172 : -4), y: top + row * step, ax: 0 };
+    return { ...mirrored, y: top + row * step };
   }
   const step = 38;
   const top = (g.h - perColumn * step) / 2 + step / 2;
