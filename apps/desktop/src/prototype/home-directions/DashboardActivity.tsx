@@ -30,9 +30,16 @@ interface Day {
   count: number;
 }
 
+function dayLabel(day: Day) {
+  return `${formatDay(day.date)} · ${formatCount(day.count)} ${day.count === 1 ? "load" : "loads"}`;
+}
+
 function DailyLoads({ days, openDay }: { days: Day[]; openDay: (date: string) => void }) {
   const [focusedDate, setFocusedDate] = useState<string>();
+  const [hovered, setHovered] = useState<string>();
+  const [focusWithin, setFocusWithin] = useState(false);
   const active = days.find((day) => day.date === focusedDate) ?? days[days.length - 1];
+  const readout = days.find((day) => day.date === hovered) ?? (focusWithin ? active : undefined);
   const peak = Math.max(...days.map((day) => day.count));
 
   function moveFocus(event: KeyboardEvent<HTMLButtonElement>, index: number) {
@@ -53,20 +60,27 @@ function DailyLoads({ days, openDay }: { days: Day[]; openDay: (date: string) =>
     <figure className="mt-3.5">
       <div
         role="toolbar"
+        onMouseLeave={() => setHovered(undefined)}
+        onFocus={() => setFocusWithin(true)}
+        onBlur={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget)) setFocusWithin(false);
+        }}
         aria-label="Recorded loads by day, open day in Activity"
         className="flex h-16 items-end gap-px border-b border-border"
       >
         {days.map(({ date, count }, index) => {
-          const label = `${formatDay(date)} · ${formatCount(count)} ${count === 1 ? "load" : "loads"}`;
           return (
             <Button
               key={date}
               variant="ghost"
-              aria-label={label}
-              title={label}
+              aria-label={dayLabel({ date, count })}
+              onMouseEnter={() => setHovered(date)}
               tabIndex={date === active.date ? 0 : -1}
-              className="group/day h-full min-w-0 flex-1 items-end rounded-xs border-0 p-0 hover:bg-bg-hover"
-              onFocus={() => setFocusedDate(date)}
+              className="group/day relative focus-visible:z-10 h-full min-w-0 flex-1 items-end rounded-xs border-0 p-0 hover:bg-bg-hover"
+              onFocus={() => {
+                setFocusedDate(date);
+                setHovered(undefined);
+              }}
               onKeyDown={(event) => moveFocus(event, index)}
               onClick={() => openDay(date)}
             >
@@ -83,6 +97,7 @@ function DailyLoads({ days, openDay }: { days: Day[]; openDay: (date: string) =>
       </div>
       <figcaption className="mt-1.5 flex justify-between text-caption text-text-tertiary tabular-nums">
         <span>{formatDay(days[0].date)}</span>
+        <span className="font-medium text-text-primary">{readout && dayLabel(readout)}</span>
         <span>{formatDay(days[days.length - 1].date)}</span>
       </figcaption>
     </figure>

@@ -35,6 +35,14 @@ test("open a client report and compare the native Home designs", async ({ page }
   await expect(chart.getByRole("button")).toHaveCount(30);
   await page.getByRole("button", { name: "7 days", exact: true }).click();
   await expect(chart.getByRole("button")).toHaveCount(7);
-  await chart.getByRole("button").last().click();
+  const days = chart.getByRole("button");
+  await days.last().focus();
+  await page.keyboard.press("ArrowLeft");
+  const selected = days.nth(5);
+  await expect(selected).toBeFocused();
+  await expect(page.getByRole("figure").locator("figcaption")).toContainText(
+    (await selected.getAttribute("aria-label"))!,
+  );
+  await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { name: "Activity", exact: true })).toBeVisible();
 });

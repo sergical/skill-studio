@@ -1,6 +1,7 @@
 {
   "productName": "Skill Studio Home Lab",
   "identifier": "com.skillstudio.home-lab",
+  "plugins": { "updater": { "endpoints": [] } },
   "bundle": { "createUpdaterArtifacts": false },
   "build": { "beforeBuildCommand": "env VITE_HOME_DIRECTIONS=1 pnpm run build" }
 }

@@ -5,10 +5,10 @@ import { deploymentLabel, deploymentLabelFromAgentId } from "@skill-studio/lib";
 import type { HealthIssue, SkillSnapshot } from "@skill-studio/lib";
 import { computeHomeGroups, issueDeploymentPath } from "../../components/Home/home-inbox-data";
 import { issueRowState } from "../../components/SkillList/skill-row-state";
-import { currentListingRequest } from "../../components/Listing/useSkillVisibility";
+import { useHomeListing } from "./useHomeListing";
 import { HarnessIcon, harnessIdFromLabel } from "../../components/ui/HarnessIcon";
 import { useClientIds } from "../../hooks/useClientRows";
-import { listingReportKey, sessionsReportKey, useAppStore } from "../../store/appStore";
+import { sessionsReportKey, useAppStore } from "../../store/appStore";
 
 interface HomeData {
   snapshot: SkillSnapshot;
@@ -19,8 +19,6 @@ const title = "text-[28px] leading-tight font-semibold tracking-[-.025em] text-t
 const row =
   "h-auto w-full min-w-0 justify-start gap-3 rounded-none border-b border-border-subtle px-1 py-3 text-left font-normal";
 const sub = "text-small text-text-secondary";
-const request = currentListingRequest(null);
-const reportKey = listingReportKey(request);
 
 function IssueRow({
   issue,
@@ -133,14 +131,10 @@ export function RepairQueue({ snapshot, open }: HomeData) {
   );
 }
 
-export function ClientDirectory() {
+export function ClientDirectory({ revision, active }: { revision: number; active: boolean }) {
   const clients = useClientIds();
   const navigate = useAppStore((s) => s.setActiveView);
-  const load = useAppStore((s) => s.listingReports[reportKey]);
-  const refresh = useAppStore((s) => s.refreshListing);
-  useEffect(() => {
-    if (!useAppStore.getState().listingReports[reportKey]) refresh(request);
-  }, [refresh]);
+  const { load, retry } = useHomeListing(revision, active && Boolean(clients?.length));
   return (
     <section aria-label="Client overview" className="space-y-6">
       <header>
@@ -204,7 +198,7 @@ export function ClientDirectory() {
         </p>
       )}
       {load?.error && (
-        <Button variant="outline" onClick={() => refresh(request)}>
+        <Button variant="outline" onClick={retry}>
           Retry global reports
         </Button>
       )}
