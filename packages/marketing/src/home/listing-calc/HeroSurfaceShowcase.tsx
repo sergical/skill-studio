@@ -225,7 +225,7 @@ export function HeroSurfaceShowcase({
         : "Local stdio MCP server. Works with Claude Code, Codex, Cursor, OpenCode, and pi.";
 
   return (
-    <section id="product" {...stylex.props(styles.section)}>
+    <section id="product" data-theme-bound {...stylex.props(styles.section)}>
       <div {...stylex.props(styles.frame, styles.frameBack(DITHER_COLORS[theme].back))}>
         <div aria-hidden="true" {...stylex.props(styles.dither)}>
           <WarpDither colorBack="#00000000" colorFront={DITHER_COLORS[theme].front} />

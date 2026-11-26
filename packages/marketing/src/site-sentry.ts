@@ -157,16 +157,26 @@ function readSiteSentryEnv(): SiteSentryEnv {
   };
 }
 
+function afterPageSettles(): Promise<void> {
+  return new Promise((resolve) => {
+    const idle = () => setTimeout(resolve, 2000);
+    if (document.readyState === "complete") idle();
+    else window.addEventListener("load", idle, { once: true });
+  });
+}
+
 export async function startSiteSentry(
   earlyErrors: EarlyErrors,
   env: SiteSentryEnv = readSiteSentryEnv(),
   loadSdk: () => Promise<SiteSentrySdk> = () => import("@sentry/browser"),
+  pageSettled: () => Promise<void> = afterPageSettles,
 ): Promise<void> {
   if (!env.dsn?.trim()) {
     earlyErrors.stop();
     return;
   }
   try {
+    await pageSettled();
     const sdk = await loadSdk();
     sdk.init(siteSentryInitOptions(env, sdk));
     for (const { exception, mechanism } of earlyErrors.stop()) {

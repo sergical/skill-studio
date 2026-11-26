@@ -120,7 +120,7 @@ export function ClosingFinale({ theme, children }: ClosingFinaleProps) {
   const colors = DITHER_COLORS[theme];
 
   return (
-    <div ref={finaleRef} {...stylex.props(styles.finale)}>
+    <div ref={finaleRef} data-theme-bound {...stylex.props(styles.finale)}>
       {wordmark && (
         <div
           aria-hidden="true"

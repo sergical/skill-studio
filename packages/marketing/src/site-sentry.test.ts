@@ -48,18 +48,20 @@ function errorEvent(error: Error) {
   return Object.assign(new Event("error"), { error, message: error.message });
 }
 
+const settled = () => Promise.resolve();
+
 describe("startSiteSentry", () => {
   it.each([undefined, "", "   "])("never loads the SDK when the DSN is %j", async (dsn) => {
     // Failure: a build without a DSN still downloads the SDK or sends network calls.
     const loadSdk = vi.fn();
-    await startSiteSentry(noEarlyErrors(), { ...ENV, dsn }, loadSdk);
+    await startSiteSentry(noEarlyErrors(), { ...ENV, dsn }, loadSdk, settled);
     expect(loadSdk).not.toHaveBeenCalled();
   });
 
   it("loads the SDK once and initialises it when the DSN is set", async () => {
     // Failure: a configured build never starts monitoring.
     const sdk = fakeSdk();
-    await startSiteSentry(noEarlyErrors(), ENV, async () => sdk);
+    await startSiteSentry(noEarlyErrors(), ENV, async () => sdk, settled);
     expect(sdk.init).toHaveBeenCalledTimes(1);
     expect(sdk.init.mock.calls[0][0]).toMatchObject({ dsn: ENV.dsn });
   });
@@ -67,7 +69,7 @@ describe("startSiteSentry", () => {
   it("keeps the page working when the SDK chunk fails to load", async () => {
     // Failure: an ad blocker that stops the chunk turns into an unhandled rejection on the page.
     await expect(
-      startSiteSentry(noEarlyErrors(), ENV, () => Promise.reject(new Error("blocked"))),
+      startSiteSentry(noEarlyErrors(), ENV, () => Promise.reject(new Error("blocked")), settled),
     ).resolves.toBeUndefined();
   });
 
@@ -80,7 +82,7 @@ describe("startSiteSentry", () => {
     page.dispatchEvent(errorEvent(crash));
     const sdk = fakeSdk();
 
-    await startSiteSentry(earlyErrors, ENV, async () => sdk);
+    await startSiteSentry(earlyErrors, ENV, async () => sdk, settled);
     page.dispatchEvent(errorEvent(new Error("after init")));
 
     expect(sdk.captureException).toHaveBeenCalledTimes(1);
@@ -116,7 +118,7 @@ describe("setUpPageThenStartSiteSentry", () => {
           throw crash;
         },
         earlyErrors,
-        (buffer) => (started = startSiteSentry(buffer, ENV, async () => sdk)),
+        (buffer) => (started = startSiteSentry(buffer, ENV, async () => sdk, settled)),
       ),
     ).toThrow(crash);
     page.dispatchEvent(errorEvent(crash));

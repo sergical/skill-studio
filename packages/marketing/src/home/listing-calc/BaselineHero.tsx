@@ -28,7 +28,7 @@ export function BaselineHero({ theme }: { theme: SiteTheme }) {
           <h1 {...stylex.props(styles.title)}>{HERO_TITLE}</h1>
           <p {...stylex.props(styles.lede)}>{HERO_SUBLINE}</p>
           <div {...stylex.props(heroPartStyles.actions)}>
-            <DownloadButton theme={theme} place="hero" />
+            <DownloadButton place="hero" />
             <CopyAgentPromptButton />
           </div>
           <TrustLine />
