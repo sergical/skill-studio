@@ -12,7 +12,8 @@ import { JobsSection } from "../JobsSection";
 import type { ThemeToggleOrigin } from "../../ProductMock";
 import { SiteFooter, SiteHeader, siteLayout } from "../../SiteChrome";
 import { lightSiteTheme, siteTokens, type SiteTheme } from "../../SiteTheme.stylex";
-import { DownloadButton, HERO_TITLE, HeaderDownload, TrustLine } from "./HeroParts";
+import { HERO_TITLE } from "./hero-copy";
+import { DownloadButton, HeaderDownload, TrustLine } from "./HeroParts";
 
 export interface HomePageProps {
   theme: SiteTheme;

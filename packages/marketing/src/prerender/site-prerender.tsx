@@ -18,7 +18,7 @@ import { DOCS_TEMPLATE } from "./site-templates";
 
 const SITE_ORIGIN = "https://useskillstudio.com";
 const OG_IMAGE_ALT =
-  "Skill Studio: Tidy up your agent skills. The app icon in a messy pile of skills.";
+  "Skill Studio: Fix your skill issues. The app icon beside a sorted list of skills, with counts of the ones it parked, fixed and updated.";
 
 interface SiteRoute {
   /** Output path relative to dist. */

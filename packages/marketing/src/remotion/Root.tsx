@@ -1,5 +1,6 @@
 import { Composition } from "remotion";
 
+import { OG_CARD_SIZE, OgCard } from "./OgCard";
 import { ProductWalkthrough } from "./ProductWalkthrough";
 
 const walkthroughs = [
@@ -23,6 +24,7 @@ const formats = [
 export function RemotionRoot() {
   return (
     <>
+      <Composition id="OgCard" component={OgCard} durationInFrames={1} fps={30} {...OG_CARD_SIZE} />
       {walkthroughs.flatMap(([name, feature, durationInFrames]) =>
         themes.flatMap(([themeName, theme]) =>
           formats.map(([formatName, format, width, height]) => (

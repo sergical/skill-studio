@@ -3,11 +3,10 @@ import * as stylex from "@stylexjs/stylex";
 
 import { siteLayout } from "../../SiteChrome";
 import { siteTokens, type SiteTheme } from "../../SiteTheme.stylex";
+import { HERO_SUBLINE, HERO_TITLE } from "./hero-copy";
 import {
   CopyAgentPromptButton,
   DownloadButton,
-  HERO_SUBLINE,
-  HERO_TITLE,
   HeroDither,
   TrustLine,
   heroGlow,

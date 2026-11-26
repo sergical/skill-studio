@@ -9,6 +9,7 @@ import * as stylex from "@stylexjs/stylex";
 
 import { siteLayout } from "../SiteChrome";
 import { finaleCtaMarker } from "./ClosingFinale.stylex";
+import { DITHER_COLORS } from "./dither-colors";
 import { WarpDither } from "./WarpDither";
 import type { SiteTheme } from "../SiteTheme.stylex";
 
@@ -17,12 +18,6 @@ const WORDMARK_FONT =
   'system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif';
 // The share of the letters' height that the page edge cuts off.
 const WORDMARK_CROP = 0.28;
-
-// Same colours as the desktop app's welcome screen (apps/desktop FirstRunScreen).
-export const DITHER_COLORS = {
-  dark: { back: "#150b2e", front: "#5a45c4" },
-  light: { back: "#e4dcff", front: "#5a45c4" },
-} as const;
 
 // The faint glow that rises behind the footer. The letters themselves show at full strength.
 const GLOW_MASK =
