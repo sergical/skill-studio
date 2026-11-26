@@ -89,6 +89,14 @@ opens Activity, an agent opens its What it sees tab, an issue opens the skill.
 - `error`, `warning` and `success` mean broken, drifted and done. Never use
   them for decoration.
 
+## Charts
+
+- Our users are developers and read charts fluently. A chart explains its
+  encodings with a legend of marks (a swatch, a ring, a ramp) and one or two
+  words each, and labels its axes with units. Never a sentence caption such as
+  "Area: tokens · Brightness: uses".
+- Every mark is reachable: hover or focus shows the skill, click opens it.
+
 ## Action weight
 
 One row leads with one action. The action that takes skills away (Remove)
