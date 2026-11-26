@@ -43,7 +43,7 @@ export function homeTodos(
       tone: "error",
       title: `${plural(groups.broken.length, "skill")} don’t load`,
       detail: "Broken links or a SKILL.md the agents reject. No agent can use them.",
-      action: "Show",
+      action: `Review ${plural(groups.broken.length, "broken skill")}`,
       to: { kind: "filter", filter: "broken" },
     });
   for (const row of listings) {
@@ -79,7 +79,7 @@ export function homeTodos(
       tone: "neutral",
       title: plural(groups.updates.length, "update"),
       detail: `Newer versions upstream. ${updateCaption}.`,
-      action: "Show",
+      action: `Review ${plural(groups.updates.length, "update")}`,
       to: { kind: "filter", filter: "upd" },
     });
   // Without any readable history, "unused" would mean "not seen", so the item stays out. A skill
@@ -90,8 +90,8 @@ export function homeTodos(
       id: "unused",
       tone: "neutral",
       title: `${plural(unused.length, "skill")} had no use in 30 days`,
-      detail: `Counted from ${joinNames(historyAgents.map(deploymentLabelFromAgentId))} history. Each is sent with every message; Park keeps it a click away.`,
-      action: "Show",
+      detail: `Counted from ${joinNames(historyAgents.map(deploymentLabelFromAgentId))} history only. Each is sent with every message; Park keeps it a click away.`,
+      action: "Review unused",
       to: { kind: "filter", filter: "unused" },
     });
   if (groups.warnings.length)
@@ -100,7 +100,7 @@ export function homeTodos(
       tone: "neutral",
       title: `${plural(groups.warnings.length, "skill")} need a look`,
       detail: "Copies that differ between agents, or a lock entry with no folder.",
-      action: "Show",
+      action: `Review ${plural(groups.warnings.length, "warning")}`,
       to: { kind: "filter", filter: "warn" },
     });
   return todos;

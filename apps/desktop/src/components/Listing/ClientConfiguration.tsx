@@ -211,8 +211,8 @@ export function ClientConfiguration({
         ) : (
           <>
             <p className="text-heading font-semibold">
-              {name} can pick {described.toLocaleString()} of your {offered.toLocaleString()} skills
-              on its own
+              {described.toLocaleString()} of {offered.toLocaleString()} descriptions fit in {name}
+              ’s skill space
             </p>
             <div
               aria-hidden

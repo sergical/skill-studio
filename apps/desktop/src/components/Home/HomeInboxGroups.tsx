@@ -687,7 +687,6 @@ export function HomeInboxGrid({
   followRow: (e: SyntheticEvent) => void;
 }) {
   const { broken, warnings, updates, unused, recent } = groups;
-  const allClear = broken.length === 0 && warnings.length === 0 && updates.length === 0;
 
   return (
     <RichTooltipScope>
@@ -707,12 +706,6 @@ export function HomeInboxGrid({
               Show everything
             </Button>
           </div>
-        )}
-
-        {allClear && !filter && (
-          <p className="flex h-full items-center justify-center text-wrap-pretty text-text-tertiary">
-            All clear. Nothing needs attention.
-          </p>
         )}
 
         {broken.length > 0 && isGroupVisible("broken") && (

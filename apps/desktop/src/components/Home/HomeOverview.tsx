@@ -45,12 +45,12 @@ function SpaceRow({ row, open }: { row: HarnessListing; open: () => void }) {
   const total = full + cut + names;
   const estimated = row.evidence === "preview" && row.budget !== null;
   const text = !estimated
-    ? "No limit to estimate"
+    ? `Folders only · ${row.entries.filter((e) => e.scanned).length} found`
     : names
-      ? `${full + cut} of ${total} fit`
+      ? `${full + cut} of ${total} descriptions fit`
       : cut
         ? `${full} full · ${cut} shortened`
-        : `All ${total} fit`;
+        : `All ${total} descriptions fit`;
   return (
     <Button
       variant="ghost"
@@ -133,7 +133,7 @@ export function HomeOverview({
         <p className="mt-1 text-small text-text-secondary">
           {live === 0
             ? "Add a skill and Skill Studio shows here whether your agents can see it and use it."
-            : `${formatCount(live)} ${live === 1 ? "skill" : "skills"} · ${formatCount(totalUses)} ${totalUses === 1 ? "use" : "uses"} in 30 days · ${
+            : `${formatCount(live)} ${live === 1 ? "skill" : "skills"} you installed · ${formatCount(totalUses)} ${totalUses === 1 ? "use" : "uses"} in 30 days · ${
                 historyAgents.length
                   ? `uses from ${joinNames(historyAgents.map(deploymentLabelFromAgentId))} history`
                   : "no readable skill history yet"
@@ -143,12 +143,6 @@ export function HomeOverview({
           <Button className="mt-3" onClick={() => openAddSkillSheet()}>
             <Plus size={14} aria-hidden /> Add a skill
           </Button>
-        )}
-        {live > 0 && !todos.length && (
-          <p className="mt-3 text-body">
-            Every skill loads{listings.length ? ", fits its agent’s skill space" : ""} and is up to
-            date.
-          </p>
         )}
         {todos.length > 0 && (
           <ul aria-label="Things that need you" className="mt-3 border-t border-border-subtle">

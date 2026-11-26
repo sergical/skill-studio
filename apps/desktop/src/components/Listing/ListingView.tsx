@@ -324,13 +324,13 @@ function DontFit({
   const [all, setAll] = useState(false);
   const out = row.entries
     .filter((e) => e.state === "name_only" || e.state === "omitted")
-    .sort((a, b) => (uses.get(b.name) ?? 0) - (uses.get(a.name) ?? 0));
+    .sort((a, b) => (uses.get(a.name) ?? 0) - (uses.get(b.name) ?? 0));
   if (!out.length) return null;
   const shown = all ? out : out.slice(0, 8);
   return (
     <PageSection
       title={`Don’t fit · ${out.length}`}
-      meta="Used least, so cut first. Parking unused skills makes room."
+      meta="Least used first: parking these makes room for the rest."
     >
       <ul aria-label="Skills that don’t fit" className="border-t border-border-subtle">
         {shown.map((entry) => (
@@ -600,7 +600,9 @@ export function ListingView({ snapshot, initialHarness, initialScope }: ListingV
       {!row ? (
         current?.data && (
           <p className="m-0 text-small text-text-secondary">
-            None of your agents has a report for this scope. Choose agents in Settings.
+            {harnesses.length || !snapshot
+              ? "Skill Studio has no skill list for this agent in this scope yet. Its recorded uses are on the What it used tab."
+              : "None of the agents you turned on has a skill list Skill Studio can read. Turn on more agents in Settings."}
           </p>
         )
       ) : (

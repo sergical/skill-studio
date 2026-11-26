@@ -120,7 +120,8 @@ export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeVie
   // A row parked here leaves `groups.unused`; its held row takes the parked skill's data from
   // `groups.own`, so the row selects the copy at its new path.
   const heldSkills = useHeldLayout(
-    { updates, unused: groups.unused },
+    // With no readable history, "unused" would only mean "not seen", so the group stays empty.
+    { updates, unused: snapshot?.invocations.length ? groups.unused : [] },
     (skill) => skill.name,
     (skill) => skill.name,
     resetKey,
