@@ -164,7 +164,7 @@ export function HeroSurfaceShowcase({
   const [direction, setDirection] = useState<"forward" | "backward" | "none">("none");
   const [instant, setInstant] = useState(false);
   const [cliCmdId, setCliCmdId] = useState<CliCommandId>("listing");
-  const { copied, copy } = useCopyFlash();
+  const { copiedText, copy } = useCopyFlash();
 
   // Sliding pill measurement
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -222,6 +222,9 @@ export function HeroSurfaceShowcase({
       .catch(() => {});
   };
   const light = theme === "light";
+  const copied =
+    copiedText ===
+    (surface === "cli" ? activeCli.cmd : surface === "mcp" ? AGENT_SETUP_PROMPT : SITE_URL);
 
   const bottomSummary =
     surface === "app"

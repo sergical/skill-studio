@@ -714,7 +714,13 @@ const styles = stylex.create({
     },
     width: 20,
   },
-  thumbPressed: { transform: "translateY(-50%) scale(1.15)" },
+  thumbPressed: {
+    transform: "translateY(-50%) scale(1.15)",
+    transition: {
+      default: "box-shadow 150ms ease-out",
+      "@media (prefers-reduced-motion: reduce)": "none",
+    },
+  },
   thumbFocused: {
     boxShadow: `0 0 0 2px ${siteTokens.background}, 0 0 0 4px ${siteTokens.text}`,
   },
