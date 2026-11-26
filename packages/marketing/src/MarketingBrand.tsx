@@ -56,7 +56,9 @@ const brandStyles = stylex.create({
     color: siteTokens.text,
     display: "inline-flex",
     gap: 9,
+    position: "relative",
     textDecoration: "none",
+    "::before": { content: '""', inset: "-6px -6px", position: "absolute" },
   },
   inverse: {
     color: paletteVars.darkText,

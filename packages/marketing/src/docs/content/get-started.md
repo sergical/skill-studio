@@ -7,9 +7,8 @@ Choose the Mac app for a visual list, the CLI for terminal output, or MCP to ask
 ## Install
 
 1. Download Skill Studio for your Mac:
-   - [Apple Silicon](https://github.com/sergical/skill-studio/releases/latest/download/Skill-Studio-arm64.dmg) (most Macs sold since 2020)
-   - [Intel](https://github.com/sergical/skill-studio/releases/latest/download/Skill-Studio-intel.dmg)
-   - Or see [all releases](https://github.com/sergical/skill-studio/releases) for older versions.
+   - [Apple Silicon](/download) (most Macs sold since 2020)
+   - [Intel](/download/intel)
 2. Move Skill Studio to your Applications folder.
 3. Open Skill Studio.
 

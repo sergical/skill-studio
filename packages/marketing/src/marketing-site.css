@@ -3,10 +3,16 @@
 }
 
 html {
-  scroll-behavior: smooth;
   /* iOS Safari enlarges text in a block that is wider than the screen. */
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
 }
 
 html,
@@ -48,8 +54,18 @@ html[data-site-theme="light"] body {
 @layer reset {
   button,
   a,
-  input {
+  input,
+  select,
+  textarea {
     font: inherit;
+    touch-action: manipulation;
+  }
+
+  button,
+  [role="button"],
+  summary {
+    user-select: none;
+    -webkit-user-select: none;
   }
 }
 
@@ -127,15 +143,19 @@ html[data-site-theme="light"] ::selection {
   initial-value: 60%;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  html {
-    scroll-behavior: auto;
-  }
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
+/* Registered so the hero dither glow can transition (see home/listing-calc/HeroParts.tsx). */
+@property --hero-glow-alpha {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0.45;
+}
+@property --hero-glow-reach {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 70%;
+}
+@property --hero-glow-x {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 70%;
 }

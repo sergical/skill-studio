@@ -132,10 +132,8 @@ function buildPile(): PileChip[] {
   }));
 }
 
-export const PILE = buildPile();
-/** A described skill takes a place in the sorted list. Every other skill goes to a drawer. */
-export const isDescribed = (chip: PileChip) => chip.state === "described";
-export const DESCRIBED_CHIPS = PILE.filter(isDescribed);
+const PILE = buildPile();
+const DESCRIBED_CHIPS = PILE.filter((chip) => chip.state === "described");
 const countState = (state: PileState) => PILE.filter((chip) => chip.state === state).length;
 
 export const PILE_COUNTS = {
@@ -147,17 +145,8 @@ export const PILE_COUNTS = {
   notDescribed: PILE.length - DESCRIBED_CHIPS.length,
 };
 
-export type DrawerState = Exclude<PileState, "described">;
-export const DRAWER_STATES = ["name-only", "hidden"] as const satisfies ReadonlyArray<DrawerState>;
-
 export const STATE_COLOR = {
   described: "oklch(0.75 0.17 150)",
   "name-only": "oklch(0.8 0.15 80)",
   hidden: "oklch(0.6 0.02 290)",
-} as const satisfies Record<PileState, string>;
-
-export const STATE_LABEL = {
-  described: "Described",
-  "name-only": "Name only",
-  hidden: "Hidden",
 } as const satisfies Record<PileState, string>;

@@ -66,6 +66,8 @@ export interface ThemeToggleOrigin {
 interface ProductMockProps {
   theme: SiteTheme;
   onToggleTheme: (origin: ThemeToggleOrigin) => void;
+  initialView?: ProductMockRootView;
+  xstyle?: stylex.StyleXStyles;
 }
 
 type Harness = AgentId | "universal";
@@ -2773,9 +2775,14 @@ const park = (skill: SkillRow): SkillRow => ({
   fix: "Unpark",
 });
 
-export function ProductMock({ theme, onToggleTheme }: ProductMockProps) {
+export function ProductMock({
+  theme,
+  onToggleTheme,
   // Opens on Sessions: it answers the headline, which skills each session saw and used.
-  const [activeView, setActiveView] = useState<ProductMockRootView>("sessions");
+  initialView = "sessions",
+  xstyle,
+}: ProductMockProps) {
+  const [activeView, setActiveView] = useState<ProductMockRootView>(initialView);
   const [detail, setDetail] = useState<DetailState | null>(null);
   const [installOpen, setInstallOpen] = useState(false);
   const [compareSkill, setCompareSkill] = useState<string | null>(null);
@@ -2814,7 +2821,7 @@ export function ProductMock({ theme, onToggleTheme }: ProductMockProps) {
     <div
       role="region"
       aria-label="Interactive Skill Studio product preview"
-      {...stylex.props(styles.window, theme === "light" && productDemoLightTheme)}
+      {...stylex.props(styles.window, theme === "light" && productDemoLightTheme, xstyle)}
     >
       <Sidebar
         activeView={activeView}
@@ -3325,7 +3332,17 @@ const styles = stylex.create({
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
-  statCheck: { position: "absolute", right: 10, top: 10, [MOBILE]: { right: 4, top: 4 } },
+  statCheck: {
+    position: "absolute",
+    right: 10,
+    top: 10,
+    "::before": {
+      content: '""',
+      inset: { default: 0, "@media (pointer: coarse)": -10 },
+      position: "absolute",
+    },
+    [MOBILE]: { right: 4, top: 4 },
+  },
   laneCard: {
     backgroundColor: tokens.elevated,
     borderColor: tokens.subtleBorder,
@@ -3536,8 +3553,10 @@ const styles = stylex.create({
     fontSize: 12,
     height: 24,
     paddingInline: 8,
+    position: "relative",
     transition: "background-color 150ms ease-out, color 150ms ease-out",
-    ":active": { transform: "scale(.96)" },
+    ":active": { transform: "scale(.97)" },
+    "::before": { content: '""', inset: "-4px -4px", position: "absolute" },
   },
 
   // Packs

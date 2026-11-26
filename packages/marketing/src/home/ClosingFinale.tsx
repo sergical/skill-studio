@@ -165,8 +165,11 @@ const styles = stylex.create({
         [stylex.when.descendant(":hover", finaleCtaMarker)]: "95%",
       },
     },
-    transition:
-      "--finale-glow-alpha 500ms cubic-bezier(0.32, 0.72, 0, 1), --finale-glow-reach 500ms cubic-bezier(0.32, 0.72, 0, 1)",
+    transition: {
+      default:
+        "--finale-glow-alpha 500ms cubic-bezier(0.32, 0.72, 0, 1), --finale-glow-reach 500ms cubic-bezier(0.32, 0.72, 0, 1)",
+      "@media (prefers-reduced-motion: reduce)": "none",
+    },
   },
   dither: {
     inset: 0,

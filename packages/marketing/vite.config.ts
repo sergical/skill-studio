@@ -5,6 +5,7 @@ import stylex from "@stylexjs/unplugin";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin, type ViteDevServer } from "vite";
 import { PAGE_TEMPLATES } from "./src/prerender/site-templates.ts";
+import { DOWNLOAD_REDIRECTS } from "./src/site-links.ts";
 
 const PRERENDER_ENTRY = "/src/prerender/site-prerender.tsx";
 
@@ -32,7 +33,14 @@ function devPrerender(): Plugin {
     configureServer(server) {
       // The build writes the docs markdown copies and llms.txt to dist; serve them from source here.
       server.middlewares.use(async (req, res, next) => {
-        const path = req.url?.split("?")[0].replace(/^\//, "");
+        const rawPath = req.url?.split("?")[0] ?? "";
+        const downloadTarget = DOWNLOAD_REDIRECTS.get(rawPath);
+        if (downloadTarget) {
+          res.statusCode = 302;
+          res.setHeader("Location", downloadTarget);
+          return res.end();
+        }
+        const path = rawPath.replace(/^\//, "");
         if (!path || (path !== "llms.txt" && path !== "docs.md" && !path.startsWith("docs/"))) {
           return next();
         }
