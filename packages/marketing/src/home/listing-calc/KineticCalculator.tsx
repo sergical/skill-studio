@@ -220,18 +220,6 @@ export function KineticCalculator() {
                   {copied ? <Check size={14} /> : <Copy size={14} />}
                 </span>
               </button>
-              <a
-                href="#download"
-                {...stylex.props(homeSectionStyles.textLink, styles.ctaLink, styles.pointerOnly)}
-              >
-                Get the Mac app <span aria-hidden="true">→</span>
-              </a>
-              <a
-                href="#product"
-                {...stylex.props(homeSectionStyles.textLink, styles.ctaLink, styles.touchOnly)}
-              >
-                See CLI &amp; MCP <span aria-hidden="true">→</span>
-              </a>
             </div>
           </div>
         </div>
@@ -239,8 +227,6 @@ export function KineticCalculator() {
     </>
   );
 }
-
-const TOUCH_DEVICE = "@media (hover: none) and (pointer: coarse)";
 
 const styles = stylex.create({
   visuallyHidden: {
@@ -461,10 +447,4 @@ const styles = stylex.create({
   cmdIconCopied: {
     color: siteTokens.success,
   },
-  ctaLink: {
-    fontSize: 13.5,
-    minHeight: 38,
-  },
-  pointerOnly: { display: { default: "inline-flex", [TOUCH_DEVICE]: "none" } },
-  touchOnly: { display: { default: "none", [TOUCH_DEVICE]: "inline-flex" } },
 });

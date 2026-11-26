@@ -158,9 +158,6 @@ export function FirstScanSteps() {
             <li>It runs on your Mac. Free and open source.</li>
           </ul>
           <div {...stylex.props(styles.introLinks)}>
-            <a href="#download" {...stylex.props(homeSectionStyles.textLink)}>
-              Get the Mac app <span aria-hidden="true">→</span>
-            </a>
             <a href={DOCS_URL} {...stylex.props(homeSectionStyles.textLink)}>
               First-run guide <span aria-hidden="true">→</span>
             </a>

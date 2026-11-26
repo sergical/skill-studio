@@ -77,10 +77,7 @@ export function FaqSection() {
       <div>
         <h2 {...stylex.props(section.title, styles.title)}>Questions.</h2>
         <div {...stylex.props(styles.links)}>
-          <a href="#download" {...stylex.props(section.textLink)}>
-            Get the Mac app <span aria-hidden="true">→</span>
-          </a>
-          <a href={DOCS_URL} {...stylex.props(section.textLink, styles.secondaryLink)}>
+          <a href={DOCS_URL} {...stylex.props(section.textLink)}>
             Read the docs <span aria-hidden="true">→</span>
           </a>
         </div>
@@ -119,7 +116,6 @@ const styles = stylex.create({
     flexDirection: "column",
     "@media (max-width: 760px)": { flexDirection: "row", flexWrap: "wrap", gap: "0 20px" },
   },
-  secondaryLink: { color: siteTokens.muted },
   list: {
     borderTopColor: siteTokens.border,
     borderTopStyle: "solid",

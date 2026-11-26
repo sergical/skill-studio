@@ -6,20 +6,11 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import * as stylex from "@stylexjs/stylex";
 import { AGENT_SETUP_PROMPT } from "@skill-studio/lib/agent-setup";
-import {
-  AppWindow,
-  Check,
-  Copy,
-  Download,
-  Plug,
-  Share,
-  Terminal,
-  type LucideIcon,
-} from "lucide-react";
+import { AppWindow, Check, Copy, Plug, Share, Terminal, type LucideIcon } from "lucide-react";
 
 import { ProductMock, type ThemeToggleOrigin } from "../../ProductMock";
 import { siteTokens, type SiteTheme } from "../../SiteTheme.stylex";
-import { CLI_DOCS_URL, DOCS_URL, DOWNLOAD_URL, MCP_DOCS_URL, SITE_URL } from "../../site-links";
+import { CLI_DOCS_URL, DOCS_URL, MCP_DOCS_URL, SITE_URL } from "../../site-links";
 import { DITHER_COLORS } from "../ClosingFinale";
 import { WarpDither } from "../WarpDither";
 import { useCopyFlash } from "../useCopyFlash";
@@ -285,39 +276,23 @@ export function HeroSurfaceShowcase({
 
           <div {...stylex.props(styles.topActionSlot)}>
             {surface === "app" ? (
-              <>
-                <a
-                  href={DOWNLOAD_URL}
-                  {...stylex.props(
-                    styles.topActionLink,
-                    light && styles.barLight,
-                    styles.pointerOnly,
-                  )}
-                >
-                  <Download size={15} aria-hidden="true" />
-                  <span>Download for macOS</span>
-                  <span {...stylex.props(styles.topActionMeta, light && styles.topActionMetaLight)}>
-                    macOS 13+
-                  </span>
-                </a>
-                <button
-                  type="button"
-                  onClick={sendToMac}
-                  {...stylex.props(
-                    styles.topActionLink,
-                    light && styles.barLight,
-                    copied && styles.commandBarCopied,
-                    styles.touchOnly,
-                  )}
-                >
-                  {copied ? (
-                    <Check size={15} aria-hidden="true" />
-                  ) : (
-                    <Share size={15} aria-hidden="true" />
-                  )}
-                  <span>{copied ? "Link copied" : "Send to my Mac"}</span>
-                </button>
-              </>
+              <button
+                type="button"
+                onClick={sendToMac}
+                {...stylex.props(
+                  styles.topActionLink,
+                  light && styles.barLight,
+                  copied && styles.commandBarCopied,
+                  styles.touchOnly,
+                )}
+              >
+                {copied ? (
+                  <Check size={15} aria-hidden="true" />
+                ) : (
+                  <Share size={15} aria-hidden="true" />
+                )}
+                <span>{copied ? "Link copied" : "Send to my Mac"}</span>
+              </button>
             ) : surface === "cli" ? (
               <button
                 type="button"
@@ -600,16 +575,11 @@ const styles = stylex.create({
   },
   barTextLight: { color: siteTokens.text },
   commandPromptLight: { color: siteTokens.accent },
-  topActionMetaLight: {
-    backgroundColor: "oklch(0.36 0.08 293 / .08)",
-    color: siteTokens.muted,
-  },
   copyBadgeLight: {
     backgroundColor: siteTokens.text,
     color: siteTokens.background,
   },
   copyBadgeCopiedLight: { color: "oklch(0.99 0 0)" },
-  pointerOnly: { display: { default: "inline-flex", [TOUCH_DEVICE]: "none" } },
   touchOnly: { display: { default: "none", [TOUCH_DEVICE]: "inline-flex" } },
 
   topActionSlot: {
@@ -647,14 +617,6 @@ const styles = stylex.create({
     ":active": { transform: "scale(.97)" },
     ":focus-visible": { outline: "2px solid oklch(0.97 0 0)", outlineOffset: 2 },
     "@media (max-width: 520px)": { width: "100%" },
-  },
-  topActionMeta: {
-    backgroundColor: "oklch(1 0 0 / .1)",
-    borderRadius: 6,
-    color: "oklch(0.82 0.015 290)",
-    fontSize: 11.5,
-    fontWeight: 540,
-    padding: "3px 8px",
   },
   commandBar: {
     alignItems: "center",
