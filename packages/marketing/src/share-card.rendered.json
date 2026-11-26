@@ -1,0 +1,29 @@
+{
+  "title": "Fix your skill issues.",
+  "subline": "Find, fix and park the agent skills you use across Claude Code, Codex, Cursor and more.",
+  "host": "useskillstudio.com",
+  "surfaces": "Mac app · CLI · MCP server · Free and open source · macOS 13+",
+  "skills": [
+    "motion",
+    "commit",
+    "sentry-debug",
+    "release-notes",
+    "prepare-videos",
+    "agent-browser",
+    "frontend-design",
+    "tailwind",
+    "db-migrate",
+    "playwright",
+    "deploy-preview",
+    "changelog",
+    "writing-skills",
+    "code-review",
+    "pdf-tools",
+    "skill-creator"
+  ],
+  "cleanup": {
+    "parked": 76,
+    "fixed": 4,
+    "updated": 3
+  }
+}

@@ -12,13 +12,13 @@ import { DocsPage } from "../docs/DocsPage";
 import { DOCS_PAGES, type DocsPageEntry } from "../docs/docs-pages";
 import { NotFoundPage } from "../docs/NotFoundPage";
 import { MarketingSite } from "../MarketingSite";
+import { SHARE_CARD_ALT } from "../share-card";
 import { themeBootScript } from "../site-theme";
 
 import { DOCS_TEMPLATE } from "./site-templates";
 
 const SITE_ORIGIN = "https://useskillstudio.com";
-const OG_IMAGE_ALT =
-  "Skill Studio: Fix your skill issues. The app icon beside a sorted list of skills, with counts of the ones it parked, fixed and updated.";
+const OG_IMAGE_ALT_TAG = `<meta property="og:image:alt" content="${escapeAttribute(SHARE_CARD_ALT)}" />`;
 
 interface SiteRoute {
   /** Output path relative to dist. */
@@ -84,7 +84,7 @@ function renderHead({ title, description, path, markdownPath }: PageHead): strin
     `<meta property="og:image" content="${SITE_ORIGIN}/og.png" />`,
     `<meta property="og:image:width" content="1200" />`,
     `<meta property="og:image:height" content="630" />`,
-    `<meta property="og:image:alt" content="${OG_IMAGE_ALT}" />`,
+    OG_IMAGE_ALT_TAG,
     `<meta name="twitter:card" content="summary_large_image" />`,
     `<meta name="twitter:title" content="${escapeAttribute(title)}" />`,
     `<meta name="twitter:description" content="${escapeAttribute(description)}" />`,
@@ -112,7 +112,7 @@ export function renderSitePage(file: string, template: string): string {
       // marketing-site.css hides it from light visitors until the client render lands.
       return fillTemplate(
         template,
-        "",
+        OG_IMAGE_ALT_TAG,
         <MarketingSite prerenderTheme="dark" />,
         ' data-prerendered="dark"',
       );

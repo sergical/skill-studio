@@ -1,9 +1,7 @@
 // ============================================================================
 // Skill Studio - Share card
 // The 1200×630 image that link previews show (public/og.png): the homepage hero
-// in its sorted state. It reads the hero copy, the pile and the dither colours
-// from the site, so after a hero change, render it again from packages/marketing:
-//   npx remotion still src/remotion/index.ts OgCard public/og.png --log=error
+// in its sorted state. scripts/render-share-card.ts renders it.
 // ============================================================================
 import { useEffect, useState, type CSSProperties } from "react";
 import { Dithering } from "@paper-design/shaders-react";
@@ -11,9 +9,9 @@ import { AbsoluteFill, Img, continueRender, delayRender } from "remotion";
 
 import logo from "../../public/skill-studio-logo-512.webp";
 import { DITHER_COLORS } from "../home/dither-colors";
-import { HERO_SUBLINE, HERO_TITLE } from "../home/listing-calc/hero-copy";
-import { ACTIVE_PILE_CHIPS, PILE_CLEANUP } from "../home/listing-calc/pile/skill-pile-data";
-import { SITE_URL, TRUST_LINE } from "../site-links";
+import { SHARE_CARD_CONTENT } from "../share-card";
+
+const { title, subline, host, surfaces, skills, cleanup } = SHARE_CARD_CONTENT;
 
 export const OG_CARD_SIZE = { width: 1200, height: 630 };
 
@@ -32,9 +30,9 @@ const COLOR = {
 };
 
 const CLEANUP = [
-  { label: "parked", count: PILE_CLEANUP.parked, dot: COLOR.parked },
-  { label: "fixed", count: PILE_CLEANUP.fixed, dot: COLOR.danger },
-  { label: "updated", count: PILE_CLEANUP.updated, dot: COLOR.warning },
+  { label: "parked", count: cleanup.parked, dot: COLOR.parked },
+  { label: "fixed", count: cleanup.fixed, dot: COLOR.danger },
+  { label: "updated", count: cleanup.updated, dot: COLOR.warning },
 ];
 
 // The shader paints on an animation frame after it mounts, so the still waits for two.
@@ -79,19 +77,19 @@ export function OgCard() {
           <Img src={logo} style={styles.brandLogo} />
           Skill Studio
         </div>
-        <h1 style={styles.title}>{HERO_TITLE}</h1>
-        <p style={styles.lede}>{HERO_SUBLINE}</p>
+        <h1 style={styles.title}>{title}</h1>
+        <p style={styles.lede}>{subline}</p>
         <div style={styles.footer}>
-          <span style={styles.host}>{new URL(SITE_URL).host}</span>
-          <span>Mac app · CLI · MCP server · {TRUST_LINE}</span>
+          <span style={styles.host}>{host}</span>
+          <span>{surfaces}</span>
         </div>
       </div>
 
       <div style={styles.chips}>
-        {ACTIVE_PILE_CHIPS.map((chip) => (
-          <span key={chip.id} style={styles.chip}>
+        {skills.map((name) => (
+          <span key={name} style={styles.chip}>
             <Dot color={COLOR.fine} />
-            {chip.name}
+            {name}
           </span>
         ))}
       </div>
@@ -178,7 +176,7 @@ const styles = {
     fontFamily: MONO,
     gap: "13px 14px",
     gridAutoFlow: "column",
-    gridTemplateRows: `repeat(${Math.ceil(ACTIVE_PILE_CHIPS.length / 2)}, auto)`,
+    gridTemplateRows: `repeat(${Math.ceil(skills.length / 2)}, auto)`,
     justifyItems: "start",
     left: 640,
     position: "absolute",
