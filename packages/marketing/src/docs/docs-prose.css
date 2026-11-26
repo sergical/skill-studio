@@ -9,35 +9,46 @@
   }
 
   .docs-prose h1 {
-    font-size: clamp(32px, 5vw, 44px);
+    font-size: clamp(32px, 4.5vw, 40px);
     font-weight: 600;
-    letter-spacing: -0.03em;
+    letter-spacing: -0.025em;
     line-height: 1.1;
-    margin: 0 0 16px;
+    margin: 0 0 12px;
+    text-wrap: balance;
   }
 
-  .docs-prose h1 + p {
+  .docs-page-header {
+    border-bottom: 1px solid var(--docs-border);
+    margin-bottom: 32px;
+    padding-bottom: 24px;
+  }
+
+  .docs-page-header p {
     color: var(--docs-muted);
     font-size: 18px;
-    margin-bottom: 40px;
+    line-height: 1.6;
+    margin: 0;
+    text-wrap: pretty;
   }
 
   .docs-prose h2 {
-    border-top: 1px solid var(--docs-border);
-    font-size: 22px;
+    font-size: 24px;
     font-weight: 600;
-    letter-spacing: -0.01em;
+    letter-spacing: -0.015em;
     line-height: 1.3;
     margin: 48px 0 12px;
-    padding-top: 32px;
     scroll-margin-top: 24px;
+    text-wrap: balance;
   }
 
   .docs-prose h3 {
-    font-size: 17px;
+    font-size: 18px;
     font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.4;
     margin: 32px 0 8px;
     scroll-margin-top: 24px;
+    text-wrap: balance;
   }
 
   .docs-prose p,
@@ -55,10 +66,17 @@
     margin-top: 6px;
   }
 
+  .docs-prose li::marker {
+    color: var(--docs-muted);
+  }
+
   .docs-prose a {
     color: var(--docs-accent);
     text-decoration: underline;
+    text-decoration-color: color-mix(in oklch, currentColor 40%, transparent);
+    text-decoration-thickness: 1px;
     text-underline-offset: 3px;
+    transition: text-decoration-color 150ms ease-out;
   }
 
   .docs-prose strong {
@@ -79,7 +97,14 @@
 
   .docs-prose table {
     border-collapse: collapse;
+    font-size: 15px;
     width: 100%;
+  }
+
+  .docs-prose th {
+    color: var(--docs-muted);
+    font-size: 13px;
+    font-weight: 500;
   }
 
   .docs-prose :is(th, td) {
@@ -100,6 +125,84 @@
     white-space: nowrap;
   }
 
+  /* Buttons: the page actions, the code copy buttons and the small-screen page list toggle. */
+  .docs-button {
+    position: relative;
+    align-items: center;
+    background: var(--docs-surface);
+    border: 1px solid var(--docs-border);
+    border-radius: 8px;
+    color: var(--docs-muted);
+    cursor: pointer;
+    display: inline-flex;
+    font-size: 13px;
+    font-weight: 500;
+    gap: 6px;
+    height: 32px;
+    line-height: 1;
+    padding-inline: 10px;
+    text-decoration: none;
+    touch-action: manipulation;
+    transition:
+      color 150ms ease-out,
+      background-color 150ms ease-out,
+      border-color 150ms ease-out,
+      transform 150ms ease-out;
+    white-space: nowrap;
+  }
+
+  /* Grows the hit area to 40px without changing the drawn size. */
+  .docs-button::before {
+    content: "";
+    position: absolute;
+    inset: -4px 0;
+  }
+
+  .docs-button svg {
+    flex-shrink: 0;
+  }
+
+  .docs-button:active {
+    transform: scale(0.97);
+  }
+
+  .docs-button[aria-expanded="true"],
+  .docs-button[data-state="copied"] {
+    color: var(--docs-text);
+  }
+
+  .docs-button[aria-expanded="true"] {
+    background: var(--docs-accent-soft);
+  }
+
+  .docs-chevron {
+    margin-inline-end: -2px;
+    transition: transform 200ms cubic-bezier(0.23, 1, 0.32, 1);
+  }
+
+  .docs-button[aria-expanded="true"] .docs-chevron {
+    transform: rotate(180deg);
+  }
+
+  [data-copy-icon="done"],
+  [data-state="copied"] [data-copy-icon="idle"] {
+    display: none;
+  }
+
+  [data-state="copied"] [data-copy-icon="done"] {
+    display: block;
+  }
+
+  @media (pointer: coarse) {
+    .docs-button {
+      height: 40px;
+    }
+
+    .docs-button::before {
+      inset: -2px 0;
+    }
+  }
+
   .docs-nav-controls {
     display: grid;
     gap: 8px;
@@ -118,15 +221,17 @@
   }
 
   .docs-search-icon {
-    inset-inline-start: 12px;
+    inset-inline-start: 11px;
   }
 
   .docs-search kbd {
-    inset-inline-end: 10px;
+    inset-inline-end: 8px;
     border: 1px solid var(--docs-border);
     border-radius: 4px;
+    font-family: inherit;
+    font-size: 11px;
+    line-height: 16px;
     padding-inline: 5px;
-    font-size: 12px;
   }
 
   .docs-search input::placeholder {
@@ -149,27 +254,32 @@
     min-height: 0;
     padding: 3px;
     scroll-padding: 3px;
+    scrollbar-width: thin;
   }
 
   .docs-nav-group + .docs-nav-group {
-    margin-top: 16px;
+    margin-top: 20px;
   }
 
   .docs-nav-group a {
-    margin-block: 2px;
+    margin-block: 1px;
   }
 
-  .docs-nav-toggle.docs-action {
+  .docs-nav-toggle {
     display: none;
     justify-self: start;
   }
 
+  .docs-nav-toggle[aria-expanded="true"] .docs-chevron {
+    transform: rotate(180deg);
+  }
+
   @media (max-width: 860px) {
-    .docs-nav-toggle.docs-action:not([hidden]) {
+    .docs-nav-toggle {
       display: inline-flex;
     }
 
-    [data-docs-search-ready]:not([data-docs-browsing]) .docs-links {
+    nav:not([data-docs-browsing]) > .docs-links {
       display: none;
     }
 
@@ -186,67 +296,25 @@
 
   .docs-page-actions {
     display: flex;
-    align-items: center;
     flex-wrap: wrap;
-    gap: 4px 8px;
-    margin-bottom: 16px;
+    gap: 8px;
+    margin-top: 20px;
   }
 
-  .docs-action {
-    align-items: center;
-    justify-content: center;
-    background: transparent;
-    border: 0;
-    border-radius: 6px;
-    color: var(--docs-muted);
-    display: inline-flex;
-    font-size: 13px;
-    gap: 6px;
-    min-height: 44px;
-    padding-inline: 8px;
-    text-decoration: none;
-    touch-action: manipulation;
-    white-space: nowrap;
-  }
-
+  /* Wide enough for the longest label, so "Copied" does not resize the button. */
   .docs-page-copy {
-    width: 157px;
+    justify-content: center;
+    min-width: 112px;
   }
 
-  .docs-agent-trigger {
-    width: 120px;
-    justify-content: space-between;
+  /* Holds the menu's place while its script loads, and lets the mounted menu replace it. */
+  .docs-agent-slot {
+    display: contents;
   }
 
-  [data-docs-agent-menu] {
-    min-width: 120px;
-  }
-
-  @media (max-width: 860px) {
-    .docs-page-actions {
-      column-gap: 0;
-    }
-
-    .docs-page-actions .docs-action {
-      font-size: 12px;
-      padding-inline: 4px;
-    }
-
-    .docs-page-copy {
-      width: 148px;
-    }
-
-    [data-docs-agent-menu] {
-      min-width: 91px;
-    }
-
-    .docs-agent-trigger {
-      width: 91px;
-    }
-  }
-
-  .docs-action:focus-visible,
+  .docs-button:focus-visible,
   .docs-nav-group a:focus-visible,
+  .docs-outline a:focus-visible,
   .docs-code pre:focus-visible {
     outline: 2px solid var(--docs-text);
     outline-offset: 1px;
@@ -256,20 +324,24 @@
     outline-offset: -3px;
   }
 
-  .docs-action[data-state="copied"] {
-    color: var(--docs-text);
-  }
-
-  [data-copy-page][hidden],
-  [data-docs-headings][hidden] {
-    display: none;
-  }
-
   @media (hover: hover) and (pointer: fine) {
-    .docs-action:hover,
-    .docs-nav-group a:hover {
+    .docs-button:hover {
       background: var(--docs-accent-soft);
       color: var(--docs-text);
+    }
+
+    /* Lighter than the current page's fill, so hover never looks like the page you are on. */
+    .docs-nav-group a:not([aria-current]):hover {
+      background: color-mix(in oklch, var(--docs-accent-soft) 50%, transparent);
+      color: var(--docs-text);
+    }
+
+    .docs-outline a:hover {
+      color: var(--docs-text);
+    }
+
+    .docs-prose a:hover {
+      text-decoration-color: currentColor;
     }
   }
 
@@ -278,54 +350,151 @@
   }
 
   .docs-agent-menu {
-    background: var(--docs-background);
-    color: var(--docs-text);
-    border-radius: 9px;
+    background: var(--docs-surface);
+    border: 1px solid var(--docs-border);
+    border-radius: 12px;
     box-shadow:
-      0 0 0 1px var(--docs-border),
-      0 4px 16px rgb(0 0 0 / 0.12);
-    width: min(250px, calc(100vw - 24px));
+      0 12px 32px -8px rgb(0 0 0 / 0.16),
+      0 2px 6px -2px rgb(0 0 0 / 0.08);
+    color: var(--docs-text);
     max-height: var(--available-height);
+    outline: none;
     overflow-y: auto;
     padding: 4px;
+    width: min(244px, calc(100vw - 24px));
+    /* Grows out of the trigger. A transition, not keyframes, so closing mid-open reverses. */
+    transform-origin: var(--transform-origin);
+    transition:
+      opacity 160ms cubic-bezier(0.32, 0.72, 0, 1),
+      transform 160ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  .docs-agent-menu[data-starting-style],
+  .docs-agent-menu[data-ending-style] {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+
+  .docs-agent-menu[data-ending-style] {
+    transition-duration: 110ms;
+    transition-timing-function: ease-out;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .docs-agent-menu {
+      transition-property: opacity;
+    }
+
+    .docs-agent-menu[data-starting-style],
+    .docs-agent-menu[data-ending-style] {
+      transform: none;
+    }
+
+    .docs-chevron {
+      transition: none;
+    }
+
+    .docs-button:active {
+      transform: none;
+    }
   }
 
   html[data-site-theme="dark"] .docs-agent-menu {
-    box-shadow: 0 0 0 1px var(--docs-border);
+    box-shadow: 0 12px 32px -8px rgb(0 0 0 / 0.6);
   }
 
   .docs-agent-item {
-    display: flex;
     align-items: center;
-    justify-content: space-between;
-    min-height: 44px;
-    gap: 12px;
-    padding-inline: 10px;
-    border-radius: 5px;
+    border-radius: 8px;
     color: var(--docs-text);
-    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    font-size: 13px;
+    gap: 10px;
+    height: 34px;
+    outline: none;
+    padding-inline: 8px;
     text-decoration: none;
     user-select: none;
   }
 
   .docs-agent-item[data-highlighted] {
     background: var(--docs-accent-soft);
-    outline: none;
+  }
+
+  .docs-agent-item-icon {
+    display: inline-flex;
+    flex-shrink: 0;
+    height: 16px;
+    width: 16px;
+  }
+
+  .docs-agent-item-icon svg {
+    height: 100%;
+    width: 100%;
+  }
+
+  .docs-agent-item-label {
+    flex: 1;
+    min-width: 0;
   }
 
   .docs-agent-item-detail {
-    display: inline-flex;
     align-items: center;
-    gap: 6px;
     color: var(--docs-muted);
+    display: inline-flex;
     font-size: 12px;
+    gap: 4px;
+  }
+
+  .docs-agent-item-detail:empty {
+    display: none;
   }
 
   .docs-agent-separator {
+    background: var(--docs-border);
     border: 0;
     height: 1px;
-    background: var(--docs-border);
-    margin: 4px;
+    margin: 4px -4px;
+  }
+
+  @media (pointer: coarse) {
+    .docs-agent-item {
+      height: 44px;
+    }
+  }
+
+  .docs-outline-heading {
+    color: var(--docs-text);
+    font-size: 13px;
+    font-weight: 500;
+    margin: 0 0 10px;
+  }
+
+  .docs-outline ul {
+    border-left: 1px solid var(--docs-border);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .docs-outline a {
+    border-left: 1px solid transparent;
+    color: var(--docs-muted);
+    display: block;
+    font-size: 13px;
+    line-height: 1.4;
+    margin-left: -1px;
+    padding: 5px 0 5px 12px;
+    text-decoration: none;
+    transition:
+      color 150ms ease-out,
+      border-color 150ms ease-out;
+  }
+
+  .docs-outline a[aria-current] {
+    border-left-color: var(--docs-text);
+    color: var(--docs-text);
   }
 
   .docs-code {
@@ -336,14 +505,45 @@
   }
 
   .docs-code-toolbar {
-    display: flex;
-    justify-content: end;
+    align-items: center;
     border-bottom: 1px solid var(--docs-border);
-    padding-inline: 6px;
+    display: flex;
+    gap: 8px;
+    padding: 4px 4px 4px 14px;
   }
 
-  .docs-code-copy {
-    width: 76px;
+  .docs-code-lang {
+    color: var(--docs-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+  }
+
+  .docs-code-copy.docs-button {
+    background: transparent;
+    border-color: transparent;
+    height: 28px;
+    justify-content: center;
+    margin-inline-start: auto;
+    min-width: 82px;
+    padding-inline: 8px;
+  }
+
+  .docs-code-copy.docs-button::before {
+    inset: -6px 0;
+  }
+
+  @media (pointer: coarse) {
+    .docs-code-copy.docs-button {
+      height: 36px;
+    }
+
+    .docs-code-copy.docs-button::before {
+      inset: -4px 0;
+    }
+
+    .docs-outline a {
+      padding-block: 10px;
+    }
   }
 
   .docs-code pre {
@@ -353,5 +553,25 @@
     overflow-x: auto;
     padding: 12px 16px 16px;
     scrollbar-width: thin;
+  }
+}
+
+/* Moving between docs pages: the next page fades in over the last one instead of popping in.
+   The rules stay outside the reset layer so they beat the theme toggle's `animation: none` in
+   marketing-site.css, and the `docs-page` type keeps them off the theme toggle's own transition. */
+@media (prefers-reduced-motion: no-preference) {
+  @view-transition {
+    navigation: auto;
+    types: docs-page;
+  }
+}
+
+html:active-view-transition-type(docs-page)::view-transition-new(root) {
+  animation: docs-page-in 180ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+@keyframes docs-page-in {
+  from {
+    opacity: 0;
   }
 }
