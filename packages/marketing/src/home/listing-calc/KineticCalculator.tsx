@@ -268,7 +268,6 @@ const styles = stylex.create({
     "@media (max-width: 900px)": { gridTemplateColumns: "minmax(0, 1fr)" },
   },
   panel: {
-    alignSelf: "start",
     backgroundColor: siteTokens.surface,
     borderRadius: 16,
     boxShadow: `0 0 0 1px ${siteTokens.border}`,

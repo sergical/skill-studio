@@ -552,7 +552,7 @@ const styles = stylex.create({
     fontWeight: 600,
     gap: 8,
     justifyContent: "center",
-    minHeight: 42,
+    minHeight: { default: 42, [MOBILE]: 40, [TOUCH_DEVICE]: 44 },
     paddingInline: 16,
     position: "relative",
     touchAction: "manipulation",
@@ -561,7 +561,7 @@ const styles = stylex.create({
     [HOVER]: { ":hover": { color: "#fff" } },
     ":active": { transform: "scale(.97)" },
     ":focus-visible": { outline: "2px solid oklch(0.97 0 0)", outlineOffset: 2 },
-    [MOBILE]: { fontSize: 13.5, gap: 6, minHeight: 40, paddingInline: 10 },
+    [MOBILE]: { fontSize: 13.5, gap: 6, paddingInline: 10 },
   },
   tabBtnOn: {
     color: "oklch(0.14 0.02 290)",

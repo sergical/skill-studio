@@ -3332,7 +3332,17 @@ const styles = stylex.create({
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
-  statCheck: { position: "absolute", right: 10, top: 10, [MOBILE]: { right: 4, top: 4 } },
+  statCheck: {
+    position: "absolute",
+    right: 10,
+    top: 10,
+    "::before": {
+      content: '""',
+      inset: { default: 0, "@media (pointer: coarse)": -10 },
+      position: "absolute",
+    },
+    [MOBILE]: { right: 4, top: 4 },
+  },
   laneCard: {
     backgroundColor: tokens.elevated,
     borderColor: tokens.subtleBorder,
@@ -3543,8 +3553,10 @@ const styles = stylex.create({
     fontSize: 12,
     height: 24,
     paddingInline: 8,
+    position: "relative",
     transition: "background-color 150ms ease-out, color 150ms ease-out",
-    ":active": { transform: "scale(.96)" },
+    ":active": { transform: "scale(.97)" },
+    "::before": { content: '""', inset: "-4px -4px", position: "absolute" },
   },
 
   // Packs

@@ -255,7 +255,13 @@ const styles = stylex.create({
     fontWeight: 620,
     marginBottom: 6,
   },
-  stepTitle: { fontSize: 17, fontWeight: 640, letterSpacing: "-.01em", margin: "0 0 8px" },
+  stepTitle: {
+    fontSize: 17,
+    fontWeight: 640,
+    letterSpacing: "-.01em",
+    margin: "0 0 8px",
+    textWrap: "balance",
+  },
   stepCopy: {
     color: siteTokens.muted,
     fontSize: 14,
