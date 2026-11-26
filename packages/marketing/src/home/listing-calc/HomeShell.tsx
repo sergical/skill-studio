@@ -140,7 +140,7 @@ export function HomeShell({
           <p {...stylex.props(styles.closingCopy)}>
             See what each session listed and used. Park the skills that never run. Undo any time.
           </p>
-          <DownloadButton theme={theme} place="finale" />
+          <DownloadButton place="finale" />
           <TrustLine />
         </section>
         <SiteFooter page="home" />

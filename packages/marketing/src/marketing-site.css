@@ -73,9 +73,9 @@ button {
   cursor: pointer;
 }
 
-/* The prerendered homepage is drawn in the dark theme. A light-theme visitor sees nothing until
-   the client render replaces it, instead of a flash of the dark page. */
-html[data-site-theme="light"] #root[data-prerendered="dark"] {
+/* The prerendered homepage is drawn in the dark theme. Sections whose markup depends on the
+   theme stay hidden for a light-theme visitor until the client render replaces them. */
+html[data-site-theme="light"] #root[data-prerendered="dark"] [data-theme-bound] {
   visibility: hidden;
 }
 

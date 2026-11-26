@@ -115,6 +115,12 @@ export default defineConfig(({ isSsrBuild }) => ({
   define: {
     __SITE_RELEASE__: JSON.stringify(process.env.WORKERS_CI_COMMIT_SHA ?? ""),
     __SITE_BRANCH__: JSON.stringify(process.env.WORKERS_CI_BRANCH ?? ""),
+    // Sentry's tree-shaking flags: no debug logging, and no replay of iframes, shadow DOM or
+    // the compression worker (recordings are sent uncompressed for the envelope scrub).
+    __SENTRY_DEBUG__: "false",
+    __RRWEB_EXCLUDE_IFRAME__: "true",
+    __RRWEB_EXCLUDE_SHADOW_DOM__: "true",
+    __SENTRY_EXCLUDE_REPLAY_WORKER__: "true",
   },
   build: isSsrBuild
     ? {}

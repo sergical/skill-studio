@@ -39,11 +39,9 @@ const labelIn = stylex.keyframes({
 });
 
 export function DownloadButton({
-  theme,
   place,
   buttonRef,
 }: {
-  theme: SiteTheme;
   place: "hero" | "finale";
   buttonRef?: Ref<HTMLAnchorElement>;
 }) {
@@ -58,11 +56,15 @@ export function DownloadButton({
         <span>Download for macOS</span>
         <span aria-hidden="true" {...stylex.props(styles.primaryButtonArrow)}>
           <span {...stylex.props(styles.arrowNudge)}>
-            <Arrow inverse={theme === "dark"} />
+            <Arrow />
           </span>
         </span>
       </a>
-      <a href="#product" {...stylex.props(marker, styles.primaryButton, styles.touchOnly)}>
+      <a
+        href="#product"
+        data-theme-bound
+        {...stylex.props(marker, styles.primaryButton, styles.touchOnly)}
+      >
         <span>Get Skill Studio</span>
         <span
           aria-hidden="true"
@@ -71,7 +73,7 @@ export function DownloadButton({
             place === "finale" ? styles.arrowUp : styles.arrowDown,
           )}
         >
-          <Arrow inverse={theme === "dark"} />
+          <Arrow />
         </span>
       </a>
     </>
@@ -154,7 +156,7 @@ export function HeaderDownload() {
         <Download aria-hidden="true" size={15} />
         Download
       </a>
-      <a href="#product" {...stylex.props(styles.headerCta, styles.touchOnly)}>
+      <a href="#product" data-theme-bound {...stylex.props(styles.headerCta, styles.touchOnly)}>
         Get it
       </a>
     </>

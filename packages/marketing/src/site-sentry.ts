@@ -12,9 +12,18 @@ export type SiteSentrySdk = Pick<
   | "init"
   | "captureException"
   | "browserTracingIntegration"
-  | "replayIntegration"
+  | "addIntegration"
   | "makeFetchTransport"
 >;
+export type SiteSentryReplay = Pick<typeof Sentry, "replayIntegration">;
+
+const SITE_REPLAY_OPTIONS = {
+  maskAllText: true,
+  maskAllInputs: true,
+  blockAllMedia: true,
+  // The envelope scrub must read the recording text.
+  useCompression: false,
+};
 
 type SentryTransport = ReturnType<SiteSentrySdk["makeFetchTransport"]>;
 type SentryEnvelope = Parameters<SentryTransport["send"]>[0];
@@ -97,16 +106,7 @@ export function siteSentryInitOptions(env: SiteSentryEnv, sdk: SiteSentrySdk) {
     tracePropagationTargets: [],
     replaysSessionSampleRate: REPLAYS_SESSION_SAMPLE_RATE,
     replaysOnErrorSampleRate: REPLAYS_ON_ERROR_SAMPLE_RATE,
-    integrations: [
-      sdk.browserTracingIntegration(),
-      sdk.replayIntegration({
-        maskAllText: true,
-        maskAllInputs: true,
-        blockAllMedia: true,
-        // The envelope scrub must read the recording text.
-        useCompression: false,
-      }),
-    ],
+    integrations: [sdk.browserTracingIntegration()],
   };
 }
 
@@ -157,10 +157,26 @@ function readSiteSentryEnv(): SiteSentryEnv {
   };
 }
 
+function afterPageLoad(run: () => void) {
+  if (document.readyState === "complete") run();
+  else window.addEventListener("load", run, { once: true });
+}
+
+async function addReplay(sdk: SiteSentrySdk, loadReplay: () => Promise<SiteSentryReplay>) {
+  try {
+    const replay = await loadReplay();
+    sdk.addIntegration(replay.replayIntegration(SITE_REPLAY_OPTIONS));
+  } catch {
+    // An ad blocker can stop the replay chunk; errors and tracing keep working.
+  }
+}
+
 export async function startSiteSentry(
   earlyErrors: EarlyErrors,
   env: SiteSentryEnv = readSiteSentryEnv(),
-  loadSdk: () => Promise<SiteSentrySdk> = () => import("@sentry/browser"),
+  loadSdk: () => Promise<SiteSentrySdk> = () => import("./site-sentry-sdk"),
+  loadReplay: () => Promise<SiteSentryReplay> = () => import("./site-sentry-replay"),
+  whenLoaded: (run: () => void) => void = afterPageLoad,
 ): Promise<void> {
   if (!env.dsn?.trim()) {
     earlyErrors.stop();
@@ -172,6 +188,7 @@ export async function startSiteSentry(
     for (const { exception, mechanism } of earlyErrors.stop()) {
       sdk.captureException(exception, { mechanism: { type: mechanism, handled: false } });
     }
+    whenLoaded(() => void addReplay(sdk, loadReplay));
   } catch {
     // Monitoring must never break the page, for example when an ad blocker stops the chunk.
     earlyErrors.stop();
