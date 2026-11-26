@@ -1,6 +1,6 @@
-// PROTOTYPE (throwaway, branch prototype/project-skill-set): four ways to show the whole
-// library at the top of Home, switched with the picker at the bottom (1-4 or the arrow keys,
-// ?v= keeps the choice). "Current" is today's Home, unchanged. Mounted from HomeView by one
+// PROTOTYPE (throwaway, branch prototype/project-skill-set): round 2, riffing on Field and Map
+// (Current and Lanes were rejected). Switched with the picker at the bottom (1-3 or the arrow
+// keys, ?v= keeps the choice). Mounted from HomeView by one
 // dev-only block fenced with "PROTOTYPE home-library"; delete this folder and that block.
 
 import type { ReactNode } from "react";
@@ -12,10 +12,9 @@ import type { HomeGroups } from "../../components/Home/home-inbox-data";
 import { buildLibrary } from "./library-model";
 import { Picker, usePicker } from "./shared";
 import { FieldVariant } from "./FieldVariant";
-import { LanesVariant } from "./LanesVariant";
 import { MapVariant } from "./MapVariant";
 
-const NAMES = ["Current", "Field", "Map", "Lanes"];
+const NAMES = ["Field", "Field + list", "Map"];
 
 export function HomeLibraryPrototype({
   snapshot,
@@ -42,12 +41,14 @@ export function HomeLibraryPrototype({
   return (
     <>
       {/* With no skills every picture is empty, so each variant shows today's first-run Home. */}
-      {(current === 0 || skills.length === 0) && baseline}
-      {skills.length > 0 && current === 1 && (
+      {skills.length === 0 && baseline}
+      {skills.length > 0 && current < 2 && (
         <FieldVariant
+          key={current}
           skills={skills}
           history={history}
           open={open}
+          list={current === 1}
           select={(picked) => {
             clear();
             for (const skill of picked) {
@@ -59,9 +60,6 @@ export function HomeLibraryPrototype({
       )}
       {skills.length > 0 && current === 2 && (
         <MapVariant skills={skills} history={history} open={open} />
-      )}
-      {skills.length > 0 && current === 3 && (
-        <LanesVariant skills={skills} history={history} listings={listings} open={open} />
       )}
       {active && <Picker names={NAMES} current={current} set={set} />}
     </>

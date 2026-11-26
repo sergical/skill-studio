@@ -1,10 +1,11 @@
-// PROTOTYPE (throwaway): "Map" - a treemap of every skill, grouped by where it came from.
+// PROTOTYPE (throwaway): "Map" - a treemap of every skill, grouped by where it came from or
+// by state. Click a group to zoom in, Escape or "All" to zoom out, search to find a skill.
 // A tile's area is the room its description takes in every message; its brightness is how
 // much it was used. Problems mark their tiles. Click a source to zoom in, a tile to open.
 
 import { useState } from "react";
 import { formatCount } from "@skill-studio/lib";
-import { Button } from "@skill-studio/ui";
+import { Button, Input } from "@skill-studio/ui";
 import {
   FocusStrip,
   Key,
@@ -20,7 +21,7 @@ import {
 import type { Focus } from "./shared";
 import type { LibrarySkill } from "./library-model";
 
-const H = 380;
+const H = 460;
 
 interface Rect {
   x: number;
@@ -88,11 +89,26 @@ export function MapVariant({
   const { ref, width } = useWidth<HTMLDivElement>();
   const [focus, setFocus] = useState<Focus>("all");
   const [zoom, setZoom] = useState<string | null>(null);
+  const [groupBy, setGroupBy] = useState<"source" | "state">("source");
+  const [query, setQuery] = useState("");
+  const needle = query.trim().toLowerCase();
+  const keyOf = (s: LibrarySkill) =>
+    groupBy === "source"
+      ? s.source
+      : s.broken
+        ? "Doesn’t load"
+        : s.cut
+          ? "Cut"
+          : s.update
+            ? "Update available"
+            : s.uses
+              ? "Used"
+              : "Unused";
   const [hover, setHover] = useState<{ item: LibrarySkill; x: number; y: number } | null>(null);
   const maxUses = Math.max(1, ...skills.map((s) => s.uses));
   const size = (s: LibrarySkill) => Math.max(6, s.tokens);
   const bySource = new Map<string, LibrarySkill[]>();
-  for (const s of skills) bySource.set(s.source, [...(bySource.get(s.source) ?? []), s]);
+  for (const s of skills) bySource.set(keyOf(s), [...(bySource.get(keyOf(s)) ?? []), s]);
   const groups = [...bySource.entries()]
     .filter(([source]) => zoom === null || source === zoom)
     .map(([source, items]) => ({ source, items: items.sort((a, b) => size(b) - size(a)) }))
@@ -126,10 +142,46 @@ export function MapVariant({
           <Key mark={<Ring className="rounded-[3px] border-warning" />}>cut</Key>
           <Key mark={<UpdateDot />}>update</Key>
         </Legend>
+      </div>
+      <div className="flex items-center gap-2">
+        <Input
+          type="search"
+          placeholder="Find a skill"
+          aria-label="Find a skill"
+          value={query}
+          className="h-8 w-56"
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            const hit = skills.find((s) => s.name.toLowerCase().includes(needle));
+            if (e.key === "Enter" && hit) setZoom(keyOf(hit));
+          }}
+        />
+        <div role="radiogroup" aria-label="Group by" className="flex">
+          {(["source", "state"] as const).map((g) => (
+            <Button
+              key={g}
+              size="sm"
+              variant={groupBy === g ? "outline" : "ghost"}
+              role="radio"
+              aria-checked={groupBy === g}
+              onClick={() => {
+                setGroupBy(g);
+                setZoom(null);
+              }}
+            >
+              {g === "source" ? "By source" : "By state"}
+            </Button>
+          ))}
+        </div>
+        <span className="flex-1" />
         {zoom && (
-          <Button size="sm" variant="ghost" onClick={() => setZoom(null)}>
-            ← All sources
-          </Button>
+          <nav aria-label="Zoom" className="flex items-center gap-1 text-small">
+            <Button size="sm" variant="ghost" onClick={() => setZoom(null)}>
+              All
+            </Button>
+            <span className="text-text-tertiary">/</span>
+            <span className="max-w-60 truncate font-medium">{zoom}</span>
+          </nav>
         )}
       </div>
       <div
@@ -137,6 +189,7 @@ export function MapVariant({
         className="relative"
         style={{ height: H }}
         onPointerLeave={() => setHover(null)}
+        onKeyDown={(e) => e.key === "Escape" && setZoom(null)}
       >
         {groups.map((group, gi) => {
           const g = groupRects[gi];
@@ -151,6 +204,7 @@ export function MapVariant({
           return (
             <div
               key={group.source}
+              title={`${group.source} · ${group.items.length}`}
               className="absolute overflow-hidden rounded-md bg-bg-secondary"
               style={{ left: g.x + 1, top: g.y + 1, width: g.w - 2, height: g.h - 2 }}
             >
@@ -170,7 +224,9 @@ export function MapVariant({
                 const heat = item.uses
                   ? 0.25 + 0.75 * (Math.log1p(item.uses) / Math.log1p(maxUses))
                   : 0;
-                const lit = matchesFocus(item, focus);
+                const lit =
+                  matchesFocus(item, focus) &&
+                  (!needle || item.name.toLowerCase().includes(needle));
                 return (
                   <Button
                     key={item.name}
