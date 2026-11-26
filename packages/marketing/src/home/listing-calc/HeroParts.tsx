@@ -5,8 +5,8 @@ import { Check, Copy, Download } from "lucide-react";
 import { AGENT_SETUP_PROMPT } from "@skill-studio/lib/agent-setup";
 
 import { Arrow } from "../../MarketingBrand";
-import { DITHER_COLORS } from "../ClosingFinale";
 import { finaleCtaMarker } from "../ClosingFinale.stylex";
+import { DITHER_COLORS } from "../dither-colors";
 import { homeSectionStyles } from "../HomeSection.stylex";
 import { useCopyFlash } from "../useCopyFlash";
 import { WarpDither } from "../WarpDither";
@@ -19,10 +19,6 @@ import {
 } from "../../site-links";
 import { siteTokens, type SiteTheme } from "../../SiteTheme.stylex";
 import { heroCtaMarker } from "./hero.stylex";
-
-export const HERO_TITLE = "Fix your skill issues.";
-export const HERO_SUBLINE =
-  "Find, fix and park the agent skills you use across Claude Code, Codex, Cursor and more.";
 
 const TOUCH_DEVICE = "@media (hover: none) and (pointer: coarse)";
 const HOVER = "@media (hover: hover) and (pointer: fine)";

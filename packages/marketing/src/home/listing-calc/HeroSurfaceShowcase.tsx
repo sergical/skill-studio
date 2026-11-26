@@ -11,7 +11,7 @@ import { AppWindow, Check, Copy, Plug, Share, Terminal, type LucideIcon } from "
 import { ProductMock, type ThemeToggleOrigin } from "../../ProductMock";
 import { siteTokens, type SiteTheme } from "../../SiteTheme.stylex";
 import { CLI_DOCS_URL, DOCS_URL, MCP_DOCS_URL, SITE_URL } from "../../site-links";
-import { DITHER_COLORS } from "../ClosingFinale";
+import { DITHER_COLORS } from "../dither-colors";
 import { WarpDither } from "../WarpDither";
 import { useCopyFlash } from "../useCopyFlash";
 import { CLI_COMMANDS, HeroCliWindow, HeroMcpWindow, type CliCommandId } from "./HeroSurfacePanels";
