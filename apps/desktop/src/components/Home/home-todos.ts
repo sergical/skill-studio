@@ -37,15 +37,30 @@ export function homeTodos(
   updateCaption: string,
 ): HomeTodo[] {
   const todos: HomeTodo[] = [];
-  if (groups.broken.length)
+  // Home lists one row per issue; a skill with two broken links still counts once, as on Skills.
+  const skillsIn = (issues: Pick<HomeGroups, "broken">["broken"]) =>
+    new Set(issues.map((issue) => issue.skill.name)).size;
+  const broken = skillsIn(groups.broken);
+  const warnings = skillsIn(groups.warnings);
+  if (broken)
     todos.push({
       id: "broken",
       tone: "error",
-      title: `${plural(groups.broken.length, "skill")} ${groups.broken.length === 1 ? "is" : "are"} broken`,
+      title: `${plural(broken, "skill")} ${broken === 1 ? "is" : "are"} broken`,
       detail:
         "A link to a folder that is gone, or a SKILL.md with no description an agent can read. The agent behind each one can’t pick it.",
-      action: `Review ${plural(groups.broken.length, "broken skill")}`,
+      action: `Review ${plural(broken, "broken skill")}`,
       to: { kind: "filter", filter: "broken" },
+    });
+  if (warnings)
+    todos.push({
+      id: "warnings",
+      tone: "warning",
+      title: `${plural(warnings, "skill")} ${warnings === 1 ? "needs" : "need"} a look`,
+      detail:
+        "Copies that differ, a SKILL.md that some agents skip or name differently, or a lock entry with no folder.",
+      action: "Review warnings",
+      to: { kind: "filter", filter: "warn" },
     });
   for (const row of listings) {
     if (row.evidence !== "preview" || row.budget === null) continue;
@@ -94,16 +109,6 @@ export function homeTodos(
       detail: `Counted from ${joinNames(historyAgents.map(deploymentLabelFromAgentId))} history only. Each is sent with every message; Park keeps it a click away.`,
       action: "Review unused",
       to: { kind: "filter", filter: "unused" },
-    });
-  if (groups.warnings.length)
-    todos.push({
-      id: "warnings",
-      tone: "neutral",
-      title: `${plural(groups.warnings.length, "skill")} need a look`,
-      detail:
-        "Copies that differ, a SKILL.md that some agents skip or name differently, or a lock entry with no folder.",
-      action: `Review ${plural(groups.warnings.length, "warning")}`,
-      to: { kind: "filter", filter: "warn" },
     });
   return todos;
 }

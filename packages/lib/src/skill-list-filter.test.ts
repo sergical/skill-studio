@@ -4,11 +4,7 @@
 
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import {
-  applySkillListFilter,
-  defaultSkillListFilter,
-  skillListFilterPatch,
-} from "./skill-list-filter";
+import { applySkillListFilter, defaultSkillListFilter } from "./skill-list-filter";
 import type { SkillListFilter } from "./skill-list-filter";
 import type { Deployment, InstalledSkill, SkillInvocationStats } from "./skill-types";
 
@@ -186,12 +182,6 @@ describe("applySkillListFilter", () => {
     expect(names("warning")).toEqual([]);
     expect(names("update")).toEqual(["broken-and-stale", "stale"]);
     expect(names("any")).toEqual(["broken-and-stale", "stale"]);
-  });
-
-  it('older deep links (issue "any", update "available") still open an attention view', () => {
-    expect(skillListFilterPatch({ issue: "any" })).toEqual({ attention: "any" });
-    expect(skillListFilterPatch({ update: "available" })).toEqual({ attention: "update" });
-    expect(skillListFilterPatch({ issue: "broken-symlink" })).toEqual({ issue: "broken-symlink" });
   });
 
   it("query matches name, description, and source, case-insensitively", () => {

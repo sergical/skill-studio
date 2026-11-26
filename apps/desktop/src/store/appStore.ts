@@ -7,16 +7,10 @@ import { create } from "zustand";
 import {
   defaultSharedInstallAgents,
   defaultSkillListFilter,
-  skillListFilterPatch,
   isProjectPattern,
   isProjectScope,
 } from "@skill-studio/lib";
-import type {
-  SkillListFilter,
-  SkillListFilterPatch,
-  HarnessReport,
-  HarnessesChoice,
-} from "@skill-studio/lib";
+import type { SkillListFilter, HarnessReport, HarnessesChoice } from "@skill-studio/lib";
 import { ALL_ACTIVITY, USAGE_WINDOWS } from "@skill-studio/lib";
 import type { ActivityFilter, UsageWindow } from "@skill-studio/lib";
 import type { Toast, TrackedProjects, SkillSnapshot } from "@skill-studio/lib";
@@ -272,10 +266,9 @@ interface AppState {
   // Home's deep links can drive it directly - see Sidebar.tsx and
   // HomeView.tsx.
   skillListFilter: SkillListFilter;
-  /** Both setters accept the older deep-link values (`issue: "any"`, `update: "available"`). */
-  setSkillListFilter: (patch: SkillListFilterPatch) => void;
+  setSkillListFilter: (patch: Partial<SkillListFilter>) => void;
   /** Starts from the default filter, so no earlier `attention`/`usage`/`issue` survives. */
-  replaceSkillListFilter: (patch: SkillListFilterPatch) => void;
+  replaceSkillListFilter: (patch: Partial<SkillListFilter>) => void;
   resetSkillListFilter: () => void;
   /** Bumped by the sidebar's search icon so the filter bar's search input can focus itself. */
   skillSearchFocusRequest: number;
@@ -555,14 +548,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   skillListFilter: defaultSkillListFilter(),
   setSkillListFilter: (patch) =>
     set((state) => {
-      const skillListFilter = { ...state.skillListFilter, ...skillListFilterPatch(patch) };
+      const skillListFilter = { ...state.skillListFilter, ...patch };
       return sameSkillListScope(state.skillListFilter.scope, skillListFilter.scope)
         ? { skillListFilter }
         : { skillListFilter, selectedSkillPaths: new Set() };
     }),
   replaceSkillListFilter: (patch) =>
     set((state) => {
-      const skillListFilter = { ...defaultSkillListFilter(), ...skillListFilterPatch(patch) };
+      const skillListFilter = { ...defaultSkillListFilter(), ...patch };
       return sameSkillListScope(state.skillListFilter.scope, skillListFilter.scope)
         ? { skillListFilter }
         : { skillListFilter, selectedSkillPaths: new Set() };

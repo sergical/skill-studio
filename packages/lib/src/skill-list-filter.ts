@@ -38,24 +38,6 @@ export interface SkillListFilter {
   query: string;
 }
 
-/** A change to the filter, as callers pass it. Older deep links name an attention category with
- * `issue: "any"` (broken or warnings) or `update: "available"`; `skillListFilterPatch` turns
- * both into `attention`, so those links keep working. */
-export type SkillListFilterPatch = Partial<Omit<SkillListFilter, "issue">> & {
-  issue?: HealthIssueKind | "any";
-  update?: "available";
-};
-
-/** `patch` with the older deep-link values turned into `attention`. */
-export function skillListFilterPatch(patch: SkillListFilterPatch): Partial<SkillListFilter> {
-  const { issue, update, ...rest } = patch;
-  const next: Partial<SkillListFilter> = rest;
-  if (issue === "any") next.attention = "any";
-  else if ("issue" in patch) next.issue = issue;
-  if (update === "available") next.attention = "update";
-  return next;
-}
-
 /** A filter with every field at its default: every non-parked skill, no query. */
 export function defaultSkillListFilter(): SkillListFilter {
   return { scope: "all", query: "" };

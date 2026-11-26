@@ -29,6 +29,19 @@ describe("groupSkillRows", () => {
       ),
     );
   });
+
+  it("a skill under Updates offers Update, even when it also has a fixable warning", () => {
+    const base = snapshot.skills.find((skill) => skill.update_owner_ids.length > 0);
+    if (!base) throw new Error("fixture has no skill with an update");
+    const skill = {
+      ...base,
+      spec_violations: ["invalid YAML frontmatter: mapping values are not allowed in this context"],
+    };
+    const attention = attentionBySkill([skill], collectDashboardIssues([skill]));
+    const { buckets, statesBySkill } = groupSkillRows([skill], "name", [], attention, "update");
+    expect(buckets.update).toEqual([skill]);
+    expect(statesBySkill.get(skill.name)?.action).toBe("Update");
+  });
 });
 
 function byName(a: { name: string }, b: { name: string }): number {

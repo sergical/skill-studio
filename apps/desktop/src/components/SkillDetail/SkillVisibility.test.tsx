@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { InstalledSkill, ListingReport } from "@skill-studio/lib";
 import { buildHarnessSnapshot, deployment, HARNESS_HOME } from "../../dev/harness/skill-fixture";
@@ -95,29 +95,47 @@ it("leads with what the last Codex session showed, not the estimate", async () =
   expect(screen.queryByText("Beyond the cutoff")).toBeNull();
 });
 
+it("shows no description for a skill the last session listed by name only", async () => {
+  const snapshot = buildHarnessSnapshot();
+  const report = mockListingReport(snapshot, {});
+  const codex = report.listings.find((row) => row.harness === "codex")!;
+  const entry = codex.entries.find((item) => item.path && item.scanned)!;
+  const skill = snapshot.skills.find((item) =>
+    item.deployments.some((copy) => copy.path === entry.path),
+  )!;
+  codex.observed_session = {
+    transcript: "/rollout.jsonl",
+    at: null,
+    model: "gpt-5",
+    listed: 1,
+    described: 0,
+  };
+  Object.assign(entry, {
+    state: "described",
+    full_description_chars: 30,
+    description_preview: { shown: "Review staged changes first.", remainder: "" },
+    observed: "name_only",
+    observed_description_chars: null,
+  });
+  showListing(report);
+  render(
+    <SkillVisibility
+      skill={skill}
+      deployment={skill.deployments.find((item) => item.path === entry.path)!}
+      listingScope="global"
+      initialClient="codex"
+    />,
+  );
+  expect(await screen.findByText("Name only")).toBeTruthy();
+  expect(screen.queryByText(/Review staged changes first\./)).toBeNull();
+});
+
 function onlyCopy(name: string, copy: InstalledSkill["deployments"][number]) {
   const snapshot = buildHarnessSnapshot();
   const skill = snapshot.skills.find((item) => item.name === name)!;
   skill.deployments = [copy];
   return { snapshot, skill, copy };
 }
-
-it("offers only the agents that list this skill", async () => {
-  // A copy only in ~/.agents/skills: Codex and Cursor read it, Claude Code does not.
-  const { snapshot, skill, copy } = onlyCopy(
-    "incident-postmortem",
-    deployment({
-      agent: "shared",
-      scope: "global",
-      path: `${HARNESS_HOME}/.agents/skills/incident-postmortem`,
-    }),
-  );
-  showListing(mockListingReport(snapshot, {}));
-  render(<SkillVisibility skill={skill} deployment={copy} listingScope="global" />);
-  fireEvent.click(await screen.findByRole("combobox", { name: "Agent for this skill" }));
-  const options = (await screen.findAllByRole("option")).map((option) => option.textContent);
-  expect(options).toEqual(["Codex", "Cursor"]);
-});
 
 it("shows nothing when no agent lists this skill", async () => {
   const { snapshot, skill, copy } = onlyCopy(

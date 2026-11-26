@@ -14,7 +14,12 @@ import type {
 } from "@skill-studio/lib";
 import type { SortMode } from "./skill-list-sort";
 import { sortRows } from "../components/SkillList/skill-row-format";
-import { ROW_GROUP_ORDER, rowGroup, rowState } from "../components/SkillList/skill-row-state";
+import {
+  ROW_GROUP_ORDER,
+  rowGroup,
+  rowState,
+  updateRowState,
+} from "../components/SkillList/skill-row-state";
 import type { RowGroup, RowState } from "../components/SkillList/skill-row-state";
 
 interface GroupedSkillRows {
@@ -46,9 +51,11 @@ export function groupSkillRows(
     parked: [] as InstalledSkill[],
   } satisfies Record<RowGroup, InstalledSkill[]>;
   for (const skill of sorted) {
-    const state = rowState(skill);
-    statesBySkill.set(skill.name, state);
-    buckets[rowGroup(skill, attention.get(skill.name), filter)].push(skill);
+    const group = rowGroup(skill, attention.get(skill.name), filter);
+    // A row shows the state and action of the group it sits in, so a skill under Updates offers
+    // Update even when it also has a warning, as Home's Updates group does.
+    statesBySkill.set(skill.name, group === "update" ? updateRowState(skill) : rowState(skill));
+    buckets[group].push(skill);
   }
   // Inside an attention group the most serious issue kind comes first, as Home lists it; the
   // sort orders skills with the same kind (the sort is stable).

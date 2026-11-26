@@ -39,14 +39,22 @@ function knownListing(row: HarnessListing, entry: ListingEntry): KnownListing {
   const shownChars = entry.observed_description_chars ?? null;
   const full = preview ? Array.from(preview.shown + preview.remainder) : null;
   const cut = entry.observed === "truncated" ? shownChars : null;
+  // The session recorded a state and a length, not the text. Today's text stands in only when
+  // the session showed a description and its length still matches today's.
+  const shownText =
+    entry.observed === "truncated" ||
+    (entry.observed === "described" && shownChars === entry.full_description_chars);
   return {
     source: "session",
     state: entry.observed,
     shownChars,
-    text: full && {
-      shown: (cut == null ? full : full.slice(0, cut)).join(""),
-      remainder: cut == null ? "" : full.slice(cut).join(""),
-    },
+    text:
+      full && shownText
+        ? {
+            shown: (cut == null ? full : full.slice(0, cut)).join(""),
+            remainder: cut == null ? "" : full.slice(cut).join(""),
+          }
+        : null,
   };
 }
 
@@ -196,7 +204,10 @@ export function SkillVisibility({
                 {!known.text && (known.state === "described" || known.state === "truncated") && (
                   <span className="text-text-secondary">
                     {" "}
-                    · Description text unavailable for this copy.
+                    ·{" "}
+                    {known.source === "session" && entry.description_preview
+                      ? "The description changed after this session."
+                      : "Description text unavailable for this copy."}
                   </span>
                 )}
               </p>
