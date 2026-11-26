@@ -60,7 +60,11 @@ export function DownloadButton({
           </span>
         </span>
       </a>
-      <a href="#product" {...stylex.props(marker, styles.primaryButton, styles.touchOnly)}>
+      <a
+        href="#product"
+        data-theme-bound
+        {...stylex.props(marker, styles.primaryButton, styles.touchOnly)}
+      >
         <span>Get Skill Studio</span>
         <span
           aria-hidden="true"
@@ -152,7 +156,7 @@ export function HeaderDownload() {
         <Download aria-hidden="true" size={15} />
         Download
       </a>
-      <a href="#product" {...stylex.props(styles.headerCta, styles.touchOnly)}>
+      <a href="#product" data-theme-bound {...stylex.props(styles.headerCta, styles.touchOnly)}>
         Get it
       </a>
     </>
