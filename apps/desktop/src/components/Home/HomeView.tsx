@@ -17,6 +17,8 @@ import { useSkillListAct } from "../SkillList/useSkillListAct";
 import { MaterializeRootDialog } from "../ui/MaterializeRootDialog";
 import { useUpdateCheck } from "./useUpdateCheck";
 import { HomeOverview } from "./HomeOverview";
+// PROTOTYPE home-library
+import { HomeLibraryPrototype } from "../../prototype/home-library/HomeLibraryPrototype";
 import { HomeInboxGrid } from "./HomeInboxGroups";
 import { buildHomeRowPlan, computeHomeGroups } from "./home-inbox-data";
 import type { HomeInboxLists } from "./home-inbox-data";
@@ -194,17 +196,42 @@ export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeVie
     <PageShell title="Home">
       {/* Sections sit 32px apart and keep 12px inside, so the gaps say what belongs together. */}
       <div className="flex flex-col gap-8">
-        <HomeOverview
-          snapshot={snapshot}
-          groups={groups}
-          active={active}
-          updateCaption={updateCheck.caption}
-          open={onSelectSkill}
-          showFilter={(next) => {
-            setFilter(next);
-            inboxRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
-          }}
-        />
+        {/* PROTOTYPE home-library: dev-only picker over four library views; delete with
+            src/prototype/home-library. */}
+        {import.meta.env.DEV ? (
+          <HomeLibraryPrototype
+            snapshot={snapshot}
+            groups={groups}
+            active={active}
+            open={onSelectSkill}
+            baseline={
+              <HomeOverview
+                snapshot={snapshot}
+                groups={groups}
+                active={active}
+                updateCaption={updateCheck.caption}
+                open={onSelectSkill}
+                showFilter={(next) => {
+                  setFilter(next);
+                  inboxRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+                }}
+              />
+            }
+          />
+        ) : (
+          <HomeOverview
+            snapshot={snapshot}
+            groups={groups}
+            active={active}
+            updateCaption={updateCheck.caption}
+            open={onSelectSkill}
+            showFilter={(next) => {
+              setFilter(next);
+              inboxRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+            }}
+          />
+        )}
+        {/* /PROTOTYPE home-library */}
         <section ref={inboxRef} aria-labelledby="home-items-title" className="scroll-mt-4">
           <div className="mb-3 flex min-h-7 items-center justify-between gap-3">
             <h2 id="home-items-title" className="text-heading font-semibold">
