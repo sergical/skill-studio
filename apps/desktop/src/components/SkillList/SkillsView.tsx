@@ -19,6 +19,7 @@ import { applySkillListFilter, isProjectScope, skillForCoverageScope } from "@sk
 import { ownSkillsView, ownSkillsWithPluginUpdates } from "@skill-studio/lib";
 import type { InstalledSkill, SkillSnapshot } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
+import { ProjectSkillSetPrototype } from "../../prototype/project-skill-set/ProjectSkillSetPrototype";
 
 interface SkillsViewProps extends FirstScanStateProps {
   snapshot: SkillSnapshot | undefined;
@@ -122,6 +123,9 @@ export function SkillsView({
           observations={snapshot.scan_observations}
           unreadLocationCount={snapshot.unread_roots.length}
         />
+      )}
+      {isProjectScope(filter.scope) && (
+        <ProjectSkillSetPrototype snapshot={snapshot} project={filter.scope.project} />
       )}
       {showCoverage ? (
         <SkillCoverageMatrix
