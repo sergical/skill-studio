@@ -28,3 +28,16 @@ test("a long description opens and closes with Show more, and a short one shows 
   await expect(page.getByText(/^Create clear, conventional Git commits/)).toBeVisible();
   await expect(page.getByRole("button", { name: /^Show (more|less)$/ })).toHaveCount(0);
 });
+
+test("the agent picker for a skill lists only the agents that have a copy of it", async ({
+  page,
+}) => {
+  // Its one copy is in ~/.agents/skills, which Codex and Cursor read and Claude Code does not.
+  await openSkillPage(page, "incident-postmortem");
+  const section = page.getByRole("region", { name: "What agents see of this skill" });
+  await section.getByRole("combobox", { name: "Agent for this skill" }).click();
+  await expect(page.getByRole("option")).toHaveText(["Codex", "Cursor"]);
+  await page.getByRole("option", { name: "Cursor" }).click();
+  await expect(section).toContainText(".agents/skills/incident-postmortem");
+  await expect(section).not.toContainText("No matching copy");
+});

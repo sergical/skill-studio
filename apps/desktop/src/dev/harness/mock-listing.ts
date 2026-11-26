@@ -4,16 +4,30 @@
 // Claude keeps descriptions in skill
 // order while they fit 1,000,000 tokens x 3 characters x the fraction, the
 // shape of `skill_studio_core::listing_visibility`; enough for the view's flow.
+// Each agent lists only the copies in the folders it reads, as the core does.
 // ============================================================================
 
-import type { HarnessListing, ListingEntry, ListingReport, SkillSnapshot } from "@skill-studio/lib";
+import type {
+  HarnessListing,
+  InstalledSkill,
+  ListingEntry,
+  ListingReport,
+  SkillSnapshot,
+} from "@skill-studio/lib";
 
 const CONTEXT_TOKENS = 1_000_000;
 
-function entries(snapshot: SkillSnapshot, budget: number): ListingEntry[] {
-  const skills = snapshot.skills.filter((skill) =>
-    skill.deployments.some((d) => d.scope === "global"),
-  );
+/** The deployment labels of the global folders each estimated agent reads. */
+const READS = new Map([
+  ["claude-code", ["Claude Code"]],
+  ["codex", ["shared", "Codex"]],
+]);
+
+function entries(snapshot: SkillSnapshot, budget: number, harness: string): ListingEntry[] {
+  const reads = READS.get(harness) ?? ["shared"];
+  const copyOf = (skill: InstalledSkill) =>
+    skill.deployments.find((d) => d.scope === "global" && reads.includes(d.agent));
+  const skills = snapshot.skills.filter((skill) => copyOf(skill));
   let left = budget - skills.reduce((sum, s) => sum + s.name.length + 3, 0);
   return skills.map((skill) => {
     const full = skill.description?.length ?? 0;
@@ -22,7 +36,7 @@ function entries(snapshot: SkillSnapshot, budget: number): ListingEntry[] {
     if (fits) left -= full + 2;
     return {
       name: skill.name,
-      path: skill.deployments.find((copy) => copy.scope === "global")?.path ?? null,
+      path: copyOf(skill)?.path ?? null,
       state: hidden ? "hidden" : fits ? "described" : "name_only",
       hidden_reason: skill.parked ? "parked" : hidden ? "manual-only" : null,
       shown_description_chars: fits ? full : 0,
@@ -43,7 +57,7 @@ function row(
   snapshot: SkillSnapshot,
   configuredTokens: string | null = null,
 ): HarnessListing {
-  const list = entries(snapshot, budget);
+  const list = entries(snapshot, budget, harness);
   if (harness === "codex") {
     list.push({
       name: "skill-installer",
