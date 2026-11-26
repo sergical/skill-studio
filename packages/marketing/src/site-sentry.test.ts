@@ -17,7 +17,7 @@ import {
   siteSentryInitOptions,
   startSiteSentry,
 } from "./site-sentry";
-import type { EarlyErrors, SiteSentryEnv, SiteSentrySdk } from "./site-sentry";
+import type { EarlyErrors, SiteSentryEnv, SiteSentryReplay, SiteSentrySdk } from "./site-sentry";
 
 const ENV: SiteSentryEnv = {
   dsn: "https://key@example.invalid/1",
@@ -36,7 +36,7 @@ function fakeSdk() {
     ...Sentry,
     init: vi.fn<SiteSentrySdk["init"]>(),
     captureException: vi.fn<SiteSentrySdk["captureException"]>(),
-    replayIntegration: vi.fn<SiteSentrySdk["replayIntegration"]>(Sentry.replayIntegration),
+    addIntegration: vi.fn<SiteSentrySdk["addIntegration"]>(),
   };
 }
 
@@ -48,20 +48,18 @@ function errorEvent(error: Error) {
   return Object.assign(new Event("error"), { error, message: error.message });
 }
 
-const settled = () => Promise.resolve();
-
 describe("startSiteSentry", () => {
   it.each([undefined, "", "   "])("never loads the SDK when the DSN is %j", async (dsn) => {
     // Failure: a build without a DSN still downloads the SDK or sends network calls.
     const loadSdk = vi.fn();
-    await startSiteSentry(noEarlyErrors(), { ...ENV, dsn }, loadSdk, settled);
+    await startSiteSentry(noEarlyErrors(), { ...ENV, dsn }, loadSdk);
     expect(loadSdk).not.toHaveBeenCalled();
   });
 
   it("loads the SDK once and initialises it when the DSN is set", async () => {
     // Failure: a configured build never starts monitoring.
     const sdk = fakeSdk();
-    await startSiteSentry(noEarlyErrors(), ENV, async () => sdk, settled);
+    await startSiteSentry(noEarlyErrors(), ENV, async () => sdk);
     expect(sdk.init).toHaveBeenCalledTimes(1);
     expect(sdk.init.mock.calls[0][0]).toMatchObject({ dsn: ENV.dsn });
   });
@@ -69,7 +67,7 @@ describe("startSiteSentry", () => {
   it("keeps the page working when the SDK chunk fails to load", async () => {
     // Failure: an ad blocker that stops the chunk turns into an unhandled rejection on the page.
     await expect(
-      startSiteSentry(noEarlyErrors(), ENV, () => Promise.reject(new Error("blocked")), settled),
+      startSiteSentry(noEarlyErrors(), ENV, () => Promise.reject(new Error("blocked"))),
     ).resolves.toBeUndefined();
   });
 
@@ -82,7 +80,7 @@ describe("startSiteSentry", () => {
     page.dispatchEvent(errorEvent(crash));
     const sdk = fakeSdk();
 
-    await startSiteSentry(earlyErrors, ENV, async () => sdk, settled);
+    await startSiteSentry(earlyErrors, ENV, async () => sdk);
     page.dispatchEvent(errorEvent(new Error("after init")));
 
     expect(sdk.captureException).toHaveBeenCalledTimes(1);
@@ -118,7 +116,7 @@ describe("setUpPageThenStartSiteSentry", () => {
           throw crash;
         },
         earlyErrors,
-        (buffer) => (started = startSiteSentry(buffer, ENV, async () => sdk, settled)),
+        (buffer) => (started = startSiteSentry(buffer, ENV, async () => sdk)),
       ),
     ).toThrow(crash);
     page.dispatchEvent(errorEvent(crash));
@@ -137,17 +135,35 @@ describe("siteSentryInitOptions", () => {
     const options = siteSentryInitOptions(ENV, sdk);
     expect(options.sendDefaultPii).toBe(false);
     expect(options.dataCollection).toMatchObject({ cookies: false, httpHeaders: false });
-    expect(sdk.replayIntegration).toHaveBeenCalledWith(
-      expect.objectContaining({ maskAllText: true, maskAllInputs: true, blockAllMedia: true }),
-    );
   });
 
-  it("keeps replay recordings uncompressed, so the envelope scrub can read them", () => {
-    // Failure: compressed recordings pass the scrub as bytes and send the full page URL.
+  it("adds a masked, uncompressed replay once the page has loaded", async () => {
+    // Failure: a replay records visitor text or media, or compressed recordings pass the
+    // envelope scrub as bytes and send the full page URL.
     const sdk = fakeSdk();
-    siteSentryInitOptions(ENV, sdk);
-    expect(sdk.replayIntegration).toHaveBeenCalledWith(
-      expect.objectContaining({ useCompression: false }),
+    const replayIntegration = vi.fn<SiteSentryReplay["replayIntegration"]>(
+      Sentry.replayIntegration,
+    );
+    let loaded = () => {};
+    await startSiteSentry(
+      noEarlyErrors(),
+      ENV,
+      async () => sdk,
+      async () => ({ replayIntegration }),
+      (run) => {
+        loaded = run;
+      },
+    );
+    expect(replayIntegration).not.toHaveBeenCalled();
+    loaded();
+    await vi.waitFor(() => expect(sdk.addIntegration).toHaveBeenCalled());
+    expect(replayIntegration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maskAllText: true,
+        maskAllInputs: true,
+        blockAllMedia: true,
+        useCompression: false,
+      }),
     );
   });
 
