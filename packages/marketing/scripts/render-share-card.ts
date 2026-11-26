@@ -1,7 +1,7 @@
 // Renders the share card from the OgCard still and records what it showed, so
 // src/share-card.test.ts can tell when the card is older than the hero.
-// public/og.jpg is the card the pages point at: a JPEG keeps it near 150 KB, under the
-// size WhatsApp loads reliably. public/og.png keeps links shared before the switch working.
+// public/og.jpg is the card the pages point at: as a JPEG it stays under the 300 KB
+// budget share-card.test.ts checks. public/og.png keeps links shared before the switch working.
 // Run from packages/marketing after formatting: bun scripts/render-share-card.ts
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";

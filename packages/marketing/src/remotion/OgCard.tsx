@@ -2,9 +2,8 @@
 // Skill Studio - Share card
 // The 1200×630 image that link previews show (public/og.jpg): the skill pile
 // heaped on the left, a short tidy list on the right, and the mascot and
-// headline in the centre square, which is all that Slack, LinkedIn and
-// WhatsApp thumbnails keep. scripts/render-share-card.ts renders it; run it
-// after any edit here.
+// headline inside the centre square, so a square crop of the middle still
+// reads. scripts/render-share-card.ts renders it; run it after any edit here.
 // ============================================================================
 import { useEffect, useState, type CSSProperties } from "react";
 import { Dithering } from "@paper-design/shaders-react";
@@ -12,12 +11,13 @@ import { AbsoluteFill, Img, continueRender, delayRender } from "remotion";
 
 import logo from "../../public/skill-studio-logo-512.webp";
 import { DITHER_COLORS } from "../home/dither-colors";
+import { seededRandom } from "../home/listing-calc/pile/skill-pile-data";
 import { SHARE_CARD_CONTENT } from "../share-card";
 
 const { title, host, pile, sorted, cleanup } = SHARE_CARD_CONTENT;
 
 export const OG_CARD_SIZE = { width: 1200, height: 630 };
-// Thumbnails crop the middle square: columns 285 to 915 of the 1200px card.
+// The middle square, columns 285 to 915 of the 1200px card.
 const CENTRE = { left: (OG_CARD_SIZE.width - OG_CARD_SIZE.height) / 2, size: OG_CARD_SIZE.height };
 
 const SANS = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif';
@@ -33,7 +33,7 @@ const COLOR = {
   danger: "oklch(0.645 0.208 25.331)",
   warning: "oklch(0.769 0.165 70.08)",
 };
-const STATUS_DOT = { fine: COLOR.parked, warning: COLOR.warning, broken: COLOR.danger };
+const STATUS_DOT = { fine: COLOR.fine, warning: COLOR.warning, broken: COLOR.danger };
 
 const CLEANUP = [
   { label: "parked", count: cleanup.parked, dot: COLOR.parked },
@@ -41,18 +41,8 @@ const CLEANUP = [
   { label: "updated", count: cleanup.updated, dot: COLOR.warning },
 ];
 
-// A fixed seed, so every render draws the same heap.
-function seededRandom(seed: number) {
-  let state = seed;
-  return () => {
-    state = (state + 0x6d2b79f5) | 0;
-    let t = Math.imul(state ^ (state >>> 15), 1 | state);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 // Densest at the left edge and thinner toward the centre, so the headline stays clear.
+// A fixed seed, so every render draws the same heap.
 const HEAP = (() => {
   const random = seededRandom(31);
   return pile.map((chip) => {
@@ -131,7 +121,7 @@ export function OgCard() {
           <Chip
             key={`${chip.name}@${chip.folder}#${index}`}
             name={chip.name}
-            dot={chip.inUse ? COLOR.fine : STATUS_DOT[chip.status]}
+            dot={STATUS_DOT[chip.status]}
             note={note}
             style={{
               left: x,
