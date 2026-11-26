@@ -89,7 +89,8 @@ export function scrubSentryEnvelope(envelope: SentryEnvelope): SentryEnvelope {
 export function siteSentryInitOptions(env: SiteSentryEnv, sdk: SiteSentrySdk) {
   return {
     dsn: env.dsn,
-    tunnel: SITE_SENTRY_TUNNEL_PATH,
+    // Only the site worker serves the tunnel, so the Vite dev server sends straight to Sentry.
+    tunnel: env.mode === "development" ? undefined : SITE_SENTRY_TUNNEL_PATH,
     release: env.release || undefined,
     environment: siteSentryEnvironment(env),
     sendDefaultPii: false,
