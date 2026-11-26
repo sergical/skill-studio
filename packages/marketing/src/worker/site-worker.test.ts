@@ -5,8 +5,11 @@
 // or a cache can hand one format to the other client.
 // ============================================================================
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import * as Sentry from "@sentry/browser";
+
+import { siteSentryInitOptions } from "../site-sentry";
 import worker from "./site-worker";
 
 const FILES = new Map([
@@ -84,5 +87,68 @@ describe("site worker", () => {
 
     expect(again.status).toBe(304);
     expect(again.headers.get("vary")).toBe("Accept");
+  });
+});
+
+// Flow: the browser SDK posts an envelope to the same-origin tunnel, which ad blockers allow.
+// Failure: the envelope never reaches Sentry, or the tunnel forwards other projects' envelopes.
+describe("site worker Sentry tunnel", () => {
+  const SITE_DSN = "https://public@o1.ingest.us.sentry.io/42";
+
+  afterEach(async () => {
+    await Sentry.close();
+    vi.unstubAllGlobals();
+  });
+
+  // The visitor's browser with an ad blocker: same-origin requests reach the site worker,
+  // requests to sentry.io fail.
+  async function browserFetch(input: RequestInfo | URL, init?: RequestInit) {
+    const url = new URL(
+      input instanceof Request ? input.url : input,
+      "https://useskillstudio.com/",
+    );
+    if (url.hostname.endsWith("sentry.io")) throw new TypeError("net::ERR_BLOCKED_BY_CLIENT");
+    const body = new Uint8Array(await new Response(init?.body).arrayBuffer());
+    const request = new Request(url, {
+      method: init?.method,
+      body,
+      headers: { "content-length": String(body.length) },
+    });
+    return worker.fetch(request, { ...env, SENTRY_DSN: SITE_DSN });
+  }
+
+  it("delivers a page error to Sentry while the browser blocks sentry.io", async () => {
+    // The site worker's own network, where Sentry answers.
+    const received: { url: string; body: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      received.push({ url, body: await new Response(init.body).text() });
+      return new Response("{}", { status: 200 });
+    });
+    const sdk = {
+      ...Sentry,
+      makeFetchTransport: (options: Parameters<typeof Sentry.makeFetchTransport>[0]) =>
+        Sentry.makeFetchTransport(options, browserFetch),
+    };
+    const siteEnv = { dsn: SITE_DSN, release: "", branch: "main", mode: "production" };
+    // Node has no DOM for the tracing integration.
+    Sentry.init({ ...siteSentryInitOptions(siteEnv, sdk), defaultIntegrations: false });
+
+    Sentry.captureException(new Error("thrown on the homepage"));
+    await Sentry.flush(2000);
+
+    expect(received).toHaveLength(1);
+    expect(received[0].url).toMatch(/^https:\/\/o1\.ingest\.us\.sentry\.io\/api\/42\/envelope\//);
+    expect(received[0].body).toContain("thrown on the homepage");
+  });
+
+  it("refuses an envelope for another DSN", async () => {
+    const sentry = vi.fn();
+    vi.stubGlobal("fetch", sentry);
+    const body = `${JSON.stringify({ dsn: "https://public@o9.ingest.sentry.io/9" })}\n{}\n{}`;
+
+    const response = await browserFetch("/m", { method: "POST", body });
+
+    expect(response.status).toBe(403);
+    expect(sentry).not.toHaveBeenCalled();
   });
 });

@@ -1,12 +1,19 @@
 // ============================================================================
 // Skill Studio - Site worker
-// Runs before the static files for /docs/* (see wrangler.jsonc). A docs page URL
-// answers with the page's Markdown copy when the client prefers Markdown, and
-// with the HTML page otherwise. Everything else comes from the static files.
+// Runs before the static files for /docs/* and the Sentry tunnel (see wrangler.jsonc).
+// A docs page URL answers with the page's Markdown copy when the client prefers
+// Markdown, and with the HTML page otherwise. The tunnel forwards the browser SDK's
+// envelopes to Sentry. Everything else comes from the static files.
 // ============================================================================
+
+import { handleTunnelRequest } from "@sentry/core";
+
+import { SITE_SENTRY_TUNNEL_PATH } from "../site-links";
 
 interface Env {
   ASSETS: { fetch(request: Request): Promise<Response> };
+  /** The browser SDK's DSN; the tunnel forwards envelopes for this DSN only. */
+  SENTRY_DSN?: string;
 }
 
 const MARKDOWN_TYPES = ["text/markdown", "text/x-markdown"];
@@ -77,6 +84,10 @@ function withHeaders(response: Response, headers: Record<string, string>): Respo
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const { pathname } = new URL(request.url);
+
+    if (pathname === SITE_SENTRY_TUNNEL_PATH && request.method === "POST") {
+      return handleTunnelRequest(request, { allowedDsns: env.SENTRY_DSN ? [env.SENTRY_DSN] : [] });
+    }
 
     // Static files serve .md as text/markdown with no charset.
     if (pathname.endsWith(".md")) {
