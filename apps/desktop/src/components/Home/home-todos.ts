@@ -41,8 +41,9 @@ export function homeTodos(
     todos.push({
       id: "broken",
       tone: "error",
-      title: `${plural(groups.broken.length, "skill")} don’t load`,
-      detail: "Broken links or a SKILL.md the agents reject. No agent can use them.",
+      title: `${plural(groups.broken.length, "skill")} ${groups.broken.length === 1 ? "is" : "are"} broken`,
+      detail:
+        "Broken links, or a SKILL.md with no description the agents can read. No agent picks them on its own.",
       action: `Review ${plural(groups.broken.length, "broken skill")}`,
       to: { kind: "filter", filter: "broken" },
     });
@@ -99,7 +100,8 @@ export function homeTodos(
       id: "warnings",
       tone: "neutral",
       title: `${plural(groups.warnings.length, "skill")} need a look`,
-      detail: "Copies that differ between agents, or a lock entry with no folder.",
+      detail:
+        "Copies that differ, a SKILL.md that some agents skip or name differently, or a lock entry with no folder.",
       action: `Review ${plural(groups.warnings.length, "warning")}`,
       to: { kind: "filter", filter: "warn" },
     });

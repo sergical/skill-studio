@@ -230,6 +230,30 @@ describe("computeHomeGroups", () => {
     });
     expect(groups.unused.map((skill) => skill.name)).toEqual(["live-idle", "live-manual"]);
   });
+
+  it("an_unquoted_colon_in_a_description_puts_the_skill_under_warnings_not_broken_since_most_agents_still_load_it", () => {
+    // The message Rust gives for `.agents/skills/verify-skill-studio/SKILL.md`, whose description
+    // says `"not checked: real npx skills runs"` without quoting the value. Claude Code lists it.
+    const colon =
+      "invalid YAML frontmatter at line 3, column 296: mapping values are not allowed in this context";
+    const noDescription = "missing required frontmatter field: description";
+    const withViolation = (name: string, violation: string) =>
+      fixtureSkill({
+        name,
+        spec_violations: [violation],
+        deployments: [fixtureDeployment({ spec_violations: [violation] })],
+      });
+    const groups = computeHomeGroups({
+      ...buildHarnessSnapshot(),
+      skills: [
+        withViolation("verify-skill-studio", colon),
+        withViolation("no-description", noDescription),
+      ],
+    });
+
+    expect(groups.broken.map((issue) => issue.skill.name)).toEqual(["no-description"]);
+    expect(groups.warnings.map((issue) => issue.skill.name)).toEqual(["verify-skill-studio"]);
+  });
 });
 
 describe("updateAllOutdatedSkills", () => {

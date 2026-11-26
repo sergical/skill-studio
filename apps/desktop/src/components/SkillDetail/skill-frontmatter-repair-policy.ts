@@ -44,17 +44,19 @@ export type FixLine = "error" | "warning" | "note";
 
 /**
  * Which header line carries the Fix for `lineKind` (the repair that is not the invocation
- * conflict). YAML repair belongs to the red line; a name repair belongs to the yellow mismatch line,
- * or to the grey name-format note when no mismatch line is shown. `null` means no line has a Fix.
+ * conflict). YAML repair belongs to the line that shows the YAML error (`yamlLine`: red when no
+ * agent can read it, yellow when only some skip it); a name repair belongs to the yellow mismatch
+ * line, or to the grey name-format note when no mismatch line is shown. `null` means no line has a Fix.
  */
 export function fixLineFor(state: {
   lineKind: FrontmatterRepairKind | undefined;
+  yamlLine: "error" | "warning" | null;
   hasMismatchLine: boolean;
   hasNameFormatNote: boolean;
 }): FixLine | null {
   switch (state.lineKind) {
     case "colon-scalar":
-      return "error";
+      return state.yamlLine;
     case "name-mismatch":
       return state.hasMismatchLine ? "warning" : null;
     case "name-format":

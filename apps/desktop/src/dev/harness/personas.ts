@@ -138,7 +138,7 @@ export const PERSONAS = {
     label: "Thirty skills, eight broken",
     agents: ["claude-code"],
     claudeFraction: 0.01,
-    expectTop: "don’t load",
+    expectTop: "broken",
     build: () =>
       withUses(
         estate(30, (s, i) => (i < 8 ? broken(s) : s)),
@@ -167,7 +167,7 @@ export const PERSONAS = {
   "six-agents": {
     label: "Every agent, the default estate",
     agents: ALL,
-    expectTop: "don’t load",
+    expectTop: "broken",
     build: () => buildHarnessSnapshot(),
   },
   "plugin-heavy": {
@@ -237,7 +237,7 @@ export const PERSONAS = {
     label: "Broken, outdated and over the limit",
     agents: ["claude-code", "codex"],
     claudeFraction: 0.0002,
-    expectTop: "don’t load",
+    expectTop: "broken",
     build: () =>
       updates(
         withUses(
@@ -256,7 +256,7 @@ export const PERSONAS = {
     label: "One broken skill, otherwise fine",
     agents: ["claude-code"],
     claudeFraction: 0.01,
-    expectTop: "don’t load",
+    expectTop: "broken",
     build: () =>
       withUses(
         estate(10, (s, i) => (i === 0 ? broken(s) : s)),

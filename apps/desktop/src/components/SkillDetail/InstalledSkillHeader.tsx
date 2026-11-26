@@ -113,13 +113,19 @@ export function InstalledSkillHeader({
   const nameFormatNote = (renderedDeployment?.spec_violations ?? []).find(
     (v) => specViolationSeverity(v) === "note" && v.startsWith('name "'),
   );
-  const yamlViolation = blockingViolations.find((violation) =>
+  // The YAML error sits on the red line when no agent can read the file, and on the yellow line
+  // when only some agents skip it (an unquoted colon); its repair buttons go with it.
+  const yamlViolation = (renderedDeployment?.spec_violations ?? []).find((violation) =>
     violation.startsWith("invalid YAML frontmatter at line "),
   );
-  const hasMalformedYaml = yamlViolation !== undefined;
+  const yamlLine = !yamlViolation
+    ? null
+    : isBlockingSpecViolation(yamlViolation)
+      ? ("error" as const)
+      : ("warning" as const);
   const yamlLocation = yamlViolation ? parseYamlFrontmatterError(yamlViolation) : null;
   // Conflicting invocation keys are a non-blocking note with their own line and Fix;
-  // every other repair belongs to the red violation line.
+  // every other repair belongs to the line of the violation it fixes.
   const lineKind = frontmatterRepairKindsFor(renderedDeployment).find(
     (kind) => kind !== "invocation-conflict",
   );
@@ -139,6 +145,7 @@ export function InstalledSkillHeader({
       : null;
   const fixLine = fixLineFor({
     lineKind,
+    yamlLine,
     hasMismatchLine: warningViolations.some(
       (v) => frontmatterRepairKindForViolation(v) === "name-mismatch",
     ),
@@ -149,9 +156,25 @@ export function InstalledSkillHeader({
       Fix
     </Button>
   ) : null;
-  const violationText = quoteRepair
+  const yamlText = quoteRepair
     ? describeFrontmatterRepair(quoteRepair, yamlLocation?.column)
-    : (lineHint ?? describeSpecViolations(blockingViolations));
+    : lineHint;
+  const yamlControls = (
+    <>
+      {quoteRepair && (
+        <Button size="sm" onClick={() => onQuoteRepair?.(quoteRepair)}>
+          Quote the {quoteRepair.key}
+        </Button>
+      )}
+      {fixLine === yamlLine && lineRepair
+        ? lineFixButton
+        : onEditManually && (
+            <Button size="sm" variant="outline" onClick={() => onEditManually(yamlLocation?.line)}>
+              Edit manually
+            </Button>
+          )}
+    </>
+  );
 
   return (
     <header className="flex flex-col gap-4">
@@ -220,36 +243,25 @@ export function InstalledSkillHeader({
       {blockingViolations.length > 0 && (
         <div className="flex items-center gap-2 text-small text-error">
           <AlertTriangle size={13} />
-          <span>{violationText}</span>
-          {quoteRepair && (
-            <Button size="sm" onClick={() => onQuoteRepair?.(quoteRepair)}>
-              Quote the {quoteRepair.key}
-            </Button>
-          )}
-          {hasMalformedYaml &&
-            (fixLine === "error" && lineRepair
-              ? lineFixButton
-              : onEditManually && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => onEditManually(yamlLocation?.line)}
-                  >
-                    Edit manually
-                  </Button>
-                ))}
-          {!quoteRepair && !hasMalformedYaml && onEditManually && (
-            <Button size="sm" variant="outline" onClick={() => onEditManually()}>
-              Edit SKILL.md
-            </Button>
-          )}
+          <span>
+            {(yamlLine === "error" && yamlText) || describeSpecViolations(blockingViolations)}
+          </span>
+          {yamlLine === "error"
+            ? yamlControls
+            : onEditManually && (
+                <Button size="sm" variant="outline" onClick={() => onEditManually()}>
+                  Edit SKILL.md
+                </Button>
+              )}
         </div>
       )}
       {warningViolations.length > 0 && (
         <div className="flex items-center gap-2 text-small text-warning">
           <AlertTriangle size={13} />
-          <span>{describeSpecViolations(warningViolations)}</span>
-          {fixLine === "warning" && lineFixButton}
+          <span>
+            {(yamlLine === "warning" && yamlText) || describeSpecViolations(warningViolations)}
+          </span>
+          {yamlLine === "warning" ? yamlControls : fixLine === "warning" && lineFixButton}
         </div>
       )}
       {nameFormatNote && (

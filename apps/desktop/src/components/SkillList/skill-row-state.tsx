@@ -10,6 +10,7 @@ import {
   driftingCopies,
   HEALTH_ISSUE_SEVERITY,
   isBlockingSpecViolation,
+  isUnquotedColonYaml,
   locationSummary,
   parentDirectory,
 } from "@skill-studio/lib";
@@ -58,7 +59,8 @@ function parkedChipLabel(parkedAt: string | null | undefined): string {
 }
 
 /** The one thing this row most needs to say, in ladder order: blocking spec
- * violation, then the folder rollup, then an update or parked.
+ * violation, then an unquoted colon in the YAML (most agents still load it, Fix quotes it),
+ * then the folder rollup, then an update or parked.
  * `null` when the skill is unremarkable. */
 export function rowState(skill: InstalledSkill): RowState | null {
   const blocking = skill.spec_violations.filter(isBlockingSpecViolation);
@@ -68,6 +70,16 @@ export function rowState(skill: InstalledSkill): RowState | null {
       level: "error",
       label: "Blocking spec violation",
       detail: describeSpecViolations(blocking),
+      action: "Fix",
+    };
+  }
+  const colonYaml = skill.spec_violations.filter(isUnquotedColonYaml);
+  if (colonYaml.length > 0) {
+    return {
+      kind: "violation",
+      level: "warning",
+      label: ISSUE_ROW_LABEL["spec-warning"],
+      detail: describeSpecViolations(colonYaml),
       action: "Fix",
     };
   }

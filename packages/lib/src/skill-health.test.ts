@@ -66,15 +66,19 @@ const NAME_MISMATCH = 'name "other-name" does not match its directory name "agen
 
 describe("specViolationSeverity", () => {
   it.each([
-    "missing required frontmatter field: name",
     "missing required frontmatter field: description",
     "invalid YAML frontmatter at line 3, column 5: bad indent",
-  ])("rates %s an error, because at least one agent skips the skill", (violation) => {
+  ])("rates %s an error, because no agent gets the description", (violation) => {
     expect(specViolationSeverity(violation)).toBe("error");
   });
 
-  it.each([NAME_MISMATCH, "conflicting invocation keys"])(
-    "rates %s a warning, because agents disagree but all load it",
+  it.each([
+    NAME_MISMATCH,
+    "conflicting invocation keys",
+    "missing required frontmatter field: name",
+    "invalid YAML frontmatter at line 3, column 25: mapping values are not allowed in this context",
+  ])(
+    "rates %s a warning, because agents disagree but most load it with its description",
     (violation) => {
       expect(specViolationSeverity(violation)).toBe("warning");
     },
@@ -94,7 +98,7 @@ describe("specViolationSeverity", () => {
   });
 
   it("blocks only on errors, so a name mismatch does not turn a skill red", () => {
-    expect(isBlockingSpecViolation("missing required frontmatter field: name")).toBe(true);
+    expect(isBlockingSpecViolation("missing required frontmatter field: description")).toBe(true);
     expect(isBlockingSpecViolation(NAME_MISMATCH)).toBe(false);
     expect(isBlockingSpecViolation(NAME_FORMAT)).toBe(false);
   });
@@ -121,7 +125,7 @@ describe("findSpecViolations", () => {
   it("leaves warnings and notes out of the detail when an error is present", () => {
     const skill = fixtureSkill({
       spec_violations: [
-        "missing required frontmatter field: name",
+        "missing required frontmatter field: description",
         "description exceeds 1024 characters",
       ],
     });

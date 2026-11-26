@@ -14,7 +14,7 @@ import {
 } from "./skill-coverage";
 import { editableDeployments, ownDeployments } from "./skill-plugin-partition";
 import { homeRelativePath, parentDirectory } from "./skill-path-format";
-import { describeSpecViolations } from "./skill-violation-text";
+import { describeSpecViolations, isUnquotedColonYaml } from "./skill-violation-text";
 import type { Deployment, InstalledSkill } from "./skill-types";
 
 /**
@@ -190,17 +190,18 @@ export type SpecViolationSeverity = "error" | "warning" | "note";
 
 /**
  * How badly a `spec_violations` entry (from `frontmatter::validate_skill`, Rust side) hurts the
- * skill, from what Claude Code, Codex, OpenCode, and pi actually do (docs/agent-skill-conventions.md).
- * An error stops at least one agent from loading the skill: a missing description, a missing name
- * (OpenCode skips it), or YAML that pi cannot parse. A warning loads everywhere but under a
- * different name or with conflicting settings. A note loads everywhere unchanged. An
- * unrecognised string is a warning, so a new Rust message is never silently ignored.
+ * skill, from what Claude Code, Codex, OpenCode, and pi actually do
+ * (docs/malformed-skill-frontmatter-impact.md). An error leaves no agent able to pick the skill on
+ * its own: no description, or YAML the agents cannot read (Codex, OpenCode, and pi skip it; Claude
+ * Code loads it without a description). A warning means agents disagree but most load it with its
+ * description: an unquoted `: ` in a value (only pi skips it), a missing name (only OpenCode skips
+ * it), another name, or conflicting settings. A note loads everywhere unchanged. An unrecognised
+ * string is a warning, so a new Rust message is never silently ignored.
  */
 export function specViolationSeverity(violation: string): SpecViolationSeverity {
   if (
-    violation.startsWith("missing required frontmatter field: name") ||
     violation.startsWith("missing required frontmatter field: description") ||
-    violation.startsWith("invalid YAML frontmatter")
+    (violation.startsWith("invalid YAML frontmatter") && !isUnquotedColonYaml(violation))
   ) {
     return "error";
   }
