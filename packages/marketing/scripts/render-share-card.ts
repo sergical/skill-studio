@@ -1,11 +1,12 @@
 // Renders public/og.png from the OgCard still and records what it showed, so
 // src/share-card.test.ts can tell when the card is older than the hero.
-// Run from packages/marketing: bun scripts/render-share-card.ts
+// Run from packages/marketing after formatting: bun scripts/render-share-card.ts
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { SHARE_CARD_CONTENT } from "../src/share-card";
+import { hashShareCardFiles } from "../src/share-card-files";
 
 execFileSync(
   "npx",
@@ -22,5 +23,5 @@ execFileSync(
 );
 writeFileSync(
   new URL("../src/share-card.rendered.json", import.meta.url),
-  `${JSON.stringify(SHARE_CARD_CONTENT, null, 2)}\n`,
+  `${JSON.stringify({ content: SHARE_CARD_CONTENT, files: hashShareCardFiles() }, null, 2)}\n`,
 );

@@ -1,7 +1,7 @@
 // ============================================================================
 // Skill Studio - Share card
 // The 1200×630 image that link previews show (public/og.png): the homepage hero
-// in its sorted state. scripts/render-share-card.ts renders it.
+// in its sorted state. scripts/render-share-card.ts renders it; run it after any edit here.
 // ============================================================================
 import { useEffect, useState, type CSSProperties } from "react";
 import { Dithering } from "@paper-design/shaders-react";
