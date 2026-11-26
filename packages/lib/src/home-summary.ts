@@ -4,11 +4,8 @@
 // separate from HomeView.tsx so they're unit-testable without React.
 // ============================================================================
 
-import {
-  FIRST_CLASS_AGENTS,
-  HEALTH_ISSUE_SEVERITY,
-  agentsCoveredByDeployment,
-} from "./skill-health";
+import { issueAttentionCategory } from "./skill-attention";
+import { FIRST_CLASS_AGENTS, agentsCoveredByDeployment } from "./skill-health";
 import type { HealthIssue } from "./skill-health";
 import { ownSkillsView } from "./skill-plugin-partition";
 import type { InstalledSkill, SkillInvocationStats, SkillSnapshot } from "./skill-types";
@@ -166,17 +163,17 @@ export function unusedSkills(
   });
 }
 
-/** Home's "Needs attention" issues, split by severity - errors ("broken") vs. warnings. */
+/** Home's Broken and Warnings issues, split by `issueAttentionCategory`. */
 export interface HomeAttentionGroups {
   broken: HealthIssue[];
   warnings: HealthIssue[];
 }
 
-/** Splits `issues` into `broken` (severity `"error"`) and `warnings` (severity `"warning"`). */
+/** Splits `issues` into Broken and Warnings, by the category the Skills page groups them under. */
 export function attentionGroups(issues: HealthIssue[]): HomeAttentionGroups {
   const groups: HomeAttentionGroups = { broken: [], warnings: [] };
   for (const issue of issues) {
-    if (HEALTH_ISSUE_SEVERITY[issue.kind] === "error") groups.broken.push(issue);
+    if (issueAttentionCategory(issue) === "broken") groups.broken.push(issue);
     else groups.warnings.push(issue);
   }
   return groups;

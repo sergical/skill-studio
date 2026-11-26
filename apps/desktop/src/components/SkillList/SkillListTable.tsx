@@ -1,6 +1,7 @@
 // ============================================================================
 // SkillListTable - Searchable, sortable skill rows, rendered by SkillsView
-// with whatever it has already filtered down (scope, harness, source, issue)
+// with whatever it has already filtered down (scope, harness, source,
+// attention, issue)
 // ============================================================================
 
 import { useEffect, useRef, useState } from "react";
@@ -9,7 +10,13 @@ import {
   observeElementRect as observeDefaultElementRect,
   useVirtualizer,
 } from "@tanstack/react-virtual";
-import type { InstalledSkill, SkillInvocationStats, SkillListFilterScope } from "@skill-studio/lib";
+import type {
+  AttentionFilter,
+  InstalledSkill,
+  SkillAttention,
+  SkillInvocationStats,
+  SkillListFilterScope,
+} from "@skill-studio/lib";
 import { groupSkillRows } from "../../lib/skill-list-model";
 import { useHeldLayout } from "../../lib/held-layout";
 import type { SortMode } from "../../lib/skill-list-sort";
@@ -22,15 +29,8 @@ import { SkillListSelectionBar } from "./SkillListSelectionBar";
 import { useSkillListAct } from "./useSkillListAct";
 import { useSkillListScrollMargin } from "./useSkillListScrollMargin";
 import { useSkillListSelection } from "./useSkillListSelection";
+import { ROW_GROUP_LABEL, ROW_GROUP_ORDER } from "./skill-row-state";
 import type { RowGroup } from "./skill-row-state";
-
-/** The three state groups, in display order, and their header labels. */
-const GROUP_ORDER: RowGroup[] = ["attention", "healthy", "parked"];
-const GROUP_LABEL = {
-  attention: "Needs attention",
-  healthy: "Healthy",
-  parked: "Parked",
-};
 
 const skillName = (skill: InstalledSkill) => skill.name;
 
@@ -42,7 +42,7 @@ const ROW_HEIGHT = 32;
 /** Overscan past the visible range, in items. */
 const OVERSCAN = 8;
 
-/** One row of the flat, virtualized item list built from the three state-group buckets: a
+/** One row of the flat, virtualized item list built from the state-group buckets: a
  * group's header, then (only while the group is open) one entry per skill in it. `index` is the
  * row's position in the grouped `rows` array - what `aria-rowindex` and shift-click use - which
  * stays stable even for a skill inside a collapsed group. */
@@ -86,13 +86,15 @@ function buildListItems(
   const items: ListItem[] = [];
   // SAFETY: every group below is set exactly once, before the caller reads it.
   const groupMeta = {
-    attention: { start: 0, height: 0 },
+    broken: { start: 0, height: 0 },
+    warning: { start: 0, height: 0 },
+    update: { start: 0, height: 0 },
     healthy: { start: 0, height: 0 },
     parked: { start: 0, height: 0 },
   } satisfies GroupMeta;
   let cumulativeSize = 0;
   let rowIndex = 0;
-  for (const group of GROUP_ORDER) {
+  for (const group of ROW_GROUP_ORDER) {
     const groupSkills = buckets[group];
     if (groupSkills.length === 0) continue;
     const open = !collapsedGroups.has(group);
@@ -114,6 +116,10 @@ interface SkillListTableProps {
   scope: SkillListFilterScope;
   skills: InstalledSkill[];
   stats: SkillInvocationStats[];
+  /** `attentionBySkill` over `skills`: which of Broken, Warnings and Updates each skill is in. */
+  attention: ReadonlyMap<string, SkillAttention>;
+  /** The filter's attention pick, so every row shows under the category the user picked. */
+  attentionFilter?: AttentionFilter;
   /** Sort order - the Sort select lives in `SkillListFilterBar`; the search box there narrows `skills` before it reaches this table. It applies inside each state group, not across the whole list. */
   sort: SortMode;
   onSelectSkill: (name: string, deploymentPath?: string) => void;
@@ -144,14 +150,16 @@ interface SkillListTableProps {
 }
 
 /**
- * A grid of skill rows split into three sticky-headed state groups (Needs
- * attention, Healthy, Parked). Checking a row's slot selects it - no separate
+ * A grid of skill rows split into sticky-headed state groups (Broken,
+ * Warnings, Updates, Healthy, Parked), most serious first. Checking a row's slot selects it - no separate
  * selection mode - and the selection bar shows once anything is checked.
  */
 export function SkillListTable({
   scope,
   skills,
   stats,
+  attention,
+  attentionFilter,
   sort,
   onSelectSkill,
   selectedSkillName: selectedSkillNameProp,
@@ -178,7 +186,7 @@ export function SkillListTable({
    * stays put when the copy the row opens changes with a rescan. */
   const rowPath = (skill: InstalledSkill): string | undefined => skill.deployments[0]?.path;
 
-  const grouped = groupSkillRows(skills, sort, stats);
+  const grouped = groupSkillRows(skills, sort, stats, attention, attentionFilter);
   const { statesBySkill } = grouped;
   const buckets = useHeldLayout(
     grouped.buckets,
@@ -187,9 +195,9 @@ export function SkillListTable({
     `${sort}\n${resetKey}`,
     latestSkill,
   );
-  const rows = GROUP_ORDER.flatMap((group) => buckets[group]);
+  const rows = ROW_GROUP_ORDER.flatMap((group) => buckets[group]);
   /** Row keys `useRowCursor` navigates, in rendered order - a collapsed group's rows drop out. */
-  const visibleKeys = GROUP_ORDER.flatMap((group) =>
+  const visibleKeys = ROW_GROUP_ORDER.flatMap((group) =>
     collapsedGroups.has(group) ? [] : buckets[group].map((skill) => skill.name),
   );
 
@@ -281,14 +289,14 @@ export function SkillListTable({
     onCollapseGroup: (groupId) =>
       setCollapsedGroups((prev) =>
         // SAFETY: `groupId` only ever comes from this file's own `data-group` attributes, which
-        // are always one of the three `RowGroup` values.
+        // are always one of the `RowGroup` values.
         new Set(prev).add(groupId as RowGroup),
       ),
     onExpandGroup: (groupId) =>
       setCollapsedGroups((prev) => {
         const next = new Set(prev);
         // SAFETY: `groupId` only ever comes from this file's own `data-group` attributes, which
-        // are always one of the three `RowGroup` values.
+        // are always one of the `RowGroup` values.
         next.delete(groupId as RowGroup);
         return next;
       }),
@@ -368,7 +376,7 @@ export function SkillListTable({
             onPointerDown={followRow}
             onFocus={followRow}
           >
-            {GROUP_ORDER.map((group) => {
+            {ROW_GROUP_ORDER.map((group) => {
               const groupSkills = buckets[group];
               if (groupSkills.length === 0) return null;
               const open = !collapsedGroups.has(group);
@@ -377,7 +385,7 @@ export function SkillListTable({
                 <SkillListGroup
                   key={group}
                   group={group}
-                  label={GROUP_LABEL[group]}
+                  label={ROW_GROUP_LABEL[group]}
                   count={grouped.buckets[group].length}
                   open={open}
                   start={groupStart}

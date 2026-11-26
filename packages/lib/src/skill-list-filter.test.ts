@@ -4,7 +4,12 @@
 
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { applySkillListFilter, defaultSkillListFilter } from "./skill-list-filter";
+import {
+  applySkillListFilter,
+  defaultSkillListFilter,
+  skillListFilterPatch,
+} from "./skill-list-filter";
+import type { SkillListFilter } from "./skill-list-filter";
 import type { Deployment, InstalledSkill, SkillInvocationStats } from "./skill-types";
 
 function fixtureStats(overrides: Partial<SkillInvocationStats> = {}): SkillInvocationStats {
@@ -165,16 +170,28 @@ describe("applySkillListFilter", () => {
     expect(dotagentsResult.map((s) => s.name)).toEqual(["mixed"]);
   });
 
-  it('issue "any" keeps skills with at least one issue, of any kind', () => {
+  it("each attention category keeps the skills Home lists under it, and a skill in two shows in both", () => {
     const skills = [
       fixtureSkill({
-        name: "broken",
+        name: "broken-and-stale",
         deployments: [fixtureDeployment({ symlink_is_broken: true })],
+        update_owner_ids: ["owner-1"],
       }),
+      fixtureSkill({ name: "stale", update_owner_ids: ["owner-1"] }),
       fixtureSkill({ name: "healthy" }),
     ];
-    const result = applySkillListFilter(skills, { scope: "all", issue: "any", query: "" });
-    expect(result.map((s) => s.name)).toEqual(["broken"]);
+    const names = (attention: SkillListFilter["attention"]) =>
+      applySkillListFilter(skills, { scope: "all", attention, query: "" }).map((s) => s.name);
+    expect(names("broken")).toEqual(["broken-and-stale"]);
+    expect(names("warning")).toEqual([]);
+    expect(names("update")).toEqual(["broken-and-stale", "stale"]);
+    expect(names("any")).toEqual(["broken-and-stale", "stale"]);
+  });
+
+  it('older deep links (issue "any", update "available") still open an attention view', () => {
+    expect(skillListFilterPatch({ issue: "any" })).toEqual({ attention: "any" });
+    expect(skillListFilterPatch({ update: "available" })).toEqual({ attention: "update" });
+    expect(skillListFilterPatch({ issue: "broken-symlink" })).toEqual({ issue: "broken-symlink" });
   });
 
   it("query matches name, description, and source, case-insensitively", () => {
@@ -228,21 +245,6 @@ describe("applySkillListFilter", () => {
       query: "",
     });
     expect(result.map((s) => s.name)).toEqual(["model-only"]);
-  });
-
-  it("keeps only skills with an update available", () => {
-    const skills = [
-      fixtureSkill({ name: "stale", update_owner_ids: ["owner-1"] }),
-      fixtureSkill({ name: "current", update_owner_ids: [] }),
-    ];
-
-    const result = applySkillListFilter(skills, {
-      scope: "all",
-      update: "available",
-      query: "",
-    });
-
-    expect(result.map((s) => s.name)).toEqual(["stale"]);
   });
 
   it("filters by 30-day usage", () => {

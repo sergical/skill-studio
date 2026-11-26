@@ -672,7 +672,8 @@ export function HomeInboxGrid({
   isGroupExpanded: (id: GroupId) => boolean;
   toggleGroup: (id: GroupId) => void;
   onSelectSkill: (name: string, deploymentPath?: string) => void;
-  onShowAllIssues: () => void;
+  /** Opens Skills on the same category as the group whose "Show all" was pressed. */
+  onShowAllIssues: (category: "broken" | "warning") => void;
   onShowAllUpdates: () => void;
   onShowAllUnused: () => void;
   onShowAllRecent: () => void;
@@ -716,7 +717,7 @@ export function HomeInboxGrid({
             isExpanded={isGroupExpanded("broken")}
             onToggle={() => toggleGroup("broken")}
             onSelectSkill={onSelectSkill}
-            onShowAll={onShowAllIssues}
+            onShowAll={() => onShowAllIssues("broken")}
             wiring={wiring}
           />
         )}
@@ -729,7 +730,7 @@ export function HomeInboxGrid({
             isExpanded={isGroupExpanded("warn")}
             onToggle={() => toggleGroup("warn")}
             onSelectSkill={onSelectSkill}
-            onShowAll={onShowAllIssues}
+            onShowAll={() => onShowAllIssues("warning")}
             onConvertLinkedRoot={onConvertLinkedRoot}
             wiring={wiring}
           />

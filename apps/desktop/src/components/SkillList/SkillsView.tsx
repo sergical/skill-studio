@@ -2,7 +2,7 @@ import { FirstScanState, type FirstScanStateProps } from "../SkillList/FirstScan
 // ============================================================================
 // SkillsView - The unified, filterable skill list. Replaces SkillsScopeView,
 // PluginSkillsView, SkillCoverageView, and SkillIssuesView: the sidebar holds
-// places, this view holds filters (scope, harness, source, issue, query).
+// places, this view holds filters (scope, harness, source, attention, query).
 // ============================================================================
 
 import { useState } from "react";
@@ -14,7 +14,7 @@ import { deploymentForScope } from "./skill-list-deployment";
 import type { SortMode } from "../../lib/skill-list-sort";
 import { SkillListActiveFilters, SkillListFilterBar } from "./SkillListFilterBar";
 import { useProjectFolderActions } from "../../hooks/useProjectFolderActions";
-import { collectDashboardIssues } from "@skill-studio/lib";
+import { attentionBySkill, attentionCounts, collectDashboardIssues } from "@skill-studio/lib";
 import { applySkillListFilter, isProjectScope, skillForCoverageScope } from "@skill-studio/lib";
 import { ownSkillsView, ownSkillsWithPluginUpdates } from "@skill-studio/lib";
 import type { InstalledSkill, SkillSnapshot } from "@skill-studio/lib";
@@ -31,7 +31,7 @@ interface SkillsViewProps extends FirstScanStateProps {
 
 /**
  * The unified, filterable skill list. Holds no filter state of its own -
- * scope, harness, source, issue, query, and the coverage toggle all live in
+ * scope, harness, source, attention, query, and the coverage toggle all live in
  * the store's `skillListFilter`/`showCoverage`, so opening a skill and
  * coming back never loses them.
  */
@@ -68,10 +68,22 @@ export function SkillsView({
   // list is always the user's own skills.
   const baseSkills = ownSkillsView(allSkills);
   const issues = collectDashboardIssues(baseSkills);
-  // Home counts plugin-only skills with an update, so the update filter lists them too.
+  // Home counts plugin-only skills with an update, so the Updates filter lists them too.
+  const withPluginUpdates = ownSkillsWithPluginUpdates(allSkills);
   const listedSkills =
-    filter.update === "available" ? ownSkillsWithPluginUpdates(allSkills) : baseSkills;
+    filter.attention === "update" || filter.attention === "any" ? withPluginUpdates : baseSkills;
+  const attention = attentionBySkill(withPluginUpdates, issues);
   const matches = applySkillListFilter(listedSkills, filter, issues, snapshot?.invocations);
+  // Each category's count under every other filter, so a pick says how many it will list.
+  const attentionTotals = attentionCounts(
+    attention,
+    applySkillListFilter(
+      withPluginUpdates,
+      { ...filter, attention: undefined },
+      issues,
+      snapshot?.invocations,
+    ),
+  );
   const listedByName = new Map(listedSkills.map((skill) => [skill.name, skill]));
   const deploymentPathForSkill = ({ name }: InstalledSkill) => {
     const skill = listedByName.get(name);
@@ -107,6 +119,7 @@ export function SkillsView({
           showCoverage={showCoverage}
           onToggleCoverage={setShowCoverage}
           resultCount={matches.length}
+          attentionCounts={attentionTotals}
           sort={sort}
           onSortChange={setSort}
           snapshot={snapshot}
@@ -138,6 +151,8 @@ export function SkillsView({
           scope={filter.scope}
           skills={matches}
           stats={snapshot?.invocations ?? []}
+          attention={attention}
+          attentionFilter={filter.attention}
           sort={sort}
           onSelectSkill={onSelectSkill}
           selectedSkillName={selectedSkillName}

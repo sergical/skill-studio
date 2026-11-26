@@ -27,22 +27,14 @@ import {
   Activity as ActivityIcon,
 } from "lucide-react";
 import { Dialog, DialogContent, Input, Kbd } from "@skill-studio/ui";
+import { attentionBySkill, collectDashboardIssues, ownSkillsView } from "@skill-studio/lib";
 import type { SkillSnapshot } from "@skill-studio/lib";
 import { keyShortcutsFor, SHORTCUTS } from "../../lib/app-shortcuts";
 import { useAppStore } from "../../store/appStore";
 import { RowGlyph } from "../SkillList/SkillRowCells";
-import { rowGroup, rowState } from "../SkillList/skill-row-state";
-import type { RowGroup } from "../SkillList/skill-row-state";
+import { ROW_GROUP_LABEL, rowGroup, rowState } from "../SkillList/skill-row-state";
 import { gotoItems, rankItems, SECTION_LABEL, skillItems } from "./command-palette-items";
 import type { PaletteItem, PaletteSection } from "./command-palette-items";
-
-/** Same three labels `SkillListTable` uses for its state groups - kept in sync by hand since
- * the palette's skill rows and the table's group headers should always read the same way. */
-const GROUP_LABEL = {
-  attention: "Needs attention",
-  healthy: "Healthy",
-  parked: "Parked",
-} satisfies Record<RowGroup, string>;
 
 interface CommandPaletteProps {
   snapshot: SkillSnapshot | undefined;
@@ -171,9 +163,12 @@ export function CommandPalette({ snapshot, requestRescan }: CommandPaletteProps)
       setActiveView,
     );
 
+    const allSkills = snapshot?.skills ?? [];
+    // The same categories Home and the Skills table group by, so a skill reads the same in all three.
+    const attention = attentionBySkill(allSkills, collectDashboardIssues(ownSkillsView(allSkills)));
     const skills = skillItems(
-      snapshot?.skills ?? [],
-      (skill) => GROUP_LABEL[rowGroup(skill, rowState(skill))],
+      allSkills,
+      (skill) => ROW_GROUP_LABEL[rowGroup(skill, attention.get(skill.name))],
       (skill) => {
         const state = rowState(skill);
         return state && <RowGlyph state={state} size={14} />;

@@ -6,6 +6,9 @@
 
 import {
   AGENT_MATRIX_LABELS,
+  ATTENTION_LABEL,
+  ATTENTION_ORDER,
+  attentionCategoryOf,
   describeSpecViolations,
   driftingCopies,
   HEALTH_ISSUE_SEVERITY,
@@ -16,10 +19,13 @@ import {
 } from "@skill-studio/lib";
 import type {
   AgentId,
+  AttentionCategory,
+  AttentionFilter,
   Deployment,
   HealthIssue,
   HealthIssueKind,
   InstalledSkill,
+  SkillAttention,
 } from "@skill-studio/lib";
 import { buildScopeGroups, skillRollup } from "../SkillDetail/skill-location-status";
 import { harnessIdFromLabel } from "../ui/HarnessIcon";
@@ -369,17 +375,26 @@ export function whereFacts(
   };
 }
 
-/** The list's three state groups, in display order. */
-export type RowGroup = "attention" | "healthy" | "parked";
+/** The list's state groups: what needs the user, most serious first, then healthy, then parked. */
+export type RowGroup = AttentionCategory | "healthy" | "parked";
 
-/** Which group a row sorts into: a decision-worthy state first, then a quiet
- * "parked" fact, else healthy. Pass `state` when the caller already has it
- * from `rowState(skill)` to avoid computing it twice. */
+/** Every state group, in display order. */
+export const ROW_GROUP_ORDER: readonly RowGroup[] = [...ATTENTION_ORDER, "healthy", "parked"];
+
+/** Each state group's header label - the Skills table's and the command palette's. */
+export const ROW_GROUP_LABEL = {
+  ...ATTENTION_LABEL,
+  healthy: "Healthy",
+  parked: "Parked",
+} satisfies Record<RowGroup, string>;
+
+/** Which group a row sorts into: the attention category Home lists the skill under (the one
+ * `filter` picked, else its most serious), then a quiet "parked" fact, else healthy.
+ * `attention` is the skill's entry from `attentionBySkill`. */
 export function rowGroup(
   skill: InstalledSkill,
-  state: RowState | null = rowState(skill),
+  attention: SkillAttention | undefined,
+  filter?: AttentionFilter,
 ): RowGroup {
-  if (state !== null && state.kind !== "parked") return "attention";
-  if (skill.parked || state?.kind === "parked") return "parked";
-  return "healthy";
+  return attentionCategoryOf(attention, filter) ?? (skill.parked ? "parked" : "healthy");
 }

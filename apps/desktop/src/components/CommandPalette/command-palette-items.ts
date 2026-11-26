@@ -16,7 +16,7 @@ export interface PaletteItem {
   id: string;
   section: PaletteSection;
   label: string;
-  /** Secondary text under the label - a skill's state group ("Needs attention", "Healthy", "Parked"). */
+  /** Secondary text under the label - a skill's state group ("Broken", "Healthy", "Parked"). */
   secondary?: string;
   icon?: ReactNode;
   shortcut?: ShortcutDef;
@@ -90,7 +90,7 @@ export function gotoItems(
 }
 
 /** Builds one Skills-section item per installed skill, its secondary text the skill's state
- * group label (e.g. "Needs attention") so the palette reads like a compact version of the table. */
+ * group label (e.g. "Broken") so the palette reads like a compact version of the table. */
 export function skillItems(
   skills: InstalledSkill[],
   groupLabelFor: (skill: InstalledSkill) => string,

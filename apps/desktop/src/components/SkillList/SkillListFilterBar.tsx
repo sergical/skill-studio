@@ -1,7 +1,7 @@
 // ============================================================================
-// SkillListFilterBar - The Skills view's one filter row: scope, harness,
-// source, coverage toggle, and the result count. Filters live here, not in
-// the sidebar - see the design rule in spec-ux-1.md section C.
+// SkillListFilterBar - The Skills view's one filter row: scope, attention,
+// harness, source, coverage toggle, and the result count. Filters live here,
+// not in the sidebar - see the design rule in spec-ux-1.md section C.
 // ============================================================================
 
 import { useEffect, useRef } from "react";
@@ -9,10 +9,21 @@ import type { KeyboardEvent } from "react";
 import { ChevronDown, LayoutGrid, List, ListFilter, Search, X } from "lucide-react";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { Button, Input, ToggleGroup, ToggleGroupItem } from "@skill-studio/ui";
-import { harnessesPresent } from "@skill-studio/lib";
+import {
+  ATTENTION_ANY_LABEL,
+  ATTENTION_LABEL,
+  ATTENTION_ORDER,
+  harnessesPresent,
+} from "@skill-studio/lib";
 import { isProjectScope, type SkillListFilter } from "@skill-studio/lib";
 import { shortProjectPath } from "@skill-studio/lib";
-import type { InstalledSkill, SkillSnapshot, SkillSourceKind } from "@skill-studio/lib";
+import type {
+  AttentionCounts,
+  AttentionFilter,
+  InstalledSkill,
+  SkillSnapshot,
+  SkillSourceKind,
+} from "@skill-studio/lib";
 import { SOURCE_KIND_LABELS } from "@skill-studio/lib";
 import { HarnessIcon, harnessIdFromLabel } from "../ui/HarnessIcon";
 import {
@@ -65,6 +76,8 @@ interface SkillListFilterBarProps {
   showCoverage: boolean;
   onToggleCoverage: (show: boolean) => void;
   resultCount: number;
+  /** How many skills each attention pick lists under the other filters, for its menu item. */
+  attentionCounts: AttentionCounts;
   /** Sort order, applied by `SkillListTable`. */
   sort: SortMode;
   onSortChange: (sort: SortMode) => void;
@@ -101,23 +114,41 @@ function ActiveChip({ label, onClear }: { label: string; onClear: () => void }) 
 /**
  * How many of `filter`'s optional fields are set, not counting the query -
  * the search box already shows the query, but every other active filter needs
- * a chip: invocation, usage, and update are only ever set from Home's stat tiles and
- * have no control of their own in this bar.
+ * a chip: invocation and usage are only ever set from Home and have no control of
+ * their own in this bar.
  */
 function activeFilterCount(filter: SkillListFilter): number {
   let count = filter.scope !== "all" ? 1 : 0;
   if (filter.harness) count += 1;
   if (filter.source) count += 1;
+  if (filter.attention) count += 1;
   if (filter.issue) count += 1;
   if (filter.invocation) count += 1;
   if (filter.usage) count += 1;
-  if (filter.update) count += 1;
   return count;
 }
 
 /** How many of the Filter menu's own fields are set, for its trigger badge. */
 function filterMenuCount(filter: SkillListFilter): number {
-  return (filter.harness ? 1 : 0) + (filter.source ? 1 : 0);
+  return (filter.attention ? 1 : 0) + (filter.harness ? 1 : 0) + (filter.source ? 1 : 0);
+}
+
+/** The attention filter's chip and menu label. */
+function attentionLabel(attention: AttentionFilter): string {
+  return attention === "any" ? ATTENTION_ANY_LABEL : ATTENTION_LABEL[attention];
+}
+
+/** The attention picks, most serious first, then all three together. */
+const ATTENTION_OPTIONS: AttentionFilter[] = [...ATTENTION_ORDER, "any"];
+
+/** One menu item's label and the number of skills it lists, on the item's right edge. */
+function CountedLabel({ label, count }: { label: string; count: number }) {
+  return (
+    <>
+      {label}
+      <span className="ml-auto pl-4 text-text-tertiary tabular-nums">{count}</span>
+    </>
+  );
 }
 
 export function SkillListFilterBar({
@@ -129,6 +160,7 @@ export function SkillListFilterBar({
   showCoverage,
   onToggleCoverage,
   resultCount,
+  attentionCounts,
   sort,
   onSortChange,
   snapshot,
@@ -263,6 +295,26 @@ export function SkillListFilterBar({
             </>
           }
         >
+          <p className="m-0 px-2.5 pt-1.5 pb-0.5 text-caption font-medium text-text-tertiary">
+            Status
+          </p>
+          <MenuRadioGroup
+            value={filter.attention ?? ""}
+            onValueChange={(value) => {
+              // SAFETY: every MenuRadioItem in this group carries "" (Any) or an AttentionFilter.
+              onChange({ ...filter, attention: (value as AttentionFilter | "") || undefined });
+            }}
+          >
+            <MenuRadioItem value="" closeOnClick>
+              Any status
+            </MenuRadioItem>
+            {ATTENTION_OPTIONS.map((option) => (
+              <MenuRadioItem key={option} value={option} closeOnClick>
+                <CountedLabel label={attentionLabel(option)} count={attentionCounts[option]} />
+              </MenuRadioItem>
+            ))}
+          </MenuRadioGroup>
+          <MenuSeparator />
           {harnesses.length > 1 && (
             <>
               <p className="m-0 px-2.5 pt-1.5 pb-0.5 text-caption font-medium text-text-tertiary">
@@ -405,9 +457,15 @@ export function SkillListActiveFilters({ filter, onChange, onReset }: SkillListA
           onClear={() => onChange({ ...filter, source: undefined })}
         />
       )}
+      {filter.attention && (
+        <ActiveChip
+          label={attentionLabel(filter.attention)}
+          onClear={() => onChange({ ...filter, attention: undefined })}
+        />
+      )}
       {filter.issue && (
         <ActiveChip
-          label={filter.issue === "any" ? "Has issues" : filter.issue}
+          label={filter.issue}
           onClear={() => onChange({ ...filter, issue: undefined })}
         />
       )}
@@ -421,12 +479,6 @@ export function SkillListActiveFilters({ filter, onChange, onReset }: SkillListA
         <ActiveChip
           label={USAGE_LABELS[filter.usage]}
           onClear={() => onChange({ ...filter, usage: undefined })}
-        />
-      )}
-      {filter.update && (
-        <ActiveChip
-          label="Updates available"
-          onClear={() => onChange({ ...filter, update: undefined })}
         />
       )}
       <Button variant="ghost" size="xs" className="px-2 text-text-tertiary" onClick={onReset}>

@@ -276,8 +276,8 @@ export function HomeView({ snapshot, isLoading, onSelectSkill, active }: HomeVie
               isGroupExpanded={isGroupExpanded}
               toggleGroup={toggleGroup}
               onSelectSkill={onSelectSkill}
-              onShowAllIssues={() => goToSkills({ issue: "any" })}
-              onShowAllUpdates={() => goToSkills({ update: "available" })}
+              onShowAllIssues={(attention) => goToSkills({ attention })}
+              onShowAllUpdates={() => goToSkills({ attention: "update" })}
               onShowAllUnused={() => goToSkills({ usage: "unused-30d" })}
               onShowAllRecent={() => setActiveView({ kind: "activity" })}
               onConvertLinkedRoot={(skill, harness, harnessLabel, root) =>

@@ -1,11 +1,13 @@
 // ============================================================================
 // Skill Studio - skill-list-filter
 // Pure filter over a skill list: scope (all/global/parked/project), one
-// harness, one source kind, one issue kind, and a free-text query. Shared by
-// SkillListFilterBar and SkillsView so the filter bar's controls and the
-// list they drive never drift apart.
+// harness, one source kind, one attention category or issue kind, and a
+// free-text query. Shared by SkillListFilterBar and SkillsView so the filter
+// bar's controls and the list they drive never drift apart.
 // ============================================================================
 
+import { attentionBySkill, attentionCategoryOf } from "./skill-attention";
+import type { AttentionFilter } from "./skill-attention";
 import type { HealthIssueKind } from "./skill-health";
 import { agentsCoveredByDeployment, collectDashboardIssues } from "./skill-health";
 import { pluginDeployments } from "./skill-plugin-partition";
@@ -15,7 +17,6 @@ import type {
   SkillInvocationStats,
   SkillSourceKind,
 } from "./skill-types";
-import { hasUpdate } from "./skill-updates";
 
 /** Which own skills `applySkillListFilter` considers before the other fields narrow it further. */
 export type SkillListFilterScope = "all" | "global" | "parked" | { project: string };
@@ -26,15 +27,33 @@ export interface SkillListFilter {
   /** An `AgentId` display label (e.g. "Claude Code"), one at a time. */
   harness?: string;
   source?: SkillSourceKind;
-  /** `"any"` keeps every skill with at least one issue, regardless of kind - Home's "Show all N". */
-  issue?: HealthIssueKind | "any";
+  /** Keeps the skills in one attention category (Broken, Warnings, Updates), or in any of them. */
+  attention?: AttentionFilter;
+  /** Keeps the skills with one issue kind. */
+  issue?: HealthIssueKind;
   /** Matches `skill.invocation` exactly. */
   invocation?: InstalledSkill["invocation"];
   /** Whether the skill had any invocations in the last 30 days. */
   usage?: "used-30d" | "unused-30d";
-  /** Keeps only skills the background update check found a newer commit for. */
-  update?: "available";
   query: string;
+}
+
+/** A change to the filter, as callers pass it. Older deep links name an attention category with
+ * `issue: "any"` (broken or warnings) or `update: "available"`; `skillListFilterPatch` turns
+ * both into `attention`, so those links keep working. */
+export type SkillListFilterPatch = Partial<Omit<SkillListFilter, "issue">> & {
+  issue?: HealthIssueKind | "any";
+  update?: "available";
+};
+
+/** `patch` with the older deep-link values turned into `attention`. */
+export function skillListFilterPatch(patch: SkillListFilterPatch): Partial<SkillListFilter> {
+  const { issue, update, ...rest } = patch;
+  const next: Partial<SkillListFilter> = rest;
+  if (issue === "any") next.attention = "any";
+  else if ("issue" in patch) next.issue = issue;
+  if (update === "available") next.attention = "update";
+  return next;
 }
 
 /** A filter with every field at its default: every non-parked skill, no query. */
@@ -130,12 +149,9 @@ export function applySkillListFilter(
   invocations?: SkillInvocationStats[],
 ): InstalledSkill[] {
   const skillsWithIssue = filter.issue
-    ? new Set(
-        issues
-          .filter((i) => filter.issue === "any" || i.kind === filter.issue)
-          .map((i) => i.skill.name),
-      )
+    ? new Set(issues.filter((i) => i.kind === filter.issue).map((i) => i.skill.name))
     : null;
+  const attention = filter.attention ? attentionBySkill(skills, issues) : null;
   const usesIn30DaysBySkill = filter.usage
     ? new Map(invocations?.map((stat) => [stat.skill, stat.last_30_days]))
     : null;
@@ -161,7 +177,8 @@ export function applySkillListFilter(
       return false;
     }
     if (skillsWithIssue && !skillsWithIssue.has(skill.name)) return false;
-    if (filter.update === "available" && !hasUpdate(skill)) return false;
+    if (attention && attentionCategoryOf(attention.get(skill.name), filter.attention) === null)
+      return false;
     if (filter.invocation && skill.invocation !== filter.invocation) return false;
     if (usesIn30DaysBySkill) {
       const usedIn30Days = (usesIn30DaysBySkill.get(skill.name) ?? 0) > 0;

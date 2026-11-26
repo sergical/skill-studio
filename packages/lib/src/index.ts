@@ -14,6 +14,7 @@ export * from "./skill-health";
 export * from "./home-summary";
 export * from "./listing-words";
 export * from "./skill-list-filter";
+export * from "./skill-attention";
 export * from "./skill-stats";
 export * from "./skill-activity";
 export * from "./skill-source-parse";

@@ -21,14 +21,21 @@ Use these words in every string a person reads. Code identifiers may keep
 | Full description, Shortened, Name only, Not listed, Hidden | Described, Omitted, Truncated         | a skill's state in a skill list                        |
 | Global, Project                                            | global scope                          | where a skill is installed                             |
 | session                                                    | transcript, capture                   | one recorded conversation with an agent                |
+| Broken, Warnings, Updates                                  | Has issues, problems                  | what needs the user, always in this order              |
+| Needs attention                                            | issues                                | Broken, Warnings and Updates together                  |
 
 "Loads" keeps one meaning: an agent accepts a SKILL.md file ("Claude Code still
 loads it"). It never counts uses.
 
 The state labels live in
 [`listing-words.ts`](../../packages/lib/src/listing-words.ts). Import
-`LISTING_STATE_LABEL` or `SESSION_LISTED_LABEL`; never write a local map. Three
-local maps had drifted to three names for one state.
+`LISTING_STATE_LABEL`, `SESSION_LISTED_LABEL` or `ATTENTION_LABEL`; never write
+a local map. Three local maps had drifted to three names for one state.
+
+Broken means an agent does not load the skill. Which category a skill is in
+comes from [`skill-attention.ts`](../../packages/lib/src/skill-attention.ts),
+so Home's groups, the Skills groups and filter, and the command palette list
+the same skills in the same order.
 
 Known gap: notes the core writes (`crates/skill-studio-core/src/skill_sessions.rs`,
 `listing_visibility.rs`) still say "listing". The CLI and MCP print the same
