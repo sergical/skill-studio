@@ -5,7 +5,18 @@
 import { useState } from "react";
 import { formatCount } from "@skill-studio/lib";
 import { Button } from "@skill-studio/ui";
-import { FocusStrip, SkillCard, matchesFocus, useWidth } from "./shared";
+import {
+  FocusStrip,
+  Key,
+  Legend,
+  Ramp,
+  Ring,
+  SkillCard,
+  Swatch,
+  UpdateDot,
+  matchesFocus,
+  useWidth,
+} from "./shared";
 import type { Focus } from "./shared";
 import type { LibrarySkill } from "./library-model";
 
@@ -99,6 +110,22 @@ export function MapVariant({
     <section aria-label="Your skills by source" className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <FocusStrip skills={skills} history={history} focus={focus} setFocus={setFocus} />
+        <Legend>
+          <Key mark={<Ramp max={maxUses} />}>uses</Key>
+          <Key
+            mark={
+              <span className="inline-flex items-end gap-0.5">
+                <Swatch className="size-1.5 bg-text-quaternary" />
+                <Swatch className="size-3 bg-text-quaternary" />
+              </span>
+            }
+          >
+            tokens
+          </Key>
+          <Key mark={<Ring className="rounded-[3px] border-error" />}>doesn’t load</Key>
+          <Key mark={<Ring className="rounded-[3px] border-warning" />}>cut</Key>
+          <Key mark={<UpdateDot />}>update</Key>
+        </Legend>
         {zoom && (
           <Button size="sm" variant="ghost" onClick={() => setZoom(null)}>
             ← All sources
@@ -207,10 +234,6 @@ export function MapVariant({
           />
         )}
       </div>
-      <p className="text-small text-text-secondary">
-        Area: tokens in every message · Brightness: uses in 30 days · Ring: red doesn’t load, amber
-        cut from a skill listing
-      </p>
     </section>
   );
 }

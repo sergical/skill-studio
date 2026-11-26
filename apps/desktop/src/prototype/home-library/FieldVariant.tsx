@@ -7,7 +7,17 @@ import type { PointerEvent } from "react";
 import { formatCount } from "@skill-studio/lib";
 import type { InstalledSkill } from "@skill-studio/lib";
 import { Button } from "@skill-studio/ui";
-import { FocusStrip, SkillCard, matchesFocus, useWidth } from "./shared";
+import {
+  FocusStrip,
+  Key,
+  Legend,
+  Ring,
+  SkillCard,
+  Swatch,
+  UpdateDot,
+  matchesFocus,
+  useWidth,
+} from "./shared";
 import type { Focus } from "./shared";
 import type { LibrarySkill } from "./library-model";
 
@@ -77,7 +87,16 @@ export function FieldVariant({
 
   return (
     <section aria-label="Your skills by use and size" className="flex flex-col gap-3">
-      <FocusStrip skills={skills} history={history} focus={focus} setFocus={setFocus} />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <FocusStrip skills={skills} history={history} focus={focus} setFocus={setFocus} />
+        <Legend>
+          <Key mark={<Swatch className="rounded-full bg-data" />}>used</Key>
+          <Key mark={<Swatch className="size-2 rounded-full bg-text-tertiary" />}>unused</Key>
+          <Key mark={<Ring className="border-error" />}>doesn’t load</Key>
+          <Key mark={<Ring className="border-warning" />}>cut</Key>
+          <Key mark={<UpdateDot />}>update</Key>
+        </Legend>
+      </div>
       <div ref={ref} className="relative">
         {width > 0 && (
           <svg
@@ -228,11 +247,7 @@ export function FieldVariant({
               Clear
             </Button>
           </>
-        ) : (
-          <span>
-            Ring: red doesn’t load, amber cut from a skill listing · Dot: update available
-          </span>
-        )}
+        ) : null}
       </div>
     </section>
   );

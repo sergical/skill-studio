@@ -7,7 +7,16 @@ import { deploymentLabelFromAgentId, formatCount } from "@skill-studio/lib";
 import type { HarnessListing } from "@skill-studio/lib";
 import { Button } from "@skill-studio/ui";
 import { HarnessIcon, harnessIdFromLabel } from "../../components/ui/HarnessIcon";
-import { FocusStrip, SkillCard, matchesFocus, useWidth } from "./shared";
+import {
+  FocusStrip,
+  Key,
+  Legend,
+  SkillCard,
+  Swatch,
+  UpdateDot,
+  matchesFocus,
+  useWidth,
+} from "./shared";
 import type { Focus } from "./shared";
 import type { LibrarySkill } from "./library-model";
 
@@ -54,7 +63,17 @@ export function LanesVariant({
 
   return (
     <section aria-label="What each agent lists" className="flex flex-col gap-3">
-      <FocusStrip skills={skills} history={history} focus={focus} setFocus={setFocus} />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <FocusStrip skills={skills} history={history} focus={focus} setFocus={setFocus} />
+        <Legend>
+          <Key mark={<Swatch className="bg-data" />}>full</Key>
+          <Key mark={<Swatch className="bg-data/50" />}>shortened</Key>
+          <Key mark={<Swatch className="bg-text-quaternary" />}>name only</Key>
+          <Key mark={<span className="inline-block h-3 w-0.5 bg-text-primary" />}>budget</Key>
+          <Key mark={<span className="inline-block h-1 w-2.5 bg-error" />}>doesn’t load</Key>
+          <Key mark={<UpdateDot />}>update</Key>
+        </Legend>
+      </div>
       <div ref={ref} className="relative flex flex-col gap-4" onPointerLeave={() => setHover(null)}>
         {width > 0 &&
           lanes.map(({ row, entries, estimated, size, total, cut, full }) => {
@@ -75,8 +94,8 @@ export function LanesVariant({
                   </span>
                   <span className="text-text-secondary tabular-nums">
                     {estimated
-                      ? `${formatCount(full)} full · ${formatCount(entries.length - full)} shortened or name only · budget ${formatCount(row.budget ?? 0)} ${row.budget_unit}`
-                      : `${formatCount(entries.length)} found in its folders · no budget to estimate`}
+                      ? `${formatCount(full)} / ${formatCount(entries.length)} full · ${formatCount(row.budget ?? 0)} ${row.budget_unit === "characters" ? "chars" : row.budget_unit}`
+                      : `${formatCount(entries.length)} skills · no budget`}
                   </span>
                 </div>
                 <div
@@ -131,10 +150,6 @@ export function LanesVariant({
           </p>
         )}
       </div>
-      <p className="text-small text-text-secondary">
-        Width: description size · Height: uses in 30 days · Line: where the budget runs out · Red
-        top: doesn’t load
-      </p>
     </section>
   );
 }

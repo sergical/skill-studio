@@ -78,16 +78,11 @@ export function FocusStrip({
   const items: [Focus, string, number, string][] = [
     ["all", "skills", skills.length, "text-text-primary"],
     ["broken", "don’t load", skills.filter((s) => s.broken).length, "text-error"],
-    ["cut", "cut from a skill listing", skills.filter((s) => s.cut).length, "text-warning"],
+    ["cut", "cut", skills.filter((s) => s.cut).length, "text-warning"],
     ["update", "updates", skills.filter((s) => s.update).length, "text-text-primary"],
   ];
   if (history)
-    items.push([
-      "unused",
-      "unused in 30 days",
-      skills.filter((s) => !s.uses).length,
-      "text-text-secondary",
-    ]);
+    items.push(["unused", "unused", skills.filter((s) => !s.uses).length, "text-text-secondary"]);
   return (
     <div role="radiogroup" aria-label="Highlight" className="flex flex-wrap gap-1.5">
       {items.map(([id, label, count, tone]) => (
@@ -217,3 +212,53 @@ export function Picker({
     </>
   );
 }
+
+/** A chart key: one mark per encoding, each with a word or two. */
+export function Legend({ children }: { children: ReactNode }) {
+  return (
+    <ul
+      aria-label="Legend"
+      className="flex flex-wrap items-center gap-x-4 gap-y-1 text-caption text-text-secondary"
+    >
+      {children}
+    </ul>
+  );
+}
+
+export function Key({ mark, children }: { mark: ReactNode; children: ReactNode }) {
+  return (
+    <li className="inline-flex items-center gap-1.5">
+      <span aria-hidden className="inline-flex items-center">
+        {mark}
+      </span>
+      {children}
+    </li>
+  );
+}
+
+export const Swatch = ({ className }: { className: string }) => (
+  <span className={`inline-block size-2.5 rounded-[2px] ${className}`} />
+);
+
+export const Ring = ({ className }: { className: string }) => (
+  <span className={`inline-block size-3 rounded-full border-[1.5px] ${className}`} />
+);
+
+export const UpdateDot = () => (
+  <span className="inline-block size-1.5 rounded-full bg-text-primary" />
+);
+
+/** The use scale: a ramp from no use to the most-used skill. */
+export const Ramp = ({ max }: { max: number }) => (
+  <span className="inline-flex items-center gap-1 tabular-nums">
+    0
+    <span
+      className="inline-block h-2 w-16 rounded-full"
+      style={{
+        background:
+          "linear-gradient(90deg, var(--color-bg-tertiary), oklch(0.668 0.176 293.133 / 0.25), oklch(0.668 0.176 293.133))",
+      }}
+    />
+    {formatCount(max)}
+  </span>
+);
