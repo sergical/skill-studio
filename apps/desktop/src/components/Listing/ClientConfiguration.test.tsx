@@ -37,6 +37,6 @@ it("counts skills the budget left out in the headline, so a full budget never re
     { ...first, name: "c", path: "/c", state: "omitted" as const },
   ];
   render(<ClientConfiguration row={{ ...row, entries }} onSaved={() => {}} />);
-  expect(screen.getByText(/can pick 2 of your 3 skills on its own/)).toBeTruthy();
+  expect(screen.getByText(/2 of 3 descriptions fit/)).toBeTruthy();
   expect(screen.queryByText(/Every description fits/)).toBeNull();
 });

@@ -85,7 +85,7 @@ test("a row parked on Home stays selectable at its parked path, and Show all cou
     .getByRole("list", { name: "Things that need you" })
     .getByRole("listitem")
     .filter({ hasText: "no use in 30 days" })
-    .getByRole("button", { name: "Show" })
+    .getByRole("button", { name: "Review unused" })
     .click();
   const group = page.locator('[data-group="unused"]');
   const first = group.locator('[role="row"][aria-selected]').first();
