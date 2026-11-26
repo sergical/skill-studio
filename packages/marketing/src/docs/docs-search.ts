@@ -18,8 +18,11 @@ export function setupDocsSearch() {
 
   const setBrowsing = (expanded: boolean) => {
     if (!toggle) return;
+    const opening = expanded && !nav.hasAttribute("data-docs-browsing");
     toggle.setAttribute("aria-expanded", String(expanded));
     nav.toggleAttribute("data-docs-browsing", expanded);
+    // On small screens the list starts closed; show the current page when it opens.
+    if (opening) nav.querySelector("[aria-current=page]")?.scrollIntoView({ block: "nearest" });
   };
 
   let results: HTMLAnchorElement[] = [];
@@ -40,9 +43,6 @@ export function setupDocsSearch() {
     if (empty) empty.hidden = results.length > 0;
   }
 
-  form.hidden = false;
-  toggle?.removeAttribute("hidden");
-  nav.setAttribute("data-docs-search-ready", "");
   updateResults(input.value);
   if (input.value.trim()) setBrowsing(true);
 

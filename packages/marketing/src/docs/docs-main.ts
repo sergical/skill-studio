@@ -16,6 +16,8 @@ import {
 import { bufferEarlyErrors, startSiteSentry } from "../site-sentry";
 import "../marketing-site.css";
 import "./docs-prose.css";
+import { rememberDocsNavScroll } from "./docs-nav-scroll";
+import { setupDocsOutline } from "./docs-outline";
 import { setupDocsSearch } from "./docs-search";
 // Imported for its StyleX rules, which the build collects into the shared CSS file.
 import "./docs-page-styles";
@@ -28,7 +30,7 @@ const copyResetTimers = new WeakMap<HTMLElement, number>();
 
 function showCopyLabel(button: HTMLElement, text: string, state?: "copied") {
   const label = button.querySelector<HTMLElement>("[data-copy-label]");
-  const original = button.hasAttribute("data-copy-page") ? "Copy page as Markdown" : "Copy";
+  const original = button.hasAttribute("data-copy-page") ? "Copy page" : "Copy";
   if (label) label.textContent = text;
   if (state) button.dataset.state = state;
   window.clearTimeout(copyResetTimers.get(button));
@@ -57,32 +59,31 @@ async function copyCode(button: HTMLElement) {
 
 async function copyPage(button: HTMLElement, url: string) {
   try {
-    // Safari requires the clipboard write to start during the click.
     const markdown = fetch(url).then((response) => {
       if (!response.ok) throw new Error("Could not load Markdown");
-      return response.text().then((body) => new Blob([body], { type: "text/plain" }));
+      return response.text();
     });
-    await navigator.clipboard.write([new ClipboardItem({ "text/plain": markdown })]);
+    if ("ClipboardItem" in window) {
+      // Safari requires the clipboard write to start during the click.
+      const blob = markdown.then((body) => new Blob([body], { type: "text/plain" }));
+      await navigator.clipboard.write([new ClipboardItem({ "text/plain": blob })]);
+    } else {
+      await navigator.clipboard.writeText(await markdown);
+    }
     showCopyLabel(button, "Copied", "copied");
   } catch {
-    showCopyLabel(button, "Use View Markdown");
+    showCopyLabel(button, "Copy failed");
   }
 }
 
 const pageCopy = document.querySelector<HTMLElement>("[data-copy-page]");
-if (
-  pageCopy &&
-  navigator.clipboard &&
-  "write" in navigator.clipboard &&
-  "ClipboardItem" in window
-) {
-  pageCopy.hidden = false;
-  pageCopy.addEventListener("click", () => {
-    if (pageCopy.dataset.copyPage) void copyPage(pageCopy, pageCopy.dataset.copyPage);
-  });
-}
+pageCopy?.addEventListener("click", () => {
+  if (pageCopy.dataset.copyPage) void copyPage(pageCopy, pageCopy.dataset.copyPage);
+});
 
 setupDocsSearch();
+setupDocsOutline();
+rememberDocsNavScroll();
 
 const agentMenu = document.querySelector<HTMLElement>("[data-docs-agent-menu]");
 if (agentMenu?.dataset.docsAgentMenu) {
