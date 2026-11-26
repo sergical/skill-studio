@@ -92,6 +92,8 @@ it("leads with what the last Codex session showed, not the estimate", async () =
   );
   expect(await screen.findByText("Full description")).toBeTruthy();
   expect(screen.getByText(/Review staged changes first\./)).toBeTruthy();
+  // The session recorded a length, not words, so the text is labelled as today's.
+  expect(screen.getByText("Today’s text")).toBeTruthy();
   expect(screen.queryByText("Beyond the cutoff")).toBeNull();
 });
 

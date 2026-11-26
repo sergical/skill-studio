@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use skill_studio_core::dto::{InstallFile, InstallLinkMode, InstallMethod, InstallRequest};
 use skill_studio_core::error::ErrorCode;
 use skill_studio_core::frontmatter::{
-    is_valid_skill_name, parse_frontmatter, validate_skill, FrontmatterParseResult,
+    is_valid_skill_name, parse_frontmatter, FrontmatterParseResult,
 };
 use skill_studio_core::identity::{CorrelationId, RootScope, SkillDestination, SkillName};
 use skill_studio_core::ops::{self, Operation};
@@ -131,10 +131,10 @@ fn check_composed(draft: &PastedSkillDraft, content: &str) -> PastedSkillCheck {
         .and_then(|f| f.description.clone())
         .filter(|d| !d.trim().is_empty());
     // The folder is named after the skill, so `name` never differs from it.
-    let problems = validate_skill(
+    let problems = skill_studio_core::frontmatter_repair::validate_skill_md(
         name.as_deref().unwrap_or_default(),
+        content,
         &parsed,
-        content.lines().count(),
     );
     let can_save = !matches!(parsed, FrontmatterParseResult::Invalid(_))
         && name.as_deref().is_some_and(is_valid_skill_name)
@@ -309,6 +309,23 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(folder.join("SKILL.md")).unwrap(),
             PASTED.trim_start(),
+        );
+    }
+
+    #[test]
+    fn a_pasted_unquoted_colon_gets_the_same_note_the_scanner_gives() {
+        let check = check_draft(&PastedSkillDraft {
+            text: "---\nname: testing\ndescription: Use when: testing\n---\n\nRun tests.".into(),
+            name: String::new(),
+            description: String::new(),
+        });
+        assert!(
+            check
+                .problems
+                .iter()
+                .any(|p| p.ends_with(skill_studio_core::frontmatter_repair::UNQUOTED_COLON_NOTE)),
+            "{:?}",
+            check.problems
         );
     }
 

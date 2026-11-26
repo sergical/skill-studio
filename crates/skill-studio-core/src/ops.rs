@@ -2081,17 +2081,7 @@ fn read_skill_md_from_disk(
         &timings.frontmatter_parse,
         clock.monotonic().saturating_sub(parse_start),
     );
-    let mut violations = frontmatter::validate_skill(name, &parsed, content.lines().count());
-    if matches!(parsed, frontmatter::FrontmatterParseResult::Invalid(_))
-        && crate::frontmatter_repair::propose_colon_scalar_repair(&content).is_ok()
-    {
-        if let Some(yaml) = violations
-            .iter_mut()
-            .find(|v| v.starts_with("invalid YAML frontmatter"))
-        {
-            yaml.push_str(crate::frontmatter_repair::UNQUOTED_COLON_NOTE);
-        }
-    }
+    let violations = crate::frontmatter_repair::validate_skill_md(name, &content, &parsed);
     let description = parsed.as_frontmatter().and_then(|f| f.description.clone());
     let facts = match mode {
         SkillRead::Metadata => ContentFacts {

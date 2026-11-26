@@ -63,6 +63,28 @@ fn frontmatter_end(lines: &[&str]) -> Option<usize> {
 /// cause (bad indentation) loads nowhere. The desktop app matches on this text.
 pub const UNQUOTED_COLON_NOTE: &str = " (unquoted colon in a value)";
 
+/// `validate_skill` for one SKILL.md's text, with `UNQUOTED_COLON_NOTE` on the YAML violation
+/// when the colon repair can quote it. The scanner and Paste both use it, so they agree on which
+/// YAML errors agents still load.
+pub fn validate_skill_md(
+    dir_name: &str,
+    content: &str,
+    parsed: &FrontmatterParseResult,
+) -> Vec<String> {
+    let mut violations = validate_skill(dir_name, parsed, content.lines().count());
+    if matches!(parsed, FrontmatterParseResult::Invalid(_))
+        && propose_colon_scalar_repair(content).is_ok()
+    {
+        if let Some(yaml) = violations
+            .iter_mut()
+            .find(|v| v.starts_with("invalid YAML frontmatter"))
+        {
+            yaml.push_str(UNQUOTED_COLON_NOTE);
+        }
+    }
+    violations
+}
+
 /// Produces an exact-byte proposal only when one top-level plain scalar is
 /// the unique likely source of the YAML parser error.
 ///

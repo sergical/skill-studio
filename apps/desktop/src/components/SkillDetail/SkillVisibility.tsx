@@ -199,6 +199,10 @@ export function SkillVisibility({
                 ` · ${known.shownChars} of ${entry.full_description_chars} characters`}
             </span>
           </div>
+          {/* A session records a state and a length, not the words: the text below is today's. */}
+          {known.source === "session" && known.text && (
+            <p className="mt-2 text-caption text-text-tertiary">Today’s text</p>
+          )}
           <div className="mt-2 rounded-md border border-border-subtle bg-bg-primary px-3 py-3 text-body leading-relaxed">
             {known.state === "hidden" || known.state === "omitted" ? (
               <p>{entry.hidden_reason ?? "The model does not see this skill."}</p>
