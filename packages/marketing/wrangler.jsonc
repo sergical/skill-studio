@@ -5,7 +5,12 @@
   "account_id": "a6221d3398c2e695ab8e1a2f1237bd1b",
   "workers_dev": false,
   "preview_urls": true,
-  "previews": {},
+  // Previews do not inherit the top-level vars.
+  "previews": {
+    "vars": {
+      "SENTRY_DSN": "https://9da77532f66533d30d56ed257eb8e7f0@o4505994951065600.ingest.us.sentry.io/4512090769391616",
+    },
+  },
   "routes": [
     { "pattern": "useskillstudio.com", "custom_domain": true },
     { "pattern": "www.useskillstudio.com", "custom_domain": true },
