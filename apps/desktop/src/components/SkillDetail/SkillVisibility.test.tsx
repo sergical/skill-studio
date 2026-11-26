@@ -130,6 +130,30 @@ it("shows no description for a skill the last session listed by name only", asyn
   expect(screen.queryByText(/Review staged changes first\./)).toBeNull();
 });
 
+it("explains a Codex cut when the whole list fits but one description is over its fixed cap", async () => {
+  const snapshot = buildHarnessSnapshot();
+  const report = mockListingReport(snapshot, {});
+  const codex = report.listings.find((row) => row.harness === "codex")!;
+  const entry = codex.entries.find((item) => item.path && item.scanned)!;
+  const skill = snapshot.skills.find((item) =>
+    item.deployments.some((copy) => copy.path === entry.path),
+  )!;
+  codex.description_char_limit = 1024;
+  codex.thresholds = { ...codex.thresholds!, tier: "all_described" };
+  Object.assign(entry, { state: "truncated", shown_description_chars: 1024 });
+  showListing(report);
+  render(
+    <SkillVisibility
+      skill={skill}
+      deployment={skill.deployments.find((item) => item.path === entry.path)!}
+      listingScope="global"
+      initialClient="codex"
+    />,
+  );
+  expect((await screen.findByText(/Per-skill limit/)).textContent).toContain("1,024 characters");
+  expect(screen.queryByText("skillListingMaxDescChars")).toBeNull();
+});
+
 function onlyCopy(name: string, copy: InstalledSkill["deployments"][number]) {
   const snapshot = buildHarnessSnapshot();
   const skill = snapshot.skills.find((item) => item.name === name)!;

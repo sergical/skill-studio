@@ -160,8 +160,16 @@ function Summary({ row, budget }: { row: HarnessListing; budget: number }) {
       </p>
       {row.description_char_limit != null && (
         <p className="m-0">
-          Per-skill limit {row.description_char_limit.toLocaleString()} characters (
-          <code>skillListingMaxDescChars</code>).
+          Per-skill limit {row.description_char_limit.toLocaleString()} characters
+          {row.description_limit_setting ? (
+            <>
+              {" "}
+              (<code>{row.description_limit_setting.key}</code>)
+            </>
+          ) : (
+            ", fixed"
+          )}
+          .
         </p>
       )}
       {row.context_window_tokens !== null && (

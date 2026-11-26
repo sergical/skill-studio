@@ -57,6 +57,12 @@ fn frontmatter_end(lines: &[&str]) -> Option<usize> {
         .map(|(index, _)| index)
 }
 
+/// Appended to the scanner's "invalid YAML frontmatter" violation when the cause is an unquoted
+/// colon in `name` or `description` that `propose_colon_scalar_repair` can quote. Claude Code,
+/// Codex and `OpenCode` load such a file; a YAML error with the same parser message but another
+/// cause (bad indentation) loads nowhere. The desktop app matches on this text.
+pub const UNQUOTED_COLON_NOTE: &str = " (unquoted colon in a value)";
+
 /// Produces an exact-byte proposal only when one top-level plain scalar is
 /// the unique likely source of the YAML parser error.
 ///
@@ -373,6 +379,23 @@ pub fn propose_repair(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn indented_key_gives_the_colon_message_but_no_quotable_repair() {
+        // Same parser message as an unquoted colon; quoting cannot fix it, so the scanner must
+        // not call it the colon case agents still load.
+        let content = "---\nname: demo\n  description: Demo text\n---\n\n# Demo\n";
+        let FrontmatterParseResult::Invalid(error) = parse_frontmatter(content) else {
+            panic!("expected invalid frontmatter");
+        };
+        assert!(
+            error.message.contains("mapping values"),
+            "{}",
+            error.message
+        );
+        assert!(propose_colon_scalar_repair(content).is_err());
+    }
+
     use super::*;
 
     #[test]

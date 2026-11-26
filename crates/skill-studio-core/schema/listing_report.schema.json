@@ -75,7 +75,7 @@
           "minimum": 0
         },
         "description_char_limit": {
-          "description": "Effective Claude Code skillListingMaxDescChars in this scope.",
+          "description": "The most characters of one description the agent lists: Claude Code's\nskillListingMaxDescChars in this scope, or Codex's fixed cap.",
           "type": [
             "integer",
             "null"

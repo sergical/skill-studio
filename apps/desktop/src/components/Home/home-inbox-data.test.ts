@@ -235,7 +235,7 @@ describe("computeHomeGroups", () => {
     // The message Rust gives for `.agents/skills/verify-skill-studio/SKILL.md`, whose description
     // says `"not checked: real npx skills runs"` without quoting the value. Claude Code lists it.
     const colon =
-      "invalid YAML frontmatter at line 3, column 296: mapping values are not allowed in this context";
+      "invalid YAML frontmatter at line 3, column 296: mapping values are not allowed in this context (unquoted colon in a value)";
     const noDescription = "missing required frontmatter field: description";
     const withViolation = (name: string, violation: string) =>
       fixtureSkill({

@@ -68,6 +68,8 @@ describe("specViolationSeverity", () => {
   it.each([
     "missing required frontmatter field: description",
     "invalid YAML frontmatter at line 3, column 5: bad indent",
+    // Bad indentation gives the colon's parser message, without the scanner's quotable note.
+    "invalid YAML frontmatter at line 3, column 14: mapping values are not allowed in this context",
   ])("rates %s an error, because no agent gets the description", (violation) => {
     expect(specViolationSeverity(violation)).toBe("error");
   });
@@ -76,7 +78,7 @@ describe("specViolationSeverity", () => {
     NAME_MISMATCH,
     "conflicting invocation keys",
     "missing required frontmatter field: name",
-    "invalid YAML frontmatter at line 3, column 25: mapping values are not allowed in this context",
+    "invalid YAML frontmatter at line 3, column 25: mapping values are not allowed in this context (unquoted colon in a value)",
   ])(
     "rates %s a warning, because agents disagree but most load it with its description",
     (violation) => {

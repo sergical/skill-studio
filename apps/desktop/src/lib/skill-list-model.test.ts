@@ -35,7 +35,9 @@ describe("groupSkillRows", () => {
     if (!base) throw new Error("fixture has no skill with an update");
     const skill = {
       ...base,
-      spec_violations: ["invalid YAML frontmatter: mapping values are not allowed in this context"],
+      spec_violations: [
+        "invalid YAML frontmatter at line 3, column 1: mapping values are not allowed in this context (unquoted colon in a value)",
+      ],
     };
     const attention = attentionBySkill([skill], collectDashboardIssues([skill]));
     const { buckets, statesBySkill } = groupSkillRows([skill], "name", [], attention, "update");

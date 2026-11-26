@@ -28,7 +28,7 @@ const CLEAN_SKILL_MD = [
   "# Find bugs",
 ].join("\n");
 const YAML_VIOLATION =
-  "invalid YAML frontmatter at line 3, column 59: mapping values are not allowed in this context";
+  "invalid YAML frontmatter at line 3, column 59: mapping values are not allowed in this context (unquoted colon in a value)";
 
 function fixtureDeployment(overrides: Partial<Deployment> = {}): Deployment {
   return {

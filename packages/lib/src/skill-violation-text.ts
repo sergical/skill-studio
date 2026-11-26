@@ -26,7 +26,13 @@ function asSentence(text: string): string {
  * skill, and Claude Code reads it line by line, so only pi skips it.
  */
 export function isUnquotedColonYaml(violation: string): boolean {
-  return violation.startsWith("invalid YAML frontmatter") && violation.includes("mapping values");
+  // The scanner adds this note only after checking the colon can be quoted (`UNQUOTED_COLON_NOTE`
+  // in crates/skill-studio-core/src/frontmatter_repair.rs); bad indentation gives the same parser
+  // message without it.
+  return (
+    violation.startsWith("invalid YAML frontmatter") &&
+    violation.endsWith("(unquoted colon in a value)")
+  );
 }
 
 /** What the agents do with one violation, or "" when there is nothing to add. */

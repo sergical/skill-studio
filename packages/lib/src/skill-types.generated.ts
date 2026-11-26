@@ -297,7 +297,8 @@ export interface HarnessListing {
    */
   context_window_tokens: number | null;
   /**
-   * Effective Claude Code skillListingMaxDescChars in this scope.
+   * The most characters of one description the agent lists: Claude Code's
+   * skillListingMaxDescChars in this scope, or Codex's fixed cap.
    */
   description_char_limit?: number | null;
   /**

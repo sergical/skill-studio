@@ -156,26 +156,31 @@ export function SkillVisibility({
         </div>
       ) : (
         <>
-          {row.description_char_limit != null ? (
+          {known.state === "truncated" && row.thresholds?.tier === "descriptions_shortened" ? (
+            // Codex's budget is full: it cuts every long description to about one length.
             <p className="mt-3 text-small text-text-secondary">
-              Per-skill limit{" "}
+              {name} keeps about{" "}
               <strong className="text-text-primary">
-                {row.description_char_limit.toLocaleString()} characters
-              </strong>
-              <code className="ml-2 text-caption text-text-tertiary">skillListingMaxDescChars</code>
+                {row.thresholds.average_description_chars.toLocaleString()} characters
+              </strong>{" "}
+              of each description
+              {row.setting && (
+                <code className="ml-2 text-caption text-text-tertiary">{row.setting.key}</code>
+              )}
             </p>
           ) : (
-            // Codex has no per-skill limit: its budget cuts every long description to about one length.
-            known.state === "truncated" &&
-            row.thresholds?.tier === "descriptions_shortened" && (
+            row.description_char_limit != null && (
               <p className="mt-3 text-small text-text-secondary">
-                {name} keeps about{" "}
+                Per-skill limit{" "}
                 <strong className="text-text-primary">
-                  {row.thresholds.average_description_chars.toLocaleString()} characters
-                </strong>{" "}
-                of each description
-                {row.setting && (
-                  <code className="ml-2 text-caption text-text-tertiary">{row.setting.key}</code>
+                  {row.description_char_limit.toLocaleString()} characters
+                </strong>
+                {row.description_limit_setting ? (
+                  <code className="ml-2 text-caption text-text-tertiary">
+                    {row.description_limit_setting.key}
+                  </code>
+                ) : (
+                  <span className="ml-2 text-caption text-text-tertiary">fixed</span>
                 )}
               </p>
             )

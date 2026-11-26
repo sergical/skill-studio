@@ -23,6 +23,9 @@ use skill_studio_core::identity::{CorrelationId, RootScope, SkillDestination, Sk
 use skill_studio_core::ops::{self, Operation};
 use skill_studio_core::ports::{OpContext, Runtime};
 
+use tauri::Manager;
+
+use super::skill_refresh::{self, SkillRefreshState};
 use crate::timing_log::CommandError;
 
 use super::agents::AgentId;
@@ -77,13 +80,17 @@ struct ComposedFrontmatter<'a> {
     description: Option<&'a str>,
 }
 
-/// Pasted text without leading blank lines or Windows line endings, so a
-/// fence copied with a blank line above it still counts as frontmatter.
+/// Pasted text without leading blank lines, trailing blank lines or Windows
+/// line endings, so a fence copied with a blank line above it still counts as
+/// frontmatter. Indentation inside the text is kept: an indented first line is
+/// a Markdown code block.
 fn normalized_text(draft: &PastedSkillDraft) -> String {
     let text = draft.text.replace("\r\n", "\n");
-    text.trim_start_matches(['\n', ' ', '\t'])
-        .trim_end()
-        .to_string()
+    let mut lines: Vec<&str> = text.lines().skip_while(|l| l.trim().is_empty()).collect();
+    while lines.last().is_some_and(|l| l.trim().is_empty()) {
+        lines.pop();
+    }
+    lines.join("\n")
 }
 
 /// The SKILL.md text a draft writes. Text without a fence gets one built
@@ -157,19 +164,16 @@ pub(crate) fn create_pasted_skill_with(
 ) -> Result<AddSkillResult, CommandError> {
     let content = compose_skill_md(&request.draft);
     let check = check_composed(&request.draft, &content);
-    let name = match (check.can_save, check.name) {
-        (true, Some(name)) => name,
-        _ => {
-            let reason = check
-                .problems
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "the skill needs a name and a description".to_string());
-            return Err(CommandError::with_code(
-                ErrorCode::InvalidRequest,
-                format!("Cannot save this skill: {reason}"),
-            ));
-        }
+    let (true, Some(name)) = (check.can_save, check.name) else {
+        let reason = check
+            .problems
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "the skill needs a name and a description".to_string());
+        return Err(CommandError::with_code(
+            ErrorCode::InvalidRequest,
+            format!("Cannot save this skill: {reason}"),
+        ));
     };
     let harnesses = std::iter::once(Ok(skill_studio_core::identity::AgentId::from(
         skill_studio_core::install_targets::UNIVERSAL_TARGET,
@@ -206,7 +210,7 @@ pub(crate) fn create_pasted_skill_with(
 }
 
 #[tauri::command]
-pub fn check_pasted_skill(draft: PastedSkillDraft) -> PastedSkillCheck {
+pub async fn check_pasted_skill(draft: PastedSkillDraft) -> PastedSkillCheck {
     check_draft(&draft)
 }
 
@@ -216,10 +220,25 @@ pub async fn create_pasted_skill(
     request: CreatePastedSkillRequest,
     app: tauri::AppHandle,
 ) -> Result<AddSkillResult, String> {
+    let reconcile_app = app.clone();
     let work = async move {
         let joined = crate::timing_log::spawn_blocking_in_span(move || {
             let rt = super::core_runtime::build_runtime_write()?;
-            create_pasted_skill_with(&rt, &request)
+            let result = create_pasted_skill_with(&rt, &request)?;
+            // The sheet opens this skill's page next, so put it in the snapshot first, as Add by
+            // source does; the folder watcher alone would leave the page on the old snapshot.
+            let reconciled = reconcile_app.try_state::<SkillRefreshState>().map(|state| {
+                skill_refresh::reconcile_skill_names_and_emit(
+                    &reconcile_app,
+                    state.inner(),
+                    [result.name.clone()],
+                    &[],
+                )
+            });
+            if !matches!(reconciled, Some(Ok(()))) {
+                skill_refresh::request_snapshot_rebuild(&reconcile_app);
+            }
+            Ok::<_, CommandError>(result)
         })
         .await;
         crate::timing_log::join_result_to_err("create_pasted_skill", joined)
@@ -290,6 +309,20 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(folder.join("SKILL.md")).unwrap(),
             PASTED.trim_start(),
+        );
+    }
+
+    #[test]
+    fn pasted_body_keeps_its_indentation_so_a_leading_code_block_stays_one() {
+        let draft = PastedSkillDraft {
+            text: "\n\n    npm test\n\nRun the tests first.  \n\n".to_string(),
+            name: "run-tests".to_string(),
+            description: "Use before a commit".to_string(),
+        };
+        let content = compose_skill_md(&draft);
+        assert!(
+            content.ends_with("\n    npm test\n\nRun the tests first.  \n"),
+            "{content}"
         );
     }
 
