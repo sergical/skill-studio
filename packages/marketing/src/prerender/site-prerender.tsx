@@ -85,14 +85,14 @@ function renderHead({ title, description, path, markdownPath }: PageHead): strin
     `<meta property="og:title" content="${escapeAttribute(title)}" />`,
     `<meta property="og:description" content="${escapeAttribute(description)}" />`,
     `<meta property="og:url" content="${url}" />`,
-    `<meta property="og:image" content="${SITE_ORIGIN}/og.png" />`,
+    `<meta property="og:image" content="${SITE_ORIGIN}/og.jpg" />`,
     `<meta property="og:image:width" content="1200" />`,
     `<meta property="og:image:height" content="630" />`,
     SHARE_IMAGE_ALT_TAGS,
     `<meta name="twitter:card" content="summary_large_image" />`,
     `<meta name="twitter:title" content="${escapeAttribute(title)}" />`,
     `<meta name="twitter:description" content="${escapeAttribute(description)}" />`,
-    `<meta name="twitter:image" content="${SITE_ORIGIN}/og.png" />`,
+    `<meta name="twitter:image" content="${SITE_ORIGIN}/og.jpg" />`,
   );
   return tags.join("\n    ");
 }

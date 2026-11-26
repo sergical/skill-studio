@@ -1,6 +1,6 @@
 // ============================================================================
 // Skill Studio - Share card test
-// Flow: a hero change ships, and link previews show the card public/og.png.
+// Flow: a hero change ships, and link previews show the card public/og.jpg.
 // Failure: the homepage says one thing and the card another, because nobody
 // rendered the card again.
 // ============================================================================
