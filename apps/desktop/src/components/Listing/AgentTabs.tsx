@@ -11,9 +11,12 @@ import { useAppStore } from "../../store/appStore";
 const AGENT_TABS = ["listing", "sessions"] as const;
 type AgentTab = (typeof AGENT_TABS)[number];
 
-/** px-0 so the first tab's label starts on the page's left edge, like the section titles. */
+/** No padding, so the first tab's label starts on the page's left edge, like the title (the
+ * list's `-ml-px` takes back each tab's 1px transparent border). The prefix matches the line
+ * variant's own `px-4`, which a bare `px-0` would lose to. `pb-1` puts the label's middle on
+ * the toolbar's other controls' middle, which sit 2px above the row's centre. */
 const TRIGGER =
-  "px-0 text-body font-medium text-text-tertiary after:bg-text-primary data-active:text-text-primary hover:text-text-secondary";
+  "group-data-[variant=line]/tabs-list:px-0 pb-1 text-body font-medium text-text-tertiary after:bg-text-primary data-active:text-text-primary hover:text-text-secondary";
 
 /** Each tab is its own page, so a switch unmounts the selected tab. The next page's tabs take
  * focus back when the switch came from here, and only then. */
@@ -33,7 +36,11 @@ export function AgentTabs({ tab, harness }: { tab: AgentTab; harness: string }) 
     return () => cancelAnimationFrame(frame);
   }, []);
   return (
+    // The tabs fill the toolbar row down to its line (`-mb-1` undoes the row's `pb-1`), and the
+    // list draws no line of its own: the row's line is the one line under the header, and the
+    // selected tab's underline sits on it.
     <Tabs
+      className="-mb-1 self-stretch"
       value={tab}
       onValueChange={(value) => {
         const kind = AGENT_TABS.find((item) => item === value);
@@ -42,7 +49,12 @@ export function AgentTabs({ tab, harness }: { tab: AgentTab; harness: string }) 
         navigate({ kind, harness: harness || undefined });
       }}
     >
-      <TabsList ref={list} variant="line" aria-label="Agent report" className="gap-5">
+      <TabsList
+        ref={list}
+        variant="line"
+        aria-label="Agent report"
+        className="-ml-px h-full gap-5 border-b-0 group-data-horizontal/tabs:h-full"
+      >
         <TabsTrigger value="listing" className={TRIGGER}>
           What it sees
         </TabsTrigger>
