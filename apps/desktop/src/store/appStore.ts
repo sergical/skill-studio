@@ -29,11 +29,16 @@ import type {
   PackExportReport,
   PackExportRequest,
   PackReport,
+  AddSkillResult,
+  PastedSkillCheck,
+  PastedSkillDraft,
 } from "@skill-studio/lib";
 import { BUSY_MESSAGE, UPDATE_ALL_BUSY_MESSAGE } from "../lib/skill-busy-message";
 import { addToast } from "../lib/toast";
 import {
+  checkPastedSkill,
   checkSkillUpdatesNow,
+  createPastedSkill,
   getAddMethodDefaults,
   invokeErrorMessage,
   openListingSetting,
@@ -327,6 +332,13 @@ interface AppState {
   runPackAction: (intent: PackIntent, dryRun: boolean) => Promise<PackActionReport>;
   /** Plans (`dryRun`) or writes a new pack folder from installed skills. Rejects with the command's message. */
   exportPack: (request: PackExportRequest) => Promise<PackExportReport>;
+
+  // === Paste a new skill ===
+  /** Builds and validates the SKILL.md a pasted draft becomes. Writes nothing. */
+  checkPastedSkill: (draft: PastedSkillDraft) => Promise<PastedSkillCheck>;
+  /** Writes the draft as a new Global skill for the agents the Add Skill sheet ticks by default.
+   * Rejects with the command's message, for example when the skill folder already exists. */
+  createPastedSkill: (draft: PastedSkillDraft) => Promise<AddSkillResult>;
 
   // === Model listing ===
   /** Per-skill listing state for each agent, from the core's `listing`. Reads only. */
@@ -660,6 +672,21 @@ export const useAppStore = create<AppState>((set, get) => ({
   runPackAction: (intent, dryRun) =>
     withCommandMessage(packActionCall(intent, dryRun, get().harnessDetection.choice?.kept ?? [])),
   exportPack: (request) => withCommandMessage(packExport(request)),
+
+  checkPastedSkill: (draft) => withCommandMessage(checkPastedSkill(draft)),
+  createPastedSkill: (draft) =>
+    withCommandMessage(
+      getAddMethodDefaults(null).then((defaults) =>
+        createPastedSkill({
+          draft,
+          agents: defaultSharedInstallAgents(
+            defaults.installed_harnesses,
+            get().harnessDetection.choice?.kept ?? [],
+          ),
+          link_mode: "link",
+        }),
+      ),
+    ),
 
   addSkillSheet: { open: false },
   openAddSkillSheet: (prefill) => set({ addSkillSheet: { open: true, prefill } }),

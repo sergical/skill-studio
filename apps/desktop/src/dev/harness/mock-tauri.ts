@@ -23,6 +23,7 @@ import type {
   Deployment,
   DiscoverySourceSetting,
   InstalledSkill,
+  PastedSkillCheck,
   ProjectFolder,
   RemoveOutcome,
   SkillEvent,
@@ -110,6 +111,36 @@ const addRequestSchema = z
   })
   .passthrough();
 type AddRequestLike = z.infer<typeof addRequestSchema>;
+
+const pastedDraftSchema = z.object({
+  text: z.string(),
+  name: z.string(),
+  description: z.string(),
+});
+
+/** Mirrors `skill_create::check_draft` for the two problems the Paste tab acts on: the frontmatter
+ * fence wins, else the Name and Description fields fill it. */
+function checkPastedDraft(draft: z.infer<typeof pastedDraftSchema>): PastedSkillCheck {
+  const text = draft.text.replace(/\r\n/g, "\n").replace(/^[\n \t]+/, "");
+  const fence = /^---\n([\s\S]*?)\n---(\n|$)/.exec(text);
+  const field = (key: "name" | "description") =>
+    (fence
+      ? new RegExp(`^${key}:[ \t]*(.+)$`, "m").exec(fence[1])?.[1].trim()
+      : draft[key].trim()) || null;
+  const name = field("name");
+  const description = field("description");
+  const problems = [
+    ...(name ? [] : ["missing required frontmatter field: name"]),
+    ...(description ? [] : ["missing required frontmatter field: description"]),
+  ];
+  return {
+    has_frontmatter: fence !== null,
+    name,
+    description,
+    problems,
+    can_save: !problems.length,
+  };
+}
 
 const SOURCE_KIND_BY_METHOD = {
   dotagents: "dotagents",
@@ -1153,6 +1184,47 @@ export function installMockTauri(
         case "add_skill": {
           const request = addRequestSchema.parse(payload.request);
           return (await addSkills(request))[0];
+        }
+        case "check_pasted_skill":
+          return checkPastedDraft(pastedDraftSchema.parse(payload.draft));
+        case "create_pasted_skill": {
+          const draft = pastedDraftSchema.parse(
+            z.object({ draft: z.unknown() }).parse(payload.request).draft,
+          );
+          const check = checkPastedDraft(draft);
+          if (!check.can_save || !check.name || !check.description) {
+            throw new Error(`Cannot save this skill: ${check.problems[0]}`);
+          }
+          const name = check.name;
+          if (currentSnapshot.skills.some((item) => item.name === name)) {
+            throw new Error(
+              "a copy already exists at this destination; install does not overwrite one",
+            );
+          }
+          const added = buildAddedSkill(
+            {
+              scope: "global",
+              method: "copy",
+              source: { kind: "local", skillName: name, repo: null, url: null },
+            },
+            name,
+            check.description,
+          );
+          const text = draft.text.trim();
+          harnessSkillContent.set(
+            `${HARNESS_HOME}/.agents/skills/${name}/SKILL.md`,
+            check.has_frontmatter
+              ? `${text}\n`
+              : `---\nname: ${name}\ndescription: ${check.description}\n---\n\n${text}\n`,
+          );
+          await publish({ ...currentSnapshot, skills: [...currentSnapshot.skills, added] });
+          return {
+            name,
+            tool: "copy",
+            command: "ops::install (copy)",
+            deployments_created: added.deployments.map((entry) => entry.path),
+            warning: null,
+          };
         }
         case "start_add_skill_operation":
         case "start_add_skills_operation": {

@@ -361,6 +361,12 @@ Universal deployment or separate Per harness copies. For Per harness, the backen
 copies the fetched source into each selected harness path and rejects an empty
 selection. Project scope uses the same layout below the selected project.
 
+The sheet's **Paste** tab makes a new skill from pasted text (a whole SKILL.md,
+or the instructions plus a name and description). The desktop builds the file,
+shows `validate_skill`'s problems before saving, and writes it as a Global
+Universal Copy through the same `ops::install`, so it is a Copy Skill Studio
+owns. It refuses a folder that already exists.
+
 ## Trials (removed)
 
 The 24-hour trial install was removed in #285. There is no time-boxed install

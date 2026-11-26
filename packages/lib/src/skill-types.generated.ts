@@ -1706,6 +1706,49 @@ export interface AddSkillResult {
   warning: string | null;
 }
 /**
+ * What the user pasted. `name` and `description` fill the frontmatter only
+ * when `text` has none of its own.
+ */
+export interface PastedSkillDraft {
+  text: string;
+  name: string;
+  description: string;
+}
+/**
+ * The SKILL.md a draft becomes, and what the validator says about it.
+ */
+export interface PastedSkillCheck {
+  /**
+   * `false` when the pasted text has no `---` frontmatter, so the sheet
+   * asks for a name and a description.
+   */
+  has_frontmatter: boolean;
+  name: string | null;
+  description: string | null;
+  /**
+   * `validate_skill`'s violations, the same strings a scanned skill shows.
+   */
+  problems: string[];
+  /**
+   * `false` when the file has no usable folder name, no description, or
+   * frontmatter that does not parse.
+   */
+  can_save: boolean;
+}
+/**
+ * `create_pasted_skill`'s request: the draft plus the agents the sheet
+ * would tick for a Global Universal install (`defaultSharedInstallAgents`).
+ */
+export interface CreatePastedSkillRequest {
+  draft: PastedSkillDraft;
+  agents: AgentId[];
+  /**
+   * Link or copy into each chosen harness folder that is not the shared
+   * folder. Ignored when the choice writes one folder only.
+   */
+  link_mode: "link" | "copy";
+}
+/**
  * `list_github_skills`'s result. `commit` is the tree's own sha, which the
  * copy install pins to; `truncated` is GitHub's own flag for a tree too
  * large to return in one response.

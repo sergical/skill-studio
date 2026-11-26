@@ -6,6 +6,7 @@
 // Global/Project Scope. Submits to
 // a background Add Skill operation (`start_add_skill_operation` /
 // `start_add_skills_operation`) so `npx` never runs on the UI thread.
+// The Paste tab (PasteSkillTab.tsx) makes a new skill from pasted text.
 // ============================================================================
 
 import { useEffect, useReducer, useRef, useState } from "react";
@@ -30,6 +31,7 @@ import { ScopeToggleGroup } from "../SkillStore/ScopeToggleGroup";
 import { SkillStore } from "../SkillStore/SkillStore";
 import { CheckboxControl } from "../ui/CheckboxControl";
 import { availableAddSkillMethods, isAddSkillFormValid } from "./add-skill-form";
+import { PasteSkillTab } from "./PasteSkillTab";
 import { TrustConfirmFooter } from "./TrustConfirmFooter";
 import {
   cancelAddSkillOperation,
@@ -120,7 +122,7 @@ function parseSummary(parsed: ParsedSkillSource | { error: string }): string {
  * to be nine separate `useState` calls all cleared by the same effect.
  */
 interface FormState {
-  sheetTab: "manual" | "browse";
+  sheetTab: "manual" | "paste" | "browse";
   source: string;
   /** The name a plain git URL installs under - it has no repo listing to
    * infer one from, so the sheet asks for it directly (see `derive_name`
@@ -1347,6 +1349,9 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
             <TabsTrigger value="manual" className={SHEET_TAB_CLASS}>
               Add by source
             </TabsTrigger>
+            <TabsTrigger value="paste" className={SHEET_TAB_CLASS}>
+              Paste
+            </TabsTrigger>
             <TabsTrigger value="browse" className={SHEET_TAB_CLASS}>
               Browse skills.sh
             </TabsTrigger>
@@ -1354,6 +1359,19 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
 
           <TabsContent value="browse" className="flex flex-1 overflow-hidden">
             <SkillStore compact />
+          </TabsContent>
+
+          <TabsContent value="paste" keepMounted className="flex flex-1 overflow-hidden">
+            {/* A fresh draft each time the sheet opens, kept across tab switches. */}
+            <PasteSkillTab
+              key={isOpen ? "open" : "closed"}
+              skills={skills}
+              onCancel={closeSheet}
+              onAdded={(name) => {
+                closeSheet();
+                openSkill(name);
+              }}
+            />
           </TabsContent>
 
           <TabsContent

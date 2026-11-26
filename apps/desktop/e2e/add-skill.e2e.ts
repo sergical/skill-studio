@@ -50,3 +50,21 @@ test("Close on the trust prompt installs nothing", async ({ page }) => {
   await expect(page.getByRole("textbox", { name: "Filter skills" })).toHaveValue(SKILL);
   await expect(skillRow(page, SKILL)).toHaveCount(0);
 });
+
+test("pasting a SKILL.md adds a new skill and opens its page", async ({ page }) => {
+  await page.getByRole("navigation").getByRole("button", { name: "Add skill" }).click();
+  const sheet = page.getByRole("dialog", { name: "Add skill" });
+  await sheet.getByRole("tab", { name: "Paste" }).click();
+
+  await sheet
+    .getByRole("textbox", { name: "SKILL.md" })
+    .fill(
+      "---\nname: pasted-review\ndescription: Reviews a diff before it ships.\n---\n\nRead the diff.\n",
+    );
+  await sheet.getByRole("button", { name: "Add skill", exact: true }).click();
+
+  await expect(sheet).toHaveCount(0);
+  await expect(skillPageTitle(page, "pasted-review")).toBeVisible();
+  await openSkillsPage(page, "Skills", "pasted-review");
+  await expect(skillRow(page, "pasted-review")).toHaveCount(1);
+});

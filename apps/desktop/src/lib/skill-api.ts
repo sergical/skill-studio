@@ -15,6 +15,9 @@ import type {
   AddMethodDefaults,
   AddSkillOperationEvent,
   AddSkillRequest,
+  CreatePastedSkillRequest,
+  PastedSkillCheck,
+  PastedSkillDraft,
   AddSkillResult,
   AddSkillsRequest,
   AgentId,
@@ -519,6 +522,18 @@ export async function unforkSkill(target: LifecycleTarget): Promise<void> {
  */
 export async function addSkill(request: AddSkillRequest): Promise<AddSkillResult> {
   return callCommand("add_skill", { request });
+}
+
+/** Build the SKILL.md a pasted draft becomes and validate it. Writes nothing. */
+export async function checkPastedSkill(draft: PastedSkillDraft): Promise<PastedSkillCheck> {
+  return callCommand("check_pasted_skill", { draft });
+}
+
+/** Write a pasted draft as a new Global Universal skill. Refuses an existing skill folder. */
+export async function createPastedSkill(
+  request: CreatePastedSkillRequest,
+): Promise<AddSkillResult> {
+  return callCommand("create_pasted_skill", { request });
 }
 
 /** Event name every background Add Skill status is emitted on. */
