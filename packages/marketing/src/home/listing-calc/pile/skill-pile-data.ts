@@ -87,7 +87,7 @@ const UNUSED = [
 const COPY_COUNT = 44;
 
 // A fixed seed, so the prerender and every visit draw the same pile.
-function seededRandom(seed: number) {
+export function seededRandom(seed: number) {
   let state = seed;
   return () => {
     state = (state + 0x6d2b79f5) | 0;

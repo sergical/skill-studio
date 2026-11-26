@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 
 const PACKAGE_ROOT = new URL("../", import.meta.url);
 const SHARE_CARD_FILES = [
+  "public/og.jpg",
   "public/og.png",
   "public/skill-studio-logo-512.webp",
   "src/remotion/OgCard.tsx",
