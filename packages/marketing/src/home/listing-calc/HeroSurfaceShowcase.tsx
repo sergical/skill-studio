@@ -6,11 +6,20 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import * as stylex from "@stylexjs/stylex";
 import { AGENT_SETUP_PROMPT } from "@skill-studio/lib/agent-setup";
-import { AppWindow, Check, Copy, Download, Plug, Terminal, type LucideIcon } from "lucide-react";
+import {
+  AppWindow,
+  Check,
+  Copy,
+  Download,
+  Plug,
+  Share,
+  Terminal,
+  type LucideIcon,
+} from "lucide-react";
 
 import { ProductMock, type ThemeToggleOrigin } from "../../ProductMock";
 import { siteTokens, type SiteTheme } from "../../SiteTheme.stylex";
-import { CLI_DOCS_URL, DOCS_URL, DOWNLOAD_URL, MCP_DOCS_URL } from "../../site-links";
+import { CLI_DOCS_URL, DOCS_URL, DOWNLOAD_URL, MCP_DOCS_URL, SITE_URL } from "../../site-links";
 import { DITHER_COLORS } from "../ClosingFinale";
 import { WarpDither } from "../WarpDither";
 import { useCopyFlash } from "../useCopyFlash";
@@ -203,6 +212,17 @@ export function HeroSurfaceShowcase({
     tabRefs.current[nextIdx]?.focus();
   };
 
+  const sendToMac = () => {
+    if (!("share" in navigator)) {
+      copy(SITE_URL);
+      return;
+    }
+    navigator
+      .share({ title: "Skill Studio", text: "Skill Studio for Mac", url: SITE_URL })
+      .catch(() => {});
+  };
+  const light = theme === "light";
+
   const bottomSummary =
     surface === "app"
       ? "Interactive macOS app preview. Inspect skills, check listing budgets, or switch views."
@@ -223,9 +243,13 @@ export function HeroSurfaceShowcase({
             role="tablist"
             aria-label="Skill Studio surfaces"
             onKeyDown={onTabKeyDown}
-            {...stylex.props(styles.tabTrack)}
+            {...stylex.props(styles.tabTrack, light && styles.tabTrackLight)}
           >
-            <span ref={pillRef} aria-hidden="true" {...stylex.props(styles.tabPill)} />
+            <span
+              ref={pillRef}
+              aria-hidden="true"
+              {...stylex.props(styles.tabPill, light && styles.tabPillLight)}
+            />
             {SURFACES.map((item, idx) => {
               const Icon = item.icon;
               const selected = item.id === surface;
@@ -242,7 +266,11 @@ export function HeroSurfaceShowcase({
                   aria-controls="surface-panel"
                   tabIndex={selected ? 0 : -1}
                   onClick={() => selectSurface(item.id, false)}
-                  {...stylex.props(styles.tabBtn, selected && styles.tabBtnOn)}
+                  {...stylex.props(
+                    styles.tabBtn,
+                    light && styles.tabBtnLight,
+                    selected && (light ? styles.tabBtnOnLight : styles.tabBtnOn),
+                  )}
                 >
                   <Icon size={16} aria-hidden="true" />
                   <span {...stylex.props(styles.desktopLabel)}>{item.label}</span>
@@ -254,23 +282,67 @@ export function HeroSurfaceShowcase({
 
           <div {...stylex.props(styles.topActionSlot)}>
             {surface === "app" ? (
-              <a href={DOWNLOAD_URL} {...stylex.props(styles.topActionLink)}>
-                <Download size={15} aria-hidden="true" />
-                <span>Download for macOS</span>
-                <span {...stylex.props(styles.topActionMeta)}>macOS 13+</span>
-              </a>
+              <>
+                <a
+                  href={DOWNLOAD_URL}
+                  {...stylex.props(
+                    styles.topActionLink,
+                    light && styles.barLight,
+                    styles.pointerOnly,
+                  )}
+                >
+                  <Download size={15} aria-hidden="true" />
+                  <span>Download for macOS</span>
+                  <span {...stylex.props(styles.topActionMeta, light && styles.topActionMetaLight)}>
+                    macOS 13+
+                  </span>
+                </a>
+                <button
+                  type="button"
+                  onClick={sendToMac}
+                  {...stylex.props(
+                    styles.topActionLink,
+                    light && styles.barLight,
+                    copied && styles.commandBarCopied,
+                    styles.touchOnly,
+                  )}
+                >
+                  {copied ? (
+                    <Check size={15} aria-hidden="true" />
+                  ) : (
+                    <Share size={15} aria-hidden="true" />
+                  )}
+                  <span>{copied ? "Link copied" : "Send to my Mac"}</span>
+                </button>
+              </>
             ) : surface === "cli" ? (
               <button
                 type="button"
                 aria-label={copied ? "Copied command" : `Copy command: ${activeCli.cmd}`}
                 onClick={() => copy(activeCli.cmd)}
-                {...stylex.props(styles.commandBar, copied && styles.commandBarCopied)}
+                {...stylex.props(
+                  styles.commandBar,
+                  light && styles.barLight,
+                  copied && styles.commandBarCopied,
+                )}
               >
-                <span {...stylex.props(styles.commandPrompt)} aria-hidden="true">
+                <span
+                  {...stylex.props(styles.commandPrompt, light && styles.commandPromptLight)}
+                  aria-hidden="true"
+                >
                   $
                 </span>
-                <code {...stylex.props(styles.commandCode)}>{activeCli.cmd}</code>
-                <span {...stylex.props(styles.copyBadge, copied && styles.copyBadgeCopied)}>
+                <code {...stylex.props(styles.commandCode, light && styles.barTextLight)}>
+                  {activeCli.cmd}
+                </code>
+                <span
+                  {...stylex.props(
+                    styles.copyBadge,
+                    light && styles.copyBadgeLight,
+                    copied && styles.copyBadgeCopied,
+                    copied && light && styles.copyBadgeCopiedLight,
+                  )}
+                >
                   {copied ? (
                     <Check size={14} aria-hidden="true" />
                   ) : (
@@ -284,13 +356,28 @@ export function HeroSurfaceShowcase({
                 type="button"
                 aria-label={copied ? "Copied MCP setup prompt" : "Copy MCP setup prompt"}
                 onClick={() => copy(AGENT_SETUP_PROMPT)}
-                {...stylex.props(styles.commandBar, copied && styles.commandBarCopied)}
+                {...stylex.props(
+                  styles.commandBar,
+                  light && styles.barLight,
+                  copied && styles.commandBarCopied,
+                )}
               >
-                <Plug size={15} aria-hidden="true" {...stylex.props(styles.commandPrompt)} />
-                <span {...stylex.props(styles.promptPreview)}>
+                <Plug
+                  size={15}
+                  aria-hidden="true"
+                  {...stylex.props(styles.commandPrompt, light && styles.commandPromptLight)}
+                />
+                <span {...stylex.props(styles.promptPreview, light && styles.barTextLight)}>
                   “Set up Skill Studio MCP and check my skills…”
                 </span>
-                <span {...stylex.props(styles.copyBadge, copied && styles.copyBadgeCopied)}>
+                <span
+                  {...stylex.props(
+                    styles.copyBadge,
+                    light && styles.copyBadgeLight,
+                    copied && styles.copyBadgeCopied,
+                    copied && light && styles.copyBadgeCopiedLight,
+                  )}
+                >
                   {copied ? (
                     <Check size={14} aria-hidden="true" />
                   ) : (
@@ -301,7 +388,13 @@ export function HeroSurfaceShowcase({
               </button>
             )}
             <span aria-live="polite" {...stylex.props(styles.visuallyHidden)}>
-              {copied ? (surface === "cli" ? "Copied command" : "Copied MCP setup prompt") : ""}
+              {copied
+                ? surface === "cli"
+                  ? "Copied command"
+                  : surface === "mcp"
+                    ? "Copied MCP setup prompt"
+                    : "Copied the link to Skill Studio"
+                : ""}
             </span>
           </div>
         </div>
@@ -344,6 +437,7 @@ export function HeroSurfaceShowcase({
 
 const MOBILE = "@media (max-width: 680px)";
 const HOVER = "@media (hover: hover) and (pointer: fine)";
+const TOUCH_DEVICE = "@media (hover: none) and (pointer: coarse)";
 const REDUCED = "@media (prefers-reduced-motion: reduce)";
 const PRESS_EASE = "cubic-bezier(0.25, 0.46, 0.45, 0.94)";
 
@@ -470,6 +564,50 @@ const styles = stylex.create({
     color: "oklch(0.14 0.02 290)",
     [HOVER]: { ":hover": { color: "oklch(0.14 0.02 290)" } },
   },
+  tabTrackLight: {
+    backgroundColor: "oklch(1 0 0 / .78)",
+    boxShadow:
+      "inset 0 0 0 1px oklch(0.36 0.08 293 / .16), 0 8px 24px -8px oklch(0.3 0.08 293 / .24)",
+  },
+  tabPillLight: {
+    backgroundColor: siteTokens.text,
+    boxShadow: "0 1px 2px oklch(0 0 0 / .16)",
+  },
+  tabBtnLight: {
+    color: siteTokens.muted,
+    [HOVER]: { ":hover": { color: siteTokens.text } },
+    ":focus-visible": { outline: `2px solid ${siteTokens.text}`, outlineOffset: 2 },
+  },
+  tabBtnOnLight: {
+    color: siteTokens.background,
+    [HOVER]: { ":hover": { color: siteTokens.background } },
+  },
+  barLight: {
+    backgroundColor: {
+      default: "oklch(1 0 0 / .8)",
+      [HOVER]: { ":hover": "oklch(1 0 0 / .94)" },
+    },
+    borderColor: {
+      default: "oklch(0.36 0.08 293 / .18)",
+      [HOVER]: { ":hover": "oklch(0.36 0.08 293 / .32)" },
+    },
+    boxShadow: "0 8px 24px -8px oklch(0.3 0.08 293 / .24)",
+    color: siteTokens.text,
+    ":focus-visible": { outline: `2px solid ${siteTokens.text}`, outlineOffset: 2 },
+  },
+  barTextLight: { color: siteTokens.text },
+  commandPromptLight: { color: siteTokens.accent },
+  topActionMetaLight: {
+    backgroundColor: "oklch(0.36 0.08 293 / .08)",
+    color: siteTokens.muted,
+  },
+  copyBadgeLight: {
+    backgroundColor: siteTokens.text,
+    color: siteTokens.background,
+  },
+  copyBadgeCopiedLight: { color: "oklch(0.99 0 0)" },
+  pointerOnly: { display: { default: "inline-flex", [TOUCH_DEVICE]: "none" } },
+  touchOnly: { display: { default: "none", [TOUCH_DEVICE]: "inline-flex" } },
 
   topActionSlot: {
     alignItems: "center",

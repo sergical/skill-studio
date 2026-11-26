@@ -1,3 +1,4 @@
+export const SITE_URL = "https://useskillstudio.com/";
 export const GITHUB_REPOSITORY_URL = "https://github.com/sergical/skill-studio";
 // Branded on-site download routes; Cloudflare _redirects (and Vite dev middleware) 302 these to
 // the latest release DMGs so buttons never expose raw GitHub release URLs.
