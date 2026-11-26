@@ -5,7 +5,7 @@
 // or a cache can hand one format to the other client.
 // ============================================================================
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import worker from "./site-worker";
 
@@ -84,5 +84,50 @@ describe("site worker", () => {
 
     expect(again.status).toBe(304);
     expect(again.headers.get("vary")).toBe("Accept");
+  });
+});
+
+// Flow: the browser SDK posts an envelope to the same-origin tunnel, which ad blockers allow.
+// Failure: the envelope never reaches Sentry, or the tunnel forwards other projects' envelopes.
+describe("site worker Sentry tunnel", () => {
+  const SITE_DSN = "https://public@o1.ingest.us.sentry.io/42";
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function postEnvelope(dsn: string) {
+    const body = `${JSON.stringify({ dsn })}\n{"type":"event"}\n{}`;
+    const request = new Request("https://useskillstudio.com/m", {
+      method: "POST",
+      body,
+      headers: { "content-length": String(body.length), "cf-connecting-ip": "203.0.113.7" },
+    });
+    return worker.fetch(request, { ...env, SENTRY_DSN: SITE_DSN });
+  }
+
+  it("forwards the site's envelope to Sentry with the visitor's IP", async () => {
+    const sentry = vi.fn(async (_url: string, init: RequestInit) => {
+      await new Response(init.body).text();
+      return new Response("{}", { status: 200 });
+    });
+    vi.stubGlobal("fetch", sentry);
+
+    const response = await postEnvelope(SITE_DSN);
+
+    expect(response.status).toBe(200);
+    const [url, init] = sentry.mock.calls[0];
+    expect(url).toMatch(/^https:\/\/o1\.ingest\.us\.sentry\.io\/api\/42\/envelope\//);
+    expect(new Headers(init.headers).get("x-sentry-forwarded-for")).toBe("203.0.113.7");
+  });
+
+  it("refuses an envelope for another DSN", async () => {
+    const sentry = vi.fn();
+    vi.stubGlobal("fetch", sentry);
+
+    const response = await postEnvelope("https://public@o9.ingest.sentry.io/9");
+
+    expect(response.status).toBe(403);
+    expect(sentry).not.toHaveBeenCalled();
   });
 });
