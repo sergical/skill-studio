@@ -102,7 +102,7 @@ export function KineticCalculator() {
   const calc = useCalculator();
   const { copied, copy } = useCopyFlash();
   const isClaude = calc.agent === "claude";
-  const kept = isClaude ? calc.claude.described : calc.codex.full + calc.codex.shortened;
+  const kept = isClaude ? calc.claude.described : calc.total - calc.codex.leftOut;
 
   const stateAt = (index: number): DotState => {
     if (index >= calc.total) return "off";

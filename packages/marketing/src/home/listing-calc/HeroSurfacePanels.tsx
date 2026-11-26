@@ -31,7 +31,7 @@ export const CLI_COMMANDS: ReadonlyArray<CliCommandSpec> = [
   {
     id: "sessions",
     label: "sessions",
-    cmd: "npx skill-studio@latest sessions --days 30",
+    cmd: "npx skill-studio@latest sessions",
     timing: "118ms",
     summary: "142 sessions scanned · 12 never triggered · 1 possible miss",
   },
@@ -52,9 +52,9 @@ export const CLI_COMMANDS: ReadonlyArray<CliCommandSpec> = [
   {
     id: "park",
     label: "park",
-    cmd: "npx skill-studio@latest park --unused-days 30",
+    cmd: "npx skill-studio@latest park release-notes deploy-preview",
     timing: "27ms",
-    summary: "12 parked · 16 of 19 now described · undoable any time",
+    summary: "2 parked · 8 of 29 now described · undoable any time",
   },
 ];
 
@@ -300,9 +300,9 @@ export function HeroCliWindow({
             >
               <CornerDownRight size={14} aria-hidden="true" />
               <span>
-                12 unused skills hold 14,820 chars. Try{" "}
+                Park the skills you never use:{" "}
                 <strong {...stylex.props(styles.tipStrong)}>
-                  npx skill-studio@latest park --unused-days 30
+                  npx skill-studio@latest park release-notes deploy-preview
                 </strong>
               </span>
             </button>
@@ -390,7 +390,7 @@ export function HeroCliWindow({
             <div {...stylex.props(styles.diagFoot, styles.lineReveal, dynamic.delay("190ms"))}>
               <span>2 errors, 1 warning found across 31 skills.</span>
               <span {...stylex.props(styles.toneAccent)}>
-                Run `npx skill-studio@latest fix --dry-run` to preview repairs.
+                Repair one with `npx skill-studio@latest fix --skill motion`.
               </span>
             </div>
           </div>
@@ -435,9 +435,9 @@ export function HeroCliWindow({
             >
               <CornerDownRight size={14} aria-hidden="true" />
               <span>
-                Park the 12 idle skills with{" "}
+                Park the idle ones by name:{" "}
                 <strong {...stylex.props(styles.tipStrong)}>
-                  npx skill-studio@latest park --unused-days 30
+                  npx skill-studio@latest park release-notes deploy-preview
                 </strong>
               </span>
             </button>
@@ -449,29 +449,26 @@ export function HeroCliWindow({
             >
               <div {...stylex.props(styles.parkBanner)}>
                 <Check size={16} aria-hidden="true" />
-                <span>Parked 12 unused skills to ~/.skill-studio/parked/</span>
+                <span>Parked 2 unused skills to ~/.skill-studio/parked/</span>
               </div>
-              <div {...stylex.props(styles.parkList)}>
-                release-notes, deploy-preview, pdf-tools,
-                opentelemetry-browser-instrumentation-guide, prisma-migrate + 7 more
-              </div>
+              <div {...stylex.props(styles.parkList)}>release-notes, deploy-preview</div>
             </div>
 
             <div {...stylex.props(styles.deltaGrid, styles.lineReveal, dynamic.delay("95ms"))}>
               <div {...stylex.props(styles.deltaCard)}>
                 <span {...stylex.props(styles.deltaLabel)}>Described</span>
-                <span {...stylex.props(styles.deltaValue, styles.toneOk)}>5 → 16</span>
-                <span {...stylex.props(styles.deltaNote)}>+11 full descriptions restored</span>
+                <span {...stylex.props(styles.deltaValue, styles.toneOk)}>5 → 8</span>
+                <span {...stylex.props(styles.deltaNote)}>+3 full descriptions restored</span>
               </div>
               <div {...stylex.props(styles.deltaCard)}>
                 <span {...stylex.props(styles.deltaLabel)}>Name only</span>
-                <span {...stylex.props(styles.deltaValue)}>12 → 3</span>
+                <span {...stylex.props(styles.deltaValue)}>12 → 11</span>
                 <span {...stylex.props(styles.deltaNote)}>writing-skills now fits</span>
               </div>
               <div {...stylex.props(styles.deltaCard)}>
                 <span {...stylex.props(styles.deltaLabel)}>Hidden</span>
-                <span {...stylex.props(styles.deltaValue, styles.toneOk)}>14 → 0</span>
-                <span {...stylex.props(styles.deltaNote)}>zero silently dropped</span>
+                <span {...stylex.props(styles.deltaValue, styles.toneOk)}>14 → 10</span>
+                <span {...stylex.props(styles.deltaNote)}>4 fewer hidden</span>
               </div>
             </div>
 
