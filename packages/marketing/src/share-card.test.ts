@@ -15,21 +15,29 @@ import { SHARE_CARD_CONTENT } from "./share-card";
 import { hashShareCardFiles } from "./share-card-files";
 
 const SHARE_IMAGE_BUDGET_BYTES = 300_000;
-const SHARE_IMAGE_TAG =
-  /<meta (?:property|name)="(?:og|twitter):image" content="https:\/\/useskillstudio\.com\/([^"]+)"/g;
+const SHARE_IMAGE_URL = "https://useskillstudio.com/og.jpg";
+const SHARE_IMAGE_TAG = /<meta (?:property|name)="((?:og|twitter):image)" content="([^"]+)"/g;
 
-it("points every page at a share card under the size budget", () => {
-  const images = new Set<string>();
-  for (const route of SITE_ROUTES) {
+// The 404 page is noindex and has no share tags on purpose.
+it.each(SITE_ROUTES.filter((route) => route.file !== "404.html"))(
+  "points $file at the share card",
+  (route) => {
     const template = readFileSync(
       fileURLToPath(new URL(`../${route.template}`, import.meta.url)),
       "utf8",
     );
-    for (const [, path] of renderSitePage(route.file, template).matchAll(SHARE_IMAGE_TAG))
-      images.add(path);
-  }
+    const html = renderSitePage(route.file, template);
 
-  expect([...images]).toEqual(["og.jpg"]);
+    expect(
+      Object.fromEntries([...html.matchAll(SHARE_IMAGE_TAG)].map(([, name, url]) => [name, url])),
+    ).toEqual({
+      "og:image": SHARE_IMAGE_URL,
+      "twitter:image": SHARE_IMAGE_URL,
+    });
+  },
+);
+
+it("keeps the share card under the size budget", () => {
   const bytes = statSync(fileURLToPath(new URL("../public/og.jpg", import.meta.url))).size;
   expect(bytes).toBeLessThan(SHARE_IMAGE_BUDGET_BYTES);
 });
