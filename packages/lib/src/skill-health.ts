@@ -77,7 +77,8 @@ export const HEALTH_ISSUE_KIND_ORDER: HealthIssueKind[] = [
  * a warning.
  */
 export const HEALTH_ISSUE_SEVERITY = {
-  "parked-but-reinstalled": "error",
+  // The live copy still loads; the parked one is drift to resolve, not breakage.
+  "parked-but-reinstalled": "warning",
   duplicate: "warning",
   "broken-symlink": "error",
   "linked-root": "warning",
@@ -99,8 +100,8 @@ export const HEALTH_ISSUE_KIND_LABEL = {
     plural: "harnesses read the Universal folder through a root link",
   },
   "spec-violation": {
-    singular: "skill that fails to load",
-    plural: "skills that fail to load",
+    singular: "skill with no description an agent can read",
+    plural: "skills with no description an agent can read",
   },
   "spec-warning": {
     singular: "skill that loads differently per agent",

@@ -43,7 +43,7 @@ export function homeTodos(
       tone: "error",
       title: `${plural(groups.broken.length, "skill")} ${groups.broken.length === 1 ? "is" : "are"} broken`,
       detail:
-        "Broken links, or a SKILL.md with no description the agents can read. No agent picks them on its own.",
+        "A link to a folder that is gone, or a SKILL.md with no description an agent can read. The agent behind each one can’t pick it.",
       action: `Review ${plural(groups.broken.length, "broken skill")}`,
       to: { kind: "filter", filter: "broken" },
     });
