@@ -40,3 +40,16 @@ for (const [id, persona] of Object.entries(PERSONAS)) {
     }
   });
 }
+
+test("selecting costly, unused skills on the chart shows what parking them frees and selects them", async ({
+  page,
+}) => {
+  await page.goto("/?persona=unused-pile");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByRole("button", { name: "Select costly, unused" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "selected" })).toContainText(
+    /frees about [\d,]+ tokens in every message/,
+  );
+  await page.getByRole("button", { name: /^Select \d+ to park$/ }).click();
+  await expect(page.getByRole("button", { name: "Cancel", exact: true })).toBeVisible();
+});

@@ -22,6 +22,7 @@ import { homeTodos, joinNames } from "./home-todos";
 import type { HomeTodo } from "./home-todos";
 import type { HomeFilter, HomeGroups } from "./home-inbox-data";
 import { useHomeListing } from "./useHomeListing";
+import { CostUseChart } from "./CostUseChart";
 
 const TONE = { error: "bg-error", warning: "bg-warning", neutral: "bg-text-tertiary" };
 
@@ -114,6 +115,12 @@ export function HomeOverview({
   const top = ranked.slice(0, 5);
   const totalUses = ranked.reduce((sum, row) => sum + row.count, 0);
   const todos = homeTodos(groups, listings, historyAgents, updateCaption);
+  const toggleSkillSelection = useAppStore((s) => s.toggleSkillSelection);
+  const clearSkillSelection = useAppStore((s) => s.clearSkillSelection);
+  const usesBySkill = new Map(ranked.map((row) => [row.skill, row.count]));
+  // The chart needs enough skills to show a spread, and history to place them by use.
+  const chartable = groups.own.filter((skill) => !skill.parked && skill.invocation !== "user-only");
+  const showChart = chartable.length >= 10 && historyAgents.length > 0;
   const live = groups.own.filter((skill) => !skill.parked).length;
   const go = (todo: HomeTodo) =>
     todo.to.kind === "filter"
@@ -164,6 +171,25 @@ export function HomeOverview({
           </ul>
         )}
       </section>
+
+      {showChart && (
+        <PageSection
+          title="What each skill costs, and what it gives back"
+          meta="Right: used more · Up: more room in every message"
+        >
+          <CostUseChart
+            points={chartable.map((skill) => ({ skill, uses: usesBySkill.get(skill.name) ?? 0 }))}
+            open={open}
+            park={(skills) => {
+              clearSkillSelection();
+              for (const skill of skills) {
+                const path = skill.deployments[0]?.path;
+                if (path) toggleSkillSelection(path);
+              }
+            }}
+          />
+        </PageSection>
+      )}
 
       {live > 0 && (
         <div className="grid gap-8 @container md:grid-cols-2">
