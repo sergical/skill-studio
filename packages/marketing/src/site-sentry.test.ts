@@ -144,17 +144,18 @@ describe("siteSentryInitOptions", () => {
     const replayIntegration = vi.fn<SiteSentryReplay["replayIntegration"]>(
       Sentry.replayIntegration,
     );
+    const loadReplay = vi.fn(async () => ({ replayIntegration }));
     let loaded = () => {};
     await startSiteSentry(
       noEarlyErrors(),
       ENV,
       async () => sdk,
-      async () => ({ replayIntegration }),
+      loadReplay,
       (run) => {
         loaded = run;
       },
     );
-    expect(replayIntegration).not.toHaveBeenCalled();
+    expect(loadReplay).not.toHaveBeenCalled();
     loaded();
     await vi.waitFor(() => expect(sdk.addIntegration).toHaveBeenCalled());
     expect(replayIntegration).toHaveBeenCalledWith(
