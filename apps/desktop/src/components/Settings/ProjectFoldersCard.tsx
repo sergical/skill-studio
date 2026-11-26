@@ -40,6 +40,7 @@ import {
   setDiscoverySource,
 } from "../../lib/skill-api";
 import { useAppStore } from "../../store/appStore";
+import { useClientIds } from "../../hooks/useClientRows";
 import { useProjectFolderActions } from "../../hooks/useProjectFolderActions";
 import { MenuControl, MenuItem } from "../ui/MenuControl";
 import { HarnessIcon } from "../ui/HarnessIcon";
@@ -279,6 +280,11 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
   } | null>(null);
   const [folders, setFolders] = useState<ProjectFolder[] | null>(null);
   const [sources, setSources] = useState<DiscoverySourceSetting[] | null>(null);
+  // History is read only from agents turned on above (see `activity_sources` in skill_refresh.rs),
+  // so an agent left out at first run gets no switch here.
+  const agents = useClientIds();
+  const shownSources =
+    sources && agents ? sources.filter((s) => agents.includes(s.harness)) : sources;
   const [foldersOpen, setFoldersOpen] = useState(false);
   const [addFormOpen, setAddFormOpen] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -413,7 +419,7 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
       <div className="flex flex-col gap-2">
         <p className="m-0 text-small font-medium text-text-tertiary">Search history from</p>
         <div className="grid grid-cols-1 gap-x-6 sm:grid-cols-2">
-          {(sources ?? []).map((source) => {
+          {(shownSources ?? []).map((source) => {
             const label = deploymentLabelFromAgentId(source.harness);
             // SAFETY: `source.harness` is always one of `discovery_harnesses()`'s six ids, which
             // are exactly `AgentId`'s wire values minus "shared".
@@ -437,7 +443,7 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
 
       <FolderList
         folders={folders}
-        sources={sources}
+        sources={shownSources}
         loadError={loadError}
         skillCounts={skillCounts}
         open={foldersOpen}
