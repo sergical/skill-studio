@@ -27,6 +27,7 @@ import type {
 } from "@skill-studio/lib";
 import { useSkillInstalls } from "../../hooks/useSkillInstalls";
 import { TooltipControl } from "../ui/TooltipControl";
+import { SkillDescription } from "./SkillDescription";
 import { skillSourceLine } from "./skill-source-line";
 import { skillUpstreamNote } from "./skill-upstream-note";
 import {
@@ -211,11 +212,7 @@ export function InstalledSkillHeader({
             </a>
           </p>
         )}
-        {skill.description && (
-          <p className="mt-3 select-text text-pretty text-body leading-[1.5] text-text-secondary">
-            {skill.description}
-          </p>
-        )}
+        {skill.description && <SkillDescription key={skill.description} text={skill.description} />}
       </div>
 
       {(skill.parked || skill.update_owner_ids.length > 0 || nonBlockingCount > 0) && (
