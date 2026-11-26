@@ -121,3 +121,16 @@ test("a row parked on Home stays selectable at its parked path, and Show all cou
   await expect(row).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("button", { name: "Cancel", exact: true })).toBeVisible();
 });
+
+test("a Home to-do scrolls only the page to its list, so the window's title row stays in view", async ({
+  page,
+}) => {
+  const title = page.getByRole("heading", { name: "Home", exact: true });
+  const before = await title.boundingBox();
+  await page
+    .getByRole("list", { name: "Things that need you" })
+    .getByRole("button", { name: /^Review \d+ broken skills?$/ })
+    .click();
+  await expect(page.getByRole("region", { name: "Your skills" })).toBeInViewport();
+  expect(await title.boundingBox()).toEqual(before);
+});

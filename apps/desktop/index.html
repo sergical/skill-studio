@@ -27,7 +27,11 @@
         height: 100%;
         margin: 0;
         padding: 0;
-        overflow: hidden;
+        /* The window itself never scrolls; only a page's own scroll area does. Without
+           position, a visually hidden element deep in a page sat on the viewport's box and
+           made it taller, so scrollIntoView slid the whole window, title row included. */
+        position: relative;
+        overflow: clip;
       }
     </style>
   </head>
