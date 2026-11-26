@@ -37,13 +37,10 @@ test("the Codex listing gives the tier and how far the budget is from the next o
 }) => {
   await openApp(page);
   await page
-    .getByRole("region", { name: "What your agents see" })
-    .getByRole("button", { name: /Codex/ })
+    .getByRole("group", { name: "Skill space by agent" })
+    .getByRole("button", { name: /^Codex/ })
     .click();
   await expect(page.getByRole("combobox", { name: "Agent" })).toContainText("Codex");
-  await expect(
-    page.getByRole("region", { name: /^Where the \d+ skills come from$/ }),
-  ).toBeVisible();
   await page.getByText("How the estimate was calculated", { exact: true }).click();
   const tier = page.getByRole("region", { name: "Skill list tier" });
   await expect(tier).toContainText("Descriptions are shortened");
@@ -68,9 +65,9 @@ test("a Cursor-only setup can follow a scanned skill from Home and back", async 
     await expect(others).toHaveCount(count - 1);
   }
   await page.getByRole("button", { name: "Continue" }).click();
-  const agents = page.getByRole("region", { name: "What your agents see" });
-  await expect(agents.getByRole("row")).toHaveCount(2);
-  await agents.getByRole("button", { name: "Cursor" }).click();
+  const agents = page.getByRole("group", { name: "Skill space by agent" });
+  await expect(agents.getByRole("button")).toHaveCount(1);
+  await agents.getByRole("button", { name: /^Cursor/ }).click();
   const agent = page.getByRole("combobox", { name: "Agent", exact: true });
   await expect(agent).toContainText("Cursor");
   await page.getByText("How Cursor lists skills", { exact: true }).click();
@@ -100,8 +97,8 @@ test("a Cursor-only setup can follow a scanned skill from Home and back", async 
 test("an agent comparison shows the source of the skills behind a difference", async ({ page }) => {
   await openApp(page);
   await page
-    .getByRole("region", { name: "What your agents see" })
-    .getByRole("button", { name: "Cursor" })
+    .getByRole("group", { name: "Skill space by agent" })
+    .getByRole("button", { name: /^Cursor/ })
     .click();
   await page.getByText("Compare with another agent", { exact: true }).click();
   await page.getByRole("combobox", { name: "Compare with" }).click();
@@ -115,8 +112,8 @@ test("an agent comparison shows the source of the skills behind a difference", a
 test("save and remove a personal Codex budget from the agent's settings", async ({ page }) => {
   await openApp(page);
   await page
-    .getByRole("region", { name: "What your agents see" })
-    .getByRole("button", { name: "Codex", exact: true })
+    .getByRole("group", { name: "Skill space by agent" })
+    .getByRole("button", { name: /^Codex/ })
     .click();
   const settings = page.getByRole("region", { name: "Codex settings", exact: true });
   await settings.getByRole("button", { name: "Edit Skill list budget" }).click();

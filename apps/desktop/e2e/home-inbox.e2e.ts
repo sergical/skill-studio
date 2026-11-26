@@ -7,7 +7,7 @@ test.beforeEach(async ({ page }) => {
   await openApp(page);
 });
 
-test("Check now on the Updates tile runs a check and changes the caption from never checked to checked", async ({
+test("Check for updates on Home runs a check and changes the caption from never checked to checked", async ({
   page,
 }) => {
   await page.evaluate(() => {
@@ -19,13 +19,13 @@ test("Check now on the Updates tile runs a check and changes the caption from ne
       update_check: { ...snapshot.update_check, checked_at: null },
     });
   });
-  const tile = page.getByRole("button", { name: /^Updates/ }).first();
-  await expect(tile).toContainText("Not checked yet");
+  const section = page.getByRole("region", { name: "Your skills" });
+  await expect(section).toContainText("Not checked yet");
 
-  await page.getByRole("button", { name: "Check now" }).click();
+  await section.getByRole("button", { name: "Check for updates" }).click();
 
-  await expect(tile).toContainText("Checked");
-  await expect(tile).not.toContainText("Not checked yet");
+  await expect(section).toContainText("Checked");
+  await expect(section).not.toContainText("Not checked yet");
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
@@ -78,54 +78,14 @@ test("every Home row action, including Compare and Resolve, shows its whole labe
   expect(actions.filter((action) => !action.fits).map((action) => action.label)).toEqual([]);
 });
 
-test("Park on an idle Home row takes the skill out of Who can invoke and the idle prompt cost", async ({
-  page,
-}) => {
-  const invoke = page.getByRole("group", { name: "Who can invoke" });
-  const idle = page
-    .getByRole("group", { name: "Prompt cost" })
-    .getByRole("button", { name: /skills not used in 30 days/ });
-  // "12 you or the model", "3 model only", "4 you only": the three segments add up to the total.
-  const invokeTotal = async () =>
-    (await invoke.getByRole("button").allTextContents())
-      .map((text) => Number.parseInt(text, 10))
-      .reduce((sum, count) => sum + count, 0);
-  const idleCount = async () =>
-    Number((await idle.textContent())?.match(/(\d+) skills not used/)?.[1]);
-  const invokeBefore = await invokeTotal();
-  const idleBefore = await idleCount();
-  expect(idleBefore).toBeGreaterThan(0);
-
-  // Park moves one folder and the links into it; a skill whose only folder is the Universal one
-  // has no copy left on after it.
-  const universalOnly = await page.evaluate(
-    () =>
-      window.__harness
-        ?.snapshot()
-        .skills.filter((skill) => skill.deployments.length === 1)
-        .map((skill) => skill.name) ?? [],
-  );
-  // The idle segment shows the group; its first rows are the skills the model can invoke.
-  await idle.click();
-  const rows = page.locator('[data-group="unused"]').getByRole("row");
-  const names = await rows.getByRole("gridcell").allTextContents();
-  const target = names.find((name) => universalOnly.includes(name));
-  expect(target).toBeDefined();
-  await rows
-    .filter({ has: page.getByRole("gridcell", { name: target, exact: true }) })
-    .getByRole("button", { name: "Park", exact: true })
-    .click();
-
-  await expect.poll(idleCount).toBe(idleBefore - 1);
-  expect(await invokeTotal()).toBe(invokeBefore - 1);
-});
-
 test("a row parked on Home stays selectable at its parked path, and Show all counts the skills still on", async ({
   page,
 }) => {
   await page
-    .getByRole("group", { name: "Prompt cost" })
-    .getByRole("button", { name: /skills not used in 30 days/ })
+    .getByRole("list", { name: "Things that need you" })
+    .getByRole("listitem")
+    .filter({ hasText: "no use in 30 days" })
+    .getByRole("button", { name: "Show" })
     .click();
   const group = page.locator('[data-group="unused"]');
   const first = group.locator('[role="row"][aria-selected]').first();

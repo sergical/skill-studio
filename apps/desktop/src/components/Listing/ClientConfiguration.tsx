@@ -2,13 +2,12 @@ import { useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { Button, Input } from "@skill-studio/ui";
 import { deploymentLabelFromAgentId, homeRelativePath } from "@skill-studio/lib";
-import type { HarnessListing, ListingEntry } from "@skill-studio/lib";
+import type { HarnessListing } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
 import { PageSection } from "../Shell/PageSection";
 import { SummaryCard, SummaryMetric } from "../ui/SummaryCard";
 import {
   budgetRule,
-  entrySource,
   hasAssumedClaudeWindow,
   listedEntries,
   sourceCounts,
@@ -172,10 +171,6 @@ function SettingRow({
   );
 }
 
-function sourceExample(entry: ListingEntry) {
-  return entry.plugin ?? (entry.path && homeRelativePath(entry.path)) ?? "Seen only in a session";
-}
-
 export function ClientConfiguration({
   row,
   onSaved,
@@ -214,10 +209,21 @@ export function ClientConfiguration({
             }`}
           />
         ) : (
-          <SummaryMetric
-            value={described.toLocaleString()}
-            unit={`of ${offered.toLocaleString()} skills keep a description`}
-          />
+          <>
+            <p className="text-heading font-semibold">
+              {name} can pick {described.toLocaleString()} of your {offered.toLocaleString()} skills
+              on its own
+            </p>
+            <div
+              aria-hidden
+              className="mt-3 flex h-3 overflow-hidden rounded-full bg-bg-tertiary"
+              title={`${described - shortened} full · ${shortened} shortened · ${namesOnly + omitted} name only or not listed`}
+            >
+              <span className="bg-data" style={{ flex: described - shortened }} />
+              <span className="bg-data/45" style={{ flex: shortened }} />
+              <span style={{ flex: namesOnly + omitted }} />
+            </div>
+          </>
         )}
         {preview && row.budget !== null && !assumedWindow && (
           <p className="mt-2 text-small text-text-secondary">
@@ -250,6 +256,12 @@ export function ClientConfiguration({
             </>
           )}
         </p>
+        {preview && (
+          <p className="mt-1 text-small text-text-secondary">
+            From skill folders {sources["Skill folder"]} · plugins {sources.Plugin} · seen only in
+            sessions {sources["Session record"]}
+          </p>
+        )}
         {session && (
           <p className="mt-1 text-small text-text-secondary">
             Last session listed {session.listed} skills
@@ -316,61 +328,6 @@ export function ClientConfiguration({
               Managed by chezmoi. Edit the source, then run <code>chezmoi apply</code>.
             </p>
           )}
-        </PageSection>
-      )}
-      {preview && (
-        <PageSection title={`Where the ${entries.length} skills come from`}>
-          <div className="divide-y divide-border-subtle rounded-md border border-border-subtle px-3">
-            {(["Skill folder", "Plugin", "Session record"] as const).map((source) => {
-              const count = sources[source];
-              const title = {
-                "Skill folder": "Skill folders",
-                Plugin: "Plugins",
-                "Session record": "Seen only in sessions",
-              }[source];
-              const heading = (
-                <span className="inline-flex w-[calc(100%-1.5rem)] justify-between text-small">
-                  <span>{title}</span>
-                  <strong className="tabular-nums">{count}</strong>
-                </span>
-              );
-              if (!count)
-                return (
-                  <div key={source} className="py-1.5 pl-4 text-text-tertiary">
-                    {heading}
-                  </div>
-                );
-              return (
-                <details key={source} className="py-1.5">
-                  <summary className="cursor-pointer">{heading}</summary>
-                  <div className="my-2 ml-4 space-y-1.5">
-                    {source === "Session record" && (
-                      <p className="text-caption text-text-secondary">
-                        A recorded session listed these skills. The folder scan could not match them
-                        to an installed copy.
-                      </p>
-                    )}
-                    {entries
-                      .filter((e) => entrySource(e) === source)
-                      .slice(0, 3)
-                      .map((e) => (
-                        <p className="text-small" key={e.name + (e.path ?? "")}>
-                          {e.name}{" "}
-                          <span className="break-all text-caption text-text-secondary">
-                            {sourceExample(e)}
-                          </span>
-                        </p>
-                      ))}
-                    {count > 3 && (
-                      <p className="text-caption text-text-secondary">
-                        3 of {count} shown. See every skill below.
-                      </p>
-                    )}
-                  </div>
-                </details>
-              );
-            })}
-          </div>
         </PageSection>
       )}
     </>

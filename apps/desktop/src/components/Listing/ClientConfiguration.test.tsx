@@ -18,7 +18,6 @@ it("shows a budget-free preview and a saved listing independently", () => {
   };
   const report = { ...row, harness: "pi", budget: null, setting: null };
   const { rerender } = render(<ClientConfiguration row={report} onSaved={() => {}} />);
-  expect(screen.getByRole("region", { name: /Where the \d+ skills come from/ })).toBeTruthy();
   expect(screen.queryByText(/Last session listed/)).toBeNull();
   rerender(
     <ClientConfiguration
@@ -26,7 +25,6 @@ it("shows a budget-free preview and a saved listing independently", () => {
       onSaved={() => {}}
     />,
   );
-  expect(screen.queryByRole("region", { name: /Where the \d+ skills come from/ })).toBeNull();
   expect(screen.getByText(/Last session listed 3 skills.*recorded-model/)).toBeTruthy();
 });
 
@@ -39,6 +37,6 @@ it("counts skills the budget left out in the headline, so a full budget never re
     { ...first, name: "c", path: "/c", state: "omitted" as const },
   ];
   render(<ClientConfiguration row={{ ...row, entries }} onSaved={() => {}} />);
-  expect(screen.getByText("of 3 skills keep a description")).toBeTruthy();
+  expect(screen.getByText(/can pick 2 of your 3 skills on its own/)).toBeTruthy();
   expect(screen.queryByText(/Every description fits/)).toBeNull();
 });

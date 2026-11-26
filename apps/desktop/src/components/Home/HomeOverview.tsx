@@ -1,184 +1,243 @@
 // ============================================================================
-// HomeOverview - The top of Home: the two questions a skill author has after
-// installing a skill. Did an agent use it in recent work (Skill use)? Did
-// each agent get its description (What your agents see)? Each part opens the
-// page that answers it in full: Activity, or the agent's What it sees tab.
+// HomeOverview - The top of Home: what needs the user, most harmful first,
+// then the skills they use most and how full each agent's skill space is.
+// Each item opens the place that fixes it.
 // ============================================================================
 
-import { ChevronRight } from "lucide-react";
-import { deploymentLabelFromAgentId } from "@skill-studio/lib";
-import type { HarnessListing, ListingState, SkillSnapshot } from "@skill-studio/lib";
+import { ArrowRight, Plus } from "lucide-react";
+import {
+  ALL_ACTIVITY,
+  HARNESS_CATALOG,
+  deploymentLabelFromAgentId,
+  formatCount,
+  skillRows,
+} from "@skill-studio/lib";
+import type { HarnessListing, SkillSnapshot } from "@skill-studio/lib";
 import { Button } from "@skill-studio/ui";
-import { hasAssumedClaudeWindow } from "../Listing/client-allocation";
 import { PageSection } from "../Shell/PageSection";
 import { HarnessIcon, harnessIdFromLabel } from "../ui/HarnessIcon";
 import { useClientIds } from "../../hooks/useClientRows";
 import { useAppStore } from "../../store/appStore";
-import { HomeActivity } from "./HomeActivity";
+import { homeTodos, joinNames } from "./home-todos";
+import type { HomeTodo } from "./home-todos";
+import type { HomeFilter, HomeGroups } from "./home-inbox-data";
 import { useHomeListing } from "./useHomeListing";
 
-const shortDate = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
-
-/** Counted states in the order they matter, phrased to follow a number. */
-const COUNTED: [ListingState, string][] = [
-  ["described", "with full description"],
-  ["omitted", "not listed"],
-  ["name_only", "name only"],
-  ["truncated", "shortened"],
-];
-
-function seesNow(row: HarnessListing) {
-  if (row.evidence === "discovery") return "Folders only, no estimate";
-  if (hasAssumedClaudeWindow(row)) return "Model window unknown";
-  const summary = COUNTED.flatMap(([state, words]) => {
-    const count = row.entries.filter((entry) => entry.state === state).length;
-    return count ? [`${count.toLocaleString()} ${words}`] : [];
-  });
-  return summary.join(" · ") || "No skills listed";
-}
+const TONE = { error: "bg-error", warning: "bg-warning", neutral: "bg-text-tertiary" };
 
 function AgentName({ id }: { id: string }) {
   const label = deploymentLabelFromAgentId(id);
   const icon = harnessIdFromLabel(label);
   return (
-    <>
-      {icon && <HarnessIcon harness={icon} size={16} />}
-      {label}
-    </>
+    <span className="inline-flex min-w-0 items-center gap-2">
+      {icon && <HarnessIcon harness={icon} size={14} />}
+      <span className="truncate">{label}</span>
+    </span>
   );
 }
 
-function AgentVisibility({
-  agents,
-  active,
-  revision,
-}: {
-  agents?: string[];
-  active: boolean;
-  revision: number;
-}) {
-  const navigate = useAppStore((s) => s.setActiveView);
-  const detectionError = useAppStore((s) => s.harnessDetection.error);
-  const hasAgents = Boolean(agents?.length);
-  const { load, retry } = useHomeListing(revision, active && hasAgents);
-  const waiting = !load?.data && !load?.error;
-  const reportFor = (id: string) =>
-    load?.data?.listings.find((item) => item.scope.scope === "global" && item.harness === id);
-  // Once the report is in, agents it doesn't cover share one line under the table instead of a
-  // row each that says nothing.
-  const rows = waiting ? agents : agents?.filter((id) => reportFor(id));
-  const unreported = waiting ? [] : (agents?.filter((id) => !reportFor(id)) ?? []);
+/** One agent's skill space as a bar: full descriptions, shortened, names only. */
+function SpaceRow({ row, open }: { row: HarnessListing; open: () => void }) {
+  const count = (...states: string[]) => row.entries.filter((e) => states.includes(e.state)).length;
+  const full = count("described");
+  const cut = count("truncated");
+  const names = count("name_only", "omitted");
+  const total = full + cut + names;
+  const estimated = row.evidence === "preview" && row.budget !== null;
+  const text = !estimated
+    ? "No limit to estimate"
+    : names
+      ? `${full + cut} of ${total} fit`
+      : cut
+        ? `${full} full · ${cut} shortened`
+        : `All ${total} fit`;
   return (
-    <PageSection title="What your agents see" meta="Global skills">
-      {!agents && <p role="status">{detectionError || "Finding your agents…"}</p>}
-      {agents?.length === 0 && (
-        <Button variant="outline" onClick={() => navigate({ kind: "settings" })}>
-          Turn on agents in Settings
-        </Button>
-      )}
-      {hasAgents && (
-        <div className="-mx-2 overflow-x-auto px-2">
-          <table className="w-full border-collapse text-left text-body tabular-nums [&_th]:font-medium [&_tr]:border-b [&_tr]:border-border-subtle [&_td]:py-2 [&_th]:py-2 [&_td]:pr-2 [&_th]:pr-2 [&_small]:text-small [&_small]:text-text-secondary">
-            <thead className="text-small text-text-secondary">
-              <tr>
-                <th>Agent</th>
-                <th title="Includes hidden skills in the folders it reads">In its folders</th>
-                <th>What it sees now</th>
-                <th>Last session</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows?.map((id) => {
-                const row = reportFor(id);
-                if (!row)
-                  return (
-                    <tr key={id}>
-                      <th scope="row">
-                        <span className="inline-flex min-h-7 items-center gap-2">
-                          <AgentName id={id} />
-                        </span>
-                      </th>
-                      <td colSpan={3}>
-                        <small>Reading its folders…</small>
-                      </td>
-                    </tr>
-                  );
-                const found = row.entries.filter((entry) => entry.scanned);
-                const hidden = found.filter((entry) => entry.state === "hidden").length;
-                const session = row.observed_session;
-                const when = session?.at ? new Date(session.at) : null;
-                return (
-                  <tr key={id}>
-                    <th scope="row">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="-ml-1 justify-start gap-2 px-1"
-                        onClick={() => navigate({ kind: "listing", scope: "global", harness: id })}
-                      >
-                        <AgentName id={id} />
-                        <ChevronRight size={12} aria-hidden />
-                      </Button>
-                    </th>
-                    <td>
-                      {found.length.toLocaleString()}
-                      {hidden > 0 && <small> · {hidden} hidden</small>}
-                    </td>
-                    <td>{seesNow(row)}</td>
-                    <td>
-                      {session ? (
-                        <>
-                          {session.listed.toLocaleString()} listed
-                          {when && Number.isFinite(when.valueOf()) && (
-                            <small> · {shortDate.format(when)}</small>
-                          )}
-                        </>
-                      ) : (
-                        <small>Not recorded</small>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {unreported.length > 0 && (
-            <p className="mt-2 text-small text-text-secondary">
-              No skill list report yet for {unreported.map(deploymentLabelFromAgentId).join(", ")}.
-            </p>
-          )}
-        </div>
-      )}
-      {load?.error && (
-        <div role="alert" className="mt-2 flex items-center gap-2 text-small text-text-secondary">
-          {load.error}
-          <Button size="sm" variant="outline" onClick={retry}>
-            Retry
-          </Button>
-        </div>
-      )}
-    </PageSection>
+    <Button
+      variant="ghost"
+      className="-mx-2 grid h-9 w-[calc(100%+1rem)] grid-cols-[7rem_minmax(4rem,1fr)_auto] gap-3 px-2 font-normal"
+      onClick={open}
+    >
+      <AgentName id={row.harness} />
+      <span className="flex h-2 overflow-hidden rounded-full bg-bg-tertiary" aria-hidden>
+        {estimated && (
+          <>
+            <span className="bg-data" style={{ flex: full }} />
+            <span className="bg-data/45" style={{ flex: cut }} />
+            <span style={{ flex: names }} />
+          </>
+        )}
+      </span>
+      <span className="text-small text-text-secondary tabular-nums">{text}</span>
+    </Button>
   );
 }
 
 interface HomeOverviewProps {
   snapshot: SkillSnapshot;
+  groups: HomeGroups;
   active: boolean;
-  usageRefreshing?: boolean;
+  updateCaption: string;
   open: (name: string) => void;
+  showFilter: (filter: HomeFilter) => void;
 }
 
-export function HomeOverview({ snapshot, active, usageRefreshing, open }: HomeOverviewProps) {
+export function HomeOverview({
+  snapshot,
+  groups,
+  active,
+  updateCaption,
+  open,
+  showFilter,
+}: HomeOverviewProps) {
   const agents = useClientIds();
+  const navigate = useAppStore((s) => s.setActiveView);
+  const openAddSkillSheet = useAppStore((s) => s.openAddSkillSheet);
+  const { load } = useHomeListing(snapshot.revision, active && Boolean(agents?.length));
+  const listings = (load?.data?.listings ?? []).filter(
+    (row) => row.scope.scope === "global" && (!agents || agents.includes(row.harness)),
+  );
+  const shown = (id: string) => !agents || agents.includes(id);
+  const uses = snapshot.invocations
+    .map((stats) => ({
+      ...stats,
+      by_hour: stats.by_hour.filter((hour) => shown(hour.harness)),
+    }))
+    .filter((stats) => stats.by_hour.length);
+  const historyAgents = HARNESS_CATALOG.flatMap((row) =>
+    row.usageReader &&
+    shown(row.id) &&
+    uses.some((s) => s.by_hour.some((h) => h.harness === row.id))
+      ? [row.id]
+      : [],
+  );
+  const ranked = skillRows(uses, "30d", ALL_ACTIVITY, new Date(snapshot.scanned_at));
+  const top = ranked.slice(0, 5);
+  const totalUses = ranked.reduce((sum, row) => sum + row.count, 0);
+  const todos = homeTodos(groups, listings, historyAgents, updateCaption);
+  const live = groups.own.filter((skill) => !skill.parked).length;
+  const go = (todo: HomeTodo) =>
+    todo.to.kind === "filter"
+      ? showFilter(todo.to.filter)
+      : navigate({ kind: "listing", scope: "global", harness: todo.to.harness });
+
   return (
     <>
-      <HomeActivity
-        snapshot={snapshot}
-        clients={agents}
-        usageRefreshing={usageRefreshing}
-        open={open}
-      />
-      <AgentVisibility agents={agents} active={active} revision={snapshot.revision} />
+      <section aria-labelledby="home-todos-title">
+        <h2 id="home-todos-title" className="text-heading font-semibold">
+          {live === 0
+            ? "No skills yet"
+            : todos.length
+              ? `${todos.length} ${todos.length === 1 ? "thing needs" : "things need"} you`
+              : "Nothing needs you"}
+        </h2>
+        <p className="mt-1 text-small text-text-secondary">
+          {live === 0
+            ? "Add a skill and Skill Studio shows here whether your agents can see it and use it."
+            : `${formatCount(live)} ${live === 1 ? "skill" : "skills"} · ${formatCount(totalUses)} ${totalUses === 1 ? "use" : "uses"} in 30 days · ${
+                historyAgents.length
+                  ? `uses from ${joinNames(historyAgents.map(deploymentLabelFromAgentId))} history`
+                  : "no readable skill history yet"
+              }`}
+        </p>
+        {live === 0 && (
+          <Button className="mt-3" onClick={() => openAddSkillSheet()}>
+            <Plus size={14} aria-hidden /> Add a skill
+          </Button>
+        )}
+        {live > 0 && !todos.length && (
+          <p className="mt-3 text-body">
+            Every skill loads{listings.length ? ", fits its agent’s skill space" : ""} and is up to
+            date.
+          </p>
+        )}
+        {todos.length > 0 && (
+          <ul aria-label="Things that need you" className="mt-3 border-t border-border-subtle">
+            {todos.map((todo) => (
+              <li
+                key={todo.id}
+                className="grid grid-cols-[8px_minmax(0,1fr)_auto] items-center gap-3 border-b border-border-subtle py-2.5"
+              >
+                <span aria-hidden className={`size-2 rounded-full ${TONE[todo.tone]}`} />
+                <span className="min-w-0">
+                  <strong className="block text-body font-semibold">{todo.title}</strong>
+                  <span className="block text-small text-text-secondary">{todo.detail}</span>
+                </span>
+                <Button size="sm" variant="outline" onClick={() => go(todo)}>
+                  {todo.action}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {live > 0 && (
+        <div className="grid gap-8 @container md:grid-cols-2">
+          <PageSection
+            title="Used most"
+            meta={
+              <Button
+                variant="ghost"
+                size="sm"
+                className="-mr-2.5 text-text-primary"
+                onClick={() => navigate({ kind: "activity" })}
+              >
+                View activity <ArrowRight aria-hidden />
+              </Button>
+            }
+          >
+            {top.length ? (
+              <ul aria-label="Used most, 30 days">
+                {top.map(({ skill, count }) => (
+                  <li key={skill}>
+                    <Button
+                      variant="ghost"
+                      className="-mx-2 grid h-8 w-[calc(100%+1rem)] grid-cols-[minmax(0,10rem)_minmax(3rem,1fr)_auto] gap-3 px-2 font-normal"
+                      onClick={() => open(skill)}
+                    >
+                      <span className="truncate text-left">{skill}</span>
+                      <span className="flex h-1.5 rounded-full" aria-hidden>
+                        <span
+                          className="rounded-full bg-data"
+                          style={{ width: `${Math.max(4, (count / top[0].count) * 100)}%` }}
+                        />
+                      </span>
+                      <span className="text-small text-text-secondary tabular-nums">
+                        {formatCount(count)}
+                      </span>
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-small text-text-secondary">
+                {historyAgents.length
+                  ? "No skill use in the last 30 days."
+                  : "None of your agents has skill history Skill Studio can read yet."}
+              </p>
+            )}
+          </PageSection>
+          <PageSection title="Skill space">
+            {listings.length ? (
+              <div aria-label="Skill space by agent" role="group">
+                {listings.map((row) => (
+                  <SpaceRow
+                    key={row.harness}
+                    row={row}
+                    open={() =>
+                      navigate({ kind: "listing", scope: "global", harness: row.harness })
+                    }
+                  />
+                ))}
+              </div>
+            ) : (
+              <p className="text-small text-text-secondary">
+                {load?.error ?? (load?.data ? "No agent to estimate." : "Reading your agents…")}
+              </p>
+            )}
+          </PageSection>
+        </div>
+      )}
     </>
   );
 }

@@ -112,9 +112,10 @@ export function mockListingReport(
   snapshot: SkillSnapshot,
   request: { claude_budget_fraction?: number | null; codex_max_context_tokens?: number | null },
   configuredTokens: string | null = null,
+  agents?: string[],
 ): ListingReport {
   const fraction = request.claude_budget_fraction ?? 0.0001;
-  return {
+  const report: ListingReport = {
     listings: [
       row("claude-code", Math.floor(CONTEXT_TOKENS * 3 * fraction), "characters", snapshot),
       row(
@@ -160,4 +161,8 @@ export function mockListingReport(
       },
     ],
   };
+  // A persona with fewer agents gets only their rows, as the real report lists installed agents.
+  return agents
+    ? { ...report, listings: report.listings.filter((row) => agents.includes(row.harness)) }
+    : report;
 }

@@ -36,13 +36,18 @@ async function boot(): Promise<void> {
   // the mock IPC layer so an agent-browser session can drive the app from a
   // realistic in-memory skill estate. See `dev/harness/mock-tauri.ts`.
   if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
-    const [{ buildHarnessSnapshot }, { installMockTauri }] = await Promise.all([
+    const [{ buildHarnessSnapshot }, { installMockTauri }, { personaFromUrl }] = await Promise.all([
       import("./dev/harness/skill-fixture"),
       import("./dev/harness/mock-tauri"),
+      import("./dev/harness/personas"),
     ]);
     // `?n=378` pads the estate to a realistic size for performance runs.
     const skillCount = Number(new URLSearchParams(window.location.search).get("n") ?? 0);
-    window.__harness = installMockTauri(buildHarnessSnapshot(skillCount));
+    // `?persona=hoarder` swaps in one of the setups in `dev/harness/personas.ts`.
+    const persona = personaFromUrl();
+    window.__harness = persona
+      ? installMockTauri(persona.build(), persona)
+      : installMockTauri(buildHarnessSnapshot(skillCount));
     // eslint-disable-next-line no-console
     console.info("[harness] mock Tauri IPC installed");
   }

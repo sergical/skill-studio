@@ -146,7 +146,10 @@ const DISCOVERY_HARNESSES = HARNESS_CATALOG.flatMap((row) =>
 
 /** Installs the mock Tauri IPC layer and returns the control the harness (or the marketing
  * capture page) drives it with. */
-export function installMockTauri(initial: SkillSnapshot): HarnessControl {
+export function installMockTauri(
+  initial: SkillSnapshot,
+  setup: { agents?: string[]; claudeFraction?: number } = {},
+): HarnessControl {
   let currentSnapshot = initial;
   let configuredTokens: string | null = null;
   // Mirrors the event store: newest first, as `list_skill_events` returns it. A remove keeps the
@@ -170,7 +173,7 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
   // `crates/skill-studio-core`, and `get_tracked_projects` reads it back.
   let trackedProjects: TrackedProjects = { added: [ARCHIVED_CLIENT_PROJECT], excluded: [] };
   const discoverySources = new Map<string, boolean>(
-    DISCOVERY_HARNESSES.map((harness) => [harness, true]),
+    DISCOVERY_HARNESSES.map((harness) => [harness, setup.agents?.includes(harness) ?? true]),
   );
   // Mirrors `preferred_editor` in `~/.agents/skill-studio.json` - an app name, a `.app` path,
   // or "$EDITOR", or `null` for the system default. See `skill_editor::EditorChoices`.
@@ -773,7 +776,15 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
               codex_max_context_tokens: z.number().nullish(),
             })
             .parse(payload.request);
-          return mockListingReport(currentSnapshot, request, configuredTokens);
+          return mockListingReport(
+            currentSnapshot,
+            {
+              ...request,
+              claude_budget_fraction: request.claude_budget_fraction ?? setup.claudeFraction,
+            },
+            configuredTokens,
+            setup.agents,
+          );
         }
         case "save_listing_setting": {
           const { value } = z

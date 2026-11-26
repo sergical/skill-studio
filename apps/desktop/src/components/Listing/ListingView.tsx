@@ -18,6 +18,7 @@ import type {
 import { useClientRows } from "../../hooks/useClientRows";
 import { AgentTabs } from "./AgentTabs";
 import { CompareClients } from "./CompareClients";
+import { PageSection } from "../Shell/PageSection";
 import { PageShell } from "../Shell/PageShell";
 import { SelectControl } from "../ui/SelectControl";
 import { ClientConfiguration } from "./ClientConfiguration";
@@ -308,6 +309,58 @@ function EntryRow({
   );
 }
 
+/** The skills past the line: the ones this agent knows by name only, or not at all. */
+function DontFit({
+  row,
+  uses,
+  open,
+  canOpen,
+}: {
+  row: HarnessListing;
+  uses: Map<string, number>;
+  open: (entry: ListingEntry) => void;
+  canOpen: (entry: ListingEntry) => boolean;
+}) {
+  const [all, setAll] = useState(false);
+  const out = row.entries
+    .filter((e) => e.state === "name_only" || e.state === "omitted")
+    .sort((a, b) => (uses.get(b.name) ?? 0) - (uses.get(a.name) ?? 0));
+  if (!out.length) return null;
+  const shown = all ? out : out.slice(0, 8);
+  return (
+    <PageSection
+      title={`Don’t fit · ${out.length}`}
+      meta="Used least, so cut first. Parking unused skills makes room."
+    >
+      <ul aria-label="Skills that don’t fit" className="border-t border-border-subtle">
+        {shown.map((entry) => (
+          <li
+            key={entryKey(entry)}
+            className="grid min-h-9 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 border-b border-border-subtle"
+          >
+            <span className="truncate text-body">{entry.name}</span>
+            <span className="text-small text-text-secondary tabular-nums">
+              {LISTING_STATE_LABEL[entry.state]} · {uses.get(entry.name) ?? 0} uses
+            </span>
+            {canOpen(entry) ? (
+              <Button size="sm" variant="ghost" className="-mr-2.5" onClick={() => open(entry)}>
+                Open
+              </Button>
+            ) : (
+              <span />
+            )}
+          </li>
+        ))}
+      </ul>
+      {out.length > shown.length && (
+        <Button size="sm" variant="ghost" className="mt-1 -ml-2.5" onClick={() => setAll(true)}>
+          Show all {out.length}
+        </Button>
+      )}
+    </PageSection>
+  );
+}
+
 interface ListingViewProps {
   snapshot: SkillSnapshot | undefined;
   initialHarness?: string;
@@ -559,6 +612,20 @@ export function ListingView({ snapshot, initialHarness, initialScope }: ListingV
               refreshListing(base);
             }}
           />
+          {preview && row.budget !== null && (
+            <DontFit
+              row={row}
+              uses={
+                new Map(snapshot?.invocations.map((stats) => [stats.skill, stats.last_30_days]))
+              }
+              open={(entry) => {
+                const owner = entry.path && byPath.get(entry.path);
+                if (owner && entry.path)
+                  openSkill(owner, entry.path, undefined, { kind: "listing", harness, scope });
+              }}
+              canOpen={(entry) => Boolean(entry.path && byPath.get(entry.path))}
+            />
+          )}
           {/* The tools for digging further sit together, 12px apart, below the sections. */}
           <div className="flex flex-col gap-3">
             {preview && row.budget !== null && (
