@@ -38,6 +38,10 @@ export function HomeLibraryPrototype({
     (row) => row.scope.scope === "global" && (!agents || agents.includes(row.harness)),
   );
   const { skills, history } = buildLibrary(snapshot, groups, listings, agents);
+  // On in the native dev app, or in the browser harness with ?v=; otherwise today's Home, so the
+  // harness e2e specs keep testing the real page.
+  const on = !("__harness" in window) || new URLSearchParams(location.search).has("v");
+  if (!on) return baseline;
   return (
     <>
       {/* With no skills every picture is empty, so each variant shows today's first-run Home. */}
