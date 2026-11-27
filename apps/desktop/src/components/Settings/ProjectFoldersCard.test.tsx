@@ -4,7 +4,11 @@ import userEvent from "@testing-library/user-event";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { afterEach, expect, it } from "vitest";
-import { ProjectFoldersCard } from "./ProjectFoldersCard";
+import { ProjectFoldersCard, useDiscoverySources } from "./ProjectFoldersCard";
+
+function Folders() {
+  return <ProjectFoldersCard snapshot={undefined} discovery={useDiscoverySources()} />;
+}
 
 afterEach(() => {
   cleanup();
@@ -17,7 +21,7 @@ it("a failed folder list says so in the card, or Settings shows 'Looking for pro
     if (command === "get_discovery_sources") return [];
     throw new Error(`Unexpected command: ${command}`);
   });
-  render(<ProjectFoldersCard snapshot={undefined} />);
+  render(<Folders />);
 
   expect(await screen.findByText("Couldn't list project folders.")).toBeTruthy();
   expect(screen.queryByText("Looking for project folders…")).toBeNull();
@@ -29,7 +33,7 @@ it("a discovery settings failure names settings instead of the folder list", asy
     if (command === "get_discovery_sources") throw new Error("settings failed");
     return null;
   });
-  render(<ProjectFoldersCard snapshot={undefined} />);
+  render(<Folders />);
   expect(await screen.findByText("Couldn't read discovery settings.")).toBeTruthy();
   expect(screen.queryByText("Couldn't list project folders.")).toBeNull();
 });
@@ -47,7 +51,7 @@ it("removes an added folder only after confirmation and leaves it tracked on can
     return null;
   });
   const user = userEvent.setup();
-  render(<ProjectFoldersCard snapshot={undefined} />);
+  render(<Folders />);
   await user.click(await screen.findByRole("button", { name: /1 folder/ }));
   await user.click(await screen.findByRole("button", { name: "Remove /project" }));
   expect(removals).toBe(0);
@@ -78,7 +82,7 @@ it("stops tracking a discovered folder only after confirmation and keeps it trac
     return null;
   });
   const user = userEvent.setup();
-  render(<ProjectFoldersCard snapshot={undefined} />);
+  render(<Folders />);
   await user.click(await screen.findByRole("button", { name: /1 folder/ }));
   await user.click(await screen.findByRole("button", { name: "Stop tracking /project" }));
   const dialog = await screen.findByRole("alertdialog");

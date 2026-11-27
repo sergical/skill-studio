@@ -1,16 +1,15 @@
 // ============================================================================
-// SettingsView - the app's own preferences, as opposed to anything read back
-// from a harness: which application "Open in editor" hands a skill folder to,
-// and the project folders discovery searches.
+// SettingsView - the app's own preferences: which agents Skill Studio shows
+// and connects, the project folders discovery searches, which application
+// "Open in editor" hands a skill folder to, telemetry, and the version.
 // ============================================================================
 
 import type { SkillSnapshot } from "@skill-studio/lib";
 import { PageShell } from "../Shell/PageShell";
-import { AgentMcpCard } from "./AgentMcpCard";
+import { AgentsSection } from "./AgentsSection";
 import { AppVersionCard } from "./AppVersionCard";
-import { DetectedAgentsCard } from "./DetectedAgentsCard";
 import { EditorCard } from "./EditorCard";
-import { ProjectFoldersCard } from "./ProjectFoldersCard";
+import { ProjectFoldersCard, useDiscoverySources } from "./ProjectFoldersCard";
 import { TelemetryCard } from "./TelemetryCard";
 
 interface SettingsViewProps {
@@ -18,14 +17,16 @@ interface SettingsViewProps {
 }
 
 export function SettingsView({ snapshot }: SettingsViewProps) {
+  const discovery = useDiscoverySources();
   return (
     <PageShell title="Settings" width="narrow">
-      <DetectedAgentsCard />
-      <AgentMcpCard />
-      <EditorCard />
-      <ProjectFoldersCard snapshot={snapshot} />
-      <AppVersionCard />
-      <TelemetryCard />
+      <div className="flex flex-col gap-8">
+        <AgentsSection sources={discovery.sources} onToggleSource={discovery.toggle} />
+        <ProjectFoldersCard snapshot={snapshot} discovery={discovery} />
+        <EditorCard />
+        <TelemetryCard />
+        <AppVersionCard />
+      </div>
     </PageShell>
   );
 }

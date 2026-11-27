@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { openSidebarPage } from "./app-harness";
 
-test("an agent left out at first run gets no Search history from switch in Settings", async ({
+test("an agent left out at first run is off in Settings and gets no Find projects switch", async ({
   page,
 }) => {
   await page.goto("/");
@@ -13,7 +13,11 @@ test("an agent left out at first run gets no Search history from switch in Setti
   await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
 
   await openSidebarPage(page, "Settings");
-  const history = page.getByText("Search history from", { exact: true }).locator("..");
-  await expect(history.getByRole("switch", { name: "Claude Code" })).toBeVisible();
-  await expect(history.getByRole("switch", { name: "Cursor" })).toHaveCount(0);
+  await expect(page.getByRole("switch", { name: "Show Cursor skills" })).not.toBeChecked();
+  await expect(
+    page.getByRole("switch", { name: "Find projects in Claude Code history" }),
+  ).toBeVisible();
+  await expect(page.getByRole("switch", { name: "Find projects in Cursor history" })).toHaveCount(
+    0,
+  );
 });

@@ -17,10 +17,10 @@ async function activityAgentChoices(page: Page): Promise<string[]> {
   return choices.slice(1).map((choice) => choice.replace(/[\d,]+$/, "").trim());
 }
 
-test("turning off an agent under Search history from takes it out of Activity's agent filter, and turning it on puts it back", async ({
+test("turning off Find projects for an agent takes it out of Activity's agent filter, and turning it on puts it back", async ({
   page,
 }) => {
-  const codex = page.getByRole("switch", { name: "Codex" });
+  const codex = page.getByRole("switch", { name: "Find projects in Codex history" });
   await expect(codex).toBeChecked();
 
   await codex.click();

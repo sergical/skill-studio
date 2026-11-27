@@ -1,12 +1,11 @@
 // ============================================================================
-// AppVersionCard - Settings' "Version" card: the running app's version and
+// AppVersionCard - Settings' "Version" section: the running app's version and
 // build commit, and a "What's new" toggle for the current release's
 // changelog notes, bundled into the app at build time so it needs no
 // network.
 // ============================================================================
 
 import { useEffect, useState } from "react";
-import { Info } from "lucide-react";
 import { Button } from "@skill-studio/ui";
 import type { AppVersion, UpdateStatus } from "@skill-studio/lib";
 import {
@@ -18,7 +17,7 @@ import {
   onUpdateStatus,
 } from "../../lib/skill-api";
 import { useAppStore } from "../../store/appStore";
-import { SettingsCard } from "./SettingsCard";
+import { PageSection } from "../Shell/PageSection";
 
 /** Settings' own label for each `UpdateStatus` - kept here rather than in `skill-types.ts` since
  * it's UI copy, not part of the wire shape. */
@@ -141,43 +140,53 @@ export function AppVersionCard() {
   const checking = updateStatus.status === "checking" || updateStatus.status === "downloading";
 
   return (
-    <SettingsCard
-      icon={Info}
+    <PageSection
       title="Version"
-      description="The version of Skill Studio you're running, and what changed in it."
-    >
-      <div className="flex items-center gap-2">
-        <p className="m-0 flex-1 text-body text-text-secondary">
-          v{info.version} ({shortCommit})
-        </p>
-        {info.notes && (
-          <Button variant="outline" size="sm" onClick={() => setShowNotes((open) => !open)}>
-            {showNotes ? "Hide what's new" : "What's new"}
-          </Button>
-        )}
-      </div>
-      {showNotes && info.notes && (
-        <div className="whitespace-pre-wrap rounded-md bg-bg-secondary p-3 text-small text-text-secondary">
-          {info.notes}
-        </div>
-      )}
-      <div className="flex items-center gap-2">
-        <p className={`m-0 flex-1 text-body ${updateStatusTone(updateStatus)}`}>
-          {checking && (
-            <span className="mr-2 inline-block size-3 animate-spin rounded-full border-2 border-current border-t-transparent align-middle" />
+      meta={
+        <>
+          {info.notes && (
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-expanded={showNotes}
+              onClick={() => setShowNotes((open) => !open)}
+            >
+              {showNotes ? "Hide what's new" : "What's new"}
+            </Button>
           )}
-          {updateStatusLabel(updateStatus)}
+          {updateStatus.status === "ready-to-install" ? (
+            <Button variant="default" size="sm" onClick={handleRestartToUpdate} busy={installing}>
+              Restart to update
+            </Button>
+          ) : (
+            <Button variant="outline" size="sm" onClick={handleCheckForUpdate} disabled={checking}>
+              Check for updates
+            </Button>
+          )}
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3">
+        <p className="m-0 flex flex-wrap items-center gap-x-2 text-body text-text-secondary">
+          <span className="tabular-nums">
+            v{info.version} ({shortCommit})
+          </span>
+          <span aria-hidden="true" className="text-text-tertiary">
+            ·
+          </span>
+          <span role="status" className={updateStatusTone(updateStatus)}>
+            {checking && (
+              <span className="mr-2 inline-block size-3 animate-spin rounded-full border-2 border-current border-t-transparent align-middle motion-reduce:animate-none" />
+            )}
+            {updateStatusLabel(updateStatus)}
+          </span>
         </p>
-        {updateStatus.status === "ready-to-install" ? (
-          <Button variant="default" size="sm" onClick={handleRestartToUpdate} busy={installing}>
-            Restart to update
-          </Button>
-        ) : (
-          <Button variant="outline" size="sm" onClick={handleCheckForUpdate} disabled={checking}>
-            Check for updates
-          </Button>
+        {showNotes && info.notes && (
+          <div className="whitespace-pre-wrap rounded-md bg-bg-secondary p-3 text-small text-text-secondary">
+            {info.notes}
+          </div>
         )}
       </div>
-    </SettingsCard>
+    </PageSection>
   );
 }

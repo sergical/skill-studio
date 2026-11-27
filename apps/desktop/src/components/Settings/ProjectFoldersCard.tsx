@@ -1,8 +1,9 @@
 // ============================================================================
-// ProjectFoldersCard - Settings' "Project folders" card: every folder
-// discovery found or the user added by hand, the per-harness search
-// switches that decide what discovery looks at, and the actions to stop
-// tracking or remove a folder. Shares its add/stop-tracking/remove logic
+// ProjectFoldersCard - Settings' "Project folders" section: every folder
+// discovery found or the user added by hand, and the actions to stop
+// tracking or remove a folder. The per-agent search switches that decide
+// what discovery looks at live in the Agents table; `useDiscoverySources`
+// holds their state for both. Shares its add/stop-tracking/remove logic
 // with the Skills filter bar through `useProjectFolderActions`, so both
 // surfaces agree on one set of tracked folders.
 // ============================================================================
@@ -28,7 +29,6 @@ import {
 import {
   deploymentLabelFromAgentId,
   homeRelativePath,
-  type AgentId,
   type DiscoverySourceSetting,
   type ProjectFolder,
   type SkillSnapshot,
@@ -43,13 +43,64 @@ import { useAppStore } from "../../store/appStore";
 import { useClientIds } from "../../hooks/useClientRows";
 import { useProjectFolderActions } from "../../hooks/useProjectFolderActions";
 import { MenuControl, MenuItem } from "../ui/MenuControl";
-import { HarnessIcon } from "../ui/HarnessIcon";
-import { SwitchControl } from "../ui/SwitchControl";
 import { ProjectFolderAddForm } from "./ProjectFolderAddForm";
-import { SettingsCard } from "./SettingsCard";
+import { PageSection } from "../Shell/PageSection";
+
+export interface DiscoverySources {
+  /** Whether each agent's history is searched for project folders; `null` until read. */
+  sources: DiscoverySourceSetting[] | null;
+  error: string | null;
+  /** Counts saved changes, so the folder list reads again after each one. */
+  saved: number;
+  toggle: (agent: string, enabled: boolean) => void;
+}
+
+/** The discovery switches, read once and shared by the Agents table and the folder list. */
+export function useDiscoverySources(): DiscoverySources {
+  const addToast = useAppStore((state) => state.addToast);
+  const [sources, setSources] = useState<DiscoverySourceSetting[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(0);
+
+  useEffect(() => {
+    getDiscoverySources()
+      .then(setSources)
+      .catch((err) => {
+        setError("Couldn't read discovery settings.");
+        addToast({
+          type: "error",
+          title: "Couldn't read discovery settings",
+          message: invokeErrorMessage(err),
+        });
+      });
+  }, [addToast]);
+
+  const toggle = (agent: string, enabled: boolean) => {
+    const previous = sources;
+    setSources((current) =>
+      (current ?? []).map((s) => (s.harness === agent ? { ...s, enabled } : s)),
+    );
+    setDiscoverySource(agent, enabled)
+      .then((updated) => {
+        setSources(updated);
+        setSaved((count) => count + 1);
+      })
+      .catch((err) => {
+        setSources(previous);
+        addToast({
+          type: "error",
+          title: "Couldn't change discovery setting",
+          message: invokeErrorMessage(err),
+        });
+      });
+  };
+
+  return { sources, error, saved, toggle };
+}
 
 interface ProjectFoldersCardProps {
   snapshot: SkillSnapshot | undefined;
+  discovery: DiscoverySources;
 }
 
 /** "A", "A and B", "A, B and C" - the empty state's list of searched harnesses. */
@@ -211,10 +262,8 @@ function FolderList({
     return (
       <p className="m-0 rounded-md border border-border-subtle px-3 py-2 text-small text-text-tertiary">
         {enabledLabels.length === 0
-          ? "Search is off for every agent, so only folders you add appear here."
-          : `No project folders with skills yet. Skill Studio searched the history of ${joinWithAnd(
-              enabledLabels,
-            )}. If your project is somewhere else, add it by hand.`}
+          ? "History search is off for every agent. Add a folder by hand."
+          : `No folders with skills in the history of ${joinWithAnd(enabledLabels)}. Add one by hand.`}
       </p>
     );
   }
@@ -271,7 +320,7 @@ function FolderList({
   );
 }
 
-export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
+export function ProjectFoldersCard({ snapshot, discovery }: ProjectFoldersCardProps) {
   const addToast = useAppStore((state) => state.addToast);
   const { addProject, addTypedPath, stopTracking, removeProject } = useProjectFolderActions();
   const [pendingRemoval, setPendingRemoval] = useState<{
@@ -279,9 +328,9 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
     discovered: boolean;
   } | null>(null);
   const [folders, setFolders] = useState<ProjectFolder[] | null>(null);
-  const [sources, setSources] = useState<DiscoverySourceSetting[] | null>(null);
-  // History is read only from agents turned on above (see `activity_sources` in skill_refresh.rs),
-  // so an agent left out at first run gets no switch here.
+  const { sources } = discovery;
+  // History is read only from agents whose skills are shown (see `activity_sources` in
+  // skill_refresh.rs), so the empty state names only those.
   const agents = useClientIds();
   const shownSources =
     sources && agents ? sources.filter((s) => agents.includes(s.harness)) : sources;
@@ -308,29 +357,16 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
       });
   };
   // Effect Event: reads the latest `refetchFolders` without becoming an effect dependency
-  // itself, so the effect below reruns only when `projectsKey` changes.
+  // itself, so the effect below reruns only when its retrigger keys change.
   const refetchFoldersOnProjectsChange = useEffectEvent(refetchFolders);
-
-  useEffect(() => {
-    getDiscoverySources()
-      .then(setSources)
-      .catch((err) => {
-        setLoadError("Couldn't read discovery settings.");
-        addToast({
-          type: "error",
-          title: "Couldn't read discovery settings",
-          message: invokeErrorMessage(err),
-        });
-      });
-  }, [addToast]);
 
   const projectsKey = (snapshot?.projects ?? []).join("\n");
   useEffect(() => {
     refetchFoldersOnProjectsChange();
-    // `projectsKey` is not read here - it stays a dependency purely to retrigger the fetch when a
-    // scan adds or removes a tracked project.
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- retrigger-only dependency, not read in the body
-  }, [projectsKey]);
+    // `projectsKey` and `discovery.saved` are not read here - they stay dependencies purely to
+    // retrigger the fetch when a scan adds or removes a tracked project, or a search switch saves.
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- retrigger-only dependencies, not read in the body
+  }, [projectsKey, discovery.saved]);
 
   const skillCounts = countSkillsByProject(snapshot);
 
@@ -369,31 +405,10 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
     refetchFolders();
   };
 
-  const handleToggleSource = async (harness: string, enabled: boolean) => {
-    const previous = sources;
-    setSources((current) =>
-      (current ?? []).map((s) => (s.harness === harness ? { ...s, enabled } : s)),
-    );
-    try {
-      const updated = await setDiscoverySource(harness, enabled);
-      setSources(updated);
-      refetchFolders();
-    } catch (err) {
-      setSources(previous);
-      addToast({
-        type: "error",
-        title: "Couldn't change discovery setting",
-        message: invokeErrorMessage(err),
-      });
-    }
-  };
-
   return (
-    <SettingsCard
-      icon={FolderOpen}
+    <PageSection
       title="Project folders"
-      description="Skill Studio finds project folders in the history of the agents below and shows the skills inside them. Add a folder it missed, or stop tracking one you don't need."
-      action={
+      meta={
         <MenuControl
           triggerClassName={buttonVariants({ variant: "outline", size: "sm" })}
           triggerAriaLabel="Add folder"
@@ -416,35 +431,10 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
         </MenuControl>
       }
     >
-      <div className="flex flex-col gap-2">
-        <p className="m-0 text-small font-medium text-text-tertiary">Search history from</p>
-        <div className="grid grid-cols-1 gap-x-6 sm:grid-cols-2">
-          {(shownSources ?? []).map((source) => {
-            const label = deploymentLabelFromAgentId(source.harness);
-            // SAFETY: `source.harness` is always one of `discovery_harnesses()`'s six ids, which
-            // are exactly `AgentId`'s wire values minus "shared".
-            const harnessId = source.harness as AgentId;
-            return (
-              <label
-                key={source.harness}
-                className="flex h-9 cursor-pointer items-center gap-2 px-2 text-body text-text-secondary"
-              >
-                <HarnessIcon harness={harnessId} size={14} />
-                <span className="flex-1">{label}</span>
-                <SwitchControl
-                  checked={source.enabled}
-                  onCheckedChange={(enabled) => handleToggleSource(source.harness, enabled)}
-                />
-              </label>
-            );
-          })}
-        </div>
-      </div>
-
       <FolderList
         folders={folders}
         sources={shownSources}
-        loadError={loadError}
+        loadError={loadError ?? discovery.error}
         skillCounts={skillCounts}
         open={foldersOpen}
         onOpenChange={setFoldersOpen}
@@ -486,6 +476,6 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </SettingsCard>
+    </PageSection>
   );
 }

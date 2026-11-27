@@ -1,5 +1,5 @@
 // ============================================================================
-// EditorCard - Settings' "Open in editor" card: which application a skill
+// EditorCard - Settings' "Open in editor" section: which application a skill
 // folder opens in from the Locations card. macOS's own default text editor is
 // TextEdit, which is never what someone editing a SKILL.md wants, so the
 // choice is explicit - a known app, any other app the user picks, or the
@@ -7,7 +7,7 @@
 // ============================================================================
 
 import { useEffect, useState } from "react";
-import { Check, Plus, SquarePen } from "lucide-react";
+import { Check, Plus } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Button, RadioGroup, RadioGroupItem } from "@skill-studio/ui";
 import {
@@ -17,7 +17,7 @@ import {
   type EditorOption,
 } from "../../lib/skill-api";
 import { useAppStore } from "../../store/appStore";
-import { SettingsCard } from "./SettingsCard";
+import { PageSection } from "../Shell/PageSection";
 
 const SYSTEM_VALUE = "system";
 
@@ -105,19 +105,25 @@ export function EditorCard() {
   };
 
   return (
-    <SettingsCard
-      icon={SquarePen}
+    <PageSection
       title="Open in editor"
-      description="The app a skill folder opens in from the Locations card."
+      meta={
+        choices && (
+          <Button variant="ghost" size="sm" className="-mr-2.5" onClick={chooseAnother}>
+            <Plus aria-hidden="true" />
+            Choose another app…
+          </Button>
+        )
+      }
     >
       {isLoading ? (
         <p className="m-0 text-small text-text-tertiary">Looking for installed editors…</p>
       ) : !choices ? (
         <p className="m-0 text-small text-text-tertiary">Couldn't read installed editors.</p>
       ) : (
-        <>
+        <div className="flex flex-col gap-2">
           <RadioGroup
-            className="flex-col"
+            className="-mx-2 flex-col"
             aria-label="Open in editor"
             value={choices.selected ?? SYSTEM_VALUE}
             onValueChange={(value) => save(value === SYSTEM_VALUE ? null : value)}
@@ -137,7 +143,7 @@ export function EditorCard() {
                 </span>
                 {option.label}
                 {choices.terminal && value === choices.terminal.app_name && (
-                  <span className="ml-auto text-small text-text-tertiary">
+                  <span className="text-small text-text-tertiary">
                     $EDITOR, in a new terminal window
                   </span>
                 )}
@@ -149,18 +155,8 @@ export function EditorCard() {
               No known code editor was found in your Applications folders.
             </p>
           )}
-          <Button
-            variant="ghost"
-            className="flex h-9 items-center justify-start gap-2 px-2 text-left text-body text-text-tertiary"
-            onClick={chooseAnother}
-          >
-            <span className="flex size-4 items-center justify-center">
-              <Plus size={14} aria-hidden="true" />
-            </span>
-            Choose another app…
-          </Button>
-        </>
+        </div>
       )}
-    </SettingsCard>
+    </PageSection>
   );
 }
