@@ -22,31 +22,37 @@ function Bars({
   average: number;
 }) {
   const max = Math.max(1, average, ...values);
+  const H = 140;
   return (
     <div className="relative">
-      <div className="flex h-40 items-end gap-2">
+      <div className="relative flex items-end gap-2 pt-5" style={{ height: H + 20 }}>
         {values.map((v, i) => (
-          <div key={i} className="flex h-full flex-1 flex-col items-center justify-end gap-1.5">
-            <span className="text-caption text-text-tertiary tabular-nums">
-              {v ? formatCount(v) : ""}
-            </span>
+          <div key={i} className="relative flex flex-1 justify-center" style={{ height: H }}>
             <span
-              className={`w-full max-w-10 rounded-t-[3px] ${i === values.length - 1 ? "bg-data" : "bg-data/45"}`}
-              style={{ height: `${Math.max(v ? 4 : 1, (v / max) * 100)}%` }}
+              className={`absolute bottom-0 w-full max-w-10 rounded-t-[3px] ${i === values.length - 1 ? "bg-data" : "bg-data/45"}`}
+              style={{ height: Math.max(v ? 3 : 1, (v / max) * H) }}
             />
+            {v > 0 && (
+              <span
+                className="absolute text-caption text-text-tertiary tabular-nums"
+                style={{ bottom: (v / max) * H + 4 }}
+              >
+                {formatCount(v)}
+              </span>
+            )}
           </div>
         ))}
+        {average > 0 && (
+          <div
+            className="pointer-events-none absolute inset-x-0 border-t border-dashed border-text-tertiary"
+            style={{ bottom: (average / max) * H }}
+          >
+            <span className="absolute -top-2.5 -right-1 translate-x-full rounded bg-bg-tertiary px-1 text-caption whitespace-nowrap text-text-secondary">
+              avg {formatCount(Math.round(average))}
+            </span>
+          </div>
+        )}
       </div>
-      {average > 0 && (
-        <div
-          className="pointer-events-none absolute inset-x-0 border-t border-dashed border-text-tertiary"
-          style={{ bottom: `calc(${(average / max) * 100}% * 0.85 + 1.5rem)` }}
-        >
-          <span className="absolute -top-2.5 right-0 rounded bg-bg-tertiary px-1 text-caption text-text-secondary">
-            avg {formatCount(Math.round(average))}
-          </span>
-        </div>
-      )}
       <div className="mt-1.5 flex gap-2">
         {labels.map((l, i) => (
           <span key={i} className="flex-1 text-center text-caption text-text-tertiary">
@@ -95,7 +101,9 @@ function AgentTile({
   const entries = (listing?.entries ?? []).filter((e) => e.state !== "hidden");
   const count = (...states: string[]) => entries.filter((e) => states.includes(e.state)).length;
   const full = count("described");
-  const cut = count("truncated", "name_only", "omitted");
+  const shortened = count("truncated");
+  const names = count("name_only", "omitted");
+  const cut = shortened + names;
   const estimated = listing?.evidence === "preview" && listing.budget !== null;
   return (
     <Button
@@ -125,9 +133,17 @@ function AgentTile({
         <span className="h-1.5 rounded-full bg-bg-tertiary" aria-hidden />
       )}
       <span className="truncate text-caption text-text-secondary tabular-nums">
-        {estimated
-          ? `${formatCount(full)} full · ${formatCount(cut)} cut`
-          : `${formatCount(entries.length)} skills · no limit`}
+        {!listing
+          ? "Not read yet"
+          : estimated
+            ? [
+                `${formatCount(full)} full`,
+                shortened && `${formatCount(shortened)} shortened`,
+                names && `${formatCount(names)} name only`,
+              ]
+                .filter(Boolean)
+                .join(" · ")
+            : `${formatCount(entries.length)} found · no estimate`}
         {broken ? <span className="text-error"> · {formatCount(broken)} broken</span> : null}
       </span>
     </Button>
@@ -184,6 +200,8 @@ export function RecapVariant({
   const historyWeeks = Number.isFinite(earliest)
     ? (Date.parse(snapshot.scanned_at) / 3_600_000 - earliest) / (24 * WEEK)
     : 0;
+  const hasHistory = snapshot.invocations.some((stats) => stats.by_hour.length > 0);
+  const hasLastWeek = lastWeek > 0 || historyWeeks >= 2;
   const skillsUsed = [...days.bySkill.values()].filter((v) => sum(v.slice(WEEK))).length;
 
   return (
@@ -201,14 +219,19 @@ export function RecapVariant({
               key={agent}
               agent={agent}
               uses={
-                readers.has(agent) ? sum((everyAgent.byAgent.get(agent) ?? []).slice(WEEK)) : null
+                readers.has(agent) && hasHistory
+                  ? sum(
+                      (everyAgent.byAgent.get(agent) ?? []).slice(
+                        week === "this" ? WEEK : 0,
+                        week === "this" ? 2 * WEEK : WEEK,
+                      ),
+                    )
+                  : null
               }
               listing={listings.find((r) => r.harness === agent)}
               broken={
-                skills.filter(
-                  (s) =>
-                    s.broken &&
-                    s.skill.deployments.some((d) => d.agent === label || d.agent === "shared"),
+                skills.filter((s) =>
+                  s.skill.deployments.some((d) => d.symlink_is_broken && d.agent === label),
                 ).length
               }
               pressed={only === agent}
@@ -225,18 +248,20 @@ export function RecapVariant({
                 Skill uses{only ? ` · ${deploymentLabelFromAgentId(only)}` : ""}
               </p>
               <p className="text-[2rem] leading-tight font-semibold tabular-nums">
-                {formatCount(total)}
+                {hasHistory ? formatCount(total) : "–"}
               </p>
               {week === "this" && (
                 <p className="text-small text-text-secondary tabular-nums">
                   {change !== null && historyWeeks >= 2
                     ? `${change >= 0 ? "↑" : "↓"} ${Math.abs(change)}% from last week · `
                     : ""}
-                  {formatCount(skillsUsed)} skills used
+                  {hasHistory
+                    ? `${formatCount(skillsUsed)} skills used`
+                    : "No readable skill history yet"}
                 </p>
               )}
             </div>
-            {historyWeeks >= 2 && (
+            {hasLastWeek && (
               <div
                 role="radiogroup"
                 aria-label="Week"
@@ -257,7 +282,9 @@ export function RecapVariant({
               </div>
             )}
           </div>
-          <Bars values={shown} labels={days.labels.slice(WEEK)} average={total / WEEK} />
+          {hasHistory && (
+            <Bars values={shown} labels={days.labels.slice(WEEK)} average={total / WEEK} />
+          )}
           <div>
             <p className="mb-2 text-small font-medium text-text-secondary">Most used</p>
             <ul className="-mx-2 border-t border-border-subtle">
@@ -283,7 +310,9 @@ export function RecapVariant({
                 </li>
               ))}
               {!top.length && (
-                <li className="py-3 text-small text-text-secondary">No skill use this week.</li>
+                <li className="py-3 text-small text-text-secondary">
+                  {hasHistory ? "No skill use this week." : "No readable skill history yet."}
+                </li>
               )}
             </ul>
           </div>
@@ -294,8 +323,10 @@ export function RecapVariant({
             <span className="text-heading font-semibold text-text-primary tabular-nums">
               {formatCount(skills.length)}
             </span>{" "}
-            skills · {formatCount(skills.filter((s) => !s.uses && !used.has(s.name)).length)} not
-            used in 30 days
+            skills
+            {hasHistory
+              ? ` · ${formatCount(skills.filter((s) => !s.uses && !used.has(s.name)).length)} not used in 30 days`
+              : " · no readable skill history yet"}
           </p>
           <ul className="flex flex-col gap-1">
             {changes.map((c) => (

@@ -88,7 +88,10 @@ export const STATE_WORDS = {
 /** Uses per day for the last `days` days (oldest first), from the hourly history, for the
  * agents shown: in total, per agent and per skill. */
 export function dailyUses(snapshot: SkillSnapshot, agents: string[] | undefined, days = 14) {
-  const end = Math.floor(Date.parse(snapshot.scanned_at) / 86_400_000);
+  // Days are the user's local days, so an evening use lands on the day it happened.
+  const offset = new Date(snapshot.scanned_at).getTimezoneOffset() * 60_000;
+  const localDay = (ms: number) => Math.floor((ms - offset) / 86_400_000);
+  const end = localDay(Date.parse(snapshot.scanned_at));
   const start = end - days + 1;
   const total = Array.from({ length: days }, () => 0);
   const byAgent = new Map<string, number[]>();
@@ -96,7 +99,7 @@ export function dailyUses(snapshot: SkillSnapshot, agents: string[] | undefined,
   for (const stats of snapshot.invocations) {
     for (const hour of stats.by_hour) {
       if (agents && !agents.includes(hour.harness)) continue;
-      const day = Math.floor(hour.hour / 24) - start;
+      const day = localDay(hour.hour * 3_600_000) - start;
       if (day < 0 || day >= days) continue;
       total[day] += hour.count;
       const agent = byAgent.get(hour.harness) ?? Array.from({ length: days }, () => 0);
@@ -108,7 +111,9 @@ export function dailyUses(snapshot: SkillSnapshot, agents: string[] | undefined,
     }
   }
   const labels = Array.from({ length: days }, (_, i) =>
-    new Date((start + i) * 86_400_000).toLocaleDateString(undefined, { weekday: "narrow" }),
+    new Date((start + i) * 86_400_000 + offset).toLocaleDateString(undefined, {
+      weekday: "narrow",
+    }),
   );
   return { total, byAgent, bySkill, labels, start };
 }
