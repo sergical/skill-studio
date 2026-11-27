@@ -7,16 +7,15 @@
 import type { ReactNode } from "react";
 import type { SkillSnapshot } from "@skill-studio/lib";
 import { useClientIds } from "../../hooks/useClientRows";
-import { useAppStore } from "../../store/appStore";
 import { useHomeListing } from "../../components/Home/useHomeListing";
 import type { HomeGroups } from "../../components/Home/home-inbox-data";
 import { buildLibrary } from "./library-model";
 import { Picker, usePicker } from "./shared";
 import { RecapVariant } from "./RecapVariant";
-import { StatusVariant } from "./StatusVariant";
-import { StorageVariant } from "./StorageVariant";
+import { AskVariant, FocusVariant, OneLineVariant, SinceVariant } from "./SimpleVariants";
+import type { SimpleProps } from "./SimpleVariants";
 
-const NAMES = ["Recap", "Storage", "Status"];
+const NAMES = ["Recap", "Since last time", "One line", "Ask", "Focus"];
 
 export function HomeLibraryPrototype({
   snapshot,
@@ -34,8 +33,6 @@ export function HomeLibraryPrototype({
   const { current, set } = usePicker(NAMES);
   const agents = useClientIds();
   const { load } = useHomeListing(snapshot.revision, active && Boolean(agents?.length));
-  const toggle = useAppStore((s) => s.toggleSkillSelection);
-  const clear = useAppStore((s) => s.clearSkillSelection);
   const listings = (load?.data?.listings ?? []).filter(
     (row) => row.scope.scope === "global" && (!agents || agents.includes(row.harness)),
   );
@@ -65,30 +62,31 @@ export function HomeLibraryPrototype({
           open={open}
         />
       )}
-      {anything && current === 1 && (
-        <StorageVariant
-          skills={skills}
-          listings={listings}
-          open={open}
-          park={(picked) => {
-            clear();
-            for (const skill of picked) {
-              const path = skill.deployments[0]?.path;
-              if (path) toggle(path);
-            }
+      {anything && current > 0 && (
+        <SimpleHome
+          index={current}
+          props={{
+            snapshot,
+            skills,
+            agents,
+            counts: {
+              broken: [...new Set(groups.broken.map((issue) => issue.skill.name))],
+              warnings: [...new Set(groups.warnings.map((issue) => issue.skill.name))],
+              updates: groups.updates.map((skill) => skill.name),
+              unused: groups.unused.map((skill) => skill.name),
+            },
+            open,
           }}
-        />
-      )}
-      {anything && current === 2 && (
-        <StatusVariant
-          snapshot={snapshot}
-          skills={skills}
-          listings={listings}
-          agents={agents}
-          open={open}
         />
       )}
       {active && <Picker names={NAMES} current={current} set={set} />}
     </>
   );
+}
+
+function SimpleHome({ index, props }: { index: number; props: SimpleProps }) {
+  if (index === 1) return <SinceVariant {...props} />;
+  if (index === 2) return <OneLineVariant {...props} />;
+  if (index === 3) return <AskVariant {...props} />;
+  return <FocusVariant {...props} />;
 }
