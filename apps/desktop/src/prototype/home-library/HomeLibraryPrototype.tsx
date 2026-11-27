@@ -9,10 +9,12 @@ import type { HarnessListing, SkillSnapshot } from "@skill-studio/lib";
 import { useClientIds } from "../../hooks/useClientRows";
 import { useHomeListing } from "../../components/Home/useHomeListing";
 import type { HomeGroups } from "../../components/Home/home-inbox-data";
+import type { UpdateCheck } from "../../components/Home/useUpdateCheck";
 import { buildLibrary } from "./library-model";
 import { Picker, usePicker } from "./shared";
 import { RecapVariant } from "./RecapVariant";
-import { AskLineVariant, AskVariant, OneLineVariant, SinceVariant } from "./SimpleVariants";
+import { AskLineVariant } from "./AskLineVariant";
+import { AskVariant, OneLineVariant, SinceVariant } from "./SimpleVariants";
 import type { SimpleProps } from "./SimpleVariants";
 
 const NAMES = ["Recap", "Since last time", "One line", "Ask", "Ask in one line"];
@@ -22,12 +24,18 @@ export function HomeLibraryPrototype({
   groups,
   active,
   baseline,
+  inbox,
+  updateCheck,
   open,
 }: {
   snapshot: SkillSnapshot;
   groups: HomeGroups;
   active: boolean;
   baseline: ReactNode;
+  /** Home's "Your skills" list. "Ask in one line" leaves it out: its counts open the same lists,
+   * and with no skills the list is only an empty heading. */
+  inbox: ReactNode;
+  updateCheck: UpdateCheck;
   open: (name: string) => void;
 }) {
   const { current, set } = usePicker(NAMES);
@@ -42,7 +50,13 @@ export function HomeLibraryPrototype({
   // On in the native dev app, or in the browser harness with ?v=; otherwise today's Home, so the
   // harness e2e specs keep testing the real page.
   const on = !("__harness" in window) || new URLSearchParams(location.search).has("v");
-  if (!on) return baseline;
+  if (!on)
+    return (
+      <>
+        {baseline}
+        {inbox}
+      </>
+    );
   return (
     <>
       {/* With no skills every picture is empty, so each variant shows today's first-run Home. */}
@@ -66,6 +80,7 @@ export function HomeLibraryPrototype({
         <SimpleHome
           index={current}
           listings={listings}
+          updateCheck={updateCheck}
           props={{
             snapshot,
             skills,
@@ -80,6 +95,7 @@ export function HomeLibraryPrototype({
           }}
         />
       )}
+      {current !== 4 && inbox}
       {active && <Picker names={NAMES} current={current} set={set} />}
     </>
   );
@@ -89,13 +105,15 @@ function SimpleHome({
   index,
   props,
   listings,
+  updateCheck,
 }: {
   index: number;
   props: SimpleProps;
   listings: HarnessListing[];
+  updateCheck: UpdateCheck;
 }) {
   if (index === 1) return <SinceVariant {...props} />;
   if (index === 2) return <OneLineVariant {...props} />;
   if (index === 3) return <AskVariant {...props} />;
-  return <AskLineVariant {...props} listings={listings} />;
+  return <AskLineVariant {...props} listings={listings} updateCheck={updateCheck} />;
 }
