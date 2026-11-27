@@ -1,12 +1,15 @@
 // ============================================================================
-// ActivityProjects - "By project, 30 days" section: every project with a use
-// in the last 30 days, under the page's harness/trigger filter.
+// ActivityProjects - "Projects" section: every project with a use in the
+// calendar's 30 days, under the page's agent and trigger filters. Left out
+// when no use carries a project, since some agents don't record one.
 // ============================================================================
 
 import { basename, formatCount, projectRows } from "@skill-studio/lib";
 import type { ActivityFilter, SkillInvocationStats } from "@skill-studio/lib";
+import { PageSection } from "../Shell/PageSection";
 import { TooltipControl } from "../ui/TooltipControl";
-import { CappedList, SectionHeader } from "./ActivityParts";
+import { CountBar } from "./ActivityBySkill";
+import { CappedList } from "./ActivityParts";
 
 export function ActivityProjects({
   stats,
@@ -18,30 +21,23 @@ export function ActivityProjects({
   now: Date;
 }) {
   const rows = projectRows(stats, filter, now);
+  if (rows.length === 0) return null;
   return (
-    <section className="flex flex-col gap-3">
-      <SectionHeader title="By project, 30 days" />
-      {rows.length === 0 ? (
-        <p className="text-body text-text-tertiary">
-          {filter.harness !== "all" || filter.trigger !== "all"
-            ? "No uses in the last 30 days with these filters."
-            : "No uses in the last 30 days."}
-        </p>
-      ) : (
-        <CappedList
-          items={rows}
-          render={({ project, count }) => (
-            <TooltipControl key={project} content={[{ text: project, mono: true }]}>
-              <div className="flex h-8 items-center justify-between gap-3 border-b border-border-subtle px-2">
-                <span className="truncate text-body text-text-primary">{basename(project)}</span>
-                <span className="text-body text-text-secondary tabular-nums">
-                  {formatCount(count)}
-                </span>
-              </div>
-            </TooltipControl>
-          )}
-        />
-      )}
-    </section>
+    <PageSection title="Projects">
+      <CappedList
+        items={rows}
+        render={({ project, count }) => (
+          <TooltipControl key={project} content={[{ text: project, mono: true }]}>
+            <div className="grid h-8 grid-cols-[minmax(0,1fr)_2.5rem_3rem] items-center gap-3">
+              <span className="truncate text-body text-text-primary">{basename(project)}</span>
+              <span className="text-right text-body text-text-secondary tabular-nums">
+                {formatCount(count)}
+              </span>
+              <CountBar value={count} max={rows[0].count} />
+            </div>
+          </TooltipControl>
+        )}
+      />
+    </PageSection>
   );
 }

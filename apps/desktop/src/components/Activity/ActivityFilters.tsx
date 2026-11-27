@@ -82,6 +82,9 @@ export function useActivityLens(stats: SkillInvocationStats[], now: Date) {
   const dates = heatmapDateRangeLocal(now).dates;
   const days = dayTotals(stats, filter);
   const historyTotal = Object.values(days).reduce((a, b) => a + b, 0);
+  const agents = enabledHarnesses
+    ? USAGE_READER_HARNESSES.filter((id) => enabledHarnesses.has(id))
+    : [];
 
   return {
     harness,
@@ -94,10 +97,11 @@ export function useActivityLens(stats: SkillInvocationStats[], now: Date) {
     days,
     historyTotal,
     enabledHarnesses,
+    agents,
   };
 }
 
-type ActivityLens = ReturnType<typeof useActivityLens>;
+export type ActivityLens = ReturnType<typeof useActivityLens>;
 
 export function ActivityFilters({
   stats,
@@ -106,17 +110,15 @@ export function ActivityFilters({
   trigger,
   setTrigger,
   clearFilter,
-  enabledHarnesses,
+  agents: harnesses,
 }: Pick<
   ActivityLens,
-  "harness" | "setHarness" | "trigger" | "setTrigger" | "clearFilter" | "enabledHarnesses"
+  "harness" | "setHarness" | "trigger" | "setTrigger" | "clearFilter" | "agents"
 > & {
   stats: SkillInvocationStats[];
 }) {
-  const harnesses = enabledHarnesses
-    ? USAGE_READER_HARNESSES.filter((id) => enabledHarnesses.has(id))
-    : [];
   const harnessCounts = historyByHarness(stats, trigger);
+  const readable = trigger === "all" ? harnessCounts : historyByHarness(stats, "all");
   const triggerCounts = historyByTrigger(stats, harness);
   const harnessTotal = Object.values(harnessCounts).reduce((a: number, b) => a + (b ?? 0), 0);
   const triggerTotal = Object.values(triggerCounts).reduce((a: number, b) => a + (b ?? 0), 0);
@@ -161,7 +163,7 @@ export function ActivityFilters({
                 <HarnessIcon harness={id} size={14} muted={n === 0} />
                 {deploymentLabelFromAgentId(id)}
                 <span className="ml-auto pl-4 text-small text-text-tertiary tabular-nums">
-                  {n === 0 ? "No uses" : formatCount(n)}
+                  {n > 0 ? formatCount(n) : readable[id] ? "No uses" : "No readable history"}
                 </span>
               </MenuRadioItem>
             );

@@ -36,7 +36,8 @@ import {
   shouldOfferForceRestore,
   restoreUnavailableReason,
 } from "./skill-history-restore-policy";
-import { CappedList, SectionHeader } from "./ActivityParts";
+import { PageSection } from "../Shell/PageSection";
+import { CappedList } from "./ActivityParts";
 
 /** Icon per event kind - see the Materialize section of spec-event-store.md for what each kind does. */
 function iconForKind(kind: string, className: string) {
@@ -319,8 +320,7 @@ export function SkillHistorySection() {
   };
 
   return (
-    <div className="flex flex-col gap-3">
-      <SectionHeader title="History" />
+    <PageSection title="History">
       {events === null ? (
         <p className="text-wrap-pretty text-body text-text-tertiary">Loading…</p>
       ) : events.length === 0 ? (
@@ -331,6 +331,6 @@ export function SkillHistorySection() {
           render={(event) => <EventRow key={event.id} event={event} onRestored={refresh} />}
         />
       )}
-    </div>
+    </PageSection>
   );
 }

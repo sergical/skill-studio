@@ -39,3 +39,48 @@ test("the Activity calendar shows 30 days in weekday columns, and arrows move by
   await page.keyboard.press("ArrowRight");
   expect(await activeIndex(calendar)).toBe(today);
 });
+
+test("Enter on a day puts that day's skills in place of the 30-day list, and Escape brings the list back", async ({
+  page,
+}) => {
+  await openApp(page);
+  await page.getByRole("button", { name: "Activity", exact: true }).click();
+  const skills = page.getByRole("heading", { name: "Skills", level: 2 });
+  await expect(skills).toBeVisible();
+
+  const calendar = page.getByRole("listbox", { name: /^Uses per day/ });
+  await calendar.focus();
+  const today = await calendar.evaluate((el) =>
+    document.getElementById(el.getAttribute("aria-activedescendant")!)!.getAttribute("aria-label"),
+  );
+  await page.keyboard.press("Enter");
+  // The day's heading is its date, the part of the cell's name before the colon.
+  await expect(page.getByRole("heading", { name: today!.split(":")[0], level: 2 })).toBeVisible();
+  await expect(skills).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Previous day" })).toBeEnabled();
+
+  await page.keyboard.press("Escape");
+  await expect(skills).toBeVisible();
+});
+
+test("pressing an agent's row filters the page to that agent, and pressing it again shows every agent", async ({
+  page,
+}) => {
+  await openApp(page);
+  await page.getByRole("button", { name: "Activity", exact: true }).click();
+  const total = page
+    .getByRole("main")
+    .getByText(/^[\d,]+ uses$/)
+    .first();
+  const before = await total.innerText();
+  const codex = page.getByRole("button", { name: /^Codex [\d,]+$/ });
+
+  await codex.click();
+  await expect(codex).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "Filter by agent" })).toHaveText(/Codex/);
+  await expect(total).not.toHaveText(before);
+
+  await codex.click();
+  await expect(codex).toHaveAttribute("aria-pressed", "false");
+  await expect(total).toHaveText(before);
+});

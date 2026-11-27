@@ -1,7 +1,6 @@
 // ============================================================================
-// ActivityParts - Small pieces the Activity page's sections share: the
-// section header, muted inline text, and the "Show N more" cap on
-// a long list.
+// ActivityParts - Small pieces the Activity page's sections share: muted
+// inline text and the "Show N more" cap on a long list.
 // ============================================================================
 
 import { useState } from "react";
@@ -9,15 +8,6 @@ import type { ReactNode } from "react";
 import { Button } from "@skill-studio/ui";
 
 const LIST_CAP = 10;
-
-export function SectionHeader({ title, children }: { title: string; children?: ReactNode }) {
-  return (
-    <div className="flex min-h-7 items-center justify-between gap-3">
-      <h2 className="text-small font-medium text-text-secondary">{title}</h2>
-      {children}
-    </div>
-  );
-}
 
 export function Muted({ children }: { children: ReactNode }) {
   return <span className="text-small text-text-tertiary tabular-nums">{children}</span>;

@@ -1,6 +1,6 @@
 // ============================================================================
 // ActivityHourStrip - A day's use counts by local hour, as a bar strip with
-// its peak hour called out above.
+// its peak hour called out above and the hours marked below.
 // ============================================================================
 
 import { formatHour } from "@skill-studio/lib";
@@ -13,22 +13,23 @@ export function HourStrip({ byHour }: { byHour: number[] }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-baseline justify-between gap-3">
-        <PanelLabel>Time of day</PanelLabel>
+        <PanelLabel>Uses by hour</PanelLabel>
         <Muted>Most around {peak}</Muted>
       </div>
-      <div className="pointer-events-none flex h-8 items-end gap-px" aria-hidden="true">
+      <div
+        role="img"
+        aria-label={`Uses by hour, most around ${peak}`}
+        className="flex h-8 items-end gap-px"
+      >
         {byHour.map((n, hour) => (
           <span
             key={hour}
-            className="flex-1 rounded-[1px] bg-text-tertiary"
-            style={{
-              height: n === 0 ? 1 : `${Math.max(12, (n / max) * 100)}%`,
-              opacity: n === 0 ? 0.35 : 1,
-            }}
+            className={`flex-1 rounded-[1px] ${n === 0 ? "bg-bg-tertiary" : "bg-data"}`}
+            style={{ height: n === 0 ? 2 : `${Math.max(12, (n / max) * 100)}%` }}
           />
         ))}
       </div>
-      <div className="grid grid-cols-4 text-caption text-text-quaternary" aria-hidden="true">
+      <div className="grid grid-cols-4 text-caption text-text-tertiary" aria-hidden="true">
         <span>12 AM</span>
         <span>6 AM</span>
         <span>12 PM</span>
