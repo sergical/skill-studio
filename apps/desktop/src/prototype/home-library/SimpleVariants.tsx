@@ -5,8 +5,14 @@
 
 import { useState } from "react";
 import { ArrowRight, Copy } from "lucide-react";
-import { deploymentLabelFromAgentId, formatCount, formatRelativeTime } from "@skill-studio/lib";
-import type { SkillListFilter, SkillSnapshot } from "@skill-studio/lib";
+import {
+  HARNESS_CATALOG,
+  deploymentLabelFromAgentId,
+  formatCount,
+  formatRelativeTime,
+} from "@skill-studio/lib";
+import type { HarnessListing, SkillListFilter, SkillSnapshot } from "@skill-studio/lib";
+import { HarnessIcon, harnessIdFromLabel } from "../../components/ui/HarnessIcon";
 import { Button } from "@skill-studio/ui";
 import { useAppStore } from "../../store/appStore";
 import { dailyUses } from "./library-model";
@@ -301,6 +307,100 @@ export function FocusVariant(props: SimpleProps) {
           </Button>
         )}
       </div>
+    </section>
+  );
+}
+
+/** 6. Ask in one line: each agent with what Skill Studio knows for sure about it, one status
+ * sentence, and one prompt that hands everything open to your agent. */
+export function AskLineVariant(props: SimpleProps & { listings: HarnessListing[] }) {
+  const items = useItems(props);
+  const addToast = useAppStore((s) => s.addToast);
+  const w = week(props.snapshot, props.agents);
+  const shown = props.agents ?? props.listings.map((r) => r.harness);
+  const readers = new Set<string>(HARNESS_CATALOG.filter((r) => r.usageReader).map((r) => r.id));
+  const hasHistory = props.snapshot.invocations.length > 0;
+  const [picked, setPicked] = useState<string | null>(null);
+  const prompt = items.length
+    ? `Use Skill Studio to sort out my skills: ${items.map((i) => i.title.toLowerCase()).join("; ")}. Fix what is broken, show me the updates before applying them, and park the unused skills. Tell me what you changed.`
+    : "";
+  const copy = (text: string) => {
+    void navigator.clipboard?.writeText(text);
+    addToast({ type: "success", title: "Prompt copied" });
+  };
+  return (
+    <section aria-label="Your skills at a glance" className="flex max-w-3xl flex-col gap-4">
+      <ul
+        aria-label="Agents"
+        className="flex flex-wrap gap-x-5 gap-y-1.5 text-small text-text-secondary"
+      >
+        {shown.map((agent) => {
+          const label = deploymentLabelFromAgentId(agent);
+          const icon = harnessIdFromLabel(label);
+          const listing = props.listings.find((r) => r.harness === agent);
+          const listed = (listing?.entries ?? []).filter((e) => e.state !== "hidden").length;
+          const uses = sum(w.days.byAgent.get(agent) ?? []);
+          return (
+            <li key={agent} className="inline-flex items-center gap-1.5 tabular-nums">
+              {icon && <HarnessIcon harness={icon} size={13} />}
+              <span className="text-text-primary">{label}</span>
+              <span>
+                {listing ? plural(listed, "skill") : "not read yet"}
+                {readers.has(agent) && hasHistory ? ` · ${plural(uses, "use")}` : ""}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="text-[1.375rem] leading-snug font-semibold text-balance">
+        {hasHistory
+          ? `${plural(w.total, "use")} this week across ${plural(w.used, "skill")}. `
+          : ""}
+        {items.length ? (
+          <span className="text-text-secondary">{items.map((i) => i.title).join(", ")}.</span>
+        ) : (
+          <span className="text-text-secondary">Nothing to sort out.</span>
+        )}
+      </p>
+      {items.length > 0 && (
+        <div className="rounded-lg border border-border-subtle bg-bg-secondary">
+          <p className="px-4 pt-3 font-mono text-small leading-relaxed text-text-primary select-text">
+            {picked ? (items.find((i) => i.id === picked)?.ask ?? prompt) : prompt}
+          </p>
+          <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5">
+            <span className="flex flex-wrap gap-1">
+              <Button
+                size="sm"
+                variant={picked === null ? "outline" : "ghost"}
+                onClick={() => setPicked(null)}
+              >
+                Everything
+              </Button>
+              {items.map((i) => (
+                <Button
+                  key={i.id}
+                  size="sm"
+                  variant={picked === i.id ? "outline" : "ghost"}
+                  onClick={() => setPicked(i.id)}
+                >
+                  <span className={`size-1.5 rounded-full ${i.tone}`} aria-hidden />
+                  {i.action === "Review" && i.id === "unused"
+                    ? "Unused"
+                    : i.title.split(" ").slice(1).join(" ")}
+                </Button>
+              ))}
+            </span>
+            <Button
+              size="sm"
+              onClick={() =>
+                copy(picked ? (items.find((i) => i.id === picked)?.ask ?? prompt) : prompt)
+              }
+            >
+              <Copy aria-hidden /> Copy prompt
+            </Button>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

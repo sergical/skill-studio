@@ -5,17 +5,17 @@
 // dev-only block fenced with "PROTOTYPE home-library"; delete this folder and that block.
 
 import type { ReactNode } from "react";
-import type { SkillSnapshot } from "@skill-studio/lib";
+import type { HarnessListing, SkillSnapshot } from "@skill-studio/lib";
 import { useClientIds } from "../../hooks/useClientRows";
 import { useHomeListing } from "../../components/Home/useHomeListing";
 import type { HomeGroups } from "../../components/Home/home-inbox-data";
 import { buildLibrary } from "./library-model";
 import { Picker, usePicker } from "./shared";
 import { RecapVariant } from "./RecapVariant";
-import { AskVariant, FocusVariant, OneLineVariant, SinceVariant } from "./SimpleVariants";
+import { AskLineVariant, AskVariant, OneLineVariant, SinceVariant } from "./SimpleVariants";
 import type { SimpleProps } from "./SimpleVariants";
 
-const NAMES = ["Recap", "Since last time", "One line", "Ask", "Focus"];
+const NAMES = ["Recap", "Since last time", "One line", "Ask", "Ask in one line"];
 
 export function HomeLibraryPrototype({
   snapshot,
@@ -65,6 +65,7 @@ export function HomeLibraryPrototype({
       {anything && current > 0 && (
         <SimpleHome
           index={current}
+          listings={listings}
           props={{
             snapshot,
             skills,
@@ -84,9 +85,17 @@ export function HomeLibraryPrototype({
   );
 }
 
-function SimpleHome({ index, props }: { index: number; props: SimpleProps }) {
+function SimpleHome({
+  index,
+  props,
+  listings,
+}: {
+  index: number;
+  props: SimpleProps;
+  listings: HarnessListing[];
+}) {
   if (index === 1) return <SinceVariant {...props} />;
   if (index === 2) return <OneLineVariant {...props} />;
   if (index === 3) return <AskVariant {...props} />;
-  return <FocusVariant {...props} />;
+  return <AskLineVariant {...props} listings={listings} />;
 }
