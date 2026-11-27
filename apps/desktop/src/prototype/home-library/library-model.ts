@@ -89,8 +89,10 @@ export const STATE_WORDS = {
  * agents shown: in total, per agent and per skill. */
 export function dailyUses(snapshot: SkillSnapshot, agents: string[] | undefined, days = 14) {
   // Days are the user's local days, so an evening use lands on the day it happened.
+  // Each moment uses its own offset, so a use before a daylight-saving change keeps its day.
+  const localDay = (ms: number) =>
+    Math.floor((ms - new Date(ms).getTimezoneOffset() * 60_000) / 86_400_000);
   const offset = new Date(snapshot.scanned_at).getTimezoneOffset() * 60_000;
-  const localDay = (ms: number) => Math.floor((ms - offset) / 86_400_000);
   const end = localDay(Date.parse(snapshot.scanned_at));
   const start = end - days + 1;
   const total = Array.from({ length: days }, () => 0);

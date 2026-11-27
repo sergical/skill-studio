@@ -27,7 +27,10 @@ const READS = new Map([
 function entries(snapshot: SkillSnapshot, budget: number, harness: string): ListingEntry[] {
   const reads = READS.get(harness) ?? ["shared"];
   const copyOf = (skill: InstalledSkill) =>
-    skill.deployments.find((d) => d.scope === "global" && reads.includes(d.agent));
+    // The core skips a copy whose link points nowhere, so a broken copy is not listed.
+    skill.deployments.find(
+      (d) => d.scope === "global" && reads.includes(d.agent) && !d.symlink_is_broken,
+    );
   const skills = snapshot.skills.filter((skill) => copyOf(skill));
   let left = budget - skills.reduce((sum, s) => sum + s.name.length + 3, 0);
   return skills.map((skill) => {

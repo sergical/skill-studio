@@ -148,7 +148,7 @@ export function usePicker(names: string[]) {
       // The picture and the Home grid use the arrow keys themselves.
       if (
         target?.closest(
-          "input, textarea, select, [contenteditable], [role=grid], [data-proto-keys]",
+          "input, textarea, select, [contenteditable], [role=grid], [role=radiogroup], [role=group], [data-proto-keys]",
         )
       )
         return;

@@ -22,10 +22,12 @@ function Bars({
   values,
   labels,
   average,
+  today,
 }: {
   values: number[];
   labels: string[];
   average: number;
+  today: boolean;
 }) {
   const max = Math.max(1, average, ...values);
   const y = (v: number) => (v / max) * CHART;
@@ -35,7 +37,7 @@ function Bars({
         <figcaption className="flex justify-end text-caption text-text-tertiary tabular-nums">
           <span className="inline-flex items-center gap-1.5">
             <span className="w-3 border-t border-dashed border-text-quaternary" aria-hidden />
-            avg {formatCount(Math.round(average))} a day
+            avg {average < 10 ? average.toFixed(1) : formatCount(Math.round(average))} a day
           </span>
         </figcaption>
       )}
@@ -51,7 +53,7 @@ function Bars({
           <div key={i} className="relative flex flex-1 justify-center" style={{ height: CHART }}>
             <span
               className={`absolute bottom-0 w-full max-w-11 rounded-t-[3px] ${
-                i === values.length - 1 ? "bg-data" : "bg-data/40"
+                today && i === values.length - 1 ? "bg-data" : "bg-data/40"
               }`}
               style={{ height: Math.max(v ? 3 : 1, y(v)) }}
             />
@@ -71,10 +73,12 @@ function Bars({
           <span
             key={i}
             className={`flex-1 text-center text-caption ${
-              i === labels.length - 1 ? "font-medium text-text-primary" : "text-text-tertiary"
+              today && i === labels.length - 1
+                ? "font-medium text-text-primary"
+                : "text-text-tertiary"
             }`}
           >
-            {i === labels.length - 1 ? "Today" : l}
+            {today && i === labels.length - 1 ? "Today" : l}
           </span>
         ))}
       </div>
@@ -100,6 +104,7 @@ function Spark({ values }: { values: number[] }) {
 
 interface TileFacts {
   agent: string;
+  period: string;
   uses: number | null;
   week: number[];
   listing: HarnessListing | undefined;
@@ -122,7 +127,9 @@ function AgentTile({
   const count = (...states: string[]) => entries.filter((e) => states.includes(e.state)).length;
   const full = count("described");
   const shortened = count("truncated");
-  const names = count("name_only", "omitted");
+  const names = count("name_only");
+  const omitted = count("omitted");
+  const youRun = (facts.listing?.entries ?? []).filter((e) => e.state === "hidden").length;
   const estimated = facts.listing?.evidence === "preview" && facts.listing.budget !== null;
   const listingLine = !facts.listing
     ? "Skill list not read yet"
@@ -131,6 +138,8 @@ function AgentTile({
           `${formatCount(full)} full`,
           shortened ? `${formatCount(shortened)} shortened` : "",
           names ? `${formatCount(names)} name only` : "",
+          omitted ? `${formatCount(omitted)} not listed` : "",
+          youRun ? `${formatCount(youRun)} you run` : "",
         ]
           .filter(Boolean)
           .join(" · ")
@@ -162,7 +171,9 @@ function AgentTile({
             {facts.uses === null ? "–" : formatCount(facts.uses)}
           </span>
           <span className="block truncate text-caption text-text-tertiary">
-            {facts.uses === null ? "No readable history" : "uses"}
+            {facts.uses === null
+              ? "No readable history"
+              : `${facts.uses === 1 ? "use" : "uses"} ${facts.period}`}
           </span>
         </span>
         {facts.uses !== null && <Spark values={facts.week} />}
@@ -173,6 +184,7 @@ function AgentTile({
             <span className="bg-data" style={{ flex: full }} />
             <span className="bg-data/45" style={{ flex: shortened }} />
             <span className="bg-warning" style={{ flex: names }} />
+            <span className="bg-error/70" style={{ flex: omitted }} />
           </>
         )}
       </span>
@@ -203,7 +215,7 @@ export function RecapVariant({
   agents: string[] | undefined;
   listings: HarnessListing[];
   /** Skills, not issue rows, in each of Home's groups, so the numbers match the list below. */
-  counts: { broken: string[]; warnings: string[]; updates: string[] };
+  counts: { broken: string[]; warnings: string[]; updates: string[]; unused: string[] };
   open: (name: string) => void;
 }) {
   const [week, setWeek] = useState<"this" | "last">("this");
@@ -219,10 +231,14 @@ export function RecapVariant({
   const hasHistory = snapshot.invocations.some((stats) => stats.by_hour.length > 0);
   const everyAgent = dailyUses(snapshot, agents, WEEK * 2);
   const days = only ? dailyUses(snapshot, [only], WEEK * 2) : everyAgent;
-  const pick = <T,>(values: T[]) => (week === "this" ? values.slice(WEEK) : values.slice(0, WEEK));
+  const lastWeekAny = sum(days.total.slice(0, WEEK)) > 0;
+  // An agent with nothing last week shows this week, so switching agents never strands the user.
+  const shownWeek = lastWeekAny ? week : "this";
+  const pick = <T,>(values: T[]) =>
+    shownWeek === "this" ? values.slice(WEEK) : values.slice(0, WEEK);
   const thisWeek = sum(days.total.slice(WEEK));
   const lastWeek = sum(days.total.slice(0, WEEK));
-  const total = week === "this" ? thisWeek : lastWeek;
+  const total = shownWeek === "this" ? thisWeek : lastWeek;
   const earliest = Math.min(...snapshot.invocations.flatMap((s) => s.by_hour.map((h) => h.hour)));
   const historyDays = Number.isFinite(earliest)
     ? (Date.parse(snapshot.scanned_at) / 3_600_000 - earliest) / 24
@@ -236,7 +252,6 @@ export function RecapVariant({
     .map(([name, values]) => ({ name, values: pick(values), count: sum(pick(values)) }))
     .filter((row) => row.count > 0)
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
-  const weekStart = Date.parse(snapshot.scanned_at) - WEEK * 86_400_000;
   const items: LibraryItem[] = [
     {
       id: "broken",
@@ -266,20 +281,14 @@ export function RecapVariant({
       id: "unused",
       tone: "bg-text-quaternary",
       label: "Not used in 30 days",
-      count: hasHistory ? skills.filter((s) => !s.uses).length : 0,
-      names: skills.filter((s) => !s.uses).map((s) => s.name),
+      count: hasHistory ? counts.unused.length : 0,
+      names: counts.unused,
       go: () => goToSkills({ usage: "unused-30d" }),
-    },
-    {
-      id: "added",
-      tone: "bg-data",
-      label: "Added this week",
-      count: skills.filter((s) => Date.parse(s.skill.installed_at) >= weekStart).length,
-      names: skills.filter((s) => Date.parse(s.skill.installed_at) >= weekStart).map((s) => s.name),
-      go: () => goToSkills({}),
     },
   ].filter((item) => item.count > 0);
   const scope = only ? deploymentLabelFromAgentId(only) : "All agents";
+  const library = new Set(skills.map((s) => s.name));
+  const fromPlugins = top.filter((row) => !library.has(row.name)).length;
 
   return (
     <section aria-label="This week" className="flex flex-col gap-8">
@@ -287,7 +296,7 @@ export function RecapVariant({
         role="group"
         aria-label="Agents"
         className="grid gap-2"
-        style={{ gridTemplateColumns: "repeat(auto-fill, minmax(11.5rem, 1fr))" }}
+        style={{ gridTemplateColumns: "repeat(auto-fill, minmax(13rem, 1fr))" }}
       >
         {shownAgents.map((agent) => {
           const label = deploymentLabelFromAgentId(agent);
@@ -297,15 +306,21 @@ export function RecapVariant({
               key={agent}
               facts={{
                 agent,
+                period: shownWeek === "this" ? "this week" : "last week",
                 uses: readers.has(agent) && hasHistory ? sum(pick(series)) : null,
                 week: pick(series),
                 listing: listings.find((r) => r.harness === agent),
                 // The copy an agent reads is its own folder's, else the shared one.
                 broken: skills.filter((s) => {
                   const own = s.skill.deployments.filter((d) => d.agent === label);
+                  const readsShared = HARNESS_CATALOG.find(
+                    (r) => r.id === agent,
+                  )?.readsSharedFolder;
                   const read = own.length
                     ? own
-                    : s.skill.deployments.filter((d) => d.agent === "shared");
+                    : readsShared
+                      ? s.skill.deployments.filter((d) => d.agent === "shared")
+                      : [];
                   return read.some((d) => d.symlink_is_broken);
                 }).length,
               }}
@@ -320,7 +335,9 @@ export function RecapVariant({
         <div className="flex min-w-0 flex-col gap-6">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="min-w-0">
-              <p className="text-small text-text-secondary">Skill uses · {scope}</p>
+              <p className="text-small text-text-secondary">
+                Skill uses {shownWeek === "this" ? "this week" : "last week"} · {scope}
+              </p>
               <p className="text-[2rem] leading-tight font-semibold tabular-nums">
                 {hasHistory ? formatCount(total) : "–"}
               </p>
@@ -328,10 +345,12 @@ export function RecapVariant({
                 {!hasHistory
                   ? "No readable skill history yet"
                   : [
-                      week === "this" && change !== null
+                      shownWeek === "this" && change !== null
                         ? `${change >= 0 ? "↑" : "↓"} ${Math.abs(change)}% from last week`
                         : "",
-                      `${formatCount(top.length)} ${top.length === 1 ? "skill" : "skills"} used`,
+                      `${formatCount(top.length)} ${top.length === 1 ? "skill" : "skills"} used${
+                        fromPlugins ? `, ${formatCount(fromPlugins)} from plugins` : ""
+                      }`,
                     ]
                       .filter(Boolean)
                       .join(" · ")}
@@ -347,9 +366,9 @@ export function RecapVariant({
                   <Button
                     key={w}
                     size="sm"
-                    variant={week === w ? "outline" : "ghost"}
+                    variant={shownWeek === w ? "outline" : "ghost"}
                     role="radio"
-                    aria-checked={week === w}
+                    aria-checked={shownWeek === w}
                     onClick={() => setWeek(w)}
                   >
                     {w === "this" ? "This week" : "Last week"}
@@ -360,17 +379,17 @@ export function RecapVariant({
           </div>
 
           {hasHistory ? (
-            <Bars values={pick(days.total)} labels={pick(days.labels)} average={total / WEEK} />
-          ) : (
-            <p className="rounded-lg border border-dashed border-border-subtle px-4 py-6 text-small text-text-secondary">
-              Uses appear here once {joinAgents(shownAgents.filter((a) => readers.has(a)))} records
-              a skill in its history.
-            </p>
-          )}
+            <Bars
+              values={pick(days.total)}
+              labels={pick(days.labels)}
+              average={total / WEEK}
+              today={shownWeek === "this"}
+            />
+          ) : null}
 
           {hasHistory && (
             <div>
-              <div className="grid grid-cols-[minmax(0,13rem)_minmax(3rem,1fr)_auto_2.5rem] gap-4 pb-1.5 text-caption text-text-tertiary">
+              <div className="grid grid-cols-[minmax(0,1fr)_minmax(2rem,7rem)_auto_2.5rem] gap-4 pb-1.5 text-caption text-text-tertiary">
                 <span>Most used</span>
                 <span />
                 <span>by day</span>
@@ -382,7 +401,7 @@ export function RecapVariant({
                     <Button
                       variant="ghost"
                       title={row.name}
-                      className="-mx-2 grid h-10 w-[calc(100%+1rem)] grid-cols-[minmax(0,13rem)_minmax(3rem,1fr)_auto_2.5rem] items-center gap-4 rounded-none border-0 border-b border-border-subtle px-2 font-normal"
+                      className="-mx-2 grid h-10 w-[calc(100%+1rem)] grid-cols-[minmax(0,1fr)_minmax(2rem,7rem)_auto_2.5rem] items-center gap-4 rounded-none border-0 border-b border-border-subtle px-2 font-normal"
                       onClick={() => open(row.name)}
                     >
                       <span className="truncate text-left">{row.name}</span>
@@ -401,7 +420,7 @@ export function RecapVariant({
                 ))}
                 {!top.length && (
                   <li className="py-3 text-small text-text-secondary">
-                    No skill use {week === "this" ? "this week" : "last week"}
+                    No skill use {shownWeek === "this" ? "this week" : "last week"}
                     {only ? ` in ${scope}` : ""}.
                   </li>
                 )}
@@ -414,7 +433,9 @@ export function RecapVariant({
           <p className="text-small text-text-secondary">Your library</p>
           <p className="-mt-2 text-[2rem] leading-tight font-semibold tabular-nums">
             {formatCount(skills.length)}
-            <span className="ml-1.5 text-small font-normal text-text-secondary">skills</span>
+            <span className="ml-1.5 text-small font-normal text-text-secondary">
+              {skills.length === 1 ? "skill" : "skills"}
+            </span>
           </p>
           {items.length ? (
             <ul className="border-t border-border-subtle">
@@ -450,11 +471,4 @@ export function RecapVariant({
       </div>
     </section>
   );
-}
-
-function joinAgents(ids: string[]): string {
-  const names = ids.map(deploymentLabelFromAgentId);
-  if (names.length === 0) return "an agent";
-  if (names.length === 1) return names[0];
-  return `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
 }
