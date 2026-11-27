@@ -176,7 +176,15 @@ export function mockListingReport(
     ],
   };
   // A persona with fewer agents gets only their rows, as the real report lists installed agents.
-  return agents
-    ? { ...report, listings: report.listings.filter((row) => agents.includes(row.harness)) }
-    : report;
+  // Agents with no estimate in this mock (OpenCode, pi, Grok Build) get a folder-scan row like
+  // Cursor's, listing the same global skills, so their counts are not zero.
+  if (!agents) return report;
+  const cursor = report.listings.find((row) => row.harness === "cursor");
+  const discovered = agents
+    .filter((agent) => !report.listings.some((row) => row.harness === agent))
+    .flatMap((agent) => (cursor ? [{ ...cursor, harness: agent }] : []));
+  return {
+    ...report,
+    listings: [...report.listings, ...discovered].filter((row) => agents.includes(row.harness)),
+  };
 }

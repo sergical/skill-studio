@@ -236,24 +236,26 @@ export function RecapVariant({
                 </p>
               )}
             </div>
-            <div
-              role="radiogroup"
-              aria-label="Week"
-              className="flex rounded-md border border-border-subtle p-0.5"
-            >
-              {(["last", "this"] as const).map((w) => (
-                <Button
-                  key={w}
-                  size="sm"
-                  variant={week === w ? "outline" : "ghost"}
-                  role="radio"
-                  aria-checked={week === w}
-                  onClick={() => setWeek(w)}
-                >
-                  {w === "this" ? "This week" : "Last week"}
-                </Button>
-              ))}
-            </div>
+            {historyWeeks >= 2 && (
+              <div
+                role="radiogroup"
+                aria-label="Week"
+                className="flex rounded-md border border-border-subtle p-0.5"
+              >
+                {(["last", "this"] as const).map((w) => (
+                  <Button
+                    key={w}
+                    size="sm"
+                    variant={week === w ? "outline" : "ghost"}
+                    role="radio"
+                    aria-checked={week === w}
+                    onClick={() => setWeek(w)}
+                  >
+                    {w === "this" ? "This week" : "Last week"}
+                  </Button>
+                ))}
+              </div>
+            )}
           </div>
           <Bars values={shown} labels={days.labels.slice(WEEK)} average={total / WEEK} />
           <div>
