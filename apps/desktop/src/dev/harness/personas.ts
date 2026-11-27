@@ -34,33 +34,58 @@ function estate(count: number, edit: (skill: InstalledSkill, index: number) => I
   return { ...base, skills, update_check: { ...base.update_check, updates_available: 0 } };
 }
 
-/** Gives the first `used` skills a 30-day history on `agent`, `perSkill` uses each spread over a
- * week, and every other skill none. */
-function withUses(snapshot: SkillSnapshot, used: number, perSkill = 3, agent = "claude-code") {
+/** How a persona's history is spread: which agents recorded it (skills take turns), which days
+ * (`from` days ago, over `span` days), and whether the first skill takes most of the uses. */
+interface UsePattern {
+  agents?: string[];
+  from?: number;
+  span?: number;
+  dominant?: boolean;
+}
+
+/** Gives the first `used` skills a history of `perSkill` uses each, spread as `pattern` says,
+ * and every other skill none. */
+function withUses(
+  snapshot: SkillSnapshot,
+  used: number,
+  perSkill = 3,
+  agentOrPattern: string | UsePattern = "claude-code",
+) {
+  const pattern: UsePattern =
+    agentOrPattern instanceof Object ? agentOrPattern : { agents: [agentOrPattern] };
+  const agents = pattern.agents ?? ["claude-code"];
+  const from = pattern.from ?? 0;
+  const span = pattern.span ?? 7;
   const now = Math.floor(Date.parse(snapshot.scanned_at) / 3_600_000);
   const invocations = snapshot.skills.slice(0, used).map((skill, index) => {
-    const hours = Array.from({ length: 7 }, (_, day) => now - day * 24 - (index % 12));
-    const by_hour = hours.map((hour, day) => ({
-      hour,
-      harness: agent,
-      trigger: "agent" as const,
-      project_path: null,
-      count: Math.ceil(perSkill / 7) + (day === 0 ? perSkill % 7 : 0),
-    }));
+    const agent = agents[index % agents.length];
+    const uses = pattern.dominant && index === 0 ? perSkill * 20 : perSkill;
+    const hours = Array.from({ length: span }, (_, day) => now - (from + day) * 24 - (index % 12));
+    const by_hour = hours
+      .map((hour, day) => ({
+        hour,
+        harness: agent,
+        trigger: "agent" as const,
+        project_path: null,
+        count: Math.floor(uses / span) + (day < uses % span ? 1 : 0),
+      }))
+      .filter((hour) => hour.count > 0);
     const total = by_hour.reduce((sum, hour) => sum + hour.count, 0);
+    const within = (days: number) =>
+      by_hour.filter((hour) => now - hour.hour < days * 24).reduce((t, h) => t + h.count, 0);
     const by_day = Object.fromEntries(
-      hours.map((hour, day) => [
-        new Date(hour * 3_600_000).toISOString().slice(0, 10),
-        by_hour[day].count,
+      by_hour.map((hour) => [
+        new Date(hour.hour * 3_600_000).toISOString().slice(0, 10),
+        hour.count,
       ]),
     );
     return {
       skill: skill.name,
-      last_24_hours: by_hour[0].count,
-      last_7_days: total,
-      last_14_days: total,
+      last_24_hours: within(1),
+      last_7_days: within(7),
+      last_14_days: within(14),
       last_30_days: total,
-      last_used: new Date(hours[0] * 3_600_000).toISOString(),
+      last_used: by_hour[0] ? new Date(by_hour[0].hour * 3_600_000).toISOString() : null,
       by_project_30_days: {},
       by_day,
       by_harness_30_days: { [agent]: total },
@@ -269,6 +294,42 @@ export const PERSONAS = {
     claudeFraction: 0.05,
     expectTop: null,
     build: () => withUses(estate(150, same), 150),
+  },
+  "one-dominant": {
+    label: "One skill does nearly all the work",
+    agents: ["claude-code", "codex"],
+    claudeFraction: 0.01,
+    expectTop: "Codex",
+    build: () =>
+      withUses(estate(40, same), 12, 3, { agents: ["claude-code", "codex"], dominant: true }),
+  },
+  "quiet-this-week": {
+    label: "Used last week, nothing this week",
+    agents: ["claude-code"],
+    claudeFraction: 0.01,
+    expectTop: "no use",
+    build: () => withUses(estate(30, same), 12, 6, { from: 8, span: 6 }),
+  },
+  "two-weeks-steady": {
+    label: "Two steady weeks on three agents",
+    agents: ["claude-code", "codex", "pi"],
+    claudeFraction: 0.01,
+    expectTop: "Codex",
+    build: () =>
+      withUses(estate(60, same), 40, 14, { agents: ["claude-code", "codex", "pi"], span: 14 }),
+  },
+  "all-six-spread": {
+    label: "All six agents, use spread over them",
+    agents: ALL,
+    claudeFraction: 0.002,
+    expectTop: "names of",
+    build: () => withUses(estate(90, same), 48, 6, { agents: ALL, span: 14 }),
+  },
+  "grok-only": {
+    label: "Grok Build only",
+    agents: ["grok-build"],
+    expectTop: null,
+    build: () => withUses(estate(12, same), 0),
   },
 } satisfies Record<string, Persona>;
 

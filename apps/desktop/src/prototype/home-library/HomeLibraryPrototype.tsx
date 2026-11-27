@@ -49,7 +49,13 @@ export function HomeLibraryPrototype({
       {/* With no skills every picture is empty, so each variant shows today's first-run Home. */}
       {skills.length === 0 && baseline}
       {skills.length > 0 && current === 0 && (
-        <RecapVariant snapshot={snapshot} skills={skills} agents={agents} open={open} />
+        <RecapVariant
+          snapshot={snapshot}
+          skills={skills}
+          agents={agents}
+          listings={listings}
+          open={open}
+        />
       )}
       {skills.length > 0 && current === 1 && (
         <StorageVariant
