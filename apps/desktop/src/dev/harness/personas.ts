@@ -356,7 +356,7 @@ export const PERSONAS = {
     label: "Three agents share skills, one copy broken",
     agents: ["claude-code", "codex", "pi"],
     claudeFraction: 0.01,
-    expectTop: "don’t load",
+    expectTop: "broken",
     build: () =>
       withUses(
         estate(20, (s, i) => (i === 0 ? broken(s) : s)),
