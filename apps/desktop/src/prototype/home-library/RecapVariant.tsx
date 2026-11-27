@@ -147,12 +147,12 @@ export function RecapVariant({
         <Bars values={shown} labels={days.labels.slice(WEEK)} average={total / WEEK} />
         <div>
           <p className="mb-2 text-small font-medium text-text-secondary">Most used</p>
-          <ul className="border-t border-border-subtle">
+          <ul className="-mx-2 border-t border-border-subtle">
             {top.map((row) => (
               <li key={row.name}>
                 <Button
                   variant="ghost"
-                  className="grid h-10 w-full grid-cols-[minmax(0,12rem)_minmax(4rem,1fr)_auto_3rem] items-center gap-4 rounded-none border-b border-border-subtle px-0 font-normal"
+                  className="grid h-10 w-full grid-cols-[minmax(0,12rem)_minmax(4rem,1fr)_auto_3rem] items-center gap-4 rounded-none border-0 border-b border-border-subtle px-2 font-normal"
                   onClick={() => open(row.name)}
                 >
                   <span className="truncate text-left">{row.name}</span>

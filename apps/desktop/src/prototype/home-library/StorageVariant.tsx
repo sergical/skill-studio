@@ -13,11 +13,17 @@ import type { LibrarySkill } from "./library-model";
 function Capacity({ row, unused }: { row: HarnessListing; unused: Set<string> }) {
   const label = deploymentLabelFromAgentId(row.harness);
   const icon = harnessIdFromLabel(label);
+  // The budget is in characters for Claude Code and in tokens (about 4 characters) for Codex.
+  const perUnit = row.budget_unit === "tokens" ? 4 : 1;
   const size = (e: HarnessListing["entries"][number]) =>
-    e.name.length + e.full_description_chars + 4;
+    (e.name.length + e.full_description_chars + 4) / perUnit;
   const entries = row.entries.filter((e) => e.state !== "hidden");
-  const usedSize = entries.filter((e) => !unused.has(e.name)).reduce((t, e) => t + size(e), 0);
-  const unusedSize = entries.filter((e) => unused.has(e.name)).reduce((t, e) => t + size(e), 0);
+  // The core's full_size is the whole list in the budget's unit; split it by each skill's share.
+  const usedRaw = entries.filter((e) => !unused.has(e.name)).reduce((t, e) => t + size(e), 0);
+  const unusedRaw = entries.filter((e) => unused.has(e.name)).reduce((t, e) => t + size(e), 0);
+  const share = usedRaw + unusedRaw || 1;
+  const usedSize = Math.round((row.full_size * usedRaw) / share);
+  const unusedSize = Math.round((row.full_size * unusedRaw) / share);
   const budget = row.budget ?? 0;
   const scale = Math.max(budget, usedSize + unusedSize, 1);
   const unit = row.budget_unit === "characters" ? "chars" : row.budget_unit;
@@ -29,8 +35,10 @@ function Capacity({ row, unused }: { row: HarnessListing; unused: Set<string> })
           {label}
         </span>
         <span className="text-text-secondary tabular-nums">
-          {formatCount(usedSize + unusedSize)} of {formatCount(budget)} {unit}
-          {usedSize + unusedSize > budget && (
+          {budget === 0
+            ? `${formatCount(entries.length)} skills · no limit Skill Studio can estimate`
+            : `${formatCount(usedSize + unusedSize)} of ${formatCount(budget)} ${unit}`}
+          {budget > 0 && usedSize + unusedSize > budget && (
             <span className="text-warning">
               {" "}
               · over by {formatCount(usedSize + unusedSize - budget)}
@@ -44,7 +52,7 @@ function Capacity({ row, unused }: { row: HarnessListing; unused: Set<string> })
           className="h-full bg-text-quaternary"
           style={{ width: `${(unusedSize / scale) * 100}%` }}
         />
-        {budget < scale && (
+        {budget > 0 && budget < scale && (
           <span
             className="absolute inset-y-0 w-0.5 bg-text-primary"
             style={{ left: `${(budget / scale) * 100}%` }}
@@ -69,7 +77,8 @@ export function StorageVariant({
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [sort, setSort] = useState<"size" | "uses">("size");
   const unused = new Set(skills.filter((s) => !s.uses).map((s) => s.name));
-  const estimated = listings.filter((r) => r.evidence === "preview" && r.budget !== null);
+  // Every agent gets a bar; one with no known limit shows its size against nothing.
+  const estimated = listings;
   const rows = [...skills].sort((a, b) =>
     sort === "size" ? b.tokens - a.tokens : a.uses - b.uses || b.tokens - a.tokens,
   );
