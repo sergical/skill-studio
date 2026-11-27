@@ -311,94 +311,126 @@ export function FocusVariant(props: SimpleProps) {
   );
 }
 
-/** 6. Ask in one line: each agent with what Skill Studio knows for sure about it, one status
- * sentence, and one prompt that hands everything open to your agent. */
+/** 6. Ask in one line: every supported agent as a small visual (skills it lists, uses this
+ * week), the week as bars, open items as counts, and the agent prompt one click away. */
 export function AskLineVariant(props: SimpleProps & { listings: HarnessListing[] }) {
   const items = useItems(props);
   const addToast = useAppStore((s) => s.addToast);
+  const [showPrompt, setShowPrompt] = useState(false);
   const w = week(props.snapshot, props.agents);
-  const shown = props.agents ?? props.listings.map((r) => r.harness);
-  const readers = new Set<string>(HARNESS_CATALOG.filter((r) => r.usageReader).map((r) => r.id));
+  const kept = new Set(props.agents ?? props.listings.map((r) => r.harness));
   const hasHistory = props.snapshot.invocations.length > 0;
-  const [picked, setPicked] = useState<string | null>(null);
+  const missing = HARNESS_CATALOG.filter((row) => !kept.has(row.id));
   const prompt = items.length
-    ? `Use Skill Studio to sort out my skills: ${items.map((i) => i.title.toLowerCase()).join("; ")}. Fix what is broken, show me the updates before applying them, and park the unused skills. Tell me what you changed.`
+    ? `Use Skill Studio to sort out my skills: fix what is broken, review updates before applying them, and park what I have not used in 30 days. Tell me what you changed.`
     : "";
-  const copy = (text: string) => {
-    void navigator.clipboard?.writeText(text);
-    addToast({ type: "success", title: "Prompt copied" });
-  };
   return (
-    <section aria-label="Your skills at a glance" className="flex max-w-3xl flex-col gap-4">
+    <section aria-label="Your skills at a glance" className="flex flex-col gap-5">
       <ul
         aria-label="Agents"
-        className="flex flex-wrap gap-x-5 gap-y-1.5 text-small text-text-secondary"
+        className="flex divide-x divide-border-subtle rounded-lg border border-border-subtle"
       >
-        {shown.map((agent) => {
-          const label = deploymentLabelFromAgentId(agent);
-          const icon = harnessIdFromLabel(label);
-          const listing = props.listings.find((r) => r.harness === agent);
-          const listed = (listing?.entries ?? []).filter((e) => e.state !== "hidden").length;
-          const uses = sum(w.days.byAgent.get(agent) ?? []);
+        {HARNESS_CATALOG.filter((row) => kept.has(row.id)).map((row) => {
+          const listing = props.listings.find((r) => r.harness === row.id);
+          const entries = (listing?.entries ?? []).filter((e) => e.state !== "hidden");
+          const full = entries.filter((e) => e.state === "described").length;
+          const uses = sum(w.days.byAgent.get(row.id) ?? []);
+          const icon = harnessIdFromLabel(row.label);
           return (
-            <li key={agent} className="inline-flex items-center gap-1.5 tabular-nums">
-              {icon && <HarnessIcon harness={icon} size={13} />}
-              <span className="text-text-primary">{label}</span>
-              <span>
-                {listing ? plural(listed, "skill") : "not read yet"}
-                {readers.has(agent) && hasHistory ? ` · ${plural(uses, "use")}` : ""}
+            <li key={row.id} className="min-w-0 flex-1 px-2.5 py-2.5" title={row.label}>
+              <p className="flex items-center gap-1.5 text-caption text-text-secondary">
+                {icon && <HarnessIcon harness={icon} size={12} />}
+                <span className="truncate">{row.label}</span>
+              </p>
+              <p className="mt-1 text-caption text-text-tertiary tabular-nums">
+                <span className="text-body font-semibold text-text-primary">
+                  {formatCount(entries.length)}
+                </span>{" "}
+                skills
+              </p>
+              <span
+                role="img"
+                className="mt-2 flex h-1 overflow-hidden rounded-full bg-bg-tertiary"
+                aria-label={`${full} of ${entries.length} described in full`}
+              >
+                <span className="bg-data" style={{ flex: full }} />
+                <span className="bg-warning" style={{ flex: entries.length - full }} />
               </span>
+              {row.usageReader && hasHistory && (
+                <p className="mt-1.5 truncate text-caption text-text-tertiary tabular-nums">
+                  {plural(uses, "use")}
+                </p>
+              )}
             </li>
           );
         })}
-      </ul>
-      <p className="text-[1.375rem] leading-snug font-semibold text-balance">
-        {hasHistory
-          ? `${plural(w.total, "use")} this week across ${plural(w.used, "skill")}. `
-          : ""}
-        {items.length ? (
-          <span className="text-text-secondary">{items.map((i) => i.title).join(", ")}.</span>
-        ) : (
-          <span className="text-text-secondary">Nothing to sort out.</span>
+        {missing.length > 0 && (
+          <li
+            className="flex shrink-0 items-center gap-1.5 px-3 text-caption text-text-tertiary"
+            title={`Not set up: ${missing.map((row) => row.label).join(", ")}`}
+          >
+            {missing.map((row) => {
+              const icon = harnessIdFromLabel(row.label);
+              return (
+                icon && (
+                  <span key={row.id} className="opacity-50">
+                    <HarnessIcon harness={icon} size={12} />
+                  </span>
+                )
+              );
+            })}
+            <span>{missing.length} not set up</span>
+          </li>
         )}
-      </p>
-      {items.length > 0 && (
-        <div className="rounded-lg border border-border-subtle bg-bg-secondary">
-          <p className="px-4 pt-3 font-mono text-small leading-relaxed text-text-primary select-text">
-            {picked ? (items.find((i) => i.id === picked)?.ask ?? prompt) : prompt}
-          </p>
-          <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5">
-            <span className="flex flex-wrap gap-1">
-              <Button
-                size="sm"
-                variant={picked === null ? "outline" : "ghost"}
-                onClick={() => setPicked(null)}
-              >
-                Everything
-              </Button>
-              {items.map((i) => (
-                <Button
-                  key={i.id}
-                  size="sm"
-                  variant={picked === i.id ? "outline" : "ghost"}
-                  onClick={() => setPicked(i.id)}
-                >
-                  <span className={`size-1.5 rounded-full ${i.tone}`} aria-hidden />
-                  {i.action === "Review" && i.id === "unused"
-                    ? "Unused"
-                    : i.title.split(" ").slice(1).join(" ")}
-                </Button>
-              ))}
-            </span>
-            <Button
-              size="sm"
-              onClick={() =>
-                copy(picked ? (items.find((i) => i.id === picked)?.ask ?? prompt) : prompt)
-              }
-            >
-              <Copy aria-hidden /> Copy prompt
-            </Button>
+      </ul>
+      <div className="flex flex-wrap items-end justify-between gap-6">
+        <div className="flex items-end gap-4">
+          <div>
+            <p className="text-caption text-text-tertiary">Uses this week</p>
+            {hasHistory ? (
+              <p className="text-[2rem] leading-none font-semibold tabular-nums">
+                {formatCount(w.total)}
+              </p>
+            ) : (
+              <p className="mt-1 text-small text-text-secondary">No readable history yet</p>
+            )}
           </div>
+          {hasHistory && <MiniWeek values={w.days.total} />}
+        </div>
+        <ul aria-label="Open items" className="flex flex-wrap gap-1.5">
+          {items.map((item) => (
+            <li key={item.id}>
+              <Button size="sm" variant="outline" onClick={item.go} title={item.title}>
+                <span className={`size-2 rounded-full ${item.tone}`} aria-hidden />
+                <span className="font-semibold tabular-nums">
+                  {formatCount(Number(item.title.split(" ")[0].replace(/,/g, "")) || 0)}
+                </span>
+                {{ broken: "broken", updates: "updates", cut: "cut", unused: "unused" }[item.id]}
+              </Button>
+            </li>
+          ))}
+          {items.length > 0 && (
+            <li>
+              <Button size="sm" aria-expanded={showPrompt} onClick={() => setShowPrompt((v) => !v)}>
+                Ask your agent
+              </Button>
+            </li>
+          )}
+        </ul>
+      </div>
+      {showPrompt && (
+        <div className="flex items-start gap-3 rounded-lg border border-border-subtle bg-bg-secondary p-3">
+          <p className="flex-1 font-mono text-small leading-relaxed select-text">{prompt}</p>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              void navigator.clipboard?.writeText(prompt);
+              addToast({ type: "success", title: "Prompt copied" });
+            }}
+          >
+            <Copy aria-hidden /> Copy
+          </Button>
         </div>
       )}
     </section>

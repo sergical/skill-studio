@@ -74,7 +74,7 @@ export function HomeLibraryPrototype({
               broken: [...new Set(groups.broken.map((issue) => issue.skill.name))],
               warnings: [...new Set(groups.warnings.map((issue) => issue.skill.name))],
               updates: groups.updates.map((skill) => skill.name),
-              unused: groups.unused.map((skill) => skill.name),
+              unused: snapshot.invocations.length ? groups.unused.map((skill) => skill.name) : [],
             },
             open,
           }}
