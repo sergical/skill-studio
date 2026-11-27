@@ -26,6 +26,7 @@ export function PluginSkillsView({
 }: PluginSkillsViewProps) {
   const groups = groupPluginSkills(snapshot?.skills ?? []);
   const skillCount = new Set(groups.flatMap((g) => g.skills.map(({ skill }) => skill.name))).size;
+  const statsBySkill = new Map((snapshot?.invocations ?? []).map((stats) => [stats.skill, stats]));
 
   if (!snapshot) {
     return (
@@ -38,7 +39,7 @@ export function PluginSkillsView({
   return (
     <PageShell
       title="Plugins"
-      subtitle="Skills that ship inside agent plugins. The plugin installs and updates them, not Skill Studio."
+      subtitle="Skills inside agent plugins. Each plugin installs and updates its own."
     >
       {groups.length === 0 ? (
         <p className="m-0 text-small text-text-tertiary">
@@ -71,27 +72,50 @@ export function PluginSkillsView({
                   {group.version && (
                     <span className="text-caption text-text-tertiary">v{group.version}</span>
                   )}
-                  <span className="ml-auto text-caption tabular-nums text-text-tertiary">
-                    {skills.length} skill{skills.length !== 1 ? "s" : ""}
-                  </span>
+                  {skills.length > 1 && (
+                    <span className="ml-auto text-caption tabular-nums text-text-tertiary">
+                      {skills.length} skills
+                    </span>
+                  )}
                 </header>
                 <div className="flex flex-col">
-                  {skills.map(({ skill, deploymentPath }) => (
-                    <Button
-                      key={skill.name}
-                      variant="ghost"
-                      className="grid h-8 min-w-0 justify-start gap-3 overflow-hidden rounded-none border-0 border-b border-border-subtle px-3 text-left font-normal last:border-b-0 [grid-template-columns:minmax(0,1fr)_minmax(0,2fr)_64px]"
-                      onClick={() => onSelectSkill(skill.name, deploymentPath)}
-                    >
-                      <span className="truncate text-body text-text-primary">{skill.name}</span>
-                      <span className="select-text truncate text-small text-text-tertiary">
-                        {skill.description}
-                      </span>
-                      <span className="whitespace-nowrap text-right text-caption tabular-nums text-text-tertiary">
-                        {formatTokens(skill.skill_md_tokens)}
-                      </span>
-                    </Button>
-                  ))}
+                  {skills.map(({ skill, deploymentPath }) => {
+                    // Only the plugin's own agent runs this copy; another agent's uses of a
+                    // same-named skill are not this plugin's.
+                    const uses =
+                      (harnessId && statsBySkill.get(skill.name)?.by_harness_30_days[harnessId]) ||
+                      0;
+                    return (
+                      <Button
+                        key={skill.name}
+                        variant="ghost"
+                        className="grid h-8 min-w-0 justify-start gap-3 overflow-hidden rounded-none border-0 border-b border-border-subtle px-3 text-left font-normal last:border-b-0 [grid-template-columns:minmax(0,1fr)_minmax(0,2fr)_64px_80px]"
+                        onClick={() => onSelectSkill(skill.name, deploymentPath)}
+                      >
+                        <span className="truncate text-body text-text-primary">{skill.name}</span>
+                        <span className="select-text truncate text-small text-text-tertiary">
+                          {skill.description}
+                        </span>
+                        {/* No recorded use shows nothing, not "0": the agent may keep no history
+                            Skill Studio can read. */}
+                        <span className="whitespace-nowrap text-right text-small tabular-nums text-text-secondary">
+                          {uses > 0 && (
+                            <>
+                              {uses.toLocaleString()}
+                              <span className="text-text-tertiary">
+                                {" "}
+                                {uses === 1 ? "use" : "uses"}
+                              </span>
+                            </>
+                          )}
+                        </span>
+                        <span className="whitespace-nowrap text-right text-small tabular-nums text-text-secondary">
+                          {formatTokens(skill.skill_md_tokens)}
+                          <span className="text-text-tertiary"> tokens</span>
+                        </span>
+                      </Button>
+                    );
+                  })}
                 </div>
               </section>
             );

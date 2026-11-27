@@ -10,11 +10,11 @@ import type { InstalledSkill, SkillListFilterScope } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
 import { HarnessStack } from "./HarnessStack";
 import { RowFixButton } from "./RowFixButton";
-import { NoteCell, SkillNameCell, SlotCell } from "./SkillRowCells";
+import { NoteCell, RowMetric, SkillNameCell, SlotCell } from "./SkillRowCells";
 import { ROW_CLASS, SKILL_ROW_GRID, selectedRowClass } from "./skill-row-format";
 import { SkillLocationCell } from "./SkillLocationCell";
 import { rowClickOpensSkill } from "./skill-row-click";
-import { DEFAULT_HARNESS_LIST, whereFacts } from "./skill-row-state";
+import { DEFAULT_HARNESS_LIST, rowNote, whereFacts } from "./skill-row-state";
 import type { RowState } from "./skill-row-state";
 
 interface SkillListRowProps {
@@ -25,6 +25,10 @@ interface SkillListRowProps {
   /** The virtualizer's absolute positioning within the row's group container. */
   style: CSSProperties;
   state: RowState | null;
+  /** Uses in the last 30 days, 0 when none were recorded. */
+  uses: number;
+  /** The list is sorted by Largest: the row's number is its size, not its uses. */
+  sizeSort: boolean;
   checked: boolean;
   /** Whether any row in the table is checked. */
   hasSelection: boolean;
@@ -43,6 +47,8 @@ export function SkillListRow({
   index,
   style,
   state,
+  uses,
+  sizeSort,
   checked,
   hasSelection,
   isOpenSkill,
@@ -53,7 +59,7 @@ export function SkillListRow({
   onCheckedChange,
 }: SkillListRowProps) {
   const scopedSkill = skillForCoverageScope(skill, scope);
-  const note = state ? [state.label, state.detail].filter(Boolean).join(" · ") : undefined;
+  const note = rowNote(state);
   const busy = useAppStore((s) => s.rowActs.get(skill.name) === null);
   return (
     <div
@@ -98,7 +104,12 @@ export function SkillListRow({
         <HarnessStack skill={scopedSkill} harnessList={DEFAULT_HARNESS_LIST} />
       </div>
       <div role="gridcell" className="contents">
-        <NoteCell skill={skill} note={note} title={note} />
+        <NoteCell
+          skill={skill}
+          note={note}
+          title={state ? [state.label, state.detail].filter(Boolean).join("\n") : undefined}
+          metric={<RowMetric skill={skill} uses={uses} sizeSort={sizeSort} />}
+        />
       </div>
       <div role="gridcell" className="flex min-w-0 justify-end">
         <RowFixButton skill={skill} label={state?.action ?? null} onAct={onAct} />

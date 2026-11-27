@@ -9,6 +9,7 @@
 // ============================================================================
 
 import { Layers, Link2, Link2Off } from "lucide-react";
+import { AGENTS_READING_SHARED_ROOT, deploymentLabelFromAgentId } from "@skill-studio/lib";
 import { HarnessIcon } from "../ui/HarnessIcon";
 import { RichTooltip } from "../ui/RichTooltip";
 import type { HarnessReach, Universal } from "./skill-row-state";
@@ -108,10 +109,14 @@ export function HarnessMark({
   return <RichTooltip content={harnessMarkTooltip(reach, parked)}>{mark}</RichTooltip>;
 }
 
+/** The agents that read the Universal folder on their own, named in its mark's tooltip: one
+ * disc stands for all of them. */
+const UNIVERSAL_READERS = AGENTS_READING_SHARED_ROOT.map(deploymentLabelFromAgentId).join(", ");
+
 /** The Universal folder's own mark: present is the folder's `Layers` glyph
  * at full tone; absent is the same glyph dimmed to `--color-icon-muted` at
- * `opacity-60`. Present shows a one-line "Universal folder" tooltip so the
- * Layers glyph is named. */
+ * `opacity-60`. Present shows a tooltip naming the folder and the agents
+ * that read it, since one Layers disc stands for all of them. */
 export function UniversalMark({
   universal,
   size: sizeProp,
@@ -133,16 +138,19 @@ export function UniversalMark({
   return (
     <RichTooltip
       content={
-        <span className="flex items-center gap-1.5 text-small">
-          <Layers size={14} aria-hidden />
-          Universal folder
+        <span className="flex flex-col gap-0.5 text-small">
+          <span className="flex items-center gap-1.5">
+            <Layers size={14} aria-hidden />
+            Universal folder
+          </span>
+          <span className="text-text-tertiary">Read by {UNIVERSAL_READERS}</span>
         </span>
       }
     >
       <span
         role="img"
         className="relative inline-flex size-5 items-center justify-center"
-        aria-label="Universal folder"
+        aria-label={`Universal folder, read by ${UNIVERSAL_READERS}`}
       >
         <Layers size={size} className="text-text-primary" aria-hidden />
       </span>

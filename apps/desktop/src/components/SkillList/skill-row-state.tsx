@@ -129,6 +129,40 @@ export function rowState(skill: InstalledSkill): RowState | null {
   return null;
 }
 
+/** "Global · Claude Code: Broken link." -> "Claude Code"; "Global: SKILL.md: ..." -> "SKILL.md: ...".
+ * The scope prefix repeats the row's Where column, so the note keeps only the agent, or the
+ * condition itself when no single agent owns it. */
+function detailWithoutScope(detail: string): string {
+  const split = detail.indexOf(": ");
+  if (split === -1) return detail;
+  const where = detail.slice(0, split).split(" · ");
+  const scopeParts = where[0] === "Project" ? 2 : 1;
+  if (where[0] !== "Global" && where[0] !== "Project") return detail;
+  const agent = where.slice(scopeParts).join(" · ");
+  return agent || detail.slice(split + 2);
+}
+
+/** The Skills row's note: only what the group header, the Where column and the fix button do
+ * not already say. A spec violation shows its reason, a folder issue its count and the agent it
+ * hits, an update nothing (the group and the button say it), a parked skill the day it parked. */
+export function rowNote(state: RowState | null): string | undefined {
+  if (!state) return undefined;
+  switch (state.kind) {
+    case "violation":
+      return state.detail ?? state.label;
+    case "rollup":
+      return state.detail ? `${state.label} · ${detailWithoutScope(state.detail)}` : state.label;
+    case "update":
+      return undefined;
+    case "parked": {
+      const day = state.label.replace(/^Parked( · )?/, "");
+      return day ? `Since ${day}` : undefined;
+    }
+    case "issue":
+      return state.label;
+  }
+}
+
 /** The "Update available" rung on its own, so the Updates group can show it without running the
  * rest of `rowState`'s ladder (a spec violation or rollup issue would otherwise outrank it). */
 export function updateRowState(skill: InstalledSkill): RowState | null {

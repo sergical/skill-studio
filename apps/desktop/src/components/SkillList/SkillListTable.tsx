@@ -187,6 +187,7 @@ export function SkillListTable({
   const rowPath = (skill: InstalledSkill): string | undefined => skill.deployments[0]?.path;
 
   const grouped = groupSkillRows(skills, sort, stats, attention, attentionFilter);
+  const usesBySkill = new Map(stats.map((s) => [s.skill, s.last_30_days]));
   const { statesBySkill } = grouped;
   const buckets = useHeldLayout(
     grouped.buckets,
@@ -331,6 +332,7 @@ export function SkillListTable({
   function renderRow(skill: InstalledSkill, index: number, top: number) {
     const checked = selectedPaths.has(rowPath(skill) ?? "");
     const state = statesBySkill.get(skill.name) ?? null;
+    const uses = usesBySkill.get(skill.name) ?? 0;
     return (
       <SkillListRow
         key={skill.name}
@@ -345,6 +347,8 @@ export function SkillListTable({
           transform: `translateY(${top}px)`,
         }}
         state={state}
+        uses={uses}
+        sizeSort={sort === "size"}
         checked={checked}
         hasSelection={selectedPaths.size > 0}
         isOpenSkill={skill.name === selectedSkillName}

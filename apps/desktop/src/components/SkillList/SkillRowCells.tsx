@@ -164,23 +164,59 @@ export function SlotCell({ skill, state, checked, hasSelection, onCheckedChange 
   );
 }
 
-/** The row's note: why the row is here, then its token pair at the right edge. `title` shows a
- * note the column cuts short. */
+/** The Skills list's number at a row's right edge: uses in the last 30 days, or the SKILL.md
+ * size while the list is sorted by Largest. A skill with no recorded use shows nothing rather
+ * than "0": the agents that reach it may keep no history Skill Studio can read. */
+export function RowMetric({
+  skill,
+  uses,
+  sizeSort,
+}: {
+  skill: InstalledSkill;
+  uses: number;
+  sizeSort: boolean;
+}) {
+  if (sizeSort) {
+    return (
+      <RichTooltip content={<TokensTooltip skill={skill} />}>
+        <span className="shrink-0 whitespace-nowrap text-small tabular-nums text-text-secondary">
+          {formatTokens(skill.skill_md_tokens)}
+          <span className="text-text-tertiary"> tokens</span>
+        </span>
+      </RichTooltip>
+    );
+  }
+  if (uses === 0) return null;
+  return (
+    <span
+      className="shrink-0 whitespace-nowrap text-small tabular-nums text-text-secondary"
+      title={`${uses.toLocaleString()} ${uses === 1 ? "use" : "uses"} in the last 30 days`}
+    >
+      {uses.toLocaleString()}
+      <span className="text-text-tertiary"> {uses === 1 ? "use" : "uses"}</span>
+    </span>
+  );
+}
+
+/** The row's note: why the row is here, then a number at the right edge - `metric` when given,
+ * else the token pair. `title` shows a note the column cuts short. */
 export function NoteCell({
   skill,
   note,
   title,
+  metric,
 }: {
   skill: InstalledSkill;
   note?: ReactNode;
   title?: string;
+  metric?: ReactNode;
 }) {
   return (
     <span className="flex min-w-0 items-center justify-between gap-2">
       <span className="min-w-0 truncate text-small text-text-secondary select-text" title={title}>
         {note}
       </span>
-      <TokenPairCell skill={skill} />
+      {metric === undefined ? <TokenPairCell skill={skill} /> : metric}
     </span>
   );
 }
