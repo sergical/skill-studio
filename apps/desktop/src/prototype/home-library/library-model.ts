@@ -84,3 +84,31 @@ export const STATE_WORDS = {
   omitted: "Not listed",
   hidden: "You run it",
 } satisfies Record<ListState, string>;
+
+/** Uses per day for the last `days` days (oldest first), from the hourly history, for the
+ * agents shown: in total, per agent and per skill. */
+export function dailyUses(snapshot: SkillSnapshot, agents: string[] | undefined, days = 14) {
+  const end = Math.floor(Date.parse(snapshot.scanned_at) / 86_400_000);
+  const start = end - days + 1;
+  const total = Array.from({ length: days }, () => 0);
+  const byAgent = new Map<string, number[]>();
+  const bySkill = new Map<string, number[]>();
+  for (const stats of snapshot.invocations) {
+    for (const hour of stats.by_hour) {
+      if (agents && !agents.includes(hour.harness)) continue;
+      const day = Math.floor(hour.hour / 24) - start;
+      if (day < 0 || day >= days) continue;
+      total[day] += hour.count;
+      const agent = byAgent.get(hour.harness) ?? Array.from({ length: days }, () => 0);
+      agent[day] += hour.count;
+      byAgent.set(hour.harness, agent);
+      const skill = bySkill.get(stats.skill) ?? Array.from({ length: days }, () => 0);
+      skill[day] += hour.count;
+      bySkill.set(stats.skill, skill);
+    }
+  }
+  const labels = Array.from({ length: days }, (_, i) =>
+    new Date((start + i) * 86_400_000).toLocaleDateString(undefined, { weekday: "narrow" }),
+  );
+  return { total, byAgent, bySkill, labels, start };
+}

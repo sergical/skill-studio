@@ -1,5 +1,6 @@
-// PROTOTYPE (throwaway, branch prototype/project-skill-set): round 2, riffing on Field and Map
-// (Current and Lanes were rejected). Switched with the picker at the bottom (1-3 or the arrow
+// PROTOTYPE (throwaway, branch prototype/project-skill-set): round 3, three new directions
+// drawn from Mobbin (Screen Time recaps, storage managers, status pages). Rejected so far:
+// Current, Lanes, Field, Field + list, Map. Switched with the picker at the bottom (1-3 or the arrow
 // keys, ?v= keeps the choice). Mounted from HomeView by one
 // dev-only block fenced with "PROTOTYPE home-library"; delete this folder and that block.
 
@@ -11,10 +12,11 @@ import { useHomeListing } from "../../components/Home/useHomeListing";
 import type { HomeGroups } from "../../components/Home/home-inbox-data";
 import { buildLibrary } from "./library-model";
 import { Picker, usePicker } from "./shared";
-import { FieldVariant } from "./FieldVariant";
-import { MapVariant } from "./MapVariant";
+import { RecapVariant } from "./RecapVariant";
+import { StatusVariant } from "./StatusVariant";
+import { StorageVariant } from "./StorageVariant";
 
-const NAMES = ["Field", "Field + list", "Map"];
+const NAMES = ["Recap", "Storage", "Status"];
 
 export function HomeLibraryPrototype({
   snapshot,
@@ -37,7 +39,7 @@ export function HomeLibraryPrototype({
   const listings = (load?.data?.listings ?? []).filter(
     (row) => row.scope.scope === "global" && (!agents || agents.includes(row.harness)),
   );
-  const { skills, history } = buildLibrary(snapshot, groups, listings, agents);
+  const { skills } = buildLibrary(snapshot, groups, listings, agents);
   // On in the native dev app, or in the browser harness with ?v=; otherwise today's Home, so the
   // harness e2e specs keep testing the real page.
   const on = !("__harness" in window) || new URLSearchParams(location.search).has("v");
@@ -46,14 +48,15 @@ export function HomeLibraryPrototype({
     <>
       {/* With no skills every picture is empty, so each variant shows today's first-run Home. */}
       {skills.length === 0 && baseline}
-      {skills.length > 0 && current < 2 && (
-        <FieldVariant
-          key={current}
+      {skills.length > 0 && current === 0 && (
+        <RecapVariant snapshot={snapshot} skills={skills} agents={agents} open={open} />
+      )}
+      {skills.length > 0 && current === 1 && (
+        <StorageVariant
           skills={skills}
-          history={history}
+          listings={listings}
           open={open}
-          list={current === 1}
-          select={(picked) => {
+          park={(picked) => {
             clear();
             for (const skill of picked) {
               const path = skill.deployments[0]?.path;
@@ -63,7 +66,13 @@ export function HomeLibraryPrototype({
         />
       )}
       {skills.length > 0 && current === 2 && (
-        <MapVariant skills={skills} history={history} open={open} />
+        <StatusVariant
+          snapshot={snapshot}
+          skills={skills}
+          listings={listings}
+          agents={agents}
+          open={open}
+        />
       )}
       {active && <Picker names={NAMES} current={current} set={set} />}
     </>
