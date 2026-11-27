@@ -96,8 +96,8 @@ export const HEALTH_ISSUE_KIND_LABEL = {
   duplicate: { singular: "skill differs between copies", plural: "skills differ between copies" },
   "broken-symlink": { singular: "broken link", plural: "broken links" },
   "linked-root": {
-    singular: "harness reads the Universal folder through a root link",
-    plural: "harnesses read the Universal folder through a root link",
+    singular: "agent reads the Universal folder through a root link",
+    plural: "agents read the Universal folder through a root link",
   },
   "spec-violation": {
     singular: "skill with no description an agent can read",

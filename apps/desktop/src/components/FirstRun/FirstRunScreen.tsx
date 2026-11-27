@@ -12,29 +12,39 @@
 
 import { useEffect, useSyncExternalStore } from "react";
 import { Dithering } from "@paper-design/shaders-react";
+import { HARNESS_CATALOG } from "@skill-studio/lib";
 import { Button, Checkbox, Switch } from "@skill-studio/ui";
-import type { HarnessDetection } from "@skill-studio/lib";
+import type { AgentId, HarnessDetection } from "@skill-studio/lib";
 import { continueIsBlocked, useFirstRunGate, useFirstRunScreen } from "../../hooks/useFirstRun";
+import { HarnessIcon } from "../ui/HarnessIcon";
 
 interface FirstRunScreenProps {
   onComplete: () => void;
 }
 
-/** The only thing a user needs from a row's state: will Activity show
- * anything for this harness. `used` already answers that by being kept, so
- * it gets no secondary text. */
-function secondaryText(state: HarnessDetection["state"]): string | null {
-  switch (state) {
+/** The only thing a user needs from a found row's state: will Activity show
+ * anything for this agent. `used` already answers that by being kept, so it
+ * gets no secondary text. Agents not found are listed apart, on one line. */
+function secondaryText(row: HarnessDetection): string | null {
+  if (row.executable_on_path === false) return "Not on PATH";
+  switch (row.state) {
     case "used":
+    case "not_found":
       return null;
     case "installed":
     case "configured":
-      return "No activity yet";
+      return "No sessions yet";
     case "data_only":
       return "Settings found, command not on PATH";
-    case "not_found":
-      return "Not found";
   }
+}
+
+function isCatalogAgent(id: string): id is AgentId {
+  return HARNESS_CATALOG.some((row) => row.id === id);
+}
+
+function AgentMark({ id, muted }: { id: string; muted?: boolean }) {
+  return isCatalogAgent(id) ? <HarnessIcon harness={id} size={16} muted={muted} /> : null;
 }
 
 /** Renders nothing until the saved-choice check resolves, and skips straight
@@ -65,19 +75,21 @@ function FirstRunScreenBody({ onComplete }: FirstRunScreenProps) {
     saving,
     continue: onContinue,
   } = useFirstRunScreen(onComplete);
+  const found = rows?.filter((row) => row.state !== "not_found");
+  const missing = rows?.filter((row) => row.state === "not_found");
 
   return (
     <div className="flex h-full w-full">
       <WelcomeArt />
       <div className="flex min-w-0 flex-1 flex-col overflow-y-scroll">
         <div data-tauri-drag-region className="h-9 shrink-0" />
-        <div className="flex flex-1 items-center justify-center px-10 pb-10">
-          <div className="w-full max-w-md space-y-6">
-            <div className="space-y-1">
-              <h1 className="text-xl font-semibold">Welcome to Skill Studio</h1>
-              <p className="text-sm text-muted-foreground">
-                Pick the agents Skill Studio manages. It installs and syncs skills for them and
-                shows how they use them. These are on this Mac:
+        <div className="flex flex-1 items-center justify-center px-10 pb-9">
+          <div className="w-full max-w-md space-y-5">
+            <div className="space-y-1.5">
+              <h1 className="text-xl font-semibold text-balance">Choose your agents</h1>
+              <p className="text-sm text-text-secondary">
+                Skill Studio installs and updates skills for these agents, and reads their history
+                to show which skills they use.
               </p>
             </div>
 
@@ -88,27 +100,38 @@ function FirstRunScreenBody({ onComplete }: FirstRunScreenProps) {
             )}
 
             {rows == null && error == null && (
-              <p className="text-sm text-muted-foreground">Detecting agents…</p>
+              <p role="status" className="text-sm text-text-secondary">
+                Looking for agents on this Mac…
+              </p>
             )}
 
-            {rows != null && (
-              <ul className="divide-y divide-border rounded-md border border-border">
-                {rows.map((row) => {
-                  const secondary =
-                    row.executable_on_path === false ? "Not on PATH" : secondaryText(row.state);
+            {found != null && found.length === 0 && (
+              <p className="text-sm text-text-secondary">No agents found on this Mac.</p>
+            )}
+
+            {found != null && found.length > 0 && (
+              <ul
+                aria-label="Agents found on this Mac"
+                className="divide-y divide-border rounded-md border border-border"
+              >
+                {found.map((row) => {
+                  const secondary = secondaryText(row);
                   const secondaryId = secondary != null ? `${row.id}-secondary` : undefined;
                   return (
-                    <li key={row.id} className="flex items-center justify-between gap-3 px-4 py-3">
-                      <label className="flex items-center gap-3">
+                    <li key={row.id} className="flex min-h-10 items-center gap-3 pr-3.5">
+                      <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 self-stretch py-2 pl-3.5">
                         <Checkbox
                           checked={kept.has(row.id)}
                           onCheckedChange={(checked) => toggleRow(row.id, checked === true)}
                           aria-describedby={secondaryId}
                         />
-                        <span className="text-sm font-medium">{row.display_name}</span>
+                        <AgentMark id={row.id} />
+                        <span className="min-w-0 truncate text-sm font-medium">
+                          {row.display_name}
+                        </span>
                       </label>
                       {secondary != null && (
-                        <span id={secondaryId} className="text-sm text-muted-foreground">
+                        <span id={secondaryId} className="shrink-0 text-sm text-muted-foreground">
                           {secondary}
                         </span>
                       )}
@@ -118,27 +141,38 @@ function FirstRunScreenBody({ onComplete }: FirstRunScreenProps) {
               </ul>
             )}
 
-            <label className="flex items-center justify-between gap-3">
-              <span className="text-sm">Find my projects from agent history</span>
-              <Switch checked={searchProjectFolders} onCheckedChange={setSearchProjectFolders} />
-            </label>
-
-            <div className="space-y-1">
-              <label className="flex items-center justify-between gap-3">
-                <span className="text-sm">
-                  Send crash reports, timings, and screen performance to Skill Studio
-                </span>
-                <Switch
-                  checked={telemetryEnabled}
-                  onCheckedChange={setTelemetryEnabled}
-                  aria-describedby="telemetry-help"
-                />
-              </label>
-              <p id="telemetry-help" className="text-sm text-muted-foreground">
-                Skill Studio removes everything sensitive first: no skill names, files, paths, or
-                machine name. It uses this data only to improve the app. You can change this later
-                in Settings.
+            {missing != null && missing.length > 0 && (
+              <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+                <span>Not found:</span>
+                {missing.map((row) => (
+                  <span key={row.id} className="inline-flex items-center gap-1.5">
+                    <AgentMark id={row.id} muted />
+                    {row.display_name}
+                  </span>
+                ))}
               </p>
+            )}
+
+            <div className="space-y-3">
+              <label className="flex cursor-pointer items-center justify-between gap-3">
+                <span className="text-sm">Find my projects in agent history</span>
+                <Switch checked={searchProjectFolders} onCheckedChange={setSearchProjectFolders} />
+              </label>
+
+              <div className="space-y-1">
+                <label className="flex cursor-pointer items-center justify-between gap-3">
+                  <span className="text-sm">Send crash reports and performance timings</span>
+                  <Switch
+                    checked={telemetryEnabled}
+                    onCheckedChange={setTelemetryEnabled}
+                    aria-describedby="telemetry-help"
+                  />
+                </label>
+                <p id="telemetry-help" className="text-sm text-text-secondary">
+                  Never includes skill names, files, paths or your machine name, and is used only to
+                  improve the app. Change it any time in Settings.
+                </p>
+              </div>
             </div>
 
             {saveError != null && (
@@ -187,7 +221,7 @@ function WelcomeArt() {
     <div
       aria-hidden="true"
       data-tauri-drag-region
-      className="relative w-[44%] shrink-0 overflow-hidden bg-[#150b2e]"
+      className="relative w-[38%] max-w-[480px] shrink-0 overflow-hidden bg-[#150b2e]"
     >
       <div className="pointer-events-none absolute inset-0">
         <Dithering
@@ -216,7 +250,7 @@ function WelcomeArt() {
         <div className="space-y-1.5">
           <p className="text-xl font-semibold tracking-tight text-white">Skill Studio</p>
           <p className="max-w-64 text-sm text-balance text-white/80">
-            Manage, sync, and test agent skills
+            Install, update and fix skills across your agents
           </p>
         </div>
       </div>
