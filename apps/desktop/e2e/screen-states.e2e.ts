@@ -7,6 +7,9 @@ import { PERSONAS } from "../src/dev/harness/personas";
 // an output folder; see .agents/skills/verify-screen-states/SKILL.md.
 const out = process.env.SCREEN_STATES;
 const query = process.env.SCREEN_STATES_QUERY ?? "v=1";
+// Comma-separated accessible names, clicked in order after Home loads, to reach another screen:
+// SCREEN_STATES_NAV="Skills" or "Agents,What it used".
+const nav = (process.env.SCREEN_STATES_NAV ?? "").split(",").filter(Boolean);
 const SIZES = [
   { name: "min", width: 900, height: 600 },
   { name: "default", width: 1200, height: 800 },
@@ -27,6 +30,16 @@ for (const [id, persona] of Object.entries(PERSONAS))
       await page.getByRole("button", { name: "Continue" }).click();
       await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible();
       // The variant picker is comparison chrome, not part of the screen under review.
+      // A sidebar item's name includes its count ("Skills 34"), so match the leading words.
+      for (const label of nav) {
+        const name = new RegExp(`^${label}(\\s\\d|$)`);
+        await page
+          .getByRole("link", { name })
+          .or(page.getByRole("button", { name }))
+          .or(page.getByRole("tab", { name }))
+          .first()
+          .click();
+      }
       await page.addStyleTag({ content: ".proto-picker { display: none !important; }" });
       await page.waitForTimeout(500);
       mkdirSync(`${out}/shots`, { recursive: true });

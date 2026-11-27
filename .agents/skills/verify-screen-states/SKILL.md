@@ -23,6 +23,10 @@ E2E_PORT=1452 SCREEN_STATES=/tmp/screen-states SCREEN_STATES_QUERY="v=1" \
 
 - `SCREEN_STATES_QUERY` is the URL query that picks the screen. `v=N` picks a
   prototype variant on Home; leave it empty for the shipped Home.
+- `SCREEN_STATES_NAV` reaches another screen: comma-separated names of links,
+  buttons or tabs clicked in order after Home loads, matched from the start of
+  the name, so `Skills` matches the sidebar's "Skills 34". Examples:
+  `Skills`, `Agents,What it used`, `Activity`, `Settings`.
 - Output: `shots/<persona>-<size>.png`, one `.json` per shot with its persona,
   agents, size and any page errors, and `index.html`, a contact sheet.
 - Sizes: `min` 900×600 (the window's minimum in `tauri.conf.json`), `default`
