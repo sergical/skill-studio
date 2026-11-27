@@ -7,6 +7,7 @@
 // Each agent lists only the copies in the folders it reads, as the core does.
 // ============================================================================
 
+import { deploymentLabelFromAgentId } from "@skill-studio/lib";
 import type {
   HarnessListing,
   InstalledSkill,
@@ -182,7 +183,23 @@ export function mockListingReport(
   const cursor = report.listings.find((row) => row.harness === "cursor");
   const discovered = agents
     .filter((agent) => !report.listings.some((row) => row.harness === agent))
-    .flatMap((agent) => (cursor ? [{ ...cursor, harness: agent }] : []));
+    .flatMap((agent) => {
+      if (!cursor) return [];
+      // Each agent reads its own folders and the shared one, not Cursor's.
+      const label = deploymentLabelFromAgentId(agent);
+      const reads = new Set(
+        snapshot.skills
+          .filter((skill) =>
+            skill.deployments.some(
+              (d) => d.scope === "global" && (d.agent === label || d.agent === "shared"),
+            ),
+          )
+          .map((skill) => skill.name),
+      );
+      return [
+        { ...cursor, harness: agent, entries: cursor.entries.filter((e) => reads.has(e.name)) },
+      ];
+    });
   return {
     ...report,
     listings: [...report.listings, ...discovered].filter((row) => agents.includes(row.harness)),

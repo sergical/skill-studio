@@ -26,6 +26,8 @@ for (const [id, persona] of Object.entries(PERSONAS))
       await page.goto(`/?persona=${id}&${query}`);
       await page.getByRole("button", { name: "Continue" }).click();
       await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible();
+      // The variant picker is comparison chrome, not part of the screen under review.
+      await page.addStyleTag({ content: ".proto-picker { display: none !important; }" });
       await page.waitForTimeout(500);
       mkdirSync(`${out}/shots`, { recursive: true });
       await page.screenshot({ path: `${out}/shots/${id}-${size.name}.png` });

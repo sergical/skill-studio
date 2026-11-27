@@ -331,6 +331,65 @@ export const PERSONAS = {
     expectTop: null,
     build: () => withUses(estate(12, same), 0),
   },
+  "opencode-active": {
+    label: "OpenCode alone, used every day",
+    agents: ["opencode"],
+    expectTop: "no use",
+    build: () => withUses(estate(30, same), 12, 7, { agents: ["opencode"], span: 14 }),
+  },
+  "mixed-history": {
+    label: "Four agents with very different history",
+    agents: ["claude-code", "codex", "cursor", "grok-build"],
+    claudeFraction: 0.01,
+    expectTop: "Codex",
+    build: () => {
+      const base = estate(40, same);
+      const claude = withUses(base, 20, 20, { agents: ["claude-code"], span: 14 });
+      const codex = withUses({ ...base, skills: base.skills.slice(20) }, 6, 4, {
+        agents: ["codex"],
+        span: 2,
+      });
+      return { ...base, invocations: [...claude.invocations, ...codex.invocations] };
+    },
+  },
+  "one-broken-copy": {
+    label: "Three agents share skills, one copy broken",
+    agents: ["claude-code", "codex", "pi"],
+    claudeFraction: 0.01,
+    expectTop: "don’t load",
+    build: () =>
+      withUses(
+        estate(20, (s, i) => (i === 0 ? broken(s) : s)),
+        15,
+        5,
+        {
+          agents: ["claude-code", "codex", "pi"],
+          span: 14,
+        },
+      ),
+  },
+  "long-names": {
+    label: "Five agents, long skill names",
+    agents: ["claude-code", "codex", "opencode", "pi", "cursor"],
+    claudeFraction: 0.01,
+    expectTop: "Codex",
+    build: () =>
+      withUses(
+        estate(30, (s, i) =>
+          i < 8 ? { ...s, name: `${s.name}-for-the-internal-platform-migration-${i}` } : s,
+        ),
+        20,
+        6,
+        { agents: ["claude-code", "codex", "opencode", "pi", "cursor"], span: 14 },
+      ),
+  },
+  comeback: {
+    label: "A quiet week, then a busy one",
+    agents: ["claude-code", "codex"],
+    claudeFraction: 0.01,
+    expectTop: "Codex",
+    build: () => withUses(estate(40, same), 25, 12, { agents: ["claude-code", "codex"], span: 5 }),
+  },
 } satisfies Record<string, Persona>;
 
 export function personaFromUrl(): (Persona & { id: string }) | null {
