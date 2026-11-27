@@ -129,7 +129,10 @@ function AgentTile({
   const shortened = count("truncated");
   const names = count("name_only");
   const omitted = count("omitted");
-  const youRun = (facts.listing?.entries ?? []).filter((e) => e.state === "hidden").length;
+  // Only skills you run by hand count as "you run"; parked or turned-off ones are not listed.
+  const youRun = (facts.listing?.entries ?? []).filter(
+    (e) => e.state === "hidden" && e.hidden_reason === "manual-only",
+  ).length;
   const estimated = facts.listing?.evidence === "preview" && facts.listing.budget !== null;
   const listingLine = !facts.listing
     ? "Skill list not read yet"
@@ -287,11 +290,16 @@ export function RecapVariant({
     },
   ].filter((item) => item.count > 0);
   const scope = only ? deploymentLabelFromAgentId(only) : "All agents";
-  const library = new Set(skills.map((s) => s.name));
-  const fromPlugins = top.filter((row) => !library.has(row.name)).length;
+  const plugins = new Set(
+    snapshot.skills.filter((s) => s.source_kind === "plugin").map((s) => s.name),
+  );
+  const fromPlugins = top.filter((row) => plugins.has(row.name)).length;
 
   return (
-    <section aria-label="This week" className="flex flex-col gap-8">
+    <section
+      aria-label={shownWeek === "this" ? "This week" : "Last week"}
+      className="flex flex-col gap-8"
+    >
       <div
         role="group"
         aria-label="Agents"
@@ -361,6 +369,12 @@ export function RecapVariant({
                 role="radiogroup"
                 aria-label="Week"
                 className="flex rounded-md border border-border-subtle p-0.5"
+                onKeyDown={(e) => {
+                  if (e.key === "ArrowLeft") setWeek("last");
+                  else if (e.key === "ArrowRight") setWeek("this");
+                  else return;
+                  e.preventDefault();
+                }}
               >
                 {(["last", "this"] as const).map((w) => (
                   <Button
@@ -389,9 +403,8 @@ export function RecapVariant({
 
           {hasHistory && (
             <div>
-              <div className="grid grid-cols-[minmax(0,1fr)_minmax(2rem,7rem)_auto_2.5rem] gap-4 pb-1.5 text-caption text-text-tertiary">
+              <div className="grid grid-cols-[minmax(0,1fr)_auto_2.5rem] gap-4 pb-1.5 text-caption text-text-tertiary">
                 <span>Most used</span>
-                <span />
                 <span>by day</span>
                 <span className="text-right">uses</span>
               </div>
@@ -401,16 +414,10 @@ export function RecapVariant({
                     <Button
                       variant="ghost"
                       title={row.name}
-                      className="-mx-2 grid h-10 w-[calc(100%+1rem)] grid-cols-[minmax(0,1fr)_minmax(2rem,7rem)_auto_2.5rem] items-center gap-4 rounded-none border-0 border-b border-border-subtle px-2 font-normal"
+                      className="-mx-2 grid h-10 w-[calc(100%+1rem)] grid-cols-[minmax(0,1fr)_auto_2.5rem] items-center gap-4 rounded-none border-0 border-b border-border-subtle px-2 font-normal"
                       onClick={() => open(row.name)}
                     >
                       <span className="truncate text-left">{row.name}</span>
-                      <span className="h-1.5 rounded-full bg-bg-tertiary">
-                        <span
-                          className="block h-full rounded-full bg-data"
-                          style={{ width: `${(row.count / top[0].count) * 100}%` }}
-                        />
-                      </span>
                       <Spark values={row.values} />
                       <span className="text-right text-small text-text-secondary tabular-nums">
                         {formatCount(row.count)}

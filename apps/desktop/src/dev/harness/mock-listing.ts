@@ -194,7 +194,10 @@ export function mockListingReport(
         snapshot.skills
           .filter((skill) =>
             skill.deployments.some(
-              (d) => d.scope === "global" && (d.agent === label || d.agent === "shared"),
+              (d) =>
+                d.scope === "global" &&
+                !d.symlink_is_broken &&
+                (d.agent === label || d.agent === "shared"),
             ),
           )
           .map((skill) => skill.name),

@@ -39,6 +39,8 @@ export function HomeLibraryPrototype({
   const listings = (load?.data?.listings ?? []).filter(
     (row) => row.scope.scope === "global" && (!agents || agents.includes(row.harness)),
   );
+  // Plugin skills and history count too: a user with only plugins still has a week to report.
+  const anything = snapshot.skills.length > 0 || snapshot.invocations.length > 0;
   const { skills } = buildLibrary(snapshot, groups, listings, agents);
   // On in the native dev app, or in the browser harness with ?v=; otherwise today's Home, so the
   // harness e2e specs keep testing the real page.
@@ -47,8 +49,8 @@ export function HomeLibraryPrototype({
   return (
     <>
       {/* With no skills every picture is empty, so each variant shows today's first-run Home. */}
-      {skills.length === 0 && baseline}
-      {skills.length > 0 && current === 0 && (
+      {!anything && baseline}
+      {anything && current === 0 && (
         <RecapVariant
           snapshot={snapshot}
           skills={skills}
@@ -63,7 +65,7 @@ export function HomeLibraryPrototype({
           open={open}
         />
       )}
-      {skills.length > 0 && current === 1 && (
+      {anything && current === 1 && (
         <StorageVariant
           skills={skills}
           listings={listings}
@@ -77,7 +79,7 @@ export function HomeLibraryPrototype({
           }}
         />
       )}
-      {skills.length > 0 && current === 2 && (
+      {anything && current === 2 && (
         <StatusVariant
           snapshot={snapshot}
           skills={skills}

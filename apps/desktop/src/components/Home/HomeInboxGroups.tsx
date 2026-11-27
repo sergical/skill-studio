@@ -418,7 +418,7 @@ function RecentGroup({
                 detail={
                   <span className="tabular-nums">
                     {projectLabel ?? "Global"} · {formatRelativeTime(lastUsed)} · {usesIn30Days}{" "}
-                    uses
+                    {usesIn30Days === 1 ? "use" : "uses"}
                   </span>
                 }
                 fix={null}

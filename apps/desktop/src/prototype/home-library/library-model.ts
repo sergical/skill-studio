@@ -92,7 +92,6 @@ export function dailyUses(snapshot: SkillSnapshot, agents: string[] | undefined,
   // Each moment uses its own offset, so a use before a daylight-saving change keeps its day.
   const localDay = (ms: number) =>
     Math.floor((ms - new Date(ms).getTimezoneOffset() * 60_000) / 86_400_000);
-  const offset = new Date(snapshot.scanned_at).getTimezoneOffset() * 60_000;
   const end = localDay(Date.parse(snapshot.scanned_at));
   const start = end - days + 1;
   const total = Array.from({ length: days }, () => 0);
@@ -112,10 +111,14 @@ export function dailyUses(snapshot: SkillSnapshot, agents: string[] | undefined,
       bySkill.set(stats.skill, skill);
     }
   }
+  const scan = new Date(snapshot.scanned_at);
   const labels = Array.from({ length: days }, (_, i) =>
-    new Date((start + i) * 86_400_000 + offset).toLocaleDateString(undefined, {
-      weekday: "narrow",
-    }),
+    new Date(
+      scan.getFullYear(),
+      scan.getMonth(),
+      scan.getDate() - (days - 1 - i),
+      12,
+    ).toLocaleDateString(undefined, { weekday: "narrow" }),
   );
   return { total, byAgent, bySkill, labels, start };
 }
