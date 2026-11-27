@@ -21,15 +21,17 @@ test("Pack on the selection bar plans the new pack folder, and Export gives the 
   await page.getByRole("button", { name: "Pack", exact: true }).click();
 
   const dialog = page.getByRole("alertdialog");
-  await expect(dialog.getByRole("heading", { name: "Pack 2 skills?" })).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "Export 2 skills as a pack?" })).toBeVisible();
   await expect(dialog.getByRole("status")).toHaveText(
     /^Would write 2 skills and a README to .*my-skills\.$/,
   );
   const listed = dialog.getByRole("list", { name: "Skills in the pack" }).getByRole("listitem");
   await expect(listed).toHaveCount(2);
-  await dialog.getByRole("textbox", { name: "Pack repository" }).fill("me/my-skills");
-
-  await dialog.getByRole("button", { name: "Export" }).click();
+  // Enter in the repository field exports, as the Export button does.
+  await dialog
+    .getByRole("textbox", { name: "Repository for the install line" })
+    .fill("me/my-skills");
+  await page.keyboard.press("Enter");
 
   await expect(dialog.getByRole("heading", { name: "Pack written" })).toBeVisible();
   await expect(dialog.getByLabel("Install command")).toHaveText(

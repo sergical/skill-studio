@@ -16,7 +16,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@skill-studio/ui";
-import type { PackStep } from "@skill-studio/lib";
+import type { PackActionReport, PackStep } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
 import type { PackIntent } from "../../store/appStore";
 import { advancePackPlan, plannedCount } from "./pack-plan-phase";
@@ -41,19 +41,27 @@ function title(intent: PackIntent): string {
   return `${VERB[intent.kind]} ${intent.source}?`;
 }
 
-const PLANNED_LABEL = {
-  install: "Will install",
-  update: "Will update",
-  remove: "Will remove",
-  switch_source: "Will switch",
+const PLANNED_WORD = {
+  install: "to install",
+  update: "to update",
+  remove: "to remove",
+  switch_source: "to switch",
 } satisfies Record<PackStep["action"], string>;
 
-const DONE_LABEL = {
-  install: "Installed",
-  update: "Updated",
-  remove: "Removed",
-  switch_source: "Switched",
+const DONE_WORD = {
+  install: "installed",
+  update: "updated",
+  remove: "removed",
+  switch_source: "switched",
 } satisfies Record<PackStep["action"], string>;
+
+/** Failed steps first, the ones that ran or will run next, skipped ones last. */
+const STATE_ORDER = {
+  failed: 0,
+  planned: 1,
+  done: 1,
+  skipped: 2,
+} satisfies Record<PackStep["state"]["state"], number>;
 
 function scopeLabel(step: PackStep): string {
   return step.scope.scope === "global"
@@ -61,29 +69,90 @@ function scopeLabel(step: PackStep): string {
     : (step.scope.project.split("/").pop() ?? step.scope.project);
 }
 
-function StepRow({ step }: { step: PackStep }) {
-  const { state } = step;
-  const label =
-    state.state === "planned"
-      ? PLANNED_LABEL[step.action]
-      : state.state === "done"
-        ? DONE_LABEL[step.action]
-        : state.state === "skipped"
-          ? "Skipped"
-          : "Failed";
-  const reason = state.state === "skipped" || state.state === "failed" ? state.reason : null;
+const stepKey = (step: PackStep) =>
+  `${step.source}:${step.skill}:${step.scope.scope === "global" ? "global" : step.scope.project}`;
+
+/** The report as counts, naming only states that have steps: "3 to update · 2 skipped". */
+function countLine(report: PackActionReport): string {
+  const count = (state: PackStep["state"]["state"]) =>
+    report.steps.filter((step) => step.state.state === state).length;
+  const action = report.steps[0]?.action ?? "update";
+  const parts = [
+    count("failed") > 0 && `${count("failed")} failed`,
+    count("planned") > 0 && `${count("planned")} ${PLANNED_WORD[action]}`,
+    count("done") > 0 && `${count("done")} ${DONE_WORD[action]}`,
+    count("skipped") > 0 && `${count("skipped")} skipped`,
+  ].filter(Boolean);
+  return parts.length === 0 ? "Nothing to change." : parts.join(" · ");
+}
+
+const reasonOf = (step: PackStep) =>
+  step.state.state === "skipped" || step.state.state === "failed" ? step.state.reason : null;
+
+/** Steps in list order, with a skipped or failed run that shares one reason kept together. */
+function groupSteps(steps: PackStep[]): PackStep[][] {
+  const sorted = [...steps].sort(
+    (a, b) =>
+      STATE_ORDER[a.state.state] - STATE_ORDER[b.state.state] ||
+      (reasonOf(a) ?? "").localeCompare(reasonOf(b) ?? ""),
+  );
+  const groups: PackStep[][] = [];
+  for (const step of sorted) {
+    const group = groups[groups.length - 1];
+    const reason = reasonOf(step);
+    if (
+      group &&
+      reason &&
+      group[0].state.state === step.state.state &&
+      reasonOf(group[0]) === reason
+    ) {
+      group.push(step);
+    } else {
+      groups.push([step]);
+    }
+  }
+  return groups;
+}
+
+interface StepGroupProps {
+  /** One step, or skipped or failed steps that share a reason, which shows once. */
+  steps: PackStep[];
+  /** Show each step's scope: only when the plan spans more than one. */
+  showScope: boolean;
+  /** Show each step's pack: only when the plan spans more than one. */
+  showSource: boolean;
+}
+
+function StepGroup({ steps, showScope, showSource }: StepGroupProps) {
+  const state = steps[0].state.state;
+  const reason = reasonOf(steps[0]);
   return (
     <li className="flex flex-col gap-0.5 border-b border-border-subtle py-1.5 last:border-b-0">
-      <div className="flex items-baseline gap-2">
-        <span className="min-w-0 truncate text-body text-text-primary">{step.skill}</span>
-        <span className="text-caption text-text-secondary">{scopeLabel(step)}</span>
-        <span
-          className={`ml-auto shrink-0 text-caption ${state.state === "failed" ? "text-error" : "text-text-secondary"}`}
-        >
-          {label}
-        </span>
-      </div>
-      {reason && <span className="text-small text-text-secondary">{reason}</span>}
+      {steps.map((step, index) => {
+        const where = [showSource && step.source, showScope && scopeLabel(step)].filter(Boolean);
+        return (
+          <div key={stepKey(step)} className="flex min-w-0 items-baseline gap-2">
+            <span
+              className={`min-w-0 truncate text-body ${reason ? "text-text-secondary" : "text-text-primary"}`}
+            >
+              {step.skill}
+            </span>
+            {where.length > 0 && (
+              <span className="min-w-0 truncate text-caption text-text-tertiary">
+                {where.join(" · ")}
+              </span>
+            )}
+            {reason && index === 0 && (
+              <span
+                className={`ml-auto shrink-0 text-caption ${state === "failed" ? "text-error" : "text-text-secondary"}`}
+              >
+                {state === "failed" ? "Failed" : "Skipped"}
+              </span>
+            )}
+          </div>
+        );
+      })}
+      {reason && <span className="text-small text-text-tertiary">{reason}</span>}
     </li>
   );
 }
@@ -133,26 +202,32 @@ export function PackPlanDialog({ intent, onClose }: PackPlanDialogProps) {
         : null;
   const toRun = state.phase === "planned" || running ? plannedCount(state.plan) : 0;
   const finished = state.phase === "done" || state.phase === "failed";
+  const steps = report ? report.steps : [];
+  const groups = groupSteps(steps);
+  const showScope = new Set(steps.map(scopeLabel)).size > 1;
+  const showSource = new Set(steps.map((step) => step.source)).size > 1;
 
   return (
     <AlertDialog open busy={running} onOpenChange={(open) => !open && onClose()}>
       <AlertDialogContent className="sm:max-w-lg">
         <AlertDialogHeader>
           <AlertDialogTitle>{state.phase === "done" ? "Done" : title(intent)}</AlertDialogTitle>
-          <AlertDialogDescription role="status">
+          <AlertDialogDescription role="status" className="tabular-nums">
             {state.phase === "planning"
               ? "Checking what would change…"
               : state.phase === "failed"
                 ? state.message
-                : report?.summary}
+                : report && countLine(report)}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {report && report.steps.length > 0 && (
+        {steps.length > 0 && (
           <ul aria-label="Steps" className="m-0 max-h-72 list-none overflow-y-auto p-0">
-            {report.steps.map((step) => (
-              <StepRow
-                key={`${step.skill}:${step.scope.scope === "global" ? "global" : step.scope.project}`}
-                step={step}
+            {groups.map((group) => (
+              <StepGroup
+                key={stepKey(group[0])}
+                steps={group}
+                showScope={showScope}
+                showSource={showSource}
               />
             ))}
           </ul>

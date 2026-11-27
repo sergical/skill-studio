@@ -9,7 +9,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 const packRow = (page: Page, source: string) =>
-  page.getByRole("list", { name: "Packs" }).getByRole("listitem", { name: source, exact: true });
+  page.getByRole("main").getByRole("listitem", { name: source, exact: true });
 
 test("updating a pack shows the plan first, and Confirm runs it and shows what each step did", async ({
   page,
@@ -18,20 +18,18 @@ test("updating a pack shows the plan first, and Confirm runs it and shows what e
 
   const dialog = page.getByRole("alertdialog");
   await expect(dialog.getByRole("heading", { name: "Update getsentry/skills?" })).toBeVisible();
-  await expect(dialog.getByRole("status")).toHaveText(/^Would update \d+ skills; 0 skipped\.$/);
+  await expect(dialog.getByRole("status")).toHaveText(/^\d+ to update$/);
   const steps = dialog.getByRole("list", { name: "Steps" }).getByRole("listitem");
+  // The skill is installed globally and in a project, so each step names its scope.
   await expect(steps.filter({ hasText: "sentry-triage" })).toHaveCount(2);
-  await expect(steps.first()).toContainText("Will update");
+  await expect(steps.filter({ hasText: "sentry-triage" }).first()).toContainText("Global");
   const planned = await steps.count();
 
   await dialog.getByRole("button", { name: `Update ${planned} skills` }).click();
 
   await expect(dialog.getByRole("heading", { name: "Done" })).toBeVisible();
-  await expect(dialog.getByRole("status")).toHaveText(
-    `Updated ${planned} skills; 0 skipped; 0 failed.`,
-  );
-  await expect(steps.filter({ hasText: "Will update" })).toHaveCount(0);
-  await expect(steps.filter({ hasText: "Updated" })).toHaveCount(planned);
+  await expect(dialog.getByRole("status")).toHaveText(`${planned} updated`);
+  await expect(steps).toHaveCount(planned);
   await dialog.getByRole("button", { name: "Close" }).click();
   await expect(dialog).toHaveCount(0);
 });
@@ -44,27 +42,32 @@ test("a skill with local edits is skipped with its reason, and with nothing to r
     .click();
 
   const dialog = page.getByRole("alertdialog");
-  await expect(dialog.getByRole("status")).toHaveText("Would update 0 skills; 2 skipped.");
+  await expect(dialog.getByRole("status")).toHaveText("2 skipped");
   await expect(dialog.getByRole("list", { name: "Steps" })).toContainText(
     "has local edits, which the owner tool would overwrite or delete",
   );
   await expect(dialog.getByRole("button", { name: "Update", exact: true })).toBeDisabled();
 });
 
-test("a plugin pack's Update and Remove are off, and the tooltip names the agent command", async ({
+test("a plugin pack sits under Plugins with no Update or Remove, and offers the agent's own update command", async ({
   page,
 }) => {
-  const row = packRow(page, "changelog-formatter@community-plugins");
-  const update = row.getByRole("button", { name: "Update" });
-  await expect(update).toBeDisabled();
-  await expect(row.getByRole("button", { name: "Remove" })).toBeDisabled();
+  const plugins = page.getByRole("region", { name: /^Plugins/ });
+  await expect(plugins).toContainText("The agent updates and removes these");
+  const row = plugins.getByRole("listitem", {
+    name: "changelog-formatter@community-plugins",
+    exact: true,
+  });
+  await expect(row.getByRole("button", { name: "Update", exact: true })).toHaveCount(0);
+  await expect(row.getByRole("button", { name: "Remove", exact: true })).toHaveCount(0);
 
-  await update.locator("..").hover();
-  await expect(
-    page.getByText(
-      "A plugin. The agent updates it with claude plugin update changelog-formatter@community-plugins.",
-    ),
-  ).toBeVisible();
+  // The copy button shows on keyboard focus, not only on hover.
+  await page.getByRole("button", { name: "Add from a repo" }).focus();
+  const copy = row.getByRole("button", {
+    name: "Copy update command: claude plugin update changelog-formatter@community-plugins",
+  });
+  await copy.focus();
+  await expect(copy).toHaveCSS("opacity", "1");
 });
 
 test("Check upstream offers the pack's new skills, and adding them installs them", async ({
@@ -74,14 +77,15 @@ test("Check upstream offers the pack's new skills, and adding them installs them
   await expect(row.getByRole("button", { name: /^Add \d+ new$/ })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Check upstream" }).click();
+  await expect(page.getByRole("main").getByRole("status")).toContainText("1 new upstream");
   await row.getByRole("button", { name: "Add 1 new" }).click();
 
   const dialog = page.getByRole("alertdialog");
-  await expect(dialog.getByRole("status")).toHaveText("Would install 1 skill; 0 skipped.");
+  await expect(dialog.getByRole("status")).toHaveText("1 to install");
   await expect(dialog.getByRole("list", { name: "Steps" })).toContainText("sentry-setup-logging");
   await dialog.getByRole("button", { name: "Add 1 skill" }).click();
 
-  await expect(dialog.getByRole("status")).toHaveText("Installed 1 skill; 0 skipped; 0 failed.");
+  await expect(dialog.getByRole("status")).toHaveText("1 installed");
   await dialog.getByRole("button", { name: "Close" }).click();
   await expect(row.getByRole("button", { name: "Add 1 new" })).toHaveCount(0);
 });
@@ -92,7 +96,7 @@ test("a pack's added skill reaches Claude Code, not only the shared folder", asy
   await row.getByRole("button", { name: "Add 1 new" }).click();
   const dialog = page.getByRole("alertdialog");
   await dialog.getByRole("button", { name: "Add 1 skill" }).click();
-  await expect(dialog.getByRole("status")).toHaveText("Installed 1 skill; 0 skipped; 0 failed.");
+  await expect(dialog.getByRole("status")).toHaveText("1 installed");
   await dialog.getByRole("button", { name: "Close" }).click();
 
   await page
@@ -116,13 +120,11 @@ test("removing a pack asks first, and Confirm removes its skills and drops the r
 
   const dialog = page.getByRole("alertdialog");
   await expect(dialog.getByRole("heading", { name: "Remove anthropics/skills?" })).toBeVisible();
-  await expect(dialog.getByRole("status")).toHaveText("Would remove 1 skill; 0 skipped.");
-  await expect(dialog.getByRole("list", { name: "Steps" })).toContainText(
-    "pdf-processingGlobalWill remove",
-  );
+  await expect(dialog.getByRole("status")).toHaveText("1 to remove");
+  await expect(dialog.getByRole("list", { name: "Steps" })).toHaveText("pdf-processing");
   await dialog.getByRole("button", { name: "Remove 1 skill" }).click();
 
-  await expect(dialog.getByRole("status")).toHaveText("Removed 1 skill; 0 skipped; 0 failed.");
+  await expect(dialog.getByRole("status")).toHaveText("1 removed");
   await dialog.getByRole("button", { name: "Close" }).click();
   await expect(packRow(page, "anthropics/skills")).toHaveCount(0);
 });
@@ -130,7 +132,7 @@ test("removing a pack asks first, and Confirm removes its skills and drops the r
 test("an app shortcut does not leave Packs while a pack dialog is open", async ({ page }) => {
   await packRow(page, "anthropics/skills").getByRole("button", { name: "Remove" }).click();
   const dialog = page.getByRole("alertdialog");
-  await expect(dialog.getByRole("status")).toHaveText("Would remove 1 skill; 0 skipped.");
+  await expect(dialog.getByRole("status")).toHaveText("1 to remove");
 
   await page.keyboard.press("ControlOrMeta+Comma");
 
