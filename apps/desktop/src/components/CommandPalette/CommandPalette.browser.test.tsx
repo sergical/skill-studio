@@ -47,7 +47,7 @@ it("pressing_ArrowDown_to_the_last_option_while_the_pointer_rests_on_the_list_hi
 it("moving_the_pointer_onto_an_option_after_arrowing_highlights_that_option", async () => {
   await openPalette();
   await userEvent.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}");
-  await userEvent.hover(page.getByRole("option", { name: "Plugins" }));
+  await userEvent.hover(page.getByRole("option", { name: "Packs" }));
 
-  expect(highlightedLabel()).toBe("Plugins");
+  expect(highlightedLabel()).toBe("Packs");
 });

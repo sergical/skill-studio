@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { Button, Popover, PopoverContent, PopoverTrigger } from "@skill-studio/ui";
 import { ownSkillsView, pluginSkillsView } from "@skill-studio/lib";
-import { SHORTCUTS } from "../../lib/app-shortcuts";
+import { keyShortcutsFor, SHORTCUTS } from "../../lib/app-shortcuts";
 import {
   backgroundRefreshError,
   hasNewerSkillSnapshotEmission,
@@ -344,7 +344,7 @@ function SidebarFooter({
           <Button
             variant="ghost"
             size="icon-xs"
-            className={`${iconButtonClass} aria-[current=page]:bg-accent-softer aria-[current=page]:text-accent`}
+            className={`${iconButtonClass} aria-[current=page]:bg-bg-active aria-[current=page]:text-text-primary`}
             onClick={() => setActiveView({ kind: "learn" })}
             aria-current={anchorView.kind === "learn" ? "page" : undefined}
             aria-label="Learn"
@@ -356,7 +356,7 @@ function SidebarFooter({
           <Button
             variant="ghost"
             size="icon-xs"
-            className={`${iconButtonClass} aria-[current=page]:bg-accent-softer aria-[current=page]:text-accent`}
+            className={`${iconButtonClass} aria-[current=page]:bg-bg-active aria-[current=page]:text-text-primary`}
             onClick={() => setActiveView({ kind: "settings" })}
             aria-current={anchorView.kind === "settings" ? "page" : undefined}
             aria-label="Settings"
@@ -383,7 +383,7 @@ function SidebarFooter({
 }
 
 /**
- * Left-hand navigation: a search box that jumps into Skills with a query,
+ * Left-hand navigation: a search button that opens the command palette,
  * Add skill, the places (Home, Skills, Packs, Agents, Activity), Parked (when
  * non-empty), and a footer with the snapshot's age and a manual rescan
  * button.
@@ -411,7 +411,7 @@ export function Sidebar({
   const openAddSkillSheet = useAppStore((state) => state.openAddSkillSheet);
   const resolvedTheme = useAppStore((state) => state.resolvedTheme);
   const setTheme = useAppStore((state) => state.setTheme);
-  const requestSkillSearchFocus = useAppStore((state) => state.requestSkillSearchFocus);
+  const setCommandPaletteOpen = useAppStore((state) => state.setCommandPaletteOpen);
 
   const own = ownSkillsView(snapshot?.skills ?? []);
   const parkedCount = own.filter((s) => s.parked).length;
@@ -422,11 +422,6 @@ export function Sidebar({
   // own place (see PluginSkillsView), not a filter on Skills.
   const inParked = skillListFilter.scope === "parked";
   const skillsActive = anchorView.kind === "skills" && !inParked;
-
-  function goToSearch() {
-    if (anchorView.kind !== "skills") setActiveView({ kind: "skills" });
-    requestSkillSearchFocus();
-  }
 
   const { spinning, handleRefresh } = useSidebarRescan(
     snapshot?.revision,
@@ -448,18 +443,17 @@ export function Sidebar({
         >
           <span className="text-small font-semibold text-text-primary">Skill Studio</span>
           <div className="flex items-center gap-0.5">
-            {/* The sidebar switcher row only fits two icons without crowding, so the command
-              palette's ⌘K hint rides along on this tooltip instead of a third icon button. */}
-            <TooltipControl
-              content={["Search skills", "Command palette ⌘K"]}
-              shortcut={SHORTCUTS.filterSkills.keys}
-            >
+            {/* One search for everything: the command palette finds skills, places and actions.
+              The Skills page keeps its own filter box for narrowing the list. */}
+            <TooltipControl content="Search" shortcut={SHORTCUTS.commandPalette.keys}>
               <Button
                 variant="ghost"
                 size="icon-xs"
                 className={iconButtonClass}
-                aria-label="Search skills"
-                onClick={goToSearch}
+                aria-label="Search"
+                aria-haspopup="dialog"
+                aria-keyshortcuts={keyShortcutsFor(SHORTCUTS.commandPalette)}
+                onClick={() => setCommandPaletteOpen(true)}
               >
                 <Search size={14} />
               </Button>

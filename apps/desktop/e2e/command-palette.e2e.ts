@@ -69,3 +69,35 @@ test("closing the palette with Escape keeps the page scroll where it was, even w
   await expect(page.locator('[role="row"]:focus')).toHaveCount(1);
   expect(await scroller.evaluate((el) => el.scrollTop)).toBe(0);
 });
+
+test("typing a query highlights the first row drawn, and ArrowDown moves to the next row drawn", async ({
+  page,
+}) => {
+  await page.keyboard.press("ControlOrMeta+k");
+  // "s" matches actions, places and skills, so the ranked rows span three sections.
+  await page.keyboard.type("s");
+  const options = page.getByRole("option");
+  await expect(options.first()).toHaveAttribute("aria-selected", "true");
+
+  await page.keyboard.press("ArrowDown");
+
+  await expect(options.nth(1)).toHaveAttribute("aria-selected", "true");
+});
+
+test("the sidebar's Search button opens the palette with the broken skill first, and Enter opens it", async ({
+  page,
+}) => {
+  await page.goto("/?persona=single-broken");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByRole("navigation").getByRole("button", { name: "Search" }).click();
+  await expect(paletteInput(page)).toBeFocused();
+
+  const attention = page.getByRole("group", { name: "Needs attention" }).getByRole("option");
+  await expect(attention).toHaveCount(1);
+  const name = (await attention.locator(".truncate").textContent()) ?? "";
+  await expect(attention).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("Enter");
+
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name, level: 1 })).toBeVisible();
+});

@@ -18,6 +18,7 @@ import {
   LayoutDashboard,
   MessagesSquare,
   Moon,
+  PackageOpen,
   Plus,
   Puzzle,
   RefreshCw,
@@ -27,9 +28,18 @@ import {
   Activity as ActivityIcon,
 } from "lucide-react";
 import { Dialog, DialogContent, Input, Kbd } from "@skill-studio/ui";
-import { attentionBySkill, collectDashboardIssues, ownSkillsView } from "@skill-studio/lib";
-import type { SkillSnapshot } from "@skill-studio/lib";
+import {
+  applySkillListFilter,
+  attentionBySkill,
+  collectDashboardIssues,
+  defaultSkillListFilter,
+  ownSkillsView,
+  ownSkillsWithPluginUpdates,
+  pluginSkillsView,
+} from "@skill-studio/lib";
+import type { InstalledSkill, SkillSnapshot } from "@skill-studio/lib";
 import { keyShortcutsFor, SHORTCUTS } from "../../lib/app-shortcuts";
+import { groupSkillRows } from "../../lib/skill-list-model";
 import { useAppStore } from "../../store/appStore";
 import { RowGlyph } from "../SkillList/SkillRowCells";
 import { ROW_GROUP_LABEL, rowGroup, rowState } from "../SkillList/skill-row-state";
@@ -40,6 +50,9 @@ interface CommandPaletteProps {
   snapshot: SkillSnapshot | undefined;
   requestRescan: () => Promise<void>;
 }
+
+/** Skills listed under Needs attention before a "Show all" row takes over. */
+const ATTENTION_PREVIEW_COUNT = 5;
 
 /** No transition, no fade, no zoom - only instant open/close and an instant highlight move. */
 const NO_ANIMATION =
@@ -56,6 +69,8 @@ export function CommandPalette({ snapshot, requestRescan }: CommandPaletteProps)
   const addToast = useAppStore((state) => state.addToast);
   const setTheme = useAppStore((state) => state.setTheme);
   const goBack = useAppStore((state) => state.goBack);
+  const skillListFilter = useAppStore((state) => state.skillListFilter);
+  const replaceSkillListFilter = useAppStore((state) => state.replaceSkillListFilter);
   const goForward = useAppStore((state) => state.goForward);
 
   const [query, setQuery] = useState("");
@@ -98,6 +113,7 @@ export function CommandPalette({ snapshot, requestRescan }: CommandPaletteProps)
         label: SHORTCUTS.back.label,
         icon: <ArrowLeft size={14} />,
         shortcut: SHORTCUTS.back,
+        typedOnly: true,
         run: () => goBack(),
       },
       {
@@ -106,6 +122,7 @@ export function CommandPalette({ snapshot, requestRescan }: CommandPaletteProps)
         label: SHORTCUTS.forward.label,
         icon: <ArrowRight size={14} />,
         shortcut: SHORTCUTS.forward,
+        typedOnly: true,
         run: () => goForward(),
       },
       {
@@ -148,35 +165,136 @@ export function CommandPalette({ snapshot, requestRescan }: CommandPaletteProps)
       },
     ];
 
-    const goto = gotoItems(
-      [
-        { label: "Home", icon: <LayoutDashboard size={14} />, view: { kind: "home" } },
-        { label: "Skills", icon: <Layers size={14} />, view: { kind: "skills" } },
-        { label: "Plugins", icon: <Puzzle size={14} />, view: { kind: "plugins" } },
-        { label: "Packs", icon: <Boxes size={14} />, view: { kind: "packs" } },
-        { label: "Agents", icon: <Bot size={14} />, view: { kind: "listing" } },
-        { label: "Agent sessions", icon: <MessagesSquare size={14} />, view: { kind: "sessions" } },
-        { label: "Activity", icon: <ActivityIcon size={14} />, view: { kind: "activity" } },
-        { label: "Learn", icon: <BookOpen size={14} />, view: { kind: "learn" } },
-        { label: "Settings", icon: <SettingsIcon size={14} />, view: { kind: "settings" } },
-      ],
-      setActiveView,
-    );
-
     const allSkills = snapshot?.skills ?? [];
-    // The same categories Home and the Skills table group by, so a skill reads the same in all three.
-    const attention = attentionBySkill(allSkills, collectDashboardIssues(ownSkillsView(allSkills)));
-    const skills = skillItems(
-      allSkills,
-      (skill) => ROW_GROUP_LABEL[rowGroup(skill, attention.get(skill.name))],
-      (skill) => {
-        const state = rowState(skill);
-        return state && <RowGlyph state={state} size={14} />;
+    const own = ownSkillsView(allSkills);
+    const parkedCount = own.filter((skill) => skill.parked).length;
+    const pluginCount = pluginSkillsView(allSkills).length;
+    // The places the sidebar shows, in its order: Plugins and Parked only when they hold skills.
+    const goto = gotoItems([
+      {
+        id: "home",
+        label: "Home",
+        icon: <LayoutDashboard size={14} />,
+        run: () => setActiveView({ kind: "home" }),
       },
+      {
+        id: "skills",
+        label: "Skills",
+        icon: <Layers size={14} />,
+        run: () => {
+          if (skillListFilter.scope === "parked") replaceSkillListFilter({});
+          setActiveView({ kind: "skills" });
+        },
+      },
+      ...(pluginCount > 0
+        ? [
+            {
+              id: "plugins",
+              label: "Plugins",
+              icon: <Puzzle size={14} />,
+              run: () => setActiveView({ kind: "plugins" }),
+            },
+          ]
+        : []),
+      {
+        id: "packs",
+        label: "Packs",
+        icon: <Boxes size={14} />,
+        run: () => setActiveView({ kind: "packs" }),
+      },
+      {
+        id: "listing",
+        label: "Agents › What it sees",
+        icon: <Bot size={14} />,
+        run: () => setActiveView({ kind: "listing" }),
+      },
+      {
+        id: "sessions",
+        label: "Agents › What it used",
+        icon: <MessagesSquare size={14} />,
+        run: () => setActiveView({ kind: "sessions" }),
+      },
+      {
+        id: "activity",
+        label: "Activity",
+        icon: <ActivityIcon size={14} />,
+        run: () => setActiveView({ kind: "activity" }),
+      },
+      ...(parkedCount > 0
+        ? [
+            {
+              id: "parked",
+              label: "Parked",
+              icon: <PackageOpen size={14} />,
+              run: () => {
+                replaceSkillListFilter({ scope: "parked" });
+                setActiveView({ kind: "skills" });
+              },
+            },
+          ]
+        : []),
+      {
+        id: "learn",
+        label: "Learn",
+        icon: <BookOpen size={14} />,
+        run: () => setActiveView({ kind: "learn" }),
+      },
+      {
+        id: "settings",
+        label: "Settings",
+        icon: <SettingsIcon size={14} />,
+        run: () => setActiveView({ kind: "settings" }),
+      },
+    ]);
+
+    // The same categories, skills and order as the Skills page's Needs attention filter (its own
+    // grouping at its default sort), so a count here matches the one there.
+    const issues = collectDashboardIssues(own);
+    const withPluginUpdates = ownSkillsWithPluginUpdates(allSkills);
+    const attention = attentionBySkill(withPluginUpdates, issues);
+    const groupOf = (skill: InstalledSkill) => rowGroup(skill, attention.get(skill.name));
+    const groupLabel = (skill: InstalledSkill) => {
+      const group = groupOf(skill);
+      return group === "healthy" ? undefined : ROW_GROUP_LABEL[group];
+    };
+    const glyph = (skill: InstalledSkill) => {
+      const state = rowState(skill);
+      return state && <RowGlyph state={state} size={14} />;
+    };
+    const needsAttention = groupSkillRows(
+      applySkillListFilter(
+        withPluginUpdates,
+        { ...defaultSkillListFilter(), attention: "any" },
+        issues,
+      ),
+      "name",
+      [],
+      attention,
+    ).rows;
+    const attentionItems = skillItems(
+      needsAttention.slice(0, ATTENTION_PREVIEW_COUNT),
+      "attention",
+      groupLabel,
+      glyph,
       (skill) => openSkill(skill.name),
     );
+    if (needsAttention.length > ATTENTION_PREVIEW_COUNT)
+      attentionItems.push({
+        id: "attention-all",
+        section: "attention",
+        label: `Show all ${needsAttention.length}`,
+        icon: <ArrowRight size={14} />,
+        run: () => {
+          replaceSkillListFilter({ attention: "any" });
+          setActiveView({ kind: "skills" });
+        },
+      });
 
-    return [...actions, ...goto, ...skills];
+    const skills = skillItems(allSkills, "skills", groupLabel, glyph, (skill) =>
+      openSkill(skill.name),
+    );
+
+    return [...attentionItems, ...actions, ...goto, ...skills];
   })();
 
   const results = rankItems(items, query);
@@ -238,12 +356,11 @@ export function CommandPalette({ snapshot, requestRescan }: CommandPaletteProps)
     ? `command-palette-option-${results[highlight].id}`
     : undefined;
 
-  // Grouped for rendering, in the same order `rankItems` already produced.
-  const sections: { section: PaletteSection; items: PaletteItem[] }[] =
-    // SAFETY: these three string literals are exactly the `PaletteSection` union's members.
-    (["actions", "goto", "skills"] as PaletteSection[])
-      .map((section) => ({ section, items: results.filter((item) => item.section === section) }))
-      .filter((group) => group.items.length > 0);
+  // Grouped for rendering, in the order `rankItems` produced, so the highlight moves down the
+  // list as drawn.
+  const sections: { section: PaletteSection; items: PaletteItem[] }[] = [
+    ...new Set(results.map((item) => item.section)),
+  ].map((section) => ({ section, items: results.filter((item) => item.section === section) }));
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -278,7 +395,12 @@ export function CommandPalette({ snapshot, requestRescan }: CommandPaletteProps)
           className="max-h-[420px] overflow-y-auto py-1 pl-1 gutter-pr-1"
         >
           {sections.map(({ section, items: sectionItems }) => (
-            <div key={section} role="group" aria-label={SECTION_LABEL[section]}>
+            <div
+              key={section}
+              role="group"
+              aria-label={SECTION_LABEL[section]}
+              className="not-first:mt-2"
+            >
               <div className="px-2 pt-1.5 pb-1 text-caption text-text-tertiary">
                 {SECTION_LABEL[section]}
               </div>
