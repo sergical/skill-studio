@@ -11,23 +11,20 @@ test.beforeEach(async ({ page }) => {
 test("the What it used tab groups skills by finding and lists the sessions behind them", async ({
   page,
 }) => {
-  await page.getByText("Findings and what the words mean", { exact: true }).click();
+  const used = page.getByRole("region", { name: "What Claude Code used" });
+  await expect(used).toContainText("1 of 3");
+  await expect(used).toContainText("1 possibly missed one");
+  await page.getByText("What the words mean", { exact: true }).click();
   await expect(page.getByRole("region", { name: "What the words mean" })).toContainText(
     "Name only",
   );
-  await expect(
-    page.getByText("3 sessions read: 1 used a skill, 1 possibly missed one."),
-  ).toBeVisible();
 
-  const nameOnly = page.getByRole("region", { name: "Used while listed by name only" });
-  await expect(nameOnly.getByRole("listitem")).toHaveCount(1);
-  const neverUsed = page.getByRole("region", {
-    name: "Listed in nearly every session, never used",
-  });
-  await expect(neverUsed.getByRole("listitem")).toHaveCount(1);
-  await expect(
-    page.getByRole("region", { name: "Possibly missed" }).getByRole("listitem"),
-  ).toHaveCount(1);
+  // One row per skill, each naming its findings.
+  const findings = page.getByRole("list", { name: "Skills with findings" }).getByRole("listitem");
+  await expect(findings).toHaveCount(3);
+  await expect(findings.filter({ hasText: "Used by name only" })).toHaveCount(1);
+  await expect(findings.filter({ hasText: "Never used" })).toHaveCount(1);
+  await expect(findings.filter({ hasText: "Possibly missed" })).toHaveCount(1);
 
   // Open the recorded work, then narrow the list to sessions with a finding.
   const sessions = page
@@ -50,8 +47,6 @@ test("the What it used tab groups skills by finding and lists the sessions behin
   await expect(captured).toContainText("Shortened");
   await page.getByRole("button", { name: "Show only sessions with findings" }).click();
   await expect(sessions).toHaveCount(2);
-
-  await page.getByText("Findings and what the words mean", { exact: true }).click();
 
   // An agent that records no listing says so instead of showing empty sessions.
   await page.getByRole("combobox", { name: "Agent" }).click();

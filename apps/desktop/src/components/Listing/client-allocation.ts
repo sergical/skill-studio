@@ -15,6 +15,17 @@ export function sourceCounts(entries: ListingEntry[]) {
   return counts;
 }
 
+/** Skills per folder, the folder a skill's own directory sits in, largest first. */
+export function folderCounts(entries: ListingEntry[]): [string, number][] {
+  const counts = new Map<string, number>();
+  for (const entry of entries) {
+    if (!entry.path) continue;
+    const folder = entry.path.replace(/\/SKILL\.md$/i, "").replace(/\/[^/]+\/?$/, "");
+    counts.set(folder, (counts.get(folder) ?? 0) + 1);
+  }
+  return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
 // Codex can list two copies with the same name. Match one entry on each side at a time.
 export function additionalEntries(entries: ListingEntry[], other: ListingEntry[]) {
   const remaining = new Map<string, number>();

@@ -93,7 +93,7 @@ function row(
       harness === "claude-code"
         ? {
             key: "skillListingBudgetFraction",
-            current: "0.0001",
+            current: String(budget / CONTEXT_TOKENS / 3),
             file: "~/.claude/settings.json",
             chezmoi_source: "~/.local/share/chezmoi/private_dot_claude/private_settings.json.tmpl",
             snippet: `"skillListingBudgetFraction": ${budget / CONTEXT_TOKENS / 3}`,

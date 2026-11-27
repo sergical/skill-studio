@@ -254,7 +254,13 @@ function App() {
       );
       break;
     case "sessions":
-      main = <SessionsView key={activeView.harness} initialHarness={activeView.harness} />;
+      main = (
+        <SessionsView
+          key={activeView.harness}
+          initialHarness={activeView.harness}
+          snapshot={snapshot}
+        />
+      );
       break;
     case "skill": {
       // Opened from Learn or Settings: neither keeps a list worth reviving, so the

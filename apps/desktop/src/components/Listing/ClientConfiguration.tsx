@@ -1,16 +1,20 @@
 import { useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { Button, Input } from "@skill-studio/ui";
-import { deploymentLabelFromAgentId, homeRelativePath } from "@skill-studio/lib";
+import {
+  LISTING_STATE_LABEL,
+  deploymentLabelFromAgentId,
+  homeRelativePath,
+} from "@skill-studio/lib";
 import type { HarnessListing } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
 import { PageSection } from "../Shell/PageSection";
 import { SummaryCard, SummaryMetric } from "../ui/SummaryCard";
 import {
   budgetRule,
+  folderCounts,
   hasAssumedClaudeWindow,
   listedEntries,
-  sourceCounts,
 } from "./client-allocation";
 
 type Setting = NonNullable<HarnessListing["setting"]>;
@@ -180,7 +184,6 @@ export function ClientConfiguration({
 }) {
   const name = deploymentLabelFromAgentId(row.harness);
   const entries = listedEntries(row);
-  const sources = sourceCounts(entries);
   const project = row.scope.scope === "global" ? null : row.scope.project;
   const preview = row.evidence === "preview";
   const basePrompt = row.base_prompt_skills != null;
@@ -192,12 +195,37 @@ export function ClientConfiguration({
   const offered = entries.length + omitted;
   const session = row.observed_session;
   const assumedWindow = preview && hasAssumedClaudeWindow(row);
+  const fit = [
+    { state: "described" as const, count: described - shortened, mark: "bg-data" },
+    { state: "truncated" as const, count: shortened, mark: "bg-data/45" },
+    { state: "name_only" as const, count: namesOnly, mark: "bg-warning/45" },
+    { state: "omitted" as const, count: omitted, mark: "bg-warning" },
+  ].filter((part) => part.count > 0);
+  const estimate = preview && row.budget !== null && !assumedWindow;
+  const folders = folderCounts(entries);
+  const footnote = assumedWindow
+    ? `${name}’s settings give a percentage, and the model catalog has no window to apply it to.`
+    : basePrompt
+      ? row.notes.join(" ")
+      : !preview
+        ? `Skill Studio has no budget estimate for ${name}.`
+        : row.budget !== null &&
+          `Budget ${row.budget.toLocaleString()} ${row.budget_unit}${
+            row.context_window_tokens
+              ? ` of a ${row.context_window_tokens.toLocaleString()}-token context window`
+              : ""
+          }`;
   return (
     <>
       <SummaryCard title={basePrompt ? `${row.budget_source} preview` : `What ${name} sees`}>
         {assumedWindow ? (
           <SummaryMetric value={budgetRule(row)} unit="budget, model window unknown" />
-        ) : !preview || row.budget === null ? (
+        ) : estimate ? (
+          <SummaryMetric
+            value={`${described.toLocaleString()} of ${offered.toLocaleString()}`}
+            unit={`${offered === 1 ? "skill keeps" : "skills keep"} a description`}
+          />
+        ) : (
           <SummaryMetric
             value={entries.length.toLocaleString()}
             unit={`${entries.length === 1 ? "skill" : "skills"} ${
@@ -205,63 +233,49 @@ export function ClientConfiguration({
                 ? "in the skills section"
                 : preview
                   ? "in the estimate"
-                  : `in folders ${name} reads`
+                  : folders.length === 1
+                    ? `in ${homeRelativePath(folders[0][0])}`
+                    : "in its folders"
             }`}
           />
-        ) : (
+        )}
+        {estimate && fit.length > 1 && (
           <>
-            <p className="text-heading font-semibold">
-              {described.toLocaleString()} of {offered.toLocaleString()} descriptions fit in {name}
-              ’s skill space
-            </p>
             <div
-              aria-hidden
-              className="mt-3 flex h-3 overflow-hidden rounded-full bg-bg-tertiary"
-              title={`${described - shortened} full · ${shortened} shortened · ${namesOnly + omitted} name only or not listed`}
+              role="img"
+              aria-label={fit
+                .map((part) => `${LISTING_STATE_LABEL[part.state]} ${part.count}`)
+                .join(", ")}
+              className="mt-4 flex h-2 gap-px overflow-hidden rounded-full bg-bg-tertiary"
             >
-              <span className="bg-data" style={{ flex: described - shortened }} />
-              <span className="bg-data/45" style={{ flex: shortened }} />
-              <span style={{ flex: namesOnly + omitted }} />
+              {fit.map((part) => (
+                <span key={part.state} className={part.mark} style={{ flex: part.count }} />
+              ))}
             </div>
+            <ul aria-hidden className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-small">
+              {fit.map((part) => (
+                <li key={part.state} className="flex items-center gap-1.5 text-text-secondary">
+                  <span className={`size-2 rounded-full ${part.mark}`} />
+                  {LISTING_STATE_LABEL[part.state]}
+                  <span className="text-text-primary tabular-nums">{part.count}</span>
+                </li>
+              ))}
+            </ul>
           </>
         )}
-        {preview && row.budget !== null && !assumedWindow && (
-          <p className="mt-2 text-small text-text-secondary">
-            Budget {row.budget.toLocaleString()} {row.budget_unit}
-            {budgetRule(row).startsWith(row.budget.toLocaleString()) ? "" : ` · ${budgetRule(row)}`}
-            {row.context_window_tokens
-              ? ` · ${row.context_window_tokens.toLocaleString()}-token context window`
-              : ""}
-          </p>
+        {!preview && folders.length > 1 && (
+          <ul aria-label="Folders" className="mt-4 flex flex-col gap-1 text-small">
+            {folders.slice(0, 5).map(([folder, count]) => (
+              <li key={folder} className="flex items-baseline gap-3">
+                <span className="w-8 text-right text-text-primary tabular-nums">{count}</span>
+                <span className="min-w-0 truncate text-text-secondary" title={folder}>
+                  {homeRelativePath(folder)}
+                </span>
+              </li>
+            ))}
+          </ul>
         )}
-        <p className="mt-3 border-t border-border-subtle pt-2.5 text-small">
-          {assumedWindow ? (
-            <>
-              {name}’s settings give a percentage. The model catalog could not confirm how many
-              characters that allows.
-            </>
-          ) : basePrompt ? (
-            row.notes.join(" ")
-          ) : !preview ? (
-            `${name} lists skills from these folders. Skill Studio can’t estimate how it shortens them yet.`
-          ) : (
-            <>
-              Estimate · <strong>{offered} skills</strong>
-              {shortened ? ` · ${shortened} shortened` : ""}
-              {namesOnly ? ` · ${namesOnly} name only` : ""}
-              {!shortened && !namesOnly && !omitted && entries.length > 0
-                ? " · Every description fits"
-                : ""}
-              {omitted ? ` · ${omitted} not listed` : ""}
-            </>
-          )}
-        </p>
-        {preview && (
-          <p className="mt-1 text-small text-text-secondary">
-            From skill folders {sources["Skill folder"]} · plugins {sources.Plugin} · seen only in
-            sessions {sources["Session record"]}
-          </p>
-        )}
+        {footnote && <p className="mt-4 text-small text-text-secondary">{footnote}</p>}
         {session && (
           <p className="mt-1 text-small text-text-secondary">
             Last session listed {session.listed} skills

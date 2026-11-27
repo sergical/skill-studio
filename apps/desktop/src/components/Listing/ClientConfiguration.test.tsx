@@ -28,7 +28,7 @@ it("shows a budget-free preview and a saved listing independently", () => {
   expect(screen.getByText(/Last session listed 3 skills.*recorded-model/)).toBeTruthy();
 });
 
-it("counts skills the budget left out in the headline, so a full budget never reads as every description fits", () => {
+it("counts skills the budget left out in the headline and the bar", () => {
   const row = mockListingReport(buildHarnessSnapshot(), {}).listings[0];
   const [first] = row.entries;
   const entries = [
@@ -37,6 +37,7 @@ it("counts skills the budget left out in the headline, so a full budget never re
     { ...first, name: "c", path: "/c", state: "omitted" as const },
   ];
   render(<ClientConfiguration row={{ ...row, entries }} onSaved={() => {}} />);
-  expect(screen.getByText(/2 of 3 descriptions fit/)).toBeTruthy();
-  expect(screen.queryByText(/Every description fits/)).toBeNull();
+  expect(screen.getByText("2 of 3")).toBeTruthy();
+  expect(screen.getByText("skills keep a description")).toBeTruthy();
+  expect(screen.getByRole("img", { name: "Full description 2, Not listed 1" })).toBeTruthy();
 });

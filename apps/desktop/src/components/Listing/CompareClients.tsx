@@ -50,7 +50,7 @@ export function CompareClients({
   }));
   const extra = sides.map((s, i) => additionalEntries(s.entries, sides[1 - i].entries));
   return (
-    <details className="rounded-md border border-border-subtle px-3 py-2">
+    <details className="px-3 py-2">
       <summary className="cursor-pointer text-small">Compare with another agent</summary>
       <div className="mt-3 flex flex-wrap items-center gap-2 text-small">
         <span>{sides[0].name} and</span>

@@ -15,9 +15,11 @@ import type {
   SessionSummary,
   SkillSessionFlag,
   SkillSessionRollup,
+  SkillSnapshot,
 } from "@skill-studio/lib";
 import { useClientRows } from "../../hooks/useClientRows";
 import { AgentTabs } from "../Listing/AgentTabs";
+import { AgentUses } from "./AgentUses";
 import { PageSection } from "../Shell/PageSection";
 import { PageShell } from "../Shell/PageShell";
 import { SelectControl } from "../ui/SelectControl";
@@ -26,42 +28,40 @@ import { sessionsReportKey, useAppStore } from "../../store/appStore";
 
 interface Finding {
   flag: SkillSessionFlag;
-  title: string;
+  label: string;
   advice: string;
 }
 
 const NOT_REACHABLE: Finding = {
   flag: "not_reachable",
-  title: "Installed outside this agent’s skill folders",
-  advice: "Install the skill in a folder this agent reads to make it available here.",
+  label: "Outside its folders",
+  advice: "installed where this agent does not look. Install it in a folder it reads.",
 };
 
 /** Findings in the order a person acts on them. */
 const FINDINGS: Finding[] = [
   {
     flag: "possibly_missed",
-    title: "Possibly missed",
+    label: "Possibly missed",
     advice:
-      "A guess: a short first prompt matched the skill's description, and the session used no skill. If the guess is right, reword the description so it names the task, or make sure the skill keeps its description.",
+      "a guess: a short first prompt matched the description and no skill ran. If it was right, make the description name the task.",
   },
   {
     flag: "used_while_name_only",
-    title: "Used while listed by name only",
+    label: "Used by name only",
     advice:
-      "The model found these from the name alone. Raise the skill list budget under What it sees, or shorten other descriptions, so they keep a description.",
+      "the model picked it from the name alone. Raise the budget under What it sees so it keeps a description.",
   },
   {
     flag: "listed_never_used",
-    title: "Listed in nearly every session, never used",
-    advice:
-      "Check whether you still want these skills available. Open a skill to see its locations and invocation options.",
+    label: "Never used",
+    advice: "listed in nearly every session and never used. Park it if you no longer need it.",
   },
   NOT_REACHABLE,
   {
     flag: "not_described_now",
-    title: "No description in the current skill list",
-    advice:
-      "The current settings show these by name only, leave them out, or hide them. The reason is next to each skill.",
+    label: "No description now",
+    advice: "the current settings shorten it to a name, leave it out or hide it.",
   },
 ];
 
@@ -71,43 +71,39 @@ const SESSION_COUNTS = [
   { value: "200", label: "Newest 200 sessions" },
 ];
 
-function Glossary() {
+function Glossary({ findings }: { findings: Finding[] }) {
   return (
     <section
       aria-label="What the words mean"
-      className="flex flex-col gap-1 rounded-md border border-border-subtle p-3 text-small text-text-secondary"
+      className="flex flex-col gap-1 text-small text-text-secondary"
     >
       <p className="m-0">
-        <span className="text-text-primary">Full description</span>: the model sees the skill's name
-        and description, so it can pick the skill from what you ask.
+        <span className="text-text-primary">Full description</span>: the model sees the name and
+        description, so it can pick the skill from what you ask.
       </p>
       <p className="m-0">
-        <span className="text-text-primary">Name only</span>: the model sees only the name and must
-        guess from it. The skill can still run.
+        <span className="text-text-primary">Name only</span>: the model sees only the name. The
+        skill can still run.
       </p>
       <p className="m-0">
-        <span className="text-text-primary">Not listed</span>: the model does not see the skill. It
-        can still read the SKILL.md file if it knows the path.
+        <span className="text-text-primary">Not listed</span>: the model does not see the skill.
       </p>
+      {findings.map((finding) => (
+        <p key={finding.flag} className="m-0">
+          <span className="text-text-primary">{finding.label}</span>: {finding.advice}
+        </p>
+      ))}
     </section>
   );
 }
 
-function AgentSummary({ agent }: { agent: AgentSessions }) {
+function AgentNote({ agent }: { agent: AgentSessions }) {
   return (
-    <div className="flex flex-col gap-1 text-small text-text-secondary">
-      <p className="m-0 text-body text-text-primary">
-        {agent.records === "listing_and_uses"
-          ? `${agent.sessions_read} sessions read: ${agent.sessions_with_use} used a skill, ${agent.sessions_with_miss} possibly missed one.`
-          : agent.note}
-      </p>
-      <p className="m-0">
-        {agent.records === "listing_and_uses"
-          ? agent.note
-          : "The skills in this agent’s folders are under What it sees."}
-      </p>
+    <p className="m-0 text-small text-text-secondary">
+      {agent.note}
       {agent.doc && (
-        <p className="m-0">
+        <>
+          {" "}
           <a
             href={agent.doc}
             target="_blank"
@@ -116,13 +112,13 @@ function AgentSummary({ agent }: { agent: AgentSessions }) {
           >
             How {deploymentLabelFromAgentId(agent.harness)} finds skills
           </a>
-        </p>
+        </>
       )}
-    </div>
+    </p>
   );
 }
 
-function SkillRow({ skill }: { skill: SkillSessionRollup }) {
+function SkillRow({ skill, findings }: { skill: SkillSessionRollup; findings: Finding[] }) {
   const counts = [
     skill.described > 0 && `full description in ${skill.described}`,
     skill.truncated > 0 && `shortened in ${skill.truncated}`,
@@ -131,54 +127,63 @@ function SkillRow({ skill }: { skill: SkillSessionRollup }) {
     skill.missed > 0 && `possibly missed in ${skill.missed}`,
   ].filter(Boolean);
   return (
-    <li aria-label={skill.name} className="flex flex-col gap-0.5 py-1.5">
+    <li
+      aria-label={skill.name}
+      className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 py-2"
+    >
       <span
         className="min-w-0 truncate text-body text-text-primary"
         title={skill.path ?? undefined}
       >
         {skill.name}
       </span>
-      <span className="text-caption text-text-tertiary">
-        {counts.length > 0 && `Sessions: ${counts.join(", ")}.`}
-        {skill.reach && ` ${skill.reach}`}
+      <span className="text-right text-small text-text-secondary">
+        {findings
+          .filter((finding) => skill.flags.includes(finding.flag))
+          .map((finding) => finding.label)
+          .join(" · ")}
       </span>
+      {(counts.length > 0 || skill.reach) && (
+        <span className="col-span-2 text-caption text-text-tertiary tabular-nums">
+          {counts.length > 0 && `Sessions: ${counts.join(" · ")}`}
+          {counts.length > 0 && skill.reach && ". "}
+          {skill.reach}
+        </span>
+      )}
     </li>
   );
 }
 
-function FindingSection({ finding, skills }: { finding: Finding; skills: SkillSessionRollup[] }) {
+/** One row per skill with a finding, in the order a person acts on the findings. */
+function Findings({ findings, skills }: { findings: Finding[]; skills: SkillSessionRollup[] }) {
   const [open, setOpen] = useState(false);
-  const rows = skills.filter((s) => s.flags.includes(finding.flag));
+  const rank = (skill: SkillSessionRollup) =>
+    findings.findIndex((finding) => skill.flags.includes(finding.flag));
+  const rows = skills.filter((skill) => rank(skill) >= 0).sort((a, b) => rank(a) - rank(b));
   if (rows.length === 0) return null;
   // At most 200 rows in the page; the CLI prints every one.
   const shown = rows.slice(0, open ? 200 : 8);
   return (
-    <section aria-label={finding.title} className="flex flex-col gap-1">
-      <h2 className="m-0 text-body font-medium text-text-primary">
-        {finding.title} <span className="text-text-tertiary">({rows.length})</span>
-      </h2>
-      <p className="m-0 text-small text-text-secondary">{finding.advice}</p>
-      <ul className="m-0 list-none divide-y divide-border-subtle p-0">
+    <PageSection title={`Findings · ${rows.length}`}>
+      <ul
+        aria-label="Skills with findings"
+        className="m-0 list-none divide-y divide-border-subtle border-y border-border-subtle p-0"
+      >
         {shown.map((skill) => (
-          <SkillRow key={skill.name} skill={skill} />
+          <SkillRow key={skill.name} skill={skill} findings={findings} />
         ))}
       </ul>
       {open && rows.length > shown.length && (
-        <p className="m-0 text-caption text-text-tertiary">
+        <p className="mt-2 text-caption text-text-tertiary">
           {rows.length - shown.length} more. Run skill-studio sessions to see every one.
         </p>
       )}
       {!open && rows.length > shown.length && (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="self-start rounded-sm px-2 text-text-secondary"
-          onClick={() => setOpen(true)}
-        >
+        <Button size="sm" variant="ghost" className="mt-1 -ml-2.5" onClick={() => setOpen(true)}>
           Show all {rows.length}
         </Button>
       )}
-    </section>
+    </PageSection>
   );
 }
 
@@ -301,7 +306,7 @@ function SessionRow({
             <span className="text-caption text-text-tertiary">{formatTime(session.at)}</span>
           </span>
         </summary>
-        <div className="mb-3 ml-1 flex flex-col gap-2 border-l-2 border-accent pl-3 text-small">
+        <div className="mb-3 ml-1 flex flex-col gap-2 border-l-2 border-border-subtle pl-3 text-small">
           <p>
             {session.listing_recorded
               ? `Listed ${session.listed} skills · ${session.described} with a full description · ${session.name_only} name only`
@@ -333,7 +338,13 @@ function SessionRow({
   );
 }
 
-export function SessionsView({ initialHarness }: { initialHarness?: string }) {
+interface SessionsViewProps {
+  initialHarness?: string;
+  /** The use history behind Uses in 30 days; App passes the same snapshot as What it sees. */
+  snapshot?: SkillSnapshot;
+}
+
+export function SessionsView({ initialHarness, snapshot }: SessionsViewProps) {
   const [selected, setSelected] = useState(initialHarness);
   const navigate = useAppStore((s) => s.setActiveView);
   const [count, setCount] = useState("100");
@@ -356,6 +367,7 @@ export function SessionsView({ initialHarness }: { initialHarness?: string }) {
     (b.at ?? "").localeCompare(a.at ?? ""),
   );
   const guidance = agent?.records === "saved_guidance";
+  const name = deploymentLabelFromAgentId(harness);
   const shownSessions =
     onlyFindings && !guidance
       ? sessions.filter(
@@ -407,25 +419,43 @@ export function SessionsView({ initialHarness }: { initialHarness?: string }) {
         ) : (
           <>
             {agent.records === "listing_and_uses" && (
-              <SummaryCard title={`What ${deploymentLabelFromAgentId(harness)} used`}>
+              <SummaryCard title={`What ${name} used`}>
                 <SummaryMetric
-                  value={agent.sessions_with_use.toLocaleString()}
-                  unit={`of ${agent.sessions_read.toLocaleString()} recent sessions used a skill`}
+                  value={`${agent.sessions_with_use.toLocaleString()} of ${agent.sessions_read.toLocaleString()}`}
+                  unit={`recent ${agent.sessions_read === 1 ? "session" : "sessions"} used a skill`}
                 />
-                <p className="mt-2 text-small text-text-secondary">
-                  {agent.sessions_with_listing.toLocaleString()} recorded the skill list.
+                <p className="mt-2 text-small text-text-secondary tabular-nums">
+                  {agent.sessions_with_miss.toLocaleString()} possibly missed one ·{" "}
+                  {agent.sessions_with_listing.toLocaleString()} recorded the skill list
                 </p>
               </SummaryCard>
             )}
             {guidance && (
-              <section className="space-y-2">
-                <h2 className="text-heading font-semibold">Saved skill guidance</h2>
-                <p>
-                  {agent.sessions_with_listing.toLocaleString()} of{" "}
-                  {agent.sessions_read.toLocaleString()} recent sessions have readable guidance.
-                </p>
-                <p className="text-small text-text-secondary">{agent.note}</p>
-              </section>
+              <SummaryCard title={`What ${name} saved`}>
+                <SummaryMetric
+                  value={`${agent.sessions_with_listing.toLocaleString()} of ${agent.sessions_read.toLocaleString()}`}
+                  unit={`recent ${agent.sessions_read === 1 ? "session" : "sessions"} saved readable skill guidance`}
+                />
+              </SummaryCard>
+            )}
+            {agent.records === "uses_only" && (
+              <div className="flex flex-col items-start gap-3">
+                <AgentNote agent={agent} />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => navigate({ kind: "listing", harness })}
+                >
+                  See what {name} sees
+                </Button>
+              </div>
+            )}
+            {snapshot && <AgentUses snapshot={snapshot} harness={harness} />}
+            {agent.records === "listing_and_uses" && (
+              <Findings findings={FINDINGS} skills={skills} />
+            )}
+            {agent.records === "uses_only" && (
+              <Findings findings={[NOT_REACHABLE]} skills={skills} />
             )}
             {agent.records !== "uses_only" && (
               <PageSection
@@ -436,6 +466,7 @@ export function SessionsView({ initialHarness }: { initialHarness?: string }) {
                       variant="ghost"
                       size="sm"
                       className="-mr-2 rounded-sm px-2 text-text-secondary"
+                      aria-pressed={onlyFindings}
                       onClick={() => setOnlyFindings((v) => !v)}
                     >
                       {onlyFindings
@@ -467,30 +498,12 @@ export function SessionsView({ initialHarness }: { initialHarness?: string }) {
                 )}
               </PageSection>
             )}
-            {agent.records !== "listing_and_uses" && (
-              <section className="space-y-3">
-                {!guidance && <AgentSummary agent={agent} />}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => navigate({ kind: "listing", harness })}
-                >
-                  See what {deploymentLabelFromAgentId(harness)} sees
-                </Button>
-                <FindingSection finding={NOT_REACHABLE} skills={skills} />
-              </section>
-            )}
             {agent.records === "listing_and_uses" && (
               <details className="rounded-md border border-border-subtle px-3 py-2">
-                <summary className="cursor-pointer text-small">
-                  Findings and what the words mean
-                </summary>
-                <div className="mt-3 flex flex-col gap-4">
-                  <AgentSummary agent={agent} />
-                  <Glossary />
-                  {FINDINGS.map((finding) => (
-                    <FindingSection key={finding.flag} finding={finding} skills={skills} />
-                  ))}
+                <summary className="cursor-pointer text-small">What the words mean</summary>
+                <div className="mt-3 mb-1 flex flex-col gap-3">
+                  <Glossary findings={FINDINGS} />
+                  <AgentNote agent={agent} />
                 </div>
               </details>
             )}
