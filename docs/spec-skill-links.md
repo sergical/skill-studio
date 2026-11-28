@@ -231,10 +231,73 @@ One tool, `skill_links`, with the same input and output as the CLI's
 parks or turns off a skill, and to show the user what would break. The plan
 tools already return `breaks`.
 
-### 5.7 Flows, step by step
+### 5.7 Every starting point, every action
 
-Each flow names what the user does, what Skill Studio does, and what the
-user has at the end. Real skills throughout.
+**The model.** A link's state (OK, Missing, Renamed, Off, Elsewhere, Not
+known) is derived per link and per agent from the files on disk. It is never
+stored (rule 4 of `docs/state-machines.md`). Every action, whoever takes it
+(Skill Studio, the skills CLI, dotagents, an agent, the user in Finder),
+changes files, and the next scan derives the new states. So every flow comes
+down to three questions: what the user sees before the action, after it,
+and after undo.
+
+**Five rules hold for every combination:**
+
+1. **Before.** Every action Skill Studio runs shows, in its plan, the links
+   it would break and the links it would fix, per agent, directly and
+   through other skills. Nothing else.
+2. **After.** The next scan shows exactly the links that changed state. A
+   change made outside Skill Studio shows the same way, marked "changed
+   outside Skill Studio".
+3. **Predicted equals observed.** A plan's breaks and fixes equal the
+   difference between the scan before and the scan after.
+4. **Undo is exact.** Undo returns every link to its state before the
+   action.
+5. **Only real breaks warn.** Needs and Hands off links warn. Mentions,
+   index entries and Not known never do.
+
+**Starting points:**
+
+| Start                         | Real example                                                    |
+| ----------------------------- | --------------------------------------------------------------- |
+| Nothing installed             | A first install from the Store                                  |
+| The whole pack                | `npx skills add mattpocock/skills`                              |
+| One skill                     | `grill-me` alone                                                |
+| A subset                      | `grill-with-docs` and `to-spec`                                 |
+| The pack minus some           | A dotagents wildcard with `exclude = ["pr", "teach", …]`        |
+| Two packs that link           | pstack and `cursor-team-kit`, both from `cursor/plugins`        |
+| One skill from two installers | A skills.sh copy and a Claude Code plugin copy of the same name |
+| A renamed port                | `sergical/pstack-skills`, or a `matt-` prefix                   |
+| Global and project            | `grilling` global, `grill-me` in a project                      |
+| Edited copies                 | A pack skill with local edits                                   |
+
+**Actions, and what the user sees.** The columns are the role of the skill
+the action touches: one other skills need (`grilling`), one that needs
+others (`grill-me`), or an index or standalone skill (`ask-matt`).
+
+| Action                                                                                                    | On a skill others need                                                                                                                           | On a skill that needs others                                                                                                                                                                                            | Index or standalone                               |
+| --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| Install the whole pack                                                                                    | Clears any Missing rows it fixes                                                                                                                 | Offers only needs outside the pack (pstack's `/deslop`)                                                                                                                                                                 | Silent                                            |
+| Install one skill or a subset                                                                             | "Fixes N links" when installed skills were missing it                                                                                            | Offers everything it needs, through other skills too, ticked for Needs and Hands off                                                                                                                                    | Silent                                            |
+| Remove                                                                                                    | Lists every skill that stops working, per agent, direct and indirect; Keep or Remove anyway                                                      | Nothing breaks; silent                                                                                                                                                                                                  | Silent                                            |
+| Park, unpark                                                                                              | As Remove, worded "until you unpark"; unpark lists what it fixes                                                                                 | Silent                                                                                                                                                                                                                  | Silent                                            |
+| Turn off or on for one agent                                                                              | Lists what stops working in that agent only                                                                                                      | Silent                                                                                                                                                                                                                  | Silent                                            |
+| Edit SKILL.md in the editor                                                                               | Changing its own `name:` makes every skill that asks for it by name Renamed; the editor says so before save                                      | A new line naming a missing skill is marked in the editor and goes Missing after save; a typo is "Not found" with the nearest installed name offered; deleting the only line that names a skill drops the link silently | Silent                                            |
+| Edit outside Skill Studio                                                                                 | The same outcomes after the next scan, marked "changed outside"                                                                                  | Same                                                                                                                                                                                                                    | Silent                                            |
+| Make an independent copy or fork                                                                          | Same name: nothing breaks. New name: every skill that asks for the old name goes Renamed, listed in the plan                                     | Keeps its links                                                                                                                                                                                                         | Silent                                            |
+| Split                                                                                                     | Paths other skills read into the part that moves break; listed in the split plan                                                                 | Its own links move with the text that holds them                                                                                                                                                                        | Silent                                            |
+| Move between project and global                                                                           | Skills that read it by path go Elsewhere; listed                                                                                                 | Its path reads into the old scope's skills go Elsewhere; listed                                                                                                                                                         | Silent                                            |
+| Update one skill                                                                                          | If upstream renamed it, skills that ask by the old name go Renamed; listed in the update plan                                                    | "Now needs X" with Add, if upstream added a link; silent if it dropped one. Edited copies are skipped and keep their old links (existing rule)                                                                          | Silent                                            |
+| Update the pack                                                                                           | As above for each skill                                                                                                                          | The skills CLI does not add new upstream skills on update, so a skill that now hands off to a new one goes Missing; the plan says so and offers Add                                                                     | Index lists new names as dead entries until added |
+| Upstream deletes a skill                                                                                  | The local copy stays and nothing breaks. Check upstream says "Removed upstream; N of your skills still need it" so a cleanup does not break them | Silent                                                                                                                                                                                                                  | Silent                                            |
+| Switch the pack to a fork                                                                                 | If the fork lacks a skill, the skills that need it go Missing; in the plan                                                                       | Same                                                                                                                                                                                                                    | Silent                                            |
+| Remove the whole pack                                                                                     | Lists skills in other packs that need it (removing `cursor-team-kit` breaks pstack's `poteto-mode` step)                                         | Silent                                                                                                                                                                                                                  | Silent                                            |
+| Remove outside Skill Studio (Finder, `npx skills remove`, a dotagents `exclude` then `dotagents install`) | No warning is possible before. After the scan: new Missing rows, marked "changed outside", with Add                                              | Silent                                                                                                                                                                                                                  | Silent                                            |
+| A new agent appears (the user installs Codex)                                                             | Links are resolved for it; only its new breaks show                                                                                              | Same                                                                                                                                                                                                                    | Silent                                            |
+| Undo any action above                                                                                     | Every link back to its earlier state; rows clear                                                                                                 | Same                                                                                                                                                                                                                    | Same                                              |
+
+Each cell is the same five rules applied to that action. The worked
+examples below are single rows of this table.
 
 **A. Install `grill-me` from the Skill Store.**
 
@@ -461,9 +524,11 @@ Each slice is one vertical change, under about 500 lines.
 
 1. The real-pack snapshots, core `skill_links` with the fixtures of
    section 7, `skill-studio links`, the `skill_links` MCP tool, a
-   `flow_parity.rs` row, a `docs/flows.md` row, and verification layers 1
-   to 4 of section 10. Layer 4 runs before this slice merges, because it
-   decides the per-agent rule.
+   `flow_parity.rs` row, a `docs/flows.md` row, a "Link state" row in
+   `docs/state-machines.md`, and verification layers 1 to 5 of section 10.
+   Layer 5 runs before this slice merges, because it decides the per-agent
+   rule. Layer 3 grows with each later slice: a slice that adds a warning
+   adds its action's rows.
 2. `breaks` in the remove, park, turn-off and pack remove plans; the dialogs
    show it; the CLI dry runs print it. One e2e spec: removing `grilling`
    lists its 6 users, and Keep changes nothing.
@@ -513,24 +578,40 @@ Each dimension below comes from what Skill Studio already supports
 
 ### 10.3 How each scenario is proven
 
-Six layers, cheapest first. Each has an oracle that is not the code under
+Seven layers, cheapest first. Each has an oracle that is not the code under
 test: the thing that decides whether the answer is right.
 
-| Layer               | Proves                                                                         | Oracle                                                                                                                                                                                                                         | Runs                                                                                  |
-| ------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
-| 1. Real-pack corpus | Detection on real text                                                         | A list of links a person checked line by line, kept next to each snapshot                                                                                                                                                      | CI, Linux and macOS                                                                   |
-| 2. Scenario matrix  | Resolution in every combination of agent, layout, owner, scope, state and home | The file system: for Needs, opening the exact path the agent would open; for Hands off, the agent's list from the listing module, which has its own evidence against real agents (`docs/research/harness-listing-evidence.md`) | Host tests on real temp folders with real links, CI on macOS and Linux                |
-| 3. Real installers  | The setups real tools make, read back through CLI and MCP                      | The files the real `npx skills`, `dotagents` and `claude plugin install` write, from the snapshots served by the local git pack server                                                                                         | `verify-skill-studio`, and the `skills-cli-contract` workflow on macOS                |
-| 4. Real agents      | That OK and Missing match what each agent does                                 | The agent's own transcript, read with Skill Studio's session readers: did it load `grilling` after `grill-me`, did it open `../choreograph/SKILL.md`                                                                           | By hand in a disposable home, before slice 1 merges and on each agent's major version |
-| 5. UI flows         | Dialogs, Home and the map show the core answer                                 | The page as a user reads it, found by role and name                                                                                                                                                                            | e2e on the harness, WebKit and Chromium                                               |
-| 6. Upstream drift   | That a pack changing its links is noticed before users hit it                  | Layer 1 rerun on each pack's latest commit                                                                                                                                                                                     | Weekly CI, report only                                                                |
+| Layer                | Proves                                                                                  | Oracle                                                                                                                                                                                                                         | Runs                                                                                              |
+| -------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| 1. Real-pack corpus  | Detection on real text                                                                  | A list of links a person checked line by line, kept next to each snapshot                                                                                                                                                      | CI, Linux and macOS                                                                               |
+| 2. Resolution matrix | Resolution in every combination of agent, layout, owner, scope, state and home          | The file system: for Needs, opening the exact path the agent would open; for Hands off, the agent's list from the listing module, which has its own evidence against real agents (`docs/research/harness-listing-evidence.md`) | Host tests on real temp folders with real links, CI on macOS and Linux                            |
+| 3. Action matrix     | Every action of section 5.7 from every starting point, on every skill of the real packs | Rules 3 and 4 of section 5.7: the plan made before the action against a fresh scan of the real files after it, and the scan after undo against the scan before. Rule 5 and the role columns of the table as named checks       | Core tests on the in-memory file system, and a sample on real temp folders, CI on macOS and Linux |
+| 4. Real installers   | The setups real tools make, read back through CLI and MCP                               | The files the real `npx skills`, `dotagents` and `claude plugin install` write, from the snapshots served by the local git pack server                                                                                         | `verify-skill-studio`, and the `skills-cli-contract` workflow on macOS                            |
+| 5. Real agents       | That OK and Missing match what each agent does                                          | The agent's own transcript, read with Skill Studio's session readers: did it load `grilling` after `grill-me`, did it open `../choreograph/SKILL.md`                                                                           | By hand in a disposable home, before slice 1 merges and on each agent's major version             |
+| 6. UI flows          | Dialogs, Home and the map show the core answer                                          | The page as a user reads it, found by role and name                                                                                                                                                                            | e2e on the harness, WebKit and Chromium                                                           |
+| 7. Upstream drift    | That a pack changing its links is noticed before users hit it                           | Layer 1 rerun on each pack's latest commit                                                                                                                                                                                     | Weekly CI, report only                                                                            |
 
 Layer 2 is one property test: it builds every combination the agent
-catalog allows, and prints any combination that fails. Layer 4 runs each
+catalog allows, and prints any combination that fails.
+
+Layer 3 is the permutation matrix. It runs every starting point × every
+action × every skill of `mattpocock/skills` as the target, on the in-memory
+file system: 10 × 18 × 39, about 7,000 cases. Agent, folder layout, scope,
+home location and installer are covered pairwise, so every pair of their
+values meets in at least one case, on real temp folders with real links. A
+change outside Skill Studio is simulated by editing the files directly, as
+Finder or another tool would. Each CI run also draws a seeded random sample
+across all four packs and prints its seed; the weekly run takes the full
+product. A failure prints the starting point, action, target, agent and
+layout, which is a reproducible case, and the dev harness opens any case by
+that id, so a failure can be seen in the UI as well as read. Budget: under 60 seconds per CI run,
+measured with the first slice.
+
+Layer 5 runs each
 agent headless on its cheapest model, with the target skill present and
 absent, in each folder layout; a full pass costs under a dollar. Its table
 of results, with agent versions, goes in `docs/verification/skill-links.md`.
-Layer 4 also settles open question 1.
+Layer 5 also settles open question 1.
 
 ### 10.4 Done means
 
@@ -538,11 +619,13 @@ Layer 4 also settles open question 1.
   with the count per pack in the PR.
 - Layer 2: every generated combination passes on macOS and Linux, with the
   combination count in the PR.
-- Layer 3: one evidence folder per installer, with identical CLI and MCP
+- Layer 3: every case passes rules 3, 4 and 5, with the case count and run
+  time in the PR.
+- Layer 4: one evidence folder per installer, with identical CLI and MCP
   output.
-- Layer 4: a filled table of agent × layout × present or absent, every cell
+- Layer 5: a filled table of agent × layout × present or absent, every cell
   matching the spec's rule. A cell that does not match changes the rule.
-- Layer 5: the e2e specs pass in both engines.
+- Layer 6: the e2e specs pass in both engines.
 - No step reads the developer's home, projects or session history.
 
 Rare cases not tested, per the testing skill:
@@ -556,7 +639,7 @@ Rare cases not tested, per the testing skill:
 1. **`..` through a link.** When `~/.claude/skills/a` is a link to
    `~/.agents/skills/a`, does the agent resolve `../b` against the link's
    folder or the target's? The operating system uses the target's; a tool
-   that cleans the path first uses the link's. Layer 4 answers it per agent.
+   that cleans the path first uses the link's. Layer 5 answers it per agent.
 2. **Index rule.** Two rules on 12 packs found the three index skills and
    rejected the false ones. A pack author could also mark an index in
    `metadata` (the Agent Skills spec has no dependency or index field).
