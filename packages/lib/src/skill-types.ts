@@ -210,6 +210,21 @@ export interface AppVersion {
   notes: string | null;
 }
 
+/** One editor offered by the Settings card - see the Rust `skill_editor`. */
+export interface EditorOption {
+  /** The value to save: a macOS application name, an absolute `.app` path, or `"$EDITOR"`. */
+  app_name: string;
+  label: string;
+}
+
+/** Everything the Settings "Open in editor" card shows - see the Rust `skill_editor::EditorChoices`. */
+export interface EditorChoices {
+  automatic_label: string;
+  apps: EditorOption[];
+  terminal: EditorOption | null;
+  selected: string | null;
+}
+
 /**
  * Settings' "Version" card update state (unit 6.2) - see the Rust
  * `skill_update::UpdateStatus`. `"up-to-date"` means a check ran and found

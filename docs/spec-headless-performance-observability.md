@@ -117,7 +117,7 @@ History remains authoritative locally when telemetry fails. Recorded events can 
 
 Restore acquires the same exclusive mutation lease and resolves the stored inverse against the current scope. It validates affected paths, current ownership restrictions, expected absent targets, and backup paths before writing. Restoring a removed deployment does not require that deployment to exist in the current inventory.
 
-Inverse paths cannot escape the authorized scope through traversal or changed parent symlinks. Backup reads are confined to the event's validated backup storage. The operation claims the event once, checks current fingerprints, persists any required backup and restore intent, applies the inverse, then records completion. A forced replacement starts only after the current drift backup is durable. Failed backup persistence prevents replacement. Recovery handles an interrupted restore under the same lease.
+Inverse paths cannot escape the authorized scope through traversal or changed parent symlinks. Backup reads are confined to the event's validated backup storage. The operation checks current fingerprints, persists any required backup and restore intent, claims the event once, applies the inverse, then records completion. The claim comes after the restore intent because recovery releases a claim only through its restore row. A forced replacement starts only after the current drift backup is durable. Failed backup persistence prevents replacement. Recovery handles an interrupted restore under the same lease.
 
 ## CLI contract
 

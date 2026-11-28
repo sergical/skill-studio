@@ -7,7 +7,7 @@
 // surfaces agree on one set of tracked folders.
 // ============================================================================
 
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type { RefObject } from "react";
 import { AlertTriangle, Asterisk, ChevronDown, FolderOpen, Plus } from "lucide-react";
 import {
@@ -33,13 +33,9 @@ import {
   type ProjectFolder,
   type SkillSnapshot,
 } from "@skill-studio/lib";
-import {
-  getDiscoverySources,
-  invokeErrorMessage,
-  listProjectFolders,
-  setDiscoverySource,
-} from "../../lib/skill-api";
+import { invokeErrorMessage } from "../../lib/skill-command-error";
 import { useAppStore } from "../../store/appStore";
+import { useLoad } from "../../hooks/useLoad";
 import { useProjectFolderActions } from "../../hooks/useProjectFolderActions";
 import { MenuControl, MenuItem } from "../ui/MenuControl";
 import { HarnessIcon } from "../ui/HarnessIcon";
@@ -272,59 +268,35 @@ function FolderList({
 
 export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
   const addToast = useAppStore((state) => state.addToast);
+  const getDiscoverySources = useAppStore((state) => state.getDiscoverySources);
+  const listProjectFolders = useAppStore((state) => state.listProjectFolders);
+  const setDiscoverySource = useAppStore((state) => state.setDiscoverySource);
   const { addProject, addTypedPath, stopTracking, removeProject } = useProjectFolderActions();
   const [pendingRemoval, setPendingRemoval] = useState<{
     path: string;
     discovered: boolean;
   } | null>(null);
-  const [folders, setFolders] = useState<ProjectFolder[] | null>(null);
-  const [sources, setSources] = useState<DiscoverySourceSetting[] | null>(null);
   const [foldersOpen, setFoldersOpen] = useState(false);
   const [addFormOpen, setAddFormOpen] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const requestId = useRef(0);
   const foldersTriggerRef = useRef<HTMLButtonElement>(null);
 
-  const refetchFolders = () => {
-    const id = ++requestId.current;
-    listProjectFolders()
-      .then((rows) => {
-        if (id === requestId.current) setFolders(rows);
-      })
-      .catch((err) => {
-        if (id !== requestId.current) return;
-        setLoadError("Couldn't list project folders.");
-        addToast({
-          type: "error",
-          title: "Couldn't list project folders",
-          message: invokeErrorMessage(err),
-        });
-      });
-  };
-  // Effect Event: reads the latest `refetchFolders` without becoming an effect dependency
-  // itself, so the effect below reruns only when `projectsKey` changes.
-  const refetchFoldersOnProjectsChange = useEffectEvent(refetchFolders);
-
-  useEffect(() => {
-    getDiscoverySources()
-      .then(setSources)
-      .catch((err) => {
-        setLoadError("Couldn't read discovery settings.");
-        addToast({
-          type: "error",
-          title: "Couldn't read discovery settings",
-          message: invokeErrorMessage(err),
-        });
-      });
-  }, [addToast]);
-
-  const projectsKey = (snapshot?.projects ?? []).join("\n");
-  useEffect(() => {
-    refetchFoldersOnProjectsChange();
-    // `projectsKey` is not read here - it stays a dependency purely to retrigger the fetch when a
-    // scan adds or removes a tracked project.
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- retrigger-only dependency, not read in the body
-  }, [projectsKey]);
+  const sources = useLoad("discovery-sources", getDiscoverySources, {
+    onFailed: (message) =>
+      addToast({ type: "error", title: "Couldn't read discovery settings", message }),
+  });
+  // A scan that adds or removes a tracked project changes the key, which lists the folders again.
+  const folders = useLoad(`folders:${(snapshot?.projects ?? []).join("\n")}`, listProjectFolders, {
+    keepPreviousData: true,
+    onFailed: (message) =>
+      addToast({ type: "error", title: "Couldn't list project folders", message }),
+  });
+  const refetchFolders = folders.reload;
+  const loadError =
+    sources.error !== null
+      ? "Couldn't read discovery settings."
+      : folders.error !== null
+        ? "Couldn't list project folders."
+        : null;
 
   const skillCounts = countSkillsByProject(snapshot);
 
@@ -364,16 +336,18 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
   };
 
   const handleToggleSource = async (harness: string, enabled: boolean) => {
-    const previous = sources;
-    setSources((current) =>
-      (current ?? []).map((s) => (s.harness === harness ? { ...s, enabled } : s)),
-    );
+    const previous = sources.data ?? [];
+    sources.setData(previous.map((s) => (s.harness === harness ? { ...s, enabled } : s)));
     try {
-      const updated = await setDiscoverySource(harness, enabled);
-      setSources(updated);
+      sources.setData(await setDiscoverySource(harness, enabled));
+      // Activity can't keep filtering by an agent that is now off, and must not go back to it
+      // by itself when the agent is turned on again.
+      const { activityFilter, setActivityFilter } = useAppStore.getState();
+      if (!enabled && activityFilter.harness === harness)
+        setActivityFilter({ harness: "all", trigger: activityFilter.trigger });
       refetchFolders();
     } catch (err) {
-      setSources(previous);
+      sources.setData(previous);
       addToast({
         type: "error",
         title: "Couldn't change discovery setting",
@@ -413,7 +387,7 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
       <div className="flex flex-col gap-2">
         <p className="m-0 text-small font-medium text-text-tertiary">Search history from</p>
         <div className="grid grid-cols-1 gap-x-6 sm:grid-cols-2">
-          {(sources ?? []).map((source) => {
+          {(sources.data ?? []).map((source) => {
             const label = deploymentLabelFromAgentId(source.harness);
             // SAFETY: `source.harness` is always one of `discovery_harnesses()`'s six ids, which
             // are exactly `AgentId`'s wire values minus "shared".
@@ -436,8 +410,8 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
       </div>
 
       <FolderList
-        folders={folders}
-        sources={sources}
+        folders={folders.data ?? null}
+        sources={sources.data ?? null}
         loadError={loadError}
         skillCounts={skillCounts}
         open={foldersOpen}

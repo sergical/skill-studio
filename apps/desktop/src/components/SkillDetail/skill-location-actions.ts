@@ -22,20 +22,6 @@ import type {
   LifecycleTarget,
 } from "@skill-studio/lib";
 import {
-  addSkill,
-  forkSkill,
-  openSkillPath,
-  parkSkill,
-  removeSkill,
-  repairSkillLink,
-  restoreMovedDeployment,
-  setPluginEnabled,
-  updatePlugin,
-  setSkillsInvocation,
-  unlistParkedDotagents,
-  unparkSkill,
-} from "../../lib/skill-api";
-import {
   lifecycleTargetForDeployment,
   lifecycleTargetForSkill,
   pluginUpdatedToast,
@@ -164,6 +150,18 @@ export function useLocationActions(
     );
 
   const dispatch = (action: LocationAction): Promise<boolean> => {
+    const {
+      addSkill,
+      openSkillPath,
+      parkSkill,
+      removeSkill,
+      repairSkillLink,
+      restoreMovedDeployment,
+      setPluginEnabled,
+      updatePlugin,
+      unlistParkedDotagents,
+      unparkSkill,
+    } = useAppStore.getState();
     switch (action.kind) {
       case "relink":
         return runWithErrorToast("Couldn't relink", () =>
@@ -369,7 +367,7 @@ export async function setInvocationForFiles(
     // react-doctor-disable-next-line react-doctor/async-await-in-loop -- each fork takes an exclusive lease, so the forks must not overlap
     await forkBeforeInvocationEdit(file);
   }
-  const results = await setSkillsInvocation(
+  const results = await useAppStore.getState().setSkillsInvocation(
     files.map((file) => ({ name: skill.name, path: `${file.path}/SKILL.md` })),
     policy,
   );
@@ -388,7 +386,7 @@ export async function setInvocationForFiles(
 /** Forks a shared folder an update would write over, so the edit stays. Ambiguous and manual folders have no upstream, so they are edited in place. */
 export async function forkBeforeInvocationEdit(
   file: InvocationFile,
-  fork: (target: LifecycleTarget) => Promise<ForkRecord | void> = forkSkill,
+  fork: (target: LifecycleTarget) => Promise<ForkRecord | void> = useAppStore.getState().forkSkill,
 ): Promise<void> {
   if (file.kind === "shared" && hasUpstreamOwner(file.deployment)) {
     await fork(lifecycleTargetForDeployment(file.deployment));

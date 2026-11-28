@@ -1,6 +1,7 @@
 import { useAppStore } from "../store/appStore";
 import type { HarnessDetectionState } from "../store/appStore";
-import { invokeErrorMessage, setHarnessEnabled } from "../lib/skill-api";
+import { setHarnessEnabled } from "../lib/skill-api";
+import { invokeErrorMessage } from "../lib/skill-command-error";
 
 export function useDetectedHarnesses(): HarnessDetectionState {
   return useAppStore((state) => state.harnessDetection);

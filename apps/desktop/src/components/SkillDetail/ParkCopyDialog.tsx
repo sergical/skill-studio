@@ -18,7 +18,6 @@ import {
 import { homeRelativePath } from "@skill-studio/lib";
 import type { Deployment } from "@skill-studio/lib";
 import { useGitWarning } from "../../hooks/useGitWarning";
-import { parkSkill } from "../../lib/skill-api";
 import { useAppStore } from "../../store/appStore";
 
 export function ParkCopyDialog({
@@ -37,6 +36,7 @@ export function ParkCopyDialog({
 }) {
   const [isParking, setIsParking] = useState(false);
   const addToast = useAppStore((state) => state.addToast);
+  const parkSkill = useAppStore((state) => state.parkSkill);
   const { warning: gitWarning, isChecking } = useGitWarning(
     { deployment_id: deployment.id },
     "parking",

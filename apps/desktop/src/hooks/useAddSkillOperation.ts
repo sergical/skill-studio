@@ -3,6 +3,8 @@
 // Subscribe before start, then catch up with get-status after remount
 // ============================================================================
 
+import { useEffect, useRef } from "react";
+import type { RefObject } from "react";
 import { onAddSkillOperation } from "../lib/skill-api";
 import type { AddSkillOperationEvent } from "@skill-studio/lib";
 import { selectNewerAddSkillOperationEvent } from "@skill-studio/lib";
@@ -30,6 +32,18 @@ export async function listenForAddSkillOperation({
     return undefined;
   }
   return unlisten;
+}
+
+/**
+ * Where a component keeps the stop function of the Add Skill listener it has open. The listener
+ * starts in a submit handler, so this hook only makes sure it stops when the component unmounts.
+ */
+export function useAddSkillListenerRef(): RefObject<(() => void) | undefined> {
+  const unlistenRef = useRef<(() => void) | undefined>(undefined);
+
+  useEffect(() => () => unlistenRef.current?.(), []);
+
+  return unlistenRef;
 }
 
 /** Fold an incoming event into local state, dropping stale sequences. */

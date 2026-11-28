@@ -4,7 +4,7 @@ import { afterEach, expect, it } from "vitest";
 import { buildHarnessSnapshot } from "../../dev/harness/skill-fixture";
 import { mockListingReport } from "../../dev/harness/mock-listing";
 import { listingReportKey, useAppStore } from "../../store/appStore";
-import { currentListingRequest } from "../Listing/useSkillVisibility";
+import { currentListingRequest } from "../../hooks/useStoreReports";
 import { SkillVisibility } from "./SkillVisibility";
 
 const initial = useAppStore.getState();

@@ -37,6 +37,27 @@ test("turning off an agent under Search history from takes it out of Activity's 
   expect(await activityAgentChoices(page)).toContain("Codex");
 });
 
+test("an agent picked in Activity's filter and then turned off stays unpicked when it is turned on again", async ({
+  page,
+}) => {
+  await openSidebarPage(page, "Activity");
+  await page.getByRole("button", { name: "Filter by agent" }).click();
+  await page.getByRole("menuitemradio", { name: /^Codex/ }).click();
+  await page.keyboard.press("Escape");
+
+  await openSidebarPage(page, "Settings");
+  const codex = page.getByRole("switch", { name: "Codex" });
+  await codex.click();
+  await expect(codex).not.toBeChecked();
+  await codex.click();
+  await expect(codex).toBeChecked();
+
+  await openSidebarPage(page, "Activity");
+  await page.getByRole("button", { name: "Filter by agent" }).click();
+  await expect(page.getByRole("menuitemradio", { name: /^All agents/ })).toBeChecked();
+  await expect(page.getByRole("menuitemradio", { name: /^Codex/ })).not.toBeChecked();
+});
+
 test("the Telemetry switch keeps its new state after leaving Settings", async ({ page }) => {
   const telemetry = page.getByRole("switch", { name: "Telemetry" });
   await expect(telemetry).not.toBeChecked();

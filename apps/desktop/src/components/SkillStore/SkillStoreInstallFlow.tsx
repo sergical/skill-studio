@@ -3,7 +3,7 @@
 // installation
 // ============================================================================
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { InstallHarnessSelector } from "./InstallHarnessSelector";
 import { ProjectDirectoryField } from "./ProjectDirectoryField";
@@ -11,21 +11,14 @@ import { ScopeToggleGroup } from "./ScopeToggleGroup";
 import { StoreInstallFooter } from "./StoreInstallFooter";
 import { parentProgressForPhase, startStoreInstall } from "./store-install-flow";
 import { useStoreTrustStep } from "./use-store-trust-step";
-import {
-  cancelAddSkillOperation,
-  confirmAddSkillTrust,
-  getAddMethodDefaults,
-  getAddSkillOperation,
-  invokeErrorMessage,
-  onAddSkillOperation,
-  registerSkillProjects,
-  startAddSkillOperation,
-} from "../../lib/skill-api";
+import { invokeErrorMessage } from "../../lib/skill-command-error";
 import {
   applyAddSkillOperationEvent,
   listenForAddSkillOperation,
+  useAddSkillListenerRef,
 } from "../../hooks/useAddSkillOperation";
 import { useKeptHarnesses } from "../../hooks/useKeptHarnesses";
+import { useLoad } from "../../hooks/useLoad";
 import { useAppStore } from "../../store/appStore";
 import type { SkillInstallCompletion } from "./InstallControls";
 import {
@@ -61,8 +54,6 @@ export function SkillStoreInstallFlow({
   onInstallPaused,
   onInstallComplete,
 }: SkillStoreInstallFlowProps) {
-  const [detected, setDetected] = useState<AgentId[]>([]);
-  const [claudeReadsUniversal, setClaudeReadsUniversal] = useState(true);
   // `null` until the user changes one, so the default follows `detected`.
   const [pickedHarnesses, setPickedHarnesses] = useState<AgentId[] | null>(null);
   const [universal, setUniversal] = useState(true);
@@ -74,38 +65,31 @@ export function SkillStoreInstallFlow({
   const [trustBusy, setTrustBusy] = useState(false);
   const operationIdRef = useRef<string | undefined>(undefined);
   const consumedIdRef = useRef<string | undefined>(undefined);
-  const unlistenRef = useRef<(() => void) | undefined>(undefined);
+  const unlistenRef = useAddSkillListenerRef();
   const availableProjects = useAppStore((state) => state.userAddedProjects);
   const setTrackedProjects = useAppStore((state) => state.setTrackedProjects);
   const addToast = useAppStore((state) => state.addToast);
+  const cancelAddSkillOperation = useAppStore((state) => state.cancelAddSkillOperation);
+  const confirmAddSkillTrust = useAppStore((state) => state.confirmAddSkillTrust);
+  const getAddMethodDefaults = useAppStore((state) => state.getAddMethodDefaults);
+  const getAddSkillOperation = useAppStore((state) => state.getAddSkillOperation);
+  const onAddSkillOperation = useAppStore((state) => state.onAddSkillOperation);
+  const registerSkillProjects = useAppStore((state) => state.registerSkillProjects);
+  const startAddSkillOperation = useAppStore((state) => state.startAddSkillOperation);
 
   const defaultsProject = installScope === "project" ? selectedProject : null;
-  useEffect(() => {
-    let cancelled = false;
-    getAddMethodDefaults(defaultsProject)
-      .then((defaults) => {
-        if (cancelled) return;
-        setDetected(defaults.installed_harnesses);
-        setClaudeReadsUniversal(defaults.claude_reads_shared_folder);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        addToast({
-          type: "error",
-          title: "Couldn't load install defaults",
-          message: invokeErrorMessage(err),
-        });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [defaultsProject, addToast]);
-
-  useEffect(() => {
-    return () => {
-      unlistenRef.current?.();
-    };
-  }, []);
+  const defaults = useLoad(
+    `add-defaults:${defaultsProject ?? ""}`,
+    () => getAddMethodDefaults(defaultsProject),
+    {
+      // The last scope's agents stay shown until this scope's answer lands.
+      keepPreviousData: true,
+      onFailed: (message) =>
+        addToast({ type: "error", title: "Couldn't load install defaults", message }),
+    },
+  );
+  const detected = defaults.data?.installed_harnesses ?? [];
+  const claudeReadsUniversal = defaults.data?.claude_reads_shared_folder ?? true;
 
   // Review round 2 (B1): a skills.sh repo the user hasn't trusted through
   // the Add Skill sheet used to fail this install outright

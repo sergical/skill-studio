@@ -88,9 +88,9 @@ fn open_locked(db_path: &Path) -> Result<Connection, String> {
         .map_err(|e| format!("Failed to set busy timeout: {e}"))?;
     conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(|e| format!("Failed to set WAL mode: {e}"))?;
-    // `reverted_by` is claimed (set to the restore event's id) before that
-    // restore row exists - see `restore()` - so foreign key enforcement on
-    // that column must stay off.
+    // Earlier desktop builds claimed `reverted_by` before the
+    // restore row existed, and an app that died in between left an id that
+    // names no row. Foreign key enforcement on that column must stay off.
     conn.pragma_update(None, "foreign_keys", "OFF")
         .map_err(|e| format!("Failed to disable foreign keys: {e}"))?;
     conn.execute_batch(
@@ -394,6 +394,10 @@ impl EventStore {
         draft: &EventDraft,
         files: Option<&UndoFiles>,
     ) -> Result<(), String> {
+        #[cfg(test)]
+        if let Some(observe) = &self.observe_history {
+            observe("record");
+        }
         let ts = Utc::now().to_rfc3339();
         let payload_json = serde_json::to_string(&draft.payload)
             .map_err(|e| format!("Failed to serialize payload: {e}"))?;
@@ -751,17 +755,6 @@ impl EventStore {
             };
         observe_transaction(skill_md_transaction.as_ref());
 
-        let claimed = self
-            .conn
-            .execute(
-                "UPDATE events SET reverted_by = ?1 WHERE id = ?2 AND reverted_by IS NULL",
-                params![restore_id, target_id],
-            )
-            .map_err(|e| format!("Failed to claim event {target_id}: {e}"))?;
-        if claimed == 0 {
-            return Err(format!("Event {target_id} was already restored"));
-        }
-
         match self.apply_restore(
             &restore_id,
             &target,
@@ -773,10 +766,7 @@ impl EventStore {
         ) {
             Ok(()) => Ok(restore_id),
             Err(e) => {
-                let _ = self.conn.execute(
-                    "UPDATE events SET reverted_by = NULL WHERE id = ?1 AND reverted_by = ?2",
-                    params![target_id, restore_id],
-                );
+                let _ = self.unclaim_event_restore(target_id, &restore_id);
                 Err(e)
             }
         }
@@ -861,6 +851,7 @@ impl EventStore {
             },
             Some(files),
         )?;
+        self.claim_recorded_restore(&target.id, restore_id)?;
 
         // Phase 4: apply the target event's inverse.
         match Self::apply_inverse_op(inverse, files, source) {
@@ -871,7 +862,7 @@ impl EventStore {
                 Ok(())
             }
             Err(e) => {
-                self.finish(restore_id, EventStatus::Failed)?;
+                self.fail_claimed_restore(&target.id, restore_id)?;
                 Err(e)
             }
         }
@@ -913,6 +904,10 @@ impl EventStore {
         target_id: &str,
         restore_id: &str,
     ) -> Result<(), String> {
+        #[cfg(test)]
+        if let Some(observe) = &self.observe_history {
+            observe("claim");
+        }
         let claimed = self
             .conn
             .execute(
@@ -926,6 +921,26 @@ impl EventStore {
         Ok(())
     }
 
+    /// Claims `target_id` for the restore row that was just recorded. The row
+    /// comes first, as in the core's `restore_event_body`: recovery releases a
+    /// claim only through its `pending` or `interrupted` restore row, so a
+    /// claim must never name a row that does not exist.
+    fn claim_recorded_restore(&self, target_id: &str, restore_id: &str) -> Result<(), String> {
+        if let Err(error) = self.claim_event_restore(target_id, restore_id) {
+            self.finish(restore_id, EventStatus::Failed)?;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Settles a restore whose write failed. The claim is released first, as
+    /// in the core: recovery does not release the claim of a `failed` row, so
+    /// a `failed` row must never hold one.
+    fn fail_claimed_restore(&self, target_id: &str, restore_id: &str) -> Result<(), String> {
+        self.unclaim_event_restore(target_id, restore_id)?;
+        self.finish(restore_id, EventStatus::Failed)
+    }
+
     /// Clears a restore claim so an interrupted undo can be retried or
     /// abandoned without leaving the original event unrestorable.
     pub(crate) fn unclaim_event_restore(
@@ -933,6 +948,10 @@ impl EventStore {
         target_id: &str,
         restore_id: &str,
     ) -> Result<(), String> {
+        #[cfg(test)]
+        if let Some(observe) = &self.observe_history {
+            observe("unclaim");
+        }
         self.conn
             .execute(
                 "UPDATE events SET reverted_by = NULL WHERE id = ?1 AND reverted_by = ?2",
@@ -952,6 +971,10 @@ impl EventStore {
         id: &str,
         post_fp: &str,
     ) -> Result<(), String> {
+        #[cfg(test)]
+        if let Some(observe) = &self.observe_history {
+            observe("patch");
+        }
         let row = self
             .get_event(id)?
             .ok_or_else(|| format!("Event {id} vanished before its inverse could be patched"))?;
@@ -1079,6 +1102,7 @@ impl EventStore {
             },
             Some(files),
         )?;
+        self.claim_recorded_restore(&target.id, restore_id)?;
 
         // Phase 4: put the shared dir back, delete the copies, recreate the
         // removed symlinks.
@@ -1107,7 +1131,7 @@ impl EventStore {
                 Ok(())
             }
             Err(e) => {
-                self.finish(restore_id, EventStatus::Failed)?;
+                self.fail_claimed_restore(&target.id, restore_id)?;
                 Err(e)
             }
         }
