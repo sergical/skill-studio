@@ -5,10 +5,9 @@
 // skill-api.ts's callCommand wrapper feeds.
 // ============================================================================
 
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { Button } from "@skill-studio/ui";
-import { subscribe } from "../../lib/perf-marks";
-import type { PerfEntry } from "../../lib/perf-marks";
+import { perfEntries, subscribe } from "../../lib/perf-marks";
 
 /** How many of the most recent calls the overlay shows, newest first. */
 const VISIBLE_COUNT = 20;
@@ -20,10 +19,8 @@ function formatMs(value: number | null): string {
 }
 
 export function PerfOverlay() {
-  const [entries, setEntries] = useState<PerfEntry[]>([]);
+  const entries = useSyncExternalStore(subscribe, perfEntries);
   const [closed, setClosed] = useState(false);
-
-  useEffect(() => subscribe(setEntries), []);
 
   if (closed) return null;
 
