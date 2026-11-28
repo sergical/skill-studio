@@ -93,6 +93,7 @@ use skill_studio_core::harness::HarnessCatalog;
 use skill_studio_core::identity::CorrelationId;
 use skill_studio_core::listing_visibility::ListingRequest;
 use skill_studio_core::ops::{self, Operation, Outcome, ResultEnvelope};
+use skill_studio_core::ops_skill_links::SkillLinksRequest;
 use skill_studio_core::ports::{OpContext, Runtime};
 use skill_studio_core::skill_sessions::SkillSessionsRequest;
 use skill_studio_core::view::ViewRequest;
@@ -1084,6 +1085,27 @@ impl SkillStudioServer {
             &req,
             &context,
             |rt, ctx| ops::diagnose_conflict(rt, ctx, &req),
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Show which installed skills read, run or mention other skills, with the line behind each link and whether it works for every agent that loads the skill. Call it before you remove, park or turn off a skill, and tell the user which skills would stop working. `missing_only` lists only links an agent cannot reach. Writes nothing.",
+        annotations(read_only_hint = true)
+    )]
+    async fn skill_links(
+        &self,
+        Parameters(Viewed { request: req, view }): Parameters<Viewed<SkillLinksRequest>>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
+        run_op_viewed(
+            Operation::SkillLinks,
+            false,
+            None,
+            &view,
+            &req,
+            &context,
+            |rt, ctx| skill_studio_core::ops_skill_links::skill_links(rt, ctx, &req),
         )
         .await
     }

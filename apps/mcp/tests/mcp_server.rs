@@ -1102,6 +1102,7 @@ async fn skill_usage_counts_a_transcript_use_and_lists_the_unused_skill() {
 const READ_TOOLS: &[&str] = &[
     "extras",
     "listing",
+    "skill_links",
     "skill_sessions",
     "doctor",
     "turn_off_check",

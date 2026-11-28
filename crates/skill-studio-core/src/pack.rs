@@ -345,7 +345,7 @@ pub(crate) fn build(
     let mut entries = Vec::new();
     for (scope, root) in selected_scopes(rt, project_path)? {
         ctx.checkpoint()?;
-        let global_lock = ledger_entries(rt, &fs, &scope, root.as_deref(), &mut entries)?;
+        let (global_lock, _) = ledger_entries(rt, &fs, &scope, root.as_deref(), &mut entries)?;
         for entry in entries.iter_mut().filter(|e| e.scope == scope) {
             if entry.path.is_none() {
                 locate(rt, &inventory, entry);
@@ -514,6 +514,8 @@ struct ManifestRow {
     git_ref: Option<String>,
     #[serde(default)]
     targets: Vec<String>,
+    #[serde(default)]
+    exclude: Vec<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -541,7 +543,7 @@ fn ledger_entries(
     scope: &RootScope,
     project: Option<&Path>,
     entries: &mut Vec<Entry>,
-) -> Result<Option<SkillLockFile>, CoreError> {
+) -> Result<(Option<SkillLockFile>, Vec<String>), CoreError> {
     let home = &rt.scope.home.lexical;
     let mut global_lock = None;
     let skills_sh: Vec<(String, ProjectLockEntry)> = if let Some(project) = project {
@@ -674,7 +676,74 @@ fn ledger_entries(
             entries.push(entry);
         }
     }
-    Ok(global_lock)
+    let named = manifest
+        .skills
+        .into_iter()
+        .flat_map(|row| {
+            if row.name == "*" {
+                row.exclude
+            } else {
+                vec![row.name]
+            }
+        })
+        .collect();
+    Ok((global_lock, named))
+}
+
+/// Names and aliases for offline link resolution, read from the same records
+/// as the pack list without hashing folders or contacting upstream.
+pub(crate) struct LinkRecords {
+    pub names: BTreeSet<String>,
+    entries: Vec<Entry>,
+}
+
+impl LinkRecords {
+    pub fn renamed(
+        &self,
+        target: &str,
+        caller: &str,
+        caller_scope: &RootScope,
+        scope: &RootScope,
+        visible: impl Fn(&str, &RootScope) -> bool,
+    ) -> bool {
+        let Some(origin) = self
+            .entries
+            .iter()
+            .find(|e| e.name == caller && &e.scope == caller_scope)
+        else {
+            return false;
+        };
+        self.entries.iter().any(|row| {
+            (row.scope == RootScope::Global || &row.scope == scope)
+                && row.name != target
+                && row.key.kind == origin.key.kind
+                && row.key.ref_pin == origin.key.ref_pin
+                && source_identity(row.key.kind, &row.key.source)
+                    == source_identity(origin.key.kind, &origin.key.source)
+                && row
+                    .upstream_dir
+                    .as_deref()
+                    .and_then(|dir| Path::new(dir).file_name())
+                    .is_some_and(|name| name == target)
+                && visible(&row.name, &row.scope)
+        })
+    }
+}
+
+pub(crate) fn link_records(rt: &Runtime, fs: &dyn ScopeFs) -> Result<LinkRecords, CoreError> {
+    let mut rows = Vec::new();
+    let mut names = BTreeSet::new();
+    for (scope, root) in selected_scopes(rt, None)? {
+        let (_, declared) = ledger_entries(rt, fs, &scope, root.as_deref(), &mut rows)?;
+        names.extend(declared);
+    }
+    for row in &rows {
+        names.insert(row.name.clone());
+    }
+    Ok(LinkRecords {
+        names,
+        entries: rows,
+    })
 }
 
 fn dotagents_entry(
