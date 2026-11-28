@@ -476,7 +476,10 @@ fn check(world: &World) -> Result<(), TestCaseError> {
     let report = skill_links(
         &runtime(world.home.path()),
         &ctx(),
-        &SkillLinksRequest::default(),
+        &SkillLinksRequest {
+            include_unverified: true,
+            ..SkillLinksRequest::default()
+        },
     )
     .unwrap();
     for agent in AGENTS {

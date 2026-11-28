@@ -28,6 +28,11 @@
       "description": "Only Needs and Hands off links that do not work for some agent.",
       "type": "boolean",
       "default": false
+    },
+    "include_unverified": {
+      "description": "Show unmatched text candidates. An exact lookup for a target also shows its literal matches.",
+      "type": "boolean",
+      "default": false
     }
   },
   "additionalProperties": false,

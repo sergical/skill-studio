@@ -1037,7 +1037,7 @@ pub fn print_links_table(
     }
     for reference in &report.unverified {
         println!(
-            "{} names {} (unverified)  {}:{}  {}",
+            "{} contains “{}” (unmatched text)  {}:{}  {}",
             reference.from,
             reference.to,
             reference.evidence.file,

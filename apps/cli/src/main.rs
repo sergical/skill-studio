@@ -488,6 +488,9 @@ enum Command {
         /// Only links that need or run a skill an agent cannot reach.
         #[arg(long)]
         missing: bool,
+        /// Include unmatched text from skill instructions.
+        #[arg(long)]
+        unverified: bool,
         #[command(flatten)]
         scope: ScopeArgs,
         #[command(flatten)]
@@ -1117,14 +1120,19 @@ fn main() -> ExitCode {
             skill,
             agent,
             missing,
+            unverified,
             scope,
             view,
             json,
         } => run_links(
             &scope,
-            skill,
+            skill_studio_core::ops_skill_links::SkillLinksRequest {
+                skill,
+                agent: None,
+                missing_only: missing,
+                include_unverified: unverified,
+            },
             agent.as_deref(),
-            missing,
             &view.into(),
             json,
             time,
@@ -3018,9 +3026,8 @@ fn run_extras(scope: &ScopeArgs, view: &ViewRequest, json: bool, time: bool) -> 
 
 fn run_links(
     scope: &ScopeArgs,
-    skill: Option<String>,
+    mut request: skill_studio_core::ops_skill_links::SkillLinksRequest,
     agent: Option<&str>,
-    missing_only: bool,
     view: &ViewRequest,
     json: bool,
     time: bool,
@@ -3034,19 +3041,11 @@ fn run_links(
         Err(code) => return code,
     };
     let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
-    let request = skill_studio_core::ops_skill_links::SkillLinksRequest {
-        skill,
-        agent: None,
-        missing_only,
-    };
     let result = agent
         .map(AgentId::parse_harness)
         .transpose()
         .and_then(|agent| {
-            let request = skill_studio_core::ops_skill_links::SkillLinksRequest {
-                agent,
-                ..request.clone()
-            };
+            request.agent = agent;
             skill_studio_core::ops_skill_links::skill_links(&rt, &ctx, &request)
         });
     let envelope = ResultEnvelope::from_result(Operation::SkillLinks, &rt.scope, &ctx, result);

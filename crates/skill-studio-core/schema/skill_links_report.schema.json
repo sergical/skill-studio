@@ -124,7 +124,7 @@
           "x-untrusted": true
         },
         "agents": {
-          "description": "One entry per agent that loads a copy of `from` holding this link.",
+          "description": "Global states and differing project states per agent. The global state is the default for covered projects.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/AgentLinkState"

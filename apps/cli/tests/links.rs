@@ -146,6 +146,17 @@ fn an_uninstalled_pstack_target_keeps_its_line_and_only_a_record_identifies_it()
     let read = || {
         headless::cli(home.path(), &["links", "no-comments", "--agent", "codex"])["data"].clone()
     };
+    let by_source = |extra: &[&str]| {
+        let mut args = vec!["links", "poteto-mode", "--agent", "codex"];
+        args.extend(extra);
+        headless::cli(home.path(), &args)["data"].clone()
+    };
+    assert_eq!(by_source(&[])["unverified"], json!([]));
+    assert!(by_source(&["--unverified"])["unverified"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["to"] == "no-comments"));
     let untracked = read();
     assert!(untracked["links"].as_array().unwrap().is_empty());
     assert_eq!(untracked["unverified"][0]["evidence"]["line"], 24);
@@ -162,4 +173,38 @@ fn an_uninstalled_pstack_target_keeps_its_line_and_only_a_record_identifies_it()
         untracked["unverified"][0]["evidence"]
     );
     assert_eq!(recorded["broken"], 0);
+}
+
+#[test]
+fn a_global_break_counts_once_and_only_a_different_project_gets_its_own_state() {
+    let home = tempfile::tempdir().unwrap();
+    install(home.path(), "productivity", "grill-me", false);
+    let project = home.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let read = || {
+        headless::cli(
+            home.path(),
+            &[
+                "links",
+                "grill-me",
+                "--agent",
+                "codex",
+                "--project",
+                project.to_str().unwrap(),
+            ],
+        )["data"]
+            .clone()
+    };
+    let missing = read();
+    assert_eq!(missing["broken"], 1);
+    assert_eq!(missing["links"][0]["agents"].as_array().unwrap().len(), 1);
+    install(&project, "productivity", "grilling", false);
+    let data = read();
+    let states = data["links"][0]["agents"].as_array().unwrap();
+    assert_eq!(states.len(), 2);
+    assert_eq!(states[0]["scope"]["scope"], "global");
+    assert_eq!(states[0]["state"], "elsewhere");
+    assert_eq!(states[1]["scope"]["scope"], "project");
+    assert_eq!(states[1]["state"], "ok");
+    assert_eq!(data["broken"], 1);
 }

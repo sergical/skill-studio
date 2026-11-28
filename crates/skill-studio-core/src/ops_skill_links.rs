@@ -32,6 +32,8 @@ pub struct SkillLinksRequest {
     pub agent: Option<AgentId>,
     /// Only Needs and Hands off links that do not work for some agent.
     pub missing_only: bool,
+    /// Show unmatched text candidates. An exact lookup for a target also shows its literal matches.
+    pub include_unverified: bool,
 }
 
 /// Whether a link works for one agent.
@@ -78,7 +80,7 @@ pub struct ResolvedLink {
     /// The line behind the link.
     #[schemars(extend("x-untrusted" = true))]
     pub evidence: LinkEvidence,
-    /// One entry per agent that loads a copy of `from` holding this link.
+    /// Global states and differing project states per agent. The global state is the default for covered projects.
     pub agents: Vec<AgentLinkState>,
 }
 
@@ -264,9 +266,19 @@ pub fn skill_links(
             not_known: not_known.into_iter().collect(),
             ..SkillLinksReport::default()
         };
-        for ((unverified, ..), link) in grouped {
+        for ((unverified, ..), mut link) in grouped {
+            let global: BTreeMap<_, _> = link
+                .agents
+                .iter()
+                .filter(|a| a.scope == RootScope::Global)
+                .map(|a| (a.agent.clone(), a.state))
+                .collect();
+            link.agents
+                .retain(|a| a.scope == RootScope::Global || global.get(&a.agent) != Some(&a.state));
             if unverified {
-                if !req.missing_only {
+                if !req.missing_only
+                    && (req.include_unverified || req.skill.as_ref() == Some(&link.to))
+                {
                     report.unverified.push(link);
                 }
                 continue;
@@ -276,7 +288,9 @@ pub fn skill_links(
                 .agents
                 .iter()
                 .filter(|a| !matches!(a.state, LinkState::Ok | LinkState::NotKnown))
-                .count();
+                .map(|a| &a.agent)
+                .collect::<BTreeSet<_>>()
+                .len();
             if strong {
                 report.broken += broken;
             }

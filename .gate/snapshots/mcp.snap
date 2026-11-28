@@ -2023,6 +2023,11 @@
           },
           "type": "array"
         },
+        "include_unverified": {
+          "default": false,
+          "description": "Show unmatched text candidates. An exact lookup for a target also shows its literal matches.",
+          "type": "boolean"
+        },
         "limit": {
           "default": null,
           "description": "Rows to return from the main list. `0` returns only `page` (totals\nand `counts`). Without it, rows until the answer is 32 KB.",
