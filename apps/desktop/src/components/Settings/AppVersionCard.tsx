@@ -5,11 +5,13 @@
 // network.
 // ============================================================================
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Info } from "lucide-react";
 import { Button } from "@skill-studio/ui";
-import type { AppVersion, UpdateStatus } from "@skill-studio/lib";
+import type { UpdateStatus } from "@skill-studio/lib";
 import { invokeErrorMessage } from "../../lib/skill-command-error";
+import { useBackendEvent } from "../../hooks/useBackendEvent";
+import { useLoad } from "../../hooks/useLoad";
 import { useAppStore } from "../../store/appStore";
 import { SettingsCard } from "./SettingsCard";
 
@@ -54,65 +56,30 @@ export function AppVersionCard() {
   const getUpdateStatus = useAppStore((state) => state.getUpdateStatus);
   const installUpdate = useAppStore((state) => state.installUpdate);
   const onUpdateStatus = useAppStore((state) => state.onUpdateStatus);
-  const [info, setInfo] = useState<AppVersion | null>(null);
   const [showNotes, setShowNotes] = useState(false);
-  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ status: "up-to-date" });
   const [installing, setInstalling] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    appVersion()
-      .then((result) => {
-        if (!cancelled) setInfo(result);
-      })
-      .catch((err) => {
-        addToast({
-          type: "error",
-          title: "Couldn't read the app version",
-          message: invokeErrorMessage(err),
-        });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [addToast, appVersion]);
-
-  useEffect(() => {
-    let cancelled = false;
-    getUpdateStatus()
-      .then((result) => {
-        if (!cancelled) setUpdateStatus(result);
-      })
-      .catch((err) => {
-        if (!cancelled) setUpdateStatus({ status: "error", message: invokeErrorMessage(err) });
-      });
-    // A listener that fails to register is a toast, not an update status: the status read above
-    // owns that field, and either write would erase the other (a lost "Restart to update", or a
-    // "checking" that never ends). It leaves nothing to unlisten.
-    const unlisten = onUpdateStatus((status) => {
-      if (!cancelled) setUpdateStatus(status);
-    }).catch((err) => {
-      if (!cancelled) {
-        addToast({
-          type: "error",
-          title: "Couldn't follow update progress",
-          message: invokeErrorMessage(err),
-        });
-      }
-      return null;
-    });
-    return () => {
-      cancelled = true;
-      void unlisten.then((fn) => fn?.());
-    };
-  }, [addToast, getUpdateStatus, onUpdateStatus]);
+  const version = useLoad("app-version", appVersion, {
+    onFailed: (message) =>
+      addToast({ type: "error", title: "Couldn't read the app version", message }),
+  });
+  const info = version.data;
+  const update = useLoad("update-status", getUpdateStatus);
+  // The status read and the event stream both write this one value; whichever lands last shows.
+  useBackendEvent(onUpdateStatus, update.setData, (message) =>
+    // A listener that fails to register is a toast, not an update status: writing it over the
+    // status read would erase a "Restart to update" or leave a "checking" that never ends.
+    addToast({ type: "error", title: "Couldn't follow update progress", message }),
+  );
+  const updateStatus: UpdateStatus =
+    update.data ??
+    (update.error === null ? { status: "up-to-date" } : { status: "error", message: update.error });
 
   const handleCheckForUpdate = () => {
-    setUpdateStatus({ status: "checking" });
+    update.setData({ status: "checking" });
     checkForUpdate()
-      .then(setUpdateStatus)
+      .then(update.setData)
       .catch((err) => {
-        setUpdateStatus({ status: "error", message: invokeErrorMessage(err) });
+        update.setData({ status: "error", message: invokeErrorMessage(err) });
         addToast({
           type: "error",
           title: "Couldn't check for updates",

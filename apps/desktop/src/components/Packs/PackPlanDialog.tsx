@@ -5,7 +5,7 @@
 // action; this dialog only shows the reports.
 // ============================================================================
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,6 +17,7 @@ import {
   AlertDialogTitle,
 } from "@skill-studio/ui";
 import type { PackStep } from "@skill-studio/lib";
+import { useLoad } from "../../hooks/useLoad";
 import { useAppStore } from "../../store/appStore";
 import type { PackIntent } from "../../store/appStore";
 import { advancePackPlan, plannedCount } from "./pack-plan-phase";
@@ -97,21 +98,10 @@ export function PackPlanDialog({ intent, onClose }: PackPlanDialogProps) {
   const [state, setState] = useState<PackPlanState>({ phase: "planning" });
   const runPackAction = useAppStore((s) => s.runPackAction);
 
-  useEffect(() => {
-    let live = true;
-    runPackAction(intent, true)
-      .then((plan) => live && setState(after({ type: "planned", plan })))
-      .catch(
-        (err) =>
-          live &&
-          setState(
-            after({ type: "error", message: err instanceof Error ? err.message : String(err) }),
-          ),
-      );
-    return () => {
-      live = false;
-    };
-  }, [intent, runPackAction]);
+  useLoad(JSON.stringify(intent), () => runPackAction(intent, true), {
+    onLoaded: (plan) => setState(after({ type: "planned", plan })),
+    onFailed: (message) => setState(after({ type: "error", message })),
+  });
 
   const confirm = () => {
     setState(after({ type: "confirm" }));
