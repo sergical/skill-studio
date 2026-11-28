@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+"""Model-check Undo: `model/UndoClaim.tla` against the code it describes.
+
+    .agents/skills/verify-undo/check            run every check
+    .agents/skills/verify-undo/check --accept   record the covered code as confirmed
+
+Exit 0: every result is the expected one. Exit 1: something changed; the
+output says what. Exit 2: Java or TLC is missing. SKILL.md explains each result.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import urllib.request
+from dataclasses import dataclass, field
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+MODEL = HERE / "model"
+SPEC = MODEL / "UndoClaim.tla"
+COVERED = HERE / "covered.json"
+KNOWN = HERE / "known-findings.json"
+WORDS = HERE / "words.json"
+
+TLC_VERSION = "1.7.4"
+TLC_URL = f"https://github.com/tlaplus/tlaplus/releases/download/v{TLC_VERSION}/tla2tools.jar"
+TLC_SHA256 = "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
+
+# Each mutation in the spec's `Mutations` set, and the rule it must break.
+MUST_FAIL = {
+    "recovery_skips_release": "NoStrandedUndo",
+    "core_claim_before_record": "NoStrandedUndo",
+    "core_fail_finish_before_release": "NoStrandedUndo",
+    "core_finish_before_mutation": "UndoneMeansFilesBack",
+    "recovery_releases_done_claims": "OneFinishedUndo",
+}
+
+FN_START = r"^([ \t]*)(?:pub(?:\([a-z]+\))? )?(?:async )?fn {name}\b"
+
+
+def repo_root() -> Path:
+    out = subprocess.run(
+        ["git", "-C", str(HERE), "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return Path(out.stdout.strip())
+
+
+def java_works(java: str) -> bool:
+    try:
+        return subprocess.run([java, "-version"], capture_output=True).returncode == 0
+    except OSError:
+        return False
+
+
+def find_java() -> str | None:
+    candidates = [os.environ.get("JAVA")]
+    if os.environ.get("JAVA_HOME"):
+        candidates.append(str(Path(os.environ["JAVA_HOME"]) / "bin" / "java"))
+    candidates.append(shutil.which("java"))
+    for pattern in ("/opt/homebrew/opt/openjdk*", "/usr/local/opt/openjdk*", "/usr/lib/jvm/*"):
+        root, _, glob = pattern.rpartition("/")
+        candidates.extend(str(home / "bin" / "java") for home in sorted(Path(root).glob(glob)))
+    return next((java for java in candidates if java and java_works(java)), None)
+
+
+def sha256_of(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def find_tlc() -> Path:
+    if os.environ.get("TLA2TOOLS"):
+        return Path(os.environ["TLA2TOOLS"])
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "skill-studio"
+    jar = cache / f"tla2tools-{TLC_VERSION}.jar"
+    if jar.exists() and sha256_of(jar) == TLC_SHA256:
+        return jar
+    cache.mkdir(parents=True, exist_ok=True)
+    print(f"Downloading TLC {TLC_VERSION} to {jar}")
+    partial = jar.with_suffix(".partial")
+    with urllib.request.urlopen(TLC_URL, timeout=120) as response:
+        partial.write_bytes(response.read())
+    if sha256_of(partial) != TLC_SHA256:
+        partial.unlink()
+        raise SystemExit(f"TLC download from {TLC_URL} does not match its recorded SHA-256.")
+    partial.replace(jar)
+    return jar
+
+
+@dataclass
+class Run:
+    """One TLC run: the rule it broke (if any), the steps to it, the state count."""
+
+    broken: str | None
+    steps: list[str] = field(default_factory=list)
+    states: int = 0
+    output: str = ""
+
+
+def run_tlc(java: str, jar: Path, config: str) -> Run:
+    """Runs TLC on the spec with `config` (the text of a .cfg file)."""
+    with tempfile.TemporaryDirectory(prefix="verify-undo-") as tmp:
+        work = Path(tmp)
+        shutil.copy(SPEC, work / SPEC.name)
+        (work / "run.cfg").write_text(config)
+        out = subprocess.run(
+            [java, "-XX:+UseParallelGC", f"-Djava.io.tmpdir={tmp}", "-cp", str(jar), "tlc2.TLC",
+             "-workers", "1", "-metadir", str(work / "states"), "-config", "run.cfg", SPEC.name],
+            cwd=work,
+            capture_output=True,
+            text=True,
+        ).stdout
+    broken = re.search(r"Error: Invariant (\w+) is violated", out)
+    states = re.search(r"(\d+) distinct states found", out)
+    finished = "Model checking completed. No error has been found." in out
+    if not broken and not finished:
+        print(out)
+        raise SystemExit("TLC did not finish. Its output is above: a spec or config error.")
+    return Run(
+        broken=broken.group(1) if broken else None,
+        steps=re.findall(r"^State \d+: <(\w+) ", out, flags=re.M),
+        states=int(states.group(1)) if states else 0,
+        output=out,
+    )
+
+
+def with_break(config: str, mutation: str) -> str:
+    changed = config.replace("Break = {}", f'Break = {{"{mutation}"}}')
+    if changed == config:
+        raise SystemExit("The config has no `Break = {}` line to switch a mutation on.")
+    return changed
+
+
+def without_rules(config: str, rules: set[str]) -> str:
+    return "\n".join(line for line in config.splitlines() if line.strip() not in rules) + "\n"
+
+
+def function_text(source: str, name: str) -> str | None:
+    """The text of `fn name`, from its first line to its closing brace."""
+    start = re.search(FN_START.format(name=re.escape(name)), source, flags=re.M)
+    if not start:
+        return None
+    end = source.find(f"\n{start.group(1)}}}\n", start.end())
+    return source[start.start() : end] if end != -1 else None
+
+
+def function_hash(root: Path, entry: dict) -> str:
+    text = function_text((root / entry["file"]).read_text(), entry["function"])
+    return hashlib.sha256(text.encode()).hexdigest() if text is not None else "missing"
+
+
+def changed_code(root: Path, covered: dict) -> list[dict]:
+    return [entry for entry in covered["functions"] if function_hash(root, entry) != entry["sha256"]]
+
+
+def accept(root: Path, covered: dict) -> None:
+    """Rewrites only the hashes and the sync commit, so the file keeps its formatting."""
+    hashes = [function_hash(root, entry) for entry in covered["functions"]]
+    for entry, digest in zip(covered["functions"], hashes):
+        if digest == "missing":
+            raise SystemExit(f"{entry['file']} has no `fn {entry['function']}`. Fix covered.json.")
+    base = subprocess.run(
+        ["git", "-C", str(root), "merge-base", "HEAD", "origin/main"], capture_output=True, text=True
+    ).stdout.strip()
+    sync = base or covered["sync_commit"]
+    remaining = iter(hashes)
+    text = re.sub(r'("sha256": ")[^"]*(")', lambda found: found.group(1) + next(remaining) + found.group(2),
+                  COVERED.read_text())
+    text = re.sub(r'("sync_commit": ")[^"]*(")', lambda found: found.group(1) + sync + found.group(2), text)
+    COVERED.write_text(text)
+    print(f"Recorded {len(hashes)} functions as confirmed at {sync}.")
+
+
+def print_path(run: Run, words: dict) -> None:
+    print(f"    Rule: {words['rules'].get(run.broken, run.broken)}")
+    print(f"    Shortest path, {len(run.steps) - 1} steps:")
+    for number, action in enumerate(run.steps[1:], start=1):
+        print(f"      {number}. {words['steps'].get(action, action)}  [{action}]")
+
+
+def check_config(java: str, jar: Path, name: str, known: list[dict], words: dict) -> bool:
+    """Runs one checked-in config. True when the result is the expected one."""
+    config = (MODEL / f"UndoClaim.{name}.cfg").read_text()
+    expected = {finding["rule"]: finding for finding in known if finding["config"] == name}
+    run = run_tlc(java, jar, config)
+    if run.broken is None and not expected:
+        print(f"PASS   {name}: every rule holds in {run.states} states.")
+        return True
+    if run.broken is None:
+        print(f"CHANGED {name}: every rule holds now, but known-findings.json lists "
+              f"{', '.join(expected)}. If the code was fixed, remove the entry and say so in the PR.")
+        return False
+    if run.broken not in expected:
+        print(f"FAIL   {name}: {run.broken} breaks.")
+        print_path(run, words)
+        return False
+    finding = expected[run.broken]
+    print(f"KNOWN  {name}: {run.broken} still breaks. {finding['summary']} {finding['issue']}")
+    print_path(run, words)
+    rest = run_tlc(java, jar, without_rules(config, set(expected)))
+    if rest.broken is None:
+        print(f"PASS   {name}: the other rules hold in {rest.states} states.")
+        return True
+    print(f"FAIL   {name}: {rest.broken} breaks too, and no known finding covers it.")
+    print_path(rest, words)
+    return False
+
+
+def check_can_fail(java: str, jar: Path) -> bool:
+    """Each mutation must break its rule, or a pass of that rule proves nothing."""
+    config = (MODEL / "UndoClaim.core.cfg").read_text()
+    all_fail = True
+    for mutation, rule in MUST_FAIL.items():
+        run = run_tlc(java, jar, with_break(config, mutation))
+        caught = run.broken == rule
+        all_fail = all_fail and caught
+        got = f"{rule} breaks in {len(run.steps) - 1} steps" if caught else f"got {run.broken or 'a pass'}"
+        print(f"{'PASS  ' if caught else 'FAIL  '} mutation {mutation}: {got}.")
+    return all_fail
+
+
+def check_covered(root: Path, covered: dict) -> bool:
+    skill = (HERE / "SKILL.md").read_text()
+    unlisted = [entry["function"] for entry in covered["functions"] if f"`{entry['function']}`" not in skill]
+    if unlisted:
+        print(f"FAIL   SKILL.md does not list these covered functions: {', '.join(unlisted)}.")
+    changed = changed_code(root, covered)
+    for entry in changed:
+        print(f"CHANGED {entry['file']} `{entry['function']}` differs from the text the model was "
+              f"confirmed against. Model actions that mirror it: {', '.join(entry['mirrors'])}.")
+    if changed:
+        print("        Read the diff, make the model match the code, run this again, then run "
+              "`check --accept`. See SKILL.md, \"When the covered code changes\".")
+    else:
+        print(f"PASS   the {len(covered['functions'])} covered functions match the text confirmed "
+              f"at {covered['sync_commit'][:8]}.")
+    return not changed and not unlisted
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--accept", action="store_true",
+                        help="record the covered functions as they are now, after you confirmed the model matches them")
+    args = parser.parse_args()
+    root = repo_root()
+    covered = json.loads(COVERED.read_text())
+    if args.accept:
+        accept(root, covered)
+        return 0
+    java = find_java()
+    if not java:
+        print("No working Java found. TLC needs Java 11 or later: `brew install openjdk`, "
+              "or set JAVA to a java binary.")
+        return 2
+    jar = find_tlc()
+    known = json.loads(KNOWN.read_text())
+    words = json.loads(WORDS.read_text())
+    results = [
+        check_covered(root, covered),
+        check_config(java, jar, "core", known, words),
+        check_config(java, jar, "desktop", known, words),
+        check_can_fail(java, jar),
+    ]
+    if all(results):
+        open_findings = f" {len(known)} known finding(s) still open." if known else ""
+        print(f"\nAll results are the expected ones.{open_findings}")
+        return 0
+    print("\nSomething changed. Read the CHANGED and FAIL lines above.")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

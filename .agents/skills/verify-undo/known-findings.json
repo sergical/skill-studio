@@ -1,0 +1,8 @@
+[
+  {
+    "config": "desktop",
+    "rule": "NoStrandedUndo",
+    "issue": "https://github.com/sergical/skill-studio/issues/787",
+    "summary": "The desktop claims a change before it records the restore row, so a crash between the two leaves the change shown as undone for good."
+  }
+]
