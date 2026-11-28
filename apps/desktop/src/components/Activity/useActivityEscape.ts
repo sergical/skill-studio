@@ -5,31 +5,27 @@
 // or skill detail page is what's actually showing.
 // ============================================================================
 
-import { useEffect } from "react";
+import { useWindowEvent } from "../../hooks/useWindowEvent";
 import { useAppStore } from "../../store/appStore";
 
 export function useActivityEscape(onEscape: () => void) {
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key !== "Escape" || e.defaultPrevented) return;
-      const state = useAppStore.getState();
-      if (state.commandPaletteOpen || state.activeView.kind !== "activity") return;
-      const target = e.target;
-      if (
-        target instanceof HTMLElement &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.isContentEditable ||
-          target.closest("dialog") !== null ||
-          target.closest('[role="dialog"]') !== null ||
-          target.closest('[role="menu"]') !== null ||
-          target.closest('[role="listbox"]') !== null)
-      ) {
-        return;
-      }
-      onEscape();
+  useWindowEvent("keydown", (e) => {
+    if (e.key !== "Escape" || e.defaultPrevented) return;
+    const state = useAppStore.getState();
+    if (state.commandPaletteOpen || state.activeView.kind !== "activity") return;
+    const target = e.target;
+    if (
+      target instanceof HTMLElement &&
+      (target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable ||
+        target.closest("dialog") !== null ||
+        target.closest('[role="dialog"]') !== null ||
+        target.closest('[role="menu"]') !== null ||
+        target.closest('[role="listbox"]') !== null)
+    ) {
+      return;
     }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onEscape]);
+    onEscape();
+  });
 }

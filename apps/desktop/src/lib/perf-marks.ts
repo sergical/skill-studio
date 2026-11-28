@@ -23,6 +23,11 @@ function notify(): void {
   for (const listener of listeners) listener(entries);
 }
 
+/** The recorded calls, oldest first. A new array each time one is added or timed. */
+export function perfEntries(): PerfEntry[] {
+  return entries;
+}
+
 export function subscribe(listener: (entries: PerfEntry[]) => void): () => void {
   listeners.add(listener);
   listener(entries);
@@ -51,6 +56,8 @@ export function recordIpcCall(command: string, ipcMs: number, resolved = true): 
   requestAnimationFrame(() => {
     const measure = performance.measure(measureName, resolveMark);
     entry.paintMs = measure.duration;
+    // A new array, so a subscriber that compares by identity sees the paint time arrive.
+    entries = [...entries];
     performance.clearMarks(resolveMark);
     performance.clearMeasures(measureName);
     notify();

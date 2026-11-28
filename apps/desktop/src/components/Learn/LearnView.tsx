@@ -4,7 +4,6 @@
 // copied verbatim from popover-spec.md's `LEARN` object.
 // ============================================================================
 
-import { useEffect, useRef } from "react";
 import { HarnessIcon } from "../ui/HarnessIcon";
 import { PageShell } from "../Shell/PageShell";
 import type { LearnSection } from "../../store/appStore";
@@ -20,6 +19,14 @@ const SECTIONS: { key: LearnSection; title: string }[] = [
   { key: "unused", title: "Not used in 30 days" },
 ];
 
+/** A heading's ref while its section is the one asked for. Declared once, so React calls it when
+ * that heading gets it (the page opens at the section, or the section changes) and not on every
+ * render. */
+function scrollToAndFocus(heading: HTMLHeadingElement | null) {
+  heading?.scrollIntoView({ block: "start" });
+  heading?.focus();
+}
+
 /**
  * The four explainer sections behind Home's "Learn more →" links. When
  * opened at a given `section`, that section scrolls into view and takes
@@ -27,15 +34,6 @@ const SECTIONS: { key: LearnSection; title: string }[] = [
  * page top.
  */
 export function LearnView({ section }: LearnViewProps) {
-  const headingRefs = useRef(new Map<LearnSection, HTMLHeadingElement>());
-
-  useEffect(() => {
-    if (!section) return;
-    const heading = headingRefs.current.get(section);
-    heading?.scrollIntoView({ block: "start" });
-    heading?.focus();
-  }, [section]);
-
   return (
     <PageShell title="Learn">
       <div className="grid grid-cols-[180px_minmax(0,1fr)] items-start gap-8">
@@ -58,9 +56,7 @@ export function LearnView({ section }: LearnViewProps) {
             <h3
               className="m-0 mb-1 text-heading font-semibold text-text-primary"
               tabIndex={-1}
-              ref={(el) => {
-                if (el) headingRefs.current.set("broken", el);
-              }}
+              ref={section === "broken" ? scrollToAndFocus : undefined}
             >
               Broken and warnings
             </h3>
@@ -105,9 +101,7 @@ export function LearnView({ section }: LearnViewProps) {
             <h3
               className="m-0 mb-1 text-heading font-semibold text-text-primary"
               tabIndex={-1}
-              ref={(el) => {
-                if (el) headingRefs.current.set("invoke", el);
-              }}
+              ref={section === "invoke" ? scrollToAndFocus : undefined}
             >
               Who can invoke a skill
             </h3>
@@ -238,9 +232,7 @@ export function LearnView({ section }: LearnViewProps) {
             <h3
               className="m-0 mb-1 text-heading font-semibold text-text-primary"
               tabIndex={-1}
-              ref={(el) => {
-                if (el) headingRefs.current.set("cost", el);
-              }}
+              ref={section === "cost" ? scrollToAndFocus : undefined}
             >
               Prompt cost
             </h3>
@@ -265,9 +257,7 @@ export function LearnView({ section }: LearnViewProps) {
             <h3
               className="m-0 mb-1 text-heading font-semibold text-text-primary"
               tabIndex={-1}
-              ref={(el) => {
-                if (el) headingRefs.current.set("unused", el);
-              }}
+              ref={section === "unused" ? scrollToAndFocus : undefined}
             >
               Not used in the last 30 days
             </h3>

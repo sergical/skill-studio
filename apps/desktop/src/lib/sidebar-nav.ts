@@ -17,9 +17,9 @@ export function sidebarAnchorView(activeView: ActiveView): ActiveView {
   return activeView.kind === "skill" ? activeView.from : activeView;
 }
 
-export function relativeScanTime(scannedAt: string | undefined): string {
+export function relativeScanTime(scannedAt: string | undefined, now = Date.now()): string {
   if (!scannedAt) return "Never";
-  const ms = Date.now() - new Date(scannedAt).getTime();
+  const ms = now - new Date(scannedAt).getTime();
   if (ms < 0 || Number.isNaN(ms)) return "Just now";
   const minutes = Math.floor(ms / 60_000);
   if (minutes < 1) return "Just now";
@@ -29,8 +29,8 @@ export function relativeScanTime(scannedAt: string | undefined): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-export function rescanTooltip(scannedAt: string | undefined): string {
-  return `Refresh skills from disk\nLast sync: ${relativeScanTime(scannedAt)}`;
+export function rescanTooltip(scannedAt: string | undefined, now = Date.now()): string {
+  return `Refresh skills from disk\nLast sync: ${relativeScanTime(scannedAt, now)}`;
 }
 
 /** A manual sync completes only on a later listener-delivered backend revision. */
