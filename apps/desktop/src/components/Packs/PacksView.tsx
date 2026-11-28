@@ -5,7 +5,7 @@
 // skills from a repo goes through the Add Skill sheet, the one add flow.
 // ============================================================================
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { ReactNode } from "react";
 import { Plus, RefreshCw } from "lucide-react";
 import { Button } from "@skill-studio/ui";
@@ -13,6 +13,7 @@ import type { Pack, PackReport } from "@skill-studio/lib";
 import { PageShell } from "../Shell/PageShell";
 import { ROW_CLASS } from "../SkillList/skill-row-format";
 import { TooltipControl } from "../ui/TooltipControl";
+import { useLoad } from "../../hooks/useLoad";
 import { useAppStore } from "../../store/appStore";
 import type { PackIntent } from "../../store/appStore";
 import { PackPlanDialog } from "./PackPlanDialog";
@@ -119,40 +120,36 @@ export function PacksView() {
   const listPacks = useAppStore((s) => s.listPacks);
   const openAddSkillSheet = useAppStore((s) => s.openAddSkillSheet);
   const addSheetOpen = useAppStore((s) => s.addSkillSheet.open);
-  const [list, setList] = useState<ListState>({ kind: "loading" });
   const [checking, setChecking] = useState(false);
   const [intent, setIntent] = useState<PackIntent | null>(null);
-  const [request, setRequest] = useState({ remote: false, serial: 0 });
+  // Stays on after the first "Check upstream", so later lists keep asking each source what is new.
+  const [remote, setRemote] = useState(false);
+  const packList = useLoad("packs", () => listPacks(remote), {
+    onLoaded: () => setChecking(false),
+    onFailed: () => setChecking(false),
+  });
+  const list: ListState =
+    packList.error !== null
+      ? { kind: "error", message: packList.error }
+      : packList.data
+        ? { kind: "ready", report: packList.data }
+        : { kind: "loading" };
   // The sheet may have added skills from a new source: list again once it closes.
   const [sheetWasOpen, setSheetWasOpen] = useState(addSheetOpen);
   if (sheetWasOpen !== addSheetOpen) {
     setSheetWasOpen(addSheetOpen);
-    if (!addSheetOpen) setRequest((current) => ({ ...current, serial: current.serial + 1 }));
+    if (!addSheetOpen) packList.reload();
   }
-
-  useEffect(() => {
-    let live = true;
-    listPacks(request.remote)
-      .then((report) => live && setList({ kind: "ready", report }))
-      .catch(
-        (err) =>
-          live &&
-          setList({ kind: "error", message: err instanceof Error ? err.message : String(err) }),
-      )
-      .finally(() => live && setChecking(false));
-    return () => {
-      live = false;
-    };
-  }, [listPacks, request]);
 
   const checkUpstream = () => {
     setChecking(true);
-    setRequest((current) => ({ remote: true, serial: current.serial + 1 }));
+    setRemote(true);
+    packList.reload();
   };
 
   const closeDialog = () => {
     setIntent(null);
-    setRequest((current) => ({ ...current, serial: current.serial + 1 }));
+    packList.reload();
   };
 
   const packs = list.kind === "ready" ? list.report.packs : [];
