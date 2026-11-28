@@ -10,21 +10,23 @@
 // ============================================================================
 
 import { useAppStore } from "../../store/appStore";
+import type { SkillCommands } from "../../store/skillCommands";
 import { useGuardedSkillUpdate } from "../../hooks/useGuardedSkillUpdate";
-import { fixSkill, openConflictPaths, parkSkill, unparkSkill } from "../../lib/skill-api";
 import { lifecycleTargetForPark } from "../../lib/skill-lifecycle-target";
 import type { InstalledSkill, Toast } from "@skill-studio/lib";
 
 /** The two IPC calls `reportFixOutcome` makes, as a real interface rather
  * than an import a test would have to mock: production code gets the
- * default `skill-api.ts` wrappers below, a test hands in its own faithful
- * implementation. */
+ * store's commands, a test hands in its own faithful implementation. */
 export interface FixSkillDeps {
-  fixSkill: typeof fixSkill;
-  openConflictPaths: typeof openConflictPaths;
+  fixSkill: SkillCommands["fixSkill"];
+  openConflictPaths: SkillCommands["openConflictPaths"];
 }
 
-const defaultFixSkillDeps: FixSkillDeps = { fixSkill, openConflictPaths };
+function storeFixSkillDeps(): FixSkillDeps {
+  const { fixSkill, openConflictPaths } = useAppStore.getState();
+  return { fixSkill, openConflictPaths };
+}
 
 /** Reports what `fix_skill` actually did as a toast, and opens the skill's
  * detail page whenever an issue is left unrepaired: a link issue lands on
@@ -38,7 +40,7 @@ export async function reportFixOutcome(
   skill: InstalledSkill,
   addToast: (toast: Omit<Toast, "id">) => string,
   openDetail: () => void,
-  deps: FixSkillDeps = defaultFixSkillDeps,
+  deps: FixSkillDeps = storeFixSkillDeps(),
 ): Promise<boolean> {
   const outcome = await deps.fixSkill(skill.name);
   if (outcome.conflicts.length > 0) {
@@ -114,6 +116,7 @@ async function parkWithUndo(
   addToast: (toast: Omit<Toast, "id">) => string,
 ): Promise<boolean> {
   const target = lifecycleTargetForPark(skill);
+  const { parkSkill, unparkSkill } = useAppStore.getState();
   const run = (v: ParkVerb) => (v === "Park" ? parkSkill(target) : unparkSkill(target));
   const reverse: ParkVerb = verb === "Park" ? "Unpark" : "Park";
   try {

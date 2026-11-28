@@ -31,17 +31,6 @@ import { SkillStore } from "../SkillStore/SkillStore";
 import { CheckboxControl } from "../ui/CheckboxControl";
 import { availableAddSkillMethods, isAddSkillFormValid } from "./add-skill-form";
 import { TrustConfirmFooter } from "./TrustConfirmFooter";
-import {
-  cancelAddSkillOperation,
-  confirmAddSkillTrust,
-  getAddMethodDefaults,
-  getAddSkillOperation,
-  listGithubSkills,
-  onAddSkillOperation,
-  registerSkillProjects,
-  startAddSkillOperation,
-  startAddSkillsOperation,
-} from "../../lib/skill-api";
 import { invokeErrorMessage } from "../../lib/skill-command-error";
 import {
   applyAddSkillOperationEvent,
@@ -366,7 +355,7 @@ async function loadGithubListing(
   setResult: (value: ListingResult) => void,
 ): Promise<void> {
   try {
-    const listing = await listGithubSkills(repo, path, ref, forceRefresh);
+    const listing = await useAppStore.getState().listGithubSkills(repo, path, ref, forceRefresh);
     if (requestIdRef.current !== requestId) return;
     setListingCache((current) => new Map(current).set(key, listing));
     setResult({ requestKey, state: { status: "ready", listing, error: null } });
@@ -713,6 +702,12 @@ function useAddSkillSubmit(input: {
   openSkill: (name: string) => void;
   addToast: ReturnType<typeof useAppStore.getState>["addToast"];
 }) {
+  const cancelAddSkillOperation = useAppStore((state) => state.cancelAddSkillOperation);
+  const confirmAddSkillTrust = useAppStore((state) => state.confirmAddSkillTrust);
+  const getAddSkillOperation = useAppStore((state) => state.getAddSkillOperation);
+  const onAddSkillOperation = useAppStore((state) => state.onAddSkillOperation);
+  const startAddSkillOperation = useAppStore((state) => state.startAddSkillOperation);
+  const startAddSkillsOperation = useAppStore((state) => state.startAddSkillsOperation);
   const {
     parsed,
     noMethodsAvailable,
@@ -1153,6 +1148,8 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
   const addToast = useAppStore((state) => state.addToast);
   const userAddedProjects = useAppStore((state) => state.userAddedProjects);
   const setTrackedProjects = useAppStore((state) => state.setTrackedProjects);
+  const getAddMethodDefaults = useAppStore((state) => state.getAddMethodDefaults);
+  const registerSkillProjects = useAppStore((state) => state.registerSkillProjects);
 
   const [form, dispatch] = useReducer(formReducer, undefined, initialFormState);
   const {
@@ -1211,7 +1208,7 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
     return () => {
       cancelled = true;
     };
-  }, [isOpen, defaultsProject]);
+  }, [isOpen, defaultsProject, getAddMethodDefaults]);
 
   const closeSheet = () => {
     closeAddSkillSheet();

@@ -11,15 +11,6 @@ import { ScopeToggleGroup } from "./ScopeToggleGroup";
 import { StoreInstallFooter } from "./StoreInstallFooter";
 import { parentProgressForPhase, startStoreInstall } from "./store-install-flow";
 import { useStoreTrustStep } from "./use-store-trust-step";
-import {
-  cancelAddSkillOperation,
-  confirmAddSkillTrust,
-  getAddMethodDefaults,
-  getAddSkillOperation,
-  onAddSkillOperation,
-  registerSkillProjects,
-  startAddSkillOperation,
-} from "../../lib/skill-api";
 import { invokeErrorMessage } from "../../lib/skill-command-error";
 import {
   applyAddSkillOperationEvent,
@@ -78,6 +69,13 @@ export function SkillStoreInstallFlow({
   const availableProjects = useAppStore((state) => state.userAddedProjects);
   const setTrackedProjects = useAppStore((state) => state.setTrackedProjects);
   const addToast = useAppStore((state) => state.addToast);
+  const cancelAddSkillOperation = useAppStore((state) => state.cancelAddSkillOperation);
+  const confirmAddSkillTrust = useAppStore((state) => state.confirmAddSkillTrust);
+  const getAddMethodDefaults = useAppStore((state) => state.getAddMethodDefaults);
+  const getAddSkillOperation = useAppStore((state) => state.getAddSkillOperation);
+  const onAddSkillOperation = useAppStore((state) => state.onAddSkillOperation);
+  const registerSkillProjects = useAppStore((state) => state.registerSkillProjects);
+  const startAddSkillOperation = useAppStore((state) => state.startAddSkillOperation);
 
   const defaultsProject = installScope === "project" ? selectedProject : null;
   useEffect(() => {
@@ -99,7 +97,7 @@ export function SkillStoreInstallFlow({
     return () => {
       cancelled = true;
     };
-  }, [defaultsProject, addToast]);
+  }, [defaultsProject, addToast, getAddMethodDefaults]);
 
   useEffect(() => {
     return () => {

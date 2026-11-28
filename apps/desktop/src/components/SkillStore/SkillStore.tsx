@@ -8,7 +8,6 @@ import { SkillSearchBar } from "./SkillSearchBar";
 import { SkillBrowser } from "./SkillBrowser";
 import { SkillDetailPanel } from "./SkillDetailPanel";
 import { InstallProgressModal } from "./InstallProgressModal";
-import { searchSkills, getInstalledSkills, getPopularSkills } from "../../lib/skill-api";
 import { invokeErrorMessage } from "../../lib/skill-command-error";
 import type {
   SkillSearchResult,
@@ -112,6 +111,7 @@ type InstalledInventory =
 
 function useInstalledInventory() {
   const projects = useAppStore((state) => state.userAddedProjects);
+  const getInstalledSkills = useAppStore((state) => state.getInstalledSkills);
   const [inventory, setInventory] = useState<InstalledInventory>({ kind: "loading" });
   const latestRequest = useRef(0);
 
@@ -128,7 +128,7 @@ function useInstalledInventory() {
           setInventory({ kind: "failed", message: invokeErrorMessage(error) });
       },
     );
-  }, []);
+  }, [getInstalledSkills]);
 
   useEffect(() => {
     // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- the scan reads the tracked projects through the Tauri host
@@ -143,6 +143,8 @@ function useSkillStoreData(
   installedSkills: InstalledSkill[],
   addToast: ReturnType<typeof useAppStore.getState>["addToast"],
 ) {
+  const getPopularSkills = useAppStore((state) => state.getPopularSkills);
+  const searchSkills = useAppStore((state) => state.searchSkills);
   const [searchQuery, setSearchQuery] = useState("");
   // Raw API results, with no installed-status merged in - `searchResultsWithStatus`
   // below derives that at render time, so an `installedSkills` refresh (after
@@ -171,31 +173,34 @@ function useSkillStoreData(
   const searchResultsWithStatus = mergeWithInstalledStatus(rawResults, installedSkills);
 
   // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- the mount effect loads the initial page once
-  const handleSearch = useCallback((query: string) => {
-    const request = ++browseRequest.current;
-    searchQueryRef.current = query;
-    setSearchQuery(query);
-    pageRef.current = 0;
-    setIsLoadingMore(false);
-    setHasMore(false);
-    setBrowseError(null);
-    setIsLoading(true);
+  const handleSearch = useCallback(
+    (query: string) => {
+      const request = ++browseRequest.current;
+      searchQueryRef.current = query;
+      setSearchQuery(query);
+      pageRef.current = 0;
+      setIsLoadingMore(false);
+      setHasMore(false);
+      setBrowseError(null);
+      setIsLoading(true);
 
-    const searching = isSearchQuery(query);
-    const response = searching ? searchSkills(query, LIMIT) : getPopularSkills(0, LIMIT);
-    return response
-      .then((page) => {
-        if (browseRequest.current !== request) return;
-        setRawResults(page.skills);
-        setHasMore(!searching && page.has_more);
-      })
-      .catch((error) => {
-        if (browseRequest.current === request) setBrowseError(invokeErrorMessage(error));
-      })
-      .finally(() => {
-        if (browseRequest.current === request) setIsLoading(false);
-      });
-  }, []);
+      const searching = isSearchQuery(query);
+      const response = searching ? searchSkills(query, LIMIT) : getPopularSkills(0, LIMIT);
+      return response
+        .then((page) => {
+          if (browseRequest.current !== request) return;
+          setRawResults(page.skills);
+          setHasMore(!searching && page.has_more);
+        })
+        .catch((error) => {
+          if (browseRequest.current === request) setBrowseError(invokeErrorMessage(error));
+        })
+        .finally(() => {
+          if (browseRequest.current === request) setIsLoading(false);
+        });
+    },
+    [getPopularSkills, searchSkills],
+  );
 
   useEffect(() => {
     // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- starts the initial skills.sh request
