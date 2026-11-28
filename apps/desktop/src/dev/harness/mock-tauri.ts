@@ -88,6 +88,9 @@ interface HarnessControl {
   setLatency(ms: number): void;
   /** How many update commands Update all has started, each a `npx skills` or `dotagents` call. */
   updateCommandsStarted(): number;
+  /** Keeps each update command running until `releaseUpdateCommands`, so a test can act mid-command. */
+  holdUpdateCommands(): void;
+  releaseUpdateCommands(): void;
 }
 
 declare global {
@@ -584,6 +587,7 @@ export function installMockTauri(
   /** "Update all" batches asked to stop; like the real op, a stop sent before its batch starts still applies. */
   const stoppedBatches = new Set<string>();
   let updateCommandsStarted = 0;
+  let commandGate: { promise: Promise<void>; release: () => void } | null = null;
   mockIPC(
     async (command, rawPayload) => {
       // A Stop lands at once, so it takes effect after the step the batch is on.
@@ -1254,6 +1258,8 @@ export function installMockTauri(
             // Each command takes one answer's latency, so a running batch stays on screen.
             // react-doctor-disable-next-line react-doctor/async-await-in-loop -- fixture runs each command in turn, mirroring the real op's loop
             if (latency > 0) await new Promise((resolve) => setTimeout(resolve, latency));
+            // react-doctor-disable-next-line react-doctor/async-await-in-loop -- as above
+            if (commandGate) await commandGate.promise;
             for (const updated of command) {
               done.add(updated);
               // Clears only this owner's badge, as `clear_update_flag` does.
@@ -1533,5 +1539,16 @@ export function installMockTauri(
       latency = ms;
     },
     updateCommandsStarted: () => updateCommandsStarted,
+    holdUpdateCommands: () => {
+      let release = () => {};
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      commandGate = { promise, release };
+    },
+    releaseUpdateCommands: () => {
+      commandGate?.release();
+      commandGate = null;
+    },
   };
 }

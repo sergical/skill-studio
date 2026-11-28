@@ -2,7 +2,6 @@ import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 import { scannerOwnerId, withScannerIdentity } from "../src/dev/harness/scanned-deployment";
 import { HARNESS_PROJECT } from "../src/dev/harness/skill-fixture";
-import { setLatency } from "./app-harness";
 
 const UPDATES_COUNT = /^\d+ updates?$/;
 /** A skill row, not a group header: only skill rows carry `aria-selected`. */
@@ -98,8 +97,8 @@ test("Stop while Update all runs lets the running command finish and starts no o
     },
     [inProject, projectCopy, projectOwner] as const,
   );
-  // Each command then takes 400 ms, so the first is still running when Stop lands.
-  await setLatency(page, 400);
+  // The first command stays running until Stop has landed, however slow the machine.
+  await page.evaluate(() => window.__harness!.holdUpdateCommands());
 
   await grid(page).getByRole("button", { name: "Update all" }).click();
   // Only the row being updated spins; the rest wait.
@@ -110,6 +109,7 @@ test("Stop while Update all runs lets the running command finish and starts no o
     })
     .toBe(1);
   await grid(page).getByRole("button", { name: "Stop" }).click();
+  await page.evaluate(() => window.__harness!.releaseUpdateCommands());
 
   await expect(
     page.getByText(`Stopped. Updated ${firstCommand} of ${shown} skills.`, { exact: true }),
