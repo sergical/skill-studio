@@ -54,8 +54,9 @@ const FINDINGS: Finding[] = [
   },
   {
     flag: "listed_never_used",
-    label: "Never used",
-    advice: "listed in nearly every session and never used. Park it if you no longer need it.",
+    label: "Unused in these sessions",
+    advice:
+      "listed in nearly every one of these sessions and used in none. Park it if you no longer need it.",
   },
   NOT_REACHABLE,
   {
@@ -64,6 +65,31 @@ const FINDINGS: Finding[] = [
     advice: "the current settings shorten it to a name, leave it out or hide it.",
   },
 ];
+
+/** `FINDINGS` for an agent whose newest `sessionsRead` sessions were read: Unused names how many. */
+function findingsFor(sessionsRead: number): Finding[] {
+  const these =
+    sessionsRead === 1 ? "this session" : `these ${sessionsRead.toLocaleString()} sessions`;
+  return FINDINGS.map((finding) =>
+    finding.flag === "listed_never_used" ? { ...finding, label: `Unused in ${these}` } : finding,
+  );
+}
+
+/** `skills` without the Unused finding on a skill the 30-day history shows as used: those
+ * sessions are only the newest few, so parking it would take away a skill still in use. */
+function withoutUsedSkillsUnused(
+  skills: SkillSessionRollup[],
+  snapshot: SkillSnapshot | undefined,
+): SkillSessionRollup[] {
+  const used = new Set(
+    snapshot?.invocations.filter((stats) => stats.last_30_days > 0).map((stats) => stats.skill),
+  );
+  return skills.map((skill) =>
+    used.has(skill.name)
+      ? { ...skill, flags: skill.flags.filter((flag) => flag !== "listed_never_used") }
+      : skill,
+  );
+}
 
 const SESSION_COUNTS = [
   { value: "50", label: "Newest 50 sessions" },
@@ -362,7 +388,11 @@ export function SessionsView({ initialHarness, snapshot }: SessionsViewProps) {
   const clients = useClientRows(report?.agents ?? []);
   const agent = clients.find((a) => a.harness === selected) ?? clients[0];
   const harness = agent?.harness ?? "";
-  const skills = report?.skills.filter((s) => s.harness === harness) ?? [];
+  const skills = withoutUsedSkillsUnused(
+    report?.skills.filter((s) => s.harness === harness) ?? [],
+    snapshot,
+  );
+  const findings = findingsFor(agent?.sessions_read ?? 0);
   const sessions = (report?.sessions.filter((s) => s.harness === harness) ?? []).sort((a, b) =>
     (b.at ?? "").localeCompare(a.at ?? ""),
   );
@@ -452,7 +482,7 @@ export function SessionsView({ initialHarness, snapshot }: SessionsViewProps) {
             )}
             {snapshot && <AgentUses snapshot={snapshot} harness={harness} />}
             {agent.records === "listing_and_uses" && (
-              <Findings findings={FINDINGS} skills={skills} />
+              <Findings findings={findings} skills={skills} />
             )}
             {agent.records === "uses_only" && (
               <Findings findings={[NOT_REACHABLE]} skills={skills} />
@@ -502,7 +532,7 @@ export function SessionsView({ initialHarness, snapshot }: SessionsViewProps) {
               <details className="rounded-md border border-border-subtle px-3 py-2">
                 <summary className="cursor-pointer text-small">What the words mean</summary>
                 <div className="mt-3 mb-1 flex flex-col gap-3">
-                  <Glossary findings={FINDINGS} />
+                  <Glossary findings={findings} />
                   <AgentNote agent={agent} />
                 </div>
               </details>

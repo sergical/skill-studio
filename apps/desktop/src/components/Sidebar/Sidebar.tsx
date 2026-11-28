@@ -23,7 +23,7 @@ import {
   Sun,
 } from "lucide-react";
 import { Button, Popover, PopoverContent, PopoverTrigger } from "@skill-studio/ui";
-import { ownSkillsView, pluginSkillsView } from "@skill-studio/lib";
+import { ownSkillsWithPluginUpdates, pluginSkillsView } from "@skill-studio/lib";
 import { keyShortcutsFor, SHORTCUTS } from "../../lib/app-shortcuts";
 import {
   backgroundRefreshError,
@@ -413,9 +413,10 @@ export function Sidebar({
   const setTheme = useAppStore((state) => state.setTheme);
   const setCommandPaletteOpen = useAppStore((state) => state.setCommandPaletteOpen);
 
-  const own = ownSkillsView(snapshot?.skills ?? []);
-  const parkedCount = own.filter((s) => s.parked).length;
-  const skillsCount = own.length - parkedCount;
+  // The rows the Skills page lists: the user's own skills plus plugin-only skills with an update.
+  const listed = ownSkillsWithPluginUpdates(snapshot?.skills ?? []);
+  const parkedCount = listed.filter((s) => s.parked).length;
+  const skillsCount = listed.length - parkedCount;
   const pluginCount = pluginSkillsView(snapshot?.skills ?? []).length;
   // Parked is a sub-section of the skills list, so the Skills row is only
   // "current" when that partition isn't selected. Plugin skills are their

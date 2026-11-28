@@ -159,7 +159,7 @@ export function SkillsView({
           active={active}
           deploymentPathForSkill={deploymentPathForSkill}
           packProjectPath={isProjectScope(filter.scope) ? filter.scope.project : null}
-          hasAnySkills={baseSkills.length > 0}
+          hasAnySkills={listedSkills.length > 0}
           onClearFilters={resetSkillListFilter}
           onAddSkill={() => openAddSkillSheet()}
           resetKey={JSON.stringify(filter)}
