@@ -48,7 +48,8 @@ review. Keep that reference when a remaining pack record identifies the removed
 skill. A hand-copied folder has no permanent membership record. When neither
 the source nor the machine supplies that evidence, the map cannot identify
 every target. Preserve a quoted slash command or a bold hyphenated name
-under **Unverified references**, with the line where it occurs. Exclude it
+in an exact lookup for that name or under **Show unmatched text**, with
+the line where it occurs. Omit these text matches from the default report and exclude them
 from graph edges and broken counts. Thus removing the last record for
 `no-comments` still leaves its source line available, while the built-in
 `/loop` cannot create a missing skill. A remove preview uses the same known names before and after the
@@ -65,12 +66,15 @@ installed name.
 
 Strength decides where a link is shown. It is decided per line.
 
-| Strength      | Meaning                                       | Found by                                                                                                                                                 | Shown                                       |
-| ------------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
-| **Needs**     | A reads B's files or loads B before it starts | A relative path that resolves into B's folder; "load", "read", "first" before the name                                                                   | Dialogs, skill page, map, `doctor`          |
-| **Hands off** | A runs B for a step, or sends the user to it  | `/b`, `pack:b`, the Skill tool with `"b"`, "invoke", "run", "use the b skill"                                                                            | Dialogs, skill page, map                    |
-| **Mentions**  | A names B as related, optional, or see-also   | The name in backticks, bold, a link label, or "the b skill" with no stronger word; "if available"                                                        | Skill page and map, on demand               |
-| **Lists**     | A is an index and B is one of its entries     | A list item or table row, or an indented line under one, in an index skill (rule below), whatever words it uses. Its prose lines keep their own strength | A badge on the index, never a line or alert |
+| Strength  | Evidence in the first release                                                                     | Presentation                        |
+| --------- | ------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| Needs     | A sibling path names the other skill's file. Optional reads are mentions.                         | Skill page, map and removal preview |
+| Hands off | The instruction passes a literal target to the Skill tool.                                        | Skill page, map and removal preview |
+| Mentions  | A recorded target appears in prose, a slash command, a qualified name or an optional instruction. | Related skills                      |
+| Lists     | An index includes a mention on a list or table row.                                               | Menu entry                          |
+
+Words such as _load_, _first_, _run_ and _invoke_ are candidates for future
+detection work. They do not promote a mention to a warning in this release.
 
 An **index** names at least 5 skills and at least half of its pack, and at
 least half of those lines are list items or table rows. On the checked
@@ -139,7 +143,9 @@ the answer fits the machine it runs on.
   in `crates/skill-studio-core/src/listing_visibility/pi_listing.rs`
   already picks it). A global wrapper whose target one project overrides
   gets one state for that project and another for the rest. The report
-  names the scopes it covered.
+  names the scopes it covered. A global result applies across those projects
+  unless a project row gives a different result. Count a broken link once
+  per affected agent.
 - **Renamed installs**: resolve the literal name first. If it is absent,
   show Renamed when the installation record maps this pack's upstream
   skill to a visible copy under a different name. Otherwise show what the
@@ -172,9 +178,8 @@ the text of each skill folder through the scope port.
 - **Operation** `skill_links(scope, filter)`. `filter` takes a skill name,
   a pack source, an agent, or `missing_only`. The result lists links
   (`from`, `to`, `strength`, `target_kind`, `evidence` with file, line and
-  text, and `states`: one `{agent, scope, state}` per agent and scope that
-  loads `from`, so one report can say OK globally and broken in one
-  project) and a summary (`skills`, `links`, `missing`,
+  text, and `states`: the global state and project-specific differences
+  for each agent, so one report can say OK globally and broken in one project) and a summary (`skills`, `links`, `missing`,
   `not_known`).
 - **A preview before every change, on every surface.** Today remove and park
   have no CLI dry run, and the MCP remove and park tools change files
@@ -593,8 +598,8 @@ was connected.
 
 **Video, three beats, on the harness with the real packs:**
 
-1. Home lists `grilling` as not started in 30 days. The row says "Used
-   through `grill-me`, 14 times" and offers no park.
+1. Home lists `grilling` as not started in 30 days. The row says "Called by
+   `grill-me`, which ran 14 times" and offers no park.
 2. The user removes `grilling` from the skill page anyway. The dialog lists
    the skills in this install that call it, 4 because
    `improve-codebase-architecture` is left out, and says `grill-me` does
