@@ -1,0 +1,293 @@
+{
+  "accepted_on_top_of": "ff4b8fa026351277b0ef707d51ca1d6c88a546c6",
+  "functions": [
+    {
+      "file": "crates/skill-studio-core/src/ops.rs",
+      "function": "restore_event_body",
+      "mirrors": [
+        "CoreChecks",
+        "CoreRecordsRestoreRow",
+        "CoreClaims",
+        "CoreWritesAtOnce",
+        "CoreStartsWrite",
+        "CoreEndsWrite",
+        "CoreWriteFails",
+        "CoreReleasesAfterFailure",
+        "CoreFinishesFailed",
+        "CoreFinishesDone",
+        "CoreFindsFilesAlreadyBack"
+      ],
+      "sha256": "ea216ca8e4bfc5c78016c5c6ed00998d9581f495e227b70df1c6f0cd7cb3405a"
+    },
+    {
+      "file": "crates/skill-studio-core/src/ops.rs",
+      "function": "restore_write_dir",
+      "mirrors": ["CoreOpensSwapPlan", "CoreWritesAtOnce", "CoreWriteFails", "CoreClosesPlan"],
+      "sha256": "638c1bfbd3a9811c02aa5c9227ebed6b914d54b8f02aa3a6575411034a14f447"
+    },
+    {
+      "file": "crates/skill-studio-core/src/ops.rs",
+      "function": "apply_backup_content",
+      "mirrors": ["CoreOpensSwapPlan", "CoreWritesAtOnce"],
+      "sha256": "9684b1d4b757b4e254b0d07faaab21149696d56149c692c28d12339f1e342f34"
+    },
+    {
+      "file": "crates/skill-studio-core/src/ops_remove.rs",
+      "function": "remove_tree_best_effort",
+      "mirrors": ["CoreStartsWrite", "CoreEndsWrite"],
+      "sha256": "17b57ef1fb01bf0b44df6d7dbe728d03e19be9715643fc5350cf8e5d8d2d9d00"
+    },
+    {
+      "file": "crates/skill-studio-core/src/fsops.rs",
+      "function": "swap",
+      "mirrors": ["CoreOpensSwapPlan", "CoreWritesAtOnce", "CoreWriteFails"],
+      "sha256": "f5fc789f57cb9b5810bf768b40bd17d00452012bdf15bf72745efe72fad71ae7"
+    },
+    {
+      "file": "crates/skill-studio-core/src/events.rs",
+      "function": "recover_interrupted",
+      "mirrors": ["RecoveryReleasesClaim", "RecoveryMarksRowInterrupted", "RecoveryDoneWithRows"],
+      "sha256": "7487f234a79b1b7f6470181b6f9535922d31c6db3a65809f7b8c3d92f459f19d"
+    },
+    {
+      "file": "crates/skill-studio-core/src/events.rs",
+      "function": "release_restore_claim",
+      "mirrors": ["RecoveryReleasesClaim"],
+      "sha256": "6733aaccf2f82ab2adf26359429d7aa190c9cae8a536719e1c43218c8cc698c5"
+    },
+    {
+      "file": "crates/skill-studio-core/src/events.rs",
+      "function": "settle",
+      "mirrors": [
+        "RecoveryMarksRowInterrupted",
+        "CoreFinishesFailed",
+        "CoreFinishesDone",
+        "DesktopFinishesFailed",
+        "DesktopFinishesDone"
+      ],
+      "sha256": "4c22afa2e419fe1e0b438cbf14dc6b23959ab36dc0c7507ff61fd5f68426958b"
+    },
+    {
+      "file": "crates/skill-studio-core/src/ports.rs",
+      "function": "begin_for",
+      "mirrors": ["YouAskCoreToUndo", "AnotherWriteStarts", "RecoveryEnds"],
+      "sha256": "a359348c748906d113bffa11318c223185143a916feb8040522ffdd1e5410301"
+    },
+    {
+      "file": "crates/skill-studio-core/src/ports.rs",
+      "function": "take",
+      "mirrors": ["YouAskCoreToUndo", "AnotherWriteStarts"],
+      "sha256": "10a9bc06c098400935aa20ae12b2646ec28936e83dfa02b9d70bebeae50dcea8"
+    },
+    {
+      "file": "crates/skill-studio-core/src/ports.rs",
+      "function": "acquire_exclusive",
+      "mirrors": ["YouAskCoreToUndo", "AnotherWriteStarts"],
+      "sha256": "d38ddc37970197b71bce566628cc6bde196ebb1ba88f127f9924c3e760b320f4"
+    },
+    {
+      "file": "crates/skill-studio-core/src/journal.rs",
+      "function": "reconcile_scope_journal",
+      "mirrors": [
+        "RecoveryStartsPuttingFolderBack",
+        "RecoveryPutsSwappedFolderBack",
+        "RecoveryClosesPlan",
+        "RecoveryEnds"
+      ],
+      "sha256": "3a278c4c522f045c2d5013106cfa752c03ec4457344f85edde5feb1d67ac0670"
+    },
+    {
+      "file": "crates/skill-studio-core/src/journal.rs",
+      "function": "reconcile",
+      "mirrors": [
+        "RecoveryStartsPuttingFolderBack",
+        "RecoveryPutsSwappedFolderBack",
+        "RecoveryClosesPlan"
+      ],
+      "sha256": "d3b922e07694e1d98d72db0603ff842f302112d87ccc2ee1076f2dcf8cb98ec7"
+    },
+    {
+      "file": "crates/skill-studio-core/src/journal.rs",
+      "function": "reverse_steps",
+      "mirrors": ["RecoveryStartsPuttingFolderBack", "RecoveryPutsSwappedFolderBack"],
+      "sha256": "627cdfa07a0d0455252703de448e0493489fde41332526a40a81822f0fca7744"
+    },
+    {
+      "file": "crates/skill-studio-host/src/history.rs",
+      "function": "claim_revert",
+      "mirrors": ["CoreClaims"],
+      "sha256": "7abd6d13d351c22c5457ad9ae84b6947e9afa6e2c920c0a04e04b97457e25c05"
+    },
+    {
+      "file": "crates/skill-studio-host/src/history.rs",
+      "function": "release_revert",
+      "mirrors": ["RecoveryReleasesClaim", "CoreReleasesAfterFailure"],
+      "sha256": "1ca38d6fee9eb72affd64cd4730ec7c6669747e5862251f362e769c15c499e78"
+    },
+    {
+      "file": "crates/skill-studio-host/src/history.rs",
+      "function": "held_restore_claims",
+      "mirrors": ["RecoveryReleasesClaim"],
+      "sha256": "75f7160f3c5466ae41003b7ce8b9c9f95f235d77c3fd8a45a1e2e55e22b2c2ae"
+    },
+    {
+      "file": "crates/skill-studio-host/src/history.rs",
+      "function": "pending",
+      "mirrors": ["RecoveryMarksRowInterrupted", "RecoveryDoneWithRows"],
+      "sha256": "52eada7d131450de8d949a5e054e41bffdacf8fb78b338341e12b67c147edef7"
+    },
+    {
+      "file": "crates/skill-studio-host/src/history.rs",
+      "function": "finish",
+      "mirrors": ["RecoveryMarksRowInterrupted", "CoreFinishesFailed", "CoreFinishesDone"],
+      "sha256": "5b23929a7120942b4c3b40e149347b6d6f215bf197aa37c3cdac829107b584b8"
+    },
+    {
+      "file": "crates/skill-studio-host/src/history.rs",
+      "function": "record",
+      "mirrors": ["CoreRecordsRestoreRow"],
+      "sha256": "2961424feff050a3b01cf3df6acd1171af4466e2f250e1b35f6e4c0e48f1d631"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "restore_with_skill_md_transaction_observer",
+      "mirrors": ["DesktopChecksClaim", "DesktopReleasesOnError"],
+      "sha256": "015df3ecc80bc71c8eeedb4310073df60fbbcb3ca58b6cc7592ebe19f38634f1"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "apply_restore",
+      "mirrors": [
+        "DesktopChecksDrift",
+        "DesktopRecordsRestoreRow",
+        "DesktopClaims",
+        "DesktopWriteFails",
+        "DesktopReleasesAfterFailure",
+        "DesktopFinishesFailed",
+        "DesktopFinishesDone"
+      ],
+      "sha256": "4560cc4452860a10d89bc8b597e520311c4c2a65256ff46db124b1ee0a24a5a6"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "apply_inverse_op",
+      "mirrors": [
+        "DesktopWritesAtOnce",
+        "DesktopRemovesLiveFiles",
+        "DesktopPutsOldFilesIn",
+        "DesktopWriteFails",
+        "DesktopFindsFilesAlreadyBack"
+      ],
+      "sha256": "56356714b008c125606d5f19a8997d5cbe2d9891a8f406b2fca3f6e2fec610e7"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "record_with_bound_paths",
+      "mirrors": ["DesktopRecordsRestoreRow"],
+      "sha256": "965e270d1b36e31580ad04f02ed68acef1804f0b310a9f4a995bee163e54befc"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "apply_restore_distribute",
+      "mirrors": [
+        "DesktopChecksDrift",
+        "DesktopRecordsRestoreRow",
+        "DesktopClaims",
+        "DesktopWriteFails",
+        "DesktopReleasesAfterFailure",
+        "DesktopFinishesFailed",
+        "DesktopFinishesDone"
+      ],
+      "sha256": "7a0479c4cd5ea62567c9e8aa5a4871fcfa161112f089d223d44b44f8947b2499"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "claim_recorded_restore",
+      "mirrors": ["DesktopClaims"],
+      "sha256": "ba4467d9faddb1aa70290741baac010d49118ba6c067fd60a4bc3365ffc2bc3d"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "claim_event_restore",
+      "mirrors": ["DesktopClaims"],
+      "sha256": "4c4c5490926ab95bf6728b49975b38b610b7b8e001bd88a924b80bab27370f20"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "fail_claimed_restore",
+      "mirrors": ["DesktopReleasesAfterFailure", "DesktopFinishesFailed"],
+      "sha256": "a41e66818def190883963398f11210fb5e7a477ded6ba178f042a9b25ee2f402"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "unclaim_event_restore",
+      "mirrors": ["DesktopReleasesAfterFailure", "DesktopReleasesOnError"],
+      "sha256": "0493d71aa93a16f4dacfc28b7cff2262be7bf5a5edab0e470a06ce6a2b784a3f"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "finish",
+      "mirrors": ["DesktopClaims", "DesktopFinishesFailed", "DesktopFinishesDone"],
+      "sha256": "d32a4becb276171ab4098d1dc971dcf8d831784444011bf7a9a10b8806a6222a"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "patch_inverse_post_fingerprint",
+      "mirrors": ["DesktopFinishesDone"],
+      "sha256": "2658d5500f473777ff043c6c3c92dfb04e5d99db9210445c3a4fe883f2384160"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "backup_for_restore",
+      "mirrors": ["DesktopRecordsRestoreRow"],
+      "sha256": "a46285cfd4393d99a7fb34de8daa90899d30be8f2306858051b8736d52508b95"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/undo_files.rs",
+      "function": "restore_from",
+      "mirrors": ["DesktopRemovesLiveFiles", "DesktopPutsOldFilesIn"],
+      "sha256": "144dba55a3be67f9f0fc844355df25cb9ec87d9b172b1296838234d0bcfe25ff"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/undo_files.rs",
+      "function": "symlink",
+      "mirrors": ["DesktopRemovesLiveFiles", "DesktopPutsOldFilesIn"],
+      "sha256": "9f56d30852509bed682ad7f7303aa338612296474fc4f53811e4ff4d2b00777d"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "reconcile_at_startup",
+      "mirrors": ["DesktopAppStarts", "RecoveryMarksRowInterrupted"],
+      "sha256": "77fd3bab08bbbddc3a23bc80ff2538033375cec3612a429b4434a1eff6e915f1"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_commands.rs",
+      "function": "restore_desktop_event",
+      "mirrors": ["YouAskDesktopToUndo", "YouAskCoreToUndo"],
+      "sha256": "770be3ecfb41638415127c9806eb27a46ed07ea9a40d9fcb1e80d6ffbeb6a20f"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_commands.rs",
+      "function": "restore_event_with_state",
+      "mirrors": ["YouAskDesktopToUndo"],
+      "sha256": "b787d3d64f3fc8b729ab96ab3adad5ebbd6ebe264b2b9b99c2427bec3f2ac205"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/lib.rs",
+      "function": "reconcile_event_store_at_startup",
+      "mirrors": ["DesktopAppStarts", "RecoveryMarksRowInterrupted"],
+      "sha256": "c0744e4841981e9b5644459a433e184c58d9f0c1cb5e7e95c2d315a040d98c10"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/lib.rs",
+      "function": "reconcile_core_journal_at_startup",
+      "mirrors": [
+        "DesktopAppStarts",
+        "RecoveryStartsPuttingFolderBack",
+        "RecoveryPutsSwappedFolderBack",
+        "RecoveryClosesPlan"
+      ],
+      "sha256": "5038187aa6ce88c27a5d5322ca76ded9b8e2ffed142e4510023efbe16df1fdac"
+    }
+  ]
+}
