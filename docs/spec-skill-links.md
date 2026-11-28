@@ -170,6 +170,12 @@ the text of each skill folder through the scope port.
     will not be reachable.
   - `unknown`: links the action turns from OK to Not known. Never a warning.
   - `fixes`: links the action turns from anything else to OK.
+
+  The preview also has a `status`: `complete`, or `not_known` with a reason
+  (offline, a folder that could not be read). A `not_known` preview is not
+  a clean result: its lists hold only what could be checked, and the
+  desktop shows "could not tell" instead of "nothing breaks".
+
 - **Doctor**. One new issue kind, `MissingLink`, for a Needs or Hands off
   link in state Missing or Renamed. It shows in `doctor`, on Home, and in
   `skill-studio doctor --json`.
@@ -340,7 +346,7 @@ others (`grill-me`), or an index or standalone skill (`ask-matt`).
 | Remove the whole pack                                                                                     | Lists skills in other packs that need it. A plugin pack is removed by its agent, so its row shows the agent's command and the same list                                                                                                                           | Silent                                                                                                                                                                                                                  | Silent                                            |
 | Remove outside Skill Studio (Finder, `npx skills remove`, a dotagents `exclude` then `dotagents install`) | No warning is possible before. After the scan: new Missing rows, marked "changed outside", with Add                                                                                                                                                               | Silent                                                                                                                                                                                                                  | Silent                                            |
 | A new agent appears (the user installs Codex)                                                             | Links are resolved for it; only its new breaks show                                                                                                                                                                                                               | Same                                                                                                                                                                                                                    | Silent                                            |
-| Undo a journaled Skill Studio action                                                                      | Every link back to its earlier state; rows clear                                                                                                                                                                                                                  | Same                                                                                                                                                                                                                    | Same                                              |
+| Undo a journaled Skill Studio action                                                                      | Only the links the undone action changed return to their earlier state; their rows clear                                                                                                                                                                          | Same                                                                                                                                                                                                                    | Same                                              |
 
 Each cell is the same five rules applied to that action. The first delivery
 covers remove, park, turn-off and subset install on all three surfaces
@@ -385,7 +391,7 @@ the per-agent link the install code already makes.
 keeps only metadata. Slice 3 makes the plan fetch the source once (the same
 shallow clone `pack add` without `--skill` already makes), keep the
 checkout for the plan, and read the picked skills' Markdown. Offline,
-`unmet` is Not known. Then
+the preview's `status` is `not_known` with the reason "offline". Then
 `skill-studio pack add mattpocock/skills --skill grill-me --dry-run` lists
 the plan with an `unmet` entry: "`grill-me` runs `grilling`, which is not
 installed. Add it with `--skill grilling`." A real run without it installs
