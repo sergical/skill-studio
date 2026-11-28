@@ -1,35 +1,8 @@
-import { useEffect, useRef } from "react";
-import type { ListingRequest } from "@skill-studio/lib";
-import { listingReportKey, sessionsReportKey, useAppStore } from "../../store/appStore";
-
-export function currentListingRequest(projectPath: string | null): ListingRequest {
-  return {
-    project_path: projectPath,
-    claude_budget_fraction: null,
-    claude_context_window_tokens: null,
-    codex_max_context_tokens: null,
-    claude_transcript: null,
-    codex_transcript: null,
-  };
-}
+import { useListingReport, useSessionsReport } from "../../hooks/useStoreReports";
 
 export function useSkillVisibility(projectPath: string | null, contentHash: string) {
-  const listingKey = listingReportKey(currentListingRequest(projectPath));
-  const historyKey = sessionsReportKey({ project_path: projectPath, sessions: 50 });
-  const listing = useAppStore((s) => s.listingReports[listingKey]);
-  const history = useAppStore((s) => s.sessionsReports[historyKey]);
-  const lastRead = useRef<{ projectPath: string | null; contentHash: string } | null>(null);
-  useEffect(() => {
-    if (
-      lastRead.current?.projectPath === projectPath &&
-      lastRead.current.contentHash === contentHash
-    )
-      return;
-    lastRead.current = { projectPath, contentHash };
-    const store = useAppStore.getState();
-    store.refreshListing(currentListingRequest(projectPath));
-    store.refreshSkillSessions({ project_path: projectPath, sessions: 50 });
-  }, [projectPath, contentHash]);
+  const listing = useListingReport(projectPath, contentHash);
+  const history = useSessionsReport(projectPath, 50, contentHash);
   const listings =
     listing?.data?.listings.filter((r) =>
       projectPath === null

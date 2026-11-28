@@ -6,7 +6,7 @@
 // directly).
 // ============================================================================
 
-import { useEffect, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 import type { HarnessDetection, HarnessesChoice, HarnessReport } from "@skill-studio/lib";
 import { detectHarnesses, getHarnessesChoice, saveHarnessesChoice } from "../lib/skill-api";
 import { invokeErrorMessage } from "../lib/skill-command-error";
@@ -34,9 +34,14 @@ export function showScreenForChoiceRead(read: ChoiceRead): boolean {
   return read.ok && read.choice === null;
 }
 
-/** Checks the registry for a saved choice once on mount. */
-export function useFirstRunGate(): FirstRunGateState {
+/** Checks the registry for a saved choice once on mount. Calls `onSkip` when the check says the
+ * screen is not needed, so the caller moves on without a second effect of its own. */
+export function useFirstRunGate(onSkip: () => void): FirstRunGateState {
   const [showScreen, setShowScreen] = useState<boolean | null>(null);
+  const settle = useEffectEvent((show: boolean) => {
+    setShowScreen(show);
+    if (!show) onSkip();
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -45,12 +50,12 @@ export function useFirstRunGate(): FirstRunGateState {
       detect: detectAtLaunch,
       onChoice: (choice) => setHarnessDetection({ choice }),
       onGate: (show) => {
-        if (!cancelled) setShowScreen(show);
+        if (!cancelled) settle(show);
       },
       onReport: (report) => setHarnessDetection({ report }),
       onError: (error) => setHarnessDetection({ error }),
     }).catch(() => {
-      if (!cancelled) setShowScreen(false);
+      if (!cancelled) settle(false);
     });
     return () => {
       cancelled = true;

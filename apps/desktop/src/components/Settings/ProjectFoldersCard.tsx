@@ -340,6 +340,11 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
     sources.setData(previous.map((s) => (s.harness === harness ? { ...s, enabled } : s)));
     try {
       sources.setData(await setDiscoverySource(harness, enabled));
+      // Activity can't keep filtering by an agent that is now off, and must not go back to it
+      // by itself when the agent is turned on again.
+      const { activityFilter, setActivityFilter } = useAppStore.getState();
+      if (!enabled && activityFilter.harness === harness)
+        setActivityFilter({ harness: "all", trigger: activityFilter.trigger });
       refetchFolders();
     } catch (err) {
       sources.setData(previous);

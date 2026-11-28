@@ -9,10 +9,13 @@ import { useEffect, useRef } from "react";
 interface DelayedCall {
   /** Runs `call` after `delayMs`, in place of any call still waiting. */
   schedule: (call: () => void, delayMs: number) => void;
+  /** Drops the call still waiting, if any. */
+  cancel: () => void;
 }
 
 export function useDelayedCall(): DelayedCall {
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const cancel = () => clearTimeout(timer.current);
   const schedule = (call: () => void, delayMs: number) => {
     clearTimeout(timer.current);
     timer.current = setTimeout(call, delayMs);
@@ -20,5 +23,5 @@ export function useDelayedCall(): DelayedCall {
 
   useEffect(() => () => clearTimeout(timer.current), []);
 
-  return { schedule };
+  return { schedule, cancel };
 }
