@@ -315,9 +315,10 @@ impl SqliteHistoryStore {
             .map_err(sql_err)?;
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(sql_err)?;
-        // `reverted_by` is claimed before the restore row that references it
-        // exists (see `claim_revert`), so foreign key enforcement on that
-        // column must stay off - matches the desktop's `event_store::open`.
+        // Earlier desktop builds claimed `reverted_by` before the restore
+        // row existed, so a database can hold an id that
+        // names no row. Foreign key enforcement on that column must stay
+        // off - matches the desktop's `event_store::open`.
         conn.pragma_update(None, "foreign_keys", "OFF")
             .map_err(sql_err)?;
         conn.pragma_update(None, "synchronous", "FULL")
