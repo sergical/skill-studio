@@ -6,7 +6,7 @@
 
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { attentionBySkill, collectDashboardIssues } from "@skill-studio/lib";
+import { attentionBySkill, collectDashboardIssues, usesIn30DaysBySkill } from "@skill-studio/lib";
 import { buildHarnessSnapshot } from "../dev/harness/skill-fixture";
 import { ROW_GROUP_ORDER } from "../components/SkillList/skill-row-state";
 import { groupSkillRows } from "./skill-list-model";
@@ -21,7 +21,12 @@ describe("groupSkillRows", () => {
         fc.constantFrom("name", "used", "size"),
         (skills, sort) => {
           const attention = attentionBySkill(skills, collectDashboardIssues(skills));
-          const { buckets, rows } = groupSkillRows(skills, sort, snapshot.invocations, attention);
+          const { buckets, rows } = groupSkillRows(
+            skills,
+            sort,
+            usesIn30DaysBySkill(snapshot.invocations),
+            attention,
+          );
           const bucketed = ROW_GROUP_ORDER.flatMap((group) => buckets[group]);
           expect(rows).toEqual(bucketed);
           expect([...bucketed].sort(byName)).toEqual([...skills].sort(byName));
@@ -40,7 +45,13 @@ describe("groupSkillRows", () => {
       ],
     };
     const attention = attentionBySkill([skill], collectDashboardIssues([skill]));
-    const { buckets, statesBySkill } = groupSkillRows([skill], "name", [], attention, "update");
+    const { buckets, statesBySkill } = groupSkillRows(
+      [skill],
+      "name",
+      new Map(),
+      attention,
+      "update",
+    );
     expect(buckets.update).toEqual([skill]);
     expect(statesBySkill.get(skill.name)?.action).toBe("Update");
   });

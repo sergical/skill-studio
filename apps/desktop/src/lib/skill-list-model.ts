@@ -6,12 +6,7 @@
 // ============================================================================
 
 import { ATTENTION_ORDER } from "@skill-studio/lib";
-import type {
-  AttentionFilter,
-  InstalledSkill,
-  SkillAttention,
-  SkillInvocationStats,
-} from "@skill-studio/lib";
+import type { AttentionFilter, InstalledSkill, SkillAttention } from "@skill-studio/lib";
 import type { SortMode } from "./skill-list-sort";
 import { sortRows } from "../components/SkillList/skill-row-format";
 import {
@@ -35,12 +30,11 @@ interface GroupedSkillRows {
 export function groupSkillRows(
   skills: InstalledSkill[],
   sort: SortMode,
-  stats: SkillInvocationStats[],
+  usesBySkill: ReadonlyMap<string, number>,
   attention: ReadonlyMap<string, SkillAttention>,
   filter?: AttentionFilter,
 ): GroupedSkillRows {
-  const statsBySkill = new Map(stats.map((s) => [s.skill, s]));
-  const sorted = sortRows(skills, sort, statsBySkill);
+  const sorted = sortRows(skills, sort, usesBySkill);
   const statesBySkill = new Map<string, RowState | null>();
   // SAFETY: each bucket starts empty; the loop below only ever pushes `InstalledSkill` values into it.
   const buckets = {

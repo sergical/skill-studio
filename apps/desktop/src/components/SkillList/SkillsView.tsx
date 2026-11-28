@@ -17,7 +17,7 @@ import { useProjectFolderActions } from "../../hooks/useProjectFolderActions";
 import { useClientIds } from "../../hooks/useClientRows";
 import { attentionBySkill, attentionCounts, collectDashboardIssues } from "@skill-studio/lib";
 import { applySkillListFilter, isProjectScope, skillForCoverageScope } from "@skill-studio/lib";
-import { ownSkillsView, ownSkillsWithPluginUpdates } from "@skill-studio/lib";
+import { ownSkillsView, ownSkillsWithPluginUpdates, usesIn30DaysBySkill } from "@skill-studio/lib";
 import type { InstalledSkill, SkillSnapshot } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
 
@@ -86,6 +86,7 @@ export function SkillsView({
     ),
   );
   const listedByName = new Map(listedSkills.map((skill) => [skill.name, skill]));
+  const allByName = new Map(allSkills.map((skill) => [skill.name, skill]));
   const deploymentPathForSkill = ({ name }: InstalledSkill) => {
     const skill = listedByName.get(name);
     return skill && deploymentForScope(skill, filter.scope, filter.harness);
@@ -148,7 +149,7 @@ export function SkillsView({
         <SkillListTable
           scope={filter.scope}
           skills={matches}
-          stats={snapshot?.invocations ?? []}
+          usesBySkill={usesIn30DaysBySkill(snapshot.invocations, kept)}
           attention={attention}
           attentionFilter={filter.attention}
           sort={sort}
@@ -163,6 +164,7 @@ export function SkillsView({
           onAddSkill={() => openAddSkillSheet()}
           resetKey={JSON.stringify(filter)}
           latestSkill={(name) => listedByName.get(name)}
+          readerSkill={(name) => allByName.get(name)}
         />
       )}
     </PageShell>

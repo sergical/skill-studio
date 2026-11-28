@@ -142,6 +142,28 @@ export function homePromptCost(
   return cost;
 }
 
+/**
+ * Each skill's uses in the last 30 days, by `agents` only when given: the agents the user keeps.
+ * The Skills row count, its "Most used" sort and the unused rule all read these numbers, so a
+ * skill listed as unused never shows a use.
+ */
+export function usesIn30DaysBySkill(
+  invocations: SkillInvocationStats[],
+  agents?: readonly string[],
+): Map<string, number> {
+  return new Map(
+    invocations.map((stat) => [
+      stat.skill,
+      agents
+        ? Object.entries(stat.by_harness_30_days).reduce(
+            (sum, [agent, count]) => (agents.includes(agent) ? sum + count : sum),
+            0,
+          )
+        : stat.last_30_days,
+    ]),
+  );
+}
+
 /** What the 30-day history can say about one skill. */
 export type SkillUsageIn30Days = "used" | "unused" | "no-readable-history";
 
@@ -158,17 +180,7 @@ export function skillUsageIn30Days(
   agents?: readonly string[],
 ): (skill: InstalledSkill) => SkillUsageIn30Days {
   const counted = (agent: string) => !agents || agents.includes(agent);
-  const usesBySkill = new Map(
-    invocations.map((stat) => [
-      stat.skill,
-      agents
-        ? Object.entries(stat.by_harness_30_days).reduce(
-            (sum, [agent, count]) => (counted(agent) ? sum + count : sum),
-            0,
-          )
-        : stat.last_30_days,
-    ]),
-  );
+  const usesBySkill = usesIn30DaysBySkill(invocations, agents);
   const withHistory = HARNESS_CATALOG.filter(
     (row) =>
       counted(row.id) && invocations.some((stat) => (stat.by_harness_30_days[row.id] ?? 0) > 0),

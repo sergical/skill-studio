@@ -372,9 +372,15 @@ interface SessionsViewProps {
   initialHarness?: string;
   /** The use history behind Uses in 30 days; App passes the same snapshot as What it sees. */
   snapshot?: SkillSnapshot;
+  /** The 30-day use history is being counted, as on a first launch. */
+  usageRefreshing?: boolean;
 }
 
-export function SessionsView({ initialHarness, snapshot }: SessionsViewProps) {
+export function SessionsView({
+  initialHarness,
+  snapshot,
+  usageRefreshing = false,
+}: SessionsViewProps) {
   const [selected, setSelected] = useState(initialHarness);
   const navigate = useAppStore((s) => s.setActiveView);
   const [count, setCount] = useState("100");
@@ -483,6 +489,7 @@ export function SessionsView({ initialHarness, snapshot }: SessionsViewProps) {
                 harness={harness}
                 sessionsRead={agent.sessions_read}
                 sessionsWithUse={agent.sessions_with_use}
+                historyCounting={usageRefreshing}
               />
             )}
             {agent.records === "listing_and_uses" && (

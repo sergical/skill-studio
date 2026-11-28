@@ -19,6 +19,8 @@ import type { RowState } from "./skill-row-state";
 
 interface SkillListRowProps {
   skill: InstalledSkill;
+  /** `skill` with its plugin copies too, for the agent icons; `skill` when absent. */
+  readerSkill?: InstalledSkill;
   scope: SkillListFilterScope;
   /** This row's position in the grouped `rows` array - `aria-rowindex` and shift-click. */
   index: number;
@@ -45,6 +47,7 @@ interface SkillListRowProps {
 
 export function SkillListRow({
   skill,
+  readerSkill,
   scope,
   index,
   style,
@@ -104,7 +107,10 @@ export function SkillListRow({
         <SkillLocationCell locations={whereFacts(scopedSkill, DEFAULT_HARNESS_LIST).locations} />
       </div>
       <div role="gridcell" className="contents">
-        <HarnessStack skill={scopedSkill} harnessList={DEFAULT_HARNESS_LIST} />
+        <HarnessStack
+          skill={skillForCoverageScope(readerSkill ?? skill, scope)}
+          harnessList={DEFAULT_HARNESS_LIST}
+        />
       </div>
       <div role="gridcell" className="contents">
         <NoteCell

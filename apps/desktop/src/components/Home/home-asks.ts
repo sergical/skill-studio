@@ -42,15 +42,16 @@ export function homeCounts(
   agents: readonly string[] | undefined,
 ): HomeCounts {
   const own = ownSkillsView(snapshot.skills);
-  const { broken, warnings } = attentionGroups(collectDashboardIssues(own));
+  // Each count opens Skills, which lists no parked skill, so none is counted here either.
+  const live = own.filter((skill) => !skill.parked);
+  const liveIssues = collectDashboardIssues(own).filter((issue) => !issue.skill.parked);
+  const { broken, warnings } = attentionGroups(liveIssues);
   // One skill with two broken links still counts once, as on Skills.
   const skillNames = (issues: HealthIssue[]) => [...new Set(issues.map((i) => i.skill.name))];
-  // A parked skill is in no agent's prompt, so it is not offered for parking again.
-  const live = own.filter((skill) => !skill.parked);
   return {
     broken: skillNames(broken),
     warnings: skillNames(warnings),
-    updates: skillsWithUpdates(snapshot).map((skill) => skill.name),
+    updates: skillsWithUpdates(snapshot).flatMap((skill) => (skill.parked ? [] : [skill.name])),
     unused: unusedSkills(live, snapshot.invocations, agents).map((skill) => skill.name),
   };
 }

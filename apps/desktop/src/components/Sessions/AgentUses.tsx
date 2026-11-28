@@ -29,15 +29,24 @@ interface AgentUsesProps {
   sessionsRead: number;
   /** Sessions read that used a skill: with any, a history without `harness` has not counted it yet. */
   sessionsWithUse: number;
+  /** The 30-day history is still being counted: an agent with no use in it may just not be counted
+   * yet. Cursor and Grok Build supply uses without a session list, so `sessionsRead` stays 0. */
+  historyCounting: boolean;
 }
 
 /** What Uses in 30 days says when the history holds no use by the agent. */
-function noUsesText(sessionsRead: number, sessionsWithUse: number) {
-  if (sessionsWithUse > 0) return "Not counted yet.";
+function noUsesText(sessionsRead: number, sessionsWithUse: number, historyCounting: boolean) {
+  if (sessionsWithUse > 0 || historyCounting) return "Not counted yet.";
   return sessionsRead > 0 ? "No uses in 30 days." : "No readable history.";
 }
 
-export function AgentUses({ snapshot, harness, sessionsRead, sessionsWithUse }: AgentUsesProps) {
+export function AgentUses({
+  snapshot,
+  harness,
+  sessionsRead,
+  sessionsWithUse,
+  historyCounting,
+}: AgentUsesProps) {
   const [all, setAll] = useState(false);
   const openSkill = useAppStore((s) => s.openSkill);
   const rows = agentUses(snapshot, harness);
@@ -52,7 +61,7 @@ export function AgentUses({ snapshot, harness, sessionsRead, sessionsWithUse }: 
     >
       {!rows ? (
         <p className="m-0 text-small text-text-secondary">
-          {noUsesText(sessionsRead, sessionsWithUse)}
+          {noUsesText(sessionsRead, sessionsWithUse, historyCounting)}
         </p>
       ) : (
         <>

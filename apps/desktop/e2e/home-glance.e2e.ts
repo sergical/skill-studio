@@ -178,3 +178,51 @@ test("with Cursor turned off, its history adds nothing to Home's unused count, t
   await unused.click();
   expect(await skillsListed(page)).toBe(9);
 });
+
+// Code review round 4: with Cursor turned off, a skill with 7 uses by Cursor only was listed as
+// unused and its row still said 7 uses. The row count reads the same kept-agent history.
+test("with Cursor turned off, an unused skill's row shows no uses Cursor made", async ({
+  page,
+}) => {
+  await page.goto("/?persona=claude-history-cursor-skill");
+  await page.getByRole("checkbox", { name: "Cursor", exact: true }).press("Space");
+  await page.getByRole("button", { name: "Continue" }).click();
+  const home = page.getByRole("region", { name: "Your skills at a glance" });
+  const idle = await page.evaluate(() => {
+    const harness = window.__harness;
+    if (!harness) throw new Error("dev harness missing");
+    const snapshot = harness.snapshot();
+    const used = new Set(snapshot.invocations.map((stat) => stat.skill));
+    const skill = snapshot.skills.find(
+      (s) => !used.has(s.name) && s.deployments.every((d) => d.agent === "Claude Code"),
+    );
+    if (!skill) throw new Error("no idle Claude Code skill");
+    const template = snapshot.invocations[0];
+    const stat = {
+      ...template,
+      skill: skill.name,
+      last_24_hours: 0,
+      last_7_days: 7,
+      last_14_days: 7,
+      last_30_days: 7,
+      by_project_30_days: {},
+      by_day: {},
+      by_harness_30_days: { cursor: 7 },
+      by_hour: [],
+    };
+    void harness.publish({ ...snapshot, invocations: [...snapshot.invocations, stat] });
+    return skill.name;
+  });
+
+  const unused = home.getByRole("button", { name: /^9 unused$/ });
+  await expect(unused).toBeVisible();
+  await unused.click();
+  expect(await skillsListed(page)).toBe(9);
+  // Only skill rows carry `aria-selected`; a group header row holds its rows' text too.
+  const row = page
+    .getByRole("grid", { name: "Skills" })
+    .locator('[role="row"][aria-selected]')
+    .filter({ has: page.getByRole("gridcell", { name: idle, exact: true }) });
+  await expect(row).toHaveCount(1);
+  await expect(row.getByTitle(/uses? in the last 30 days/)).toHaveCount(0);
+});

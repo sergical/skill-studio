@@ -1,4 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
+import type { InstalledSkill } from "@skill-studio/lib";
+import { deployment, HARNESS_HOME } from "../src/dev/harness/skill-fixture";
 import {
   openApp,
   openSkillsPage as openFilteredSkills,
@@ -118,6 +120,44 @@ test("a plugin skill with an update shows Claude Code, which loads the plugin, a
   await expect(
     skillRow(page, "changelog-formatter").getByRole("img", { name: /^Claude Code · / }),
   ).toBeVisible();
+});
+
+// Code review round 4: a skill with a personal Codex copy and a Claude Code plugin copy showed
+// only Codex, because the list drops plugin copies from the user's own skills.
+test("a skill with a personal Codex copy and a Claude Code plugin copy shows both agents as reading it", async ({
+  page,
+}) => {
+  const name = "pdf-processing";
+  const copies = [
+    deployment({ agent: "Codex", scope: "global", path: `${HARNESS_HOME}/.codex/skills/${name}` }),
+    deployment({
+      agent: "Claude Code",
+      scope: "global",
+      path: `${HARNESS_HOME}/.claude/plugins/cache/docs-plugins/docs/skills/${name}`,
+      owner_kind: "plugin",
+      mutability: "read-only",
+      plugin: {
+        harness: "Claude Code",
+        id: "docs@docs-plugins",
+        name: "docs",
+        marketplace: "docs-plugins",
+        version: "1.0.0",
+      },
+    }),
+  ];
+  await page.evaluate(
+    ([skillName, deployments]) =>
+      window.__harness?.updateSkill(skillName, (skill: InstalledSkill) => ({
+        ...skill,
+        deployments,
+      })),
+    [name, copies] as const,
+  );
+  await openFilteredSkills(page, "Skills", name);
+  const row = skillRow(page, name);
+
+  await expect(row.getByRole("img", { name: /^Codex · / })).toBeVisible();
+  await expect(row.getByRole("img", { name: /^Claude Code · / })).toBeVisible();
 });
 
 test("a skill installed only globally shows the globe alone in Where, and a project install shows its project", async ({

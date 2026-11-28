@@ -78,9 +78,6 @@ import type { SkillCommands } from "./skillCommands";
  * heatmap, per-skill and per-project breakdowns); `skill` is the full-page
  * view of one installed skill, opened from any other view.
  */
-/** One of Learn's explainer sections, deep-linkable from Home and elsewhere. */
-export type LearnSection = "broken" | "invoke" | "cost" | "unused";
-
 export type ActiveView =
   | { kind: "home" }
   | { kind: "skills" }
@@ -89,7 +86,7 @@ export type ActiveView =
   | { kind: "listing"; harness?: string; scope?: string }
   | { kind: "sessions"; harness?: string }
   | { kind: "activity" }
-  | { kind: "learn"; section?: LearnSection }
+  | { kind: "learn" }
   | { kind: "settings" }
   | {
       kind: "skill";
@@ -171,15 +168,23 @@ interface ReportRead<T> {
 // Listing and Sessions both scan skills. Keep at most one of their reads in flight.
 let reportReadQueue = Promise.resolve();
 let listingGeneration = 0;
+/** Reports asked for while their read ran: the skills may have changed after that read began. */
+const reportsAskedAgain = new Set<string>();
 
+/** `again` asks for the report anew once this read is done, when someone asked while it ran. */
 function refreshReport<T>(
+  id: string,
   previous: ReportRead<T> | undefined,
   read: () => Promise<T>,
   publish: (entry: ReportRead<T>) => void,
+  again: () => void,
 ): void {
-  if (previous?.refreshing) return;
+  if (previous?.refreshing) {
+    reportsAskedAgain.add(id);
+    return;
+  }
   publish({ data: previous?.data, refreshing: true });
-  reportReadQueue = reportReadQueue.then(async () => {
+  const readOnce = async () => {
     // On launch the inventory scan can still hold the shared scope lease.
     for (const retryDelay of [500, 1500, 3000, 0]) {
       try {
@@ -194,6 +199,9 @@ function refreshReport<T>(
         await new Promise((resolve) => setTimeout(resolve, retryDelay));
       }
     }
+  };
+  reportReadQueue = reportReadQueue.then(readOnce).then(() => {
+    if (reportsAskedAgain.delete(id)) again();
   });
 }
 
@@ -651,12 +659,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     const key = listingReportKey(request);
     const generation = listingGeneration;
     refreshReport(
+      `listing:${key}`,
       get().listingReports[key],
       () => get().readListing(request),
       (entry) => {
         if (generation === listingGeneration)
           set((state) => ({ listingReports: { ...state.listingReports, [key]: entry } }));
       },
+      () => get().refreshListing(request),
     );
   },
   sessionsReports: {},
@@ -665,12 +675,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     const key = sessionsReportKey(request);
     const generation = listingGeneration;
     refreshReport(
+      `sessions:${key}`,
       get().sessionsReports[key],
       () => get().readSkillSessions(request),
       (entry) => {
         if (generation === listingGeneration)
           set((state) => ({ sessionsReports: { ...state.sessionsReports, [key]: entry } }));
       },
+      () => get().refreshSkillSessions(request),
     );
   },
   runPackAction: (intent, dryRun) =>

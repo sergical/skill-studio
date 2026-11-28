@@ -5,7 +5,7 @@
 // SkillRowCells.tsx so that file exports components only (react-refresh).
 // ============================================================================
 
-import type { InstalledSkill, SkillInvocationStats } from "@skill-studio/lib";
+import type { InstalledSkill } from "@skill-studio/lib";
 import { buttonVariants, cn } from "@skill-studio/ui";
 import type { SortMode } from "../../lib/skill-list-sort";
 
@@ -39,17 +39,13 @@ export function selectedRowClass(selected: boolean): string {
 export function sortRows(
   skills: InstalledSkill[],
   sort: SortMode,
-  statsBySkill: Map<string, SkillInvocationStats>,
+  usesBySkill: ReadonlyMap<string, number>,
 ): InstalledSkill[] {
   const rows = [...skills];
   if (sort === "name") {
     rows.sort((a, b) => a.name.localeCompare(b.name));
   } else if (sort === "used") {
-    rows.sort(
-      (a, b) =>
-        (statsBySkill.get(b.name)?.last_30_days ?? 0) -
-        (statsBySkill.get(a.name)?.last_30_days ?? 0),
-    );
+    rows.sort((a, b) => (usesBySkill.get(b.name) ?? 0) - (usesBySkill.get(a.name) ?? 0));
   } else {
     rows.sort((a, b) => b.skill_md_tokens - a.skill_md_tokens || a.name.localeCompare(b.name));
   }

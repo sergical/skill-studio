@@ -85,6 +85,8 @@ interface HarnessControl {
   writeSkillMd(path: string, content: string): void;
   /** Holds every later answer `ms` long, like `?latency=<ms>`, without slowing the app's start. */
   setLatency(ms: number): void;
+  /** How many update commands Update all has started, each a `npx skills` or `dotagents` call. */
+  updateCommandsStarted(): number;
 }
 
 declare global {
@@ -580,6 +582,7 @@ export function installMockTauri(
   let latency = Number(new URLSearchParams(location.search).get("latency") ?? 0);
   /** "Update all" batches asked to stop; like the real op, a stop sent before its batch starts still applies. */
   const stoppedBatches = new Set<string>();
+  let updateCommandsStarted = 0;
   mockIPC(
     async (command, rawPayload) => {
       // A Stop lands at once, so it takes effect after the step the batch is on.
@@ -1147,43 +1150,76 @@ export function installMockTauri(
             .parse(payload.targets);
           const batchId = z.string().nullish().parse(payload.batchId);
           const skillsByName = new Map(currentSnapshot.skills.map((s) => [s.name, s]));
+          const names = targets.map(skillNameForTarget);
+          // One command per run, as the real updater sends: consecutive skills.sh skills of one
+          // scope share one `npx skills update`, and one `dotagents install` refreshes every
+          // dotagents skill of its scope. Stop lets the running command finish and starts no other.
+          const methodOf = (name: string) => skillsByName.get(name)?.source_kind;
+          const scopeOf = (name: string) =>
+            skillsByName.get(name)?.deployments[0]?.project_path ?? "global";
+          const commandFrom = (start: number, done: ReadonlySet<string>): string[] => {
+            const first = names[start];
+            const method = methodOf(first);
+            const sameScope = (name: string) => scopeOf(name) === scopeOf(first);
+            if (method === "dotagents")
+              return [
+                ...new Set(
+                  names
+                    .slice(start)
+                    .filter((n) => !done.has(n) && methodOf(n) === method && sameScope(n)),
+                ),
+              ];
+            if (method !== "skills-sh") return [first];
+            const run = [first];
+            for (const next of names.slice(start + 1)) {
+              if (methodOf(next) !== method || !sameScope(next) || run.includes(next)) break;
+              run.push(next);
+            }
+            return run;
+          };
           const items = [];
           const notRun: string[] = [];
-          for (const target of targets) {
-            const name = skillNameForTarget(target);
+          const done = new Set<string>();
+          for (const [index, name] of names.entries()) {
+            if (done.has(name)) continue;
             if (batchId && stoppedBatches.has(batchId)) {
               notRun.push(name);
               continue;
             }
-            const deployment = skillsByName.get(name)?.deployments[0];
-            // Each target takes one answer's latency, so a running batch stays on screen.
-            // react-doctor-disable-next-line react-doctor/async-await-in-loop -- fixture applies each update sequentially, mirroring the real op's per-request loop
+            const command = commandFrom(index, done);
+            updateCommandsStarted += 1;
+            // Each command takes one answer's latency, so a running batch stays on screen.
+            // react-doctor-disable-next-line react-doctor/async-await-in-loop -- fixture runs each command in turn, mirroring the real op's loop
             if (latency > 0) await new Promise((resolve) => setTimeout(resolve, latency));
-            // react-doctor-disable-next-line react-doctor/async-await-in-loop -- as above
-            await updateSkill(name, (item) => ({
-              ...item,
-              has_update: false,
-              update_owner_ids: [],
-              update_owners: [],
-              update_commit: null,
-              update_commit_at: null,
-            }));
-            items.push({
-              skill: name,
-              outcome: {
-                event_id: `fixture-update-${name}`,
-                skill: name,
-                deployment_path: deployment?.path ?? `${HARNESS_HOME}/.agents/skills/${name}`,
-                tree_hash_before: "fixture-before",
-                tree_hash_after: "fixture-after",
-              },
-            });
-            // react-doctor-disable-next-line react-doctor/async-await-in-loop -- as above
-            await emit("skills://update-all-progress", {
-              done: items.length,
-              total: targets.length,
-              skill_name: name,
-            });
+            for (const updated of command) {
+              done.add(updated);
+              const deployment = skillsByName.get(updated)?.deployments[0];
+              // react-doctor-disable-next-line react-doctor/async-await-in-loop -- as above
+              await updateSkill(updated, (item) => ({
+                ...item,
+                has_update: false,
+                update_owner_ids: [],
+                update_owners: [],
+                update_commit: null,
+                update_commit_at: null,
+              }));
+              items.push({
+                skill: updated,
+                outcome: {
+                  event_id: `fixture-update-${updated}`,
+                  skill: updated,
+                  deployment_path: deployment?.path ?? `${HARNESS_HOME}/.agents/skills/${updated}`,
+                  tree_hash_before: "fixture-before",
+                  tree_hash_after: "fixture-after",
+                },
+              });
+              // react-doctor-disable-next-line react-doctor/async-await-in-loop -- as above
+              await emit("skills://update-all-progress", {
+                done: items.length,
+                total: targets.length,
+                skill_name: updated,
+              });
+            }
           }
           return { items, errors: {}, not_run: notRun };
         }
@@ -1432,5 +1468,6 @@ export function installMockTauri(
     setLatency: (ms) => {
       latency = ms;
     },
+    updateCommandsStarted: () => updateCommandsStarted,
   };
 }

@@ -229,7 +229,7 @@ function App() {
       main = renderListLayer(activeView.kind, null);
       break;
     case "learn":
-      main = <LearnView section={activeView.section} />;
+      main = <LearnView />;
       break;
     case "settings":
       main = <SettingsView snapshot={snapshot} />;
@@ -253,6 +253,7 @@ function App() {
           key={activeView.harness}
           initialHarness={activeView.harness}
           snapshot={snapshot}
+          usageRefreshing={usageRefreshing}
         />
       );
       break;

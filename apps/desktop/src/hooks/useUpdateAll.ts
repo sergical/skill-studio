@@ -21,20 +21,23 @@ import { updateAllFailureMessage, updateAllTitle } from "./update-all";
 export function useUpdateAll(updates: readonly InstalledSkill[]) {
   const addToast = useAppStore((state) => state.addToast);
   const [editedSkills, setEditedSkills] = useState<InstalledSkill[]>([]);
+  // The skills whose edits were checked: a confirm runs on these, not on updates that arrived since.
+  const [checkedUpdates, setCheckedUpdates] = useState<readonly InstalledSkill[]>([]);
   const [isCheckingEdits, setIsCheckingEdits] = useState(false);
   const activeBatch = useActiveUpdateAll();
 
   const runUpdateAll = async (
+    targets: readonly InstalledSkill[],
     forkNames?: ReadonlySet<string>,
     skippedNames: ReadonlySet<string> = new Set(),
   ) => {
     const { holdSkills, settleSkills, releaseSkills } = useAppStore.getState();
     // A row already updating on its own stays with that act.
     const names = holdSkills(
-      updates.flatMap((skill) => (skippedNames.has(skill.name) ? [] : [skill.name])),
+      targets.flatMap((skill) => (skippedNames.has(skill.name) ? [] : [skill.name])),
     );
     const held = new Set(names);
-    const batch = updates.filter((skill) => held.has(skill.name));
+    const batch = targets.filter((skill) => held.has(skill.name));
     // `updateAllOutdatedSkills` catches every `pullFork`/`updateAllOwners`
     // rejection itself and folds it into `failures`, so this never throws.
     const tally = await startUpdateAll(batch, forkNames);
@@ -74,14 +77,16 @@ export function useUpdateAll(updates: readonly InstalledSkill[]) {
 
   const start = async () => {
     setIsCheckingEdits(true);
+    const targets = [...updates];
     // `skillsWithLocalEdits` treats a failed check as "no edits", so it never rejects.
-    const edited = await skillsWithLocalEdits([...updates], skillLocalEdits);
+    const edited = await skillsWithLocalEdits(targets, skillLocalEdits);
     setIsCheckingEdits(false);
     if (edited.length > 0) {
+      setCheckedUpdates(targets);
       setEditedSkills(edited);
       return;
     }
-    await runUpdateAll();
+    await runUpdateAll(targets);
   };
 
   const closeEditsDialog = () => setEditedSkills([]);
@@ -102,13 +107,14 @@ export function useUpdateAll(updates: readonly InstalledSkill[]) {
       fork: (choice: "skip" | "overwrite") => {
         closeEditsDialog();
         void runUpdateAll(
+          checkedUpdates,
           new Set(forkNames),
           choice === "skip" ? new Set(unforkableNames) : undefined,
         );
       },
       overwrite: () => {
         closeEditsDialog();
-        void runUpdateAll();
+        void runUpdateAll(checkedUpdates);
       },
       cancel: closeEditsDialog,
     },

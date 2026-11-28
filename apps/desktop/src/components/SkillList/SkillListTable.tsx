@@ -14,7 +14,6 @@ import type {
   AttentionFilter,
   InstalledSkill,
   SkillAttention,
-  SkillInvocationStats,
   SkillListFilterScope,
 } from "@skill-studio/lib";
 import { groupSkillRows } from "../../lib/skill-list-model";
@@ -117,7 +116,8 @@ function buildListItems(
 interface SkillListTableProps {
   scope: SkillListFilterScope;
   skills: InstalledSkill[];
-  stats: SkillInvocationStats[];
+  /** Each skill's uses in 30 days by the kept agents (`usesIn30DaysBySkill`), for the row count and the "Most used" sort. */
+  usesBySkill: ReadonlyMap<string, number>;
   /** `attentionBySkill` over `skills`: which of Broken, Warnings and Updates each skill is in. */
   attention: ReadonlyMap<string, SkillAttention>;
   /** The filter's attention pick, so every row shows under the category the user picked. */
@@ -149,6 +149,9 @@ interface SkillListTableProps {
   /** Finds a skill outside `skills`, so a row an action took out of the caller's filter (an update
    * under "Update available") stays in its slot with fresh data until the filter changes. */
   latestSkill?: (name: string) => InstalledSkill | undefined;
+  /** The skill with every copy, plugin copies too, for the row's agent icons: an agent that
+   * loads a plugin copy reads the skill even when the row lists only the user's own copies. */
+  readerSkill?: (name: string) => InstalledSkill | undefined;
 }
 
 /**
@@ -159,7 +162,7 @@ interface SkillListTableProps {
 export function SkillListTable({
   scope,
   skills,
-  stats,
+  usesBySkill,
   attention,
   attentionFilter,
   sort,
@@ -174,6 +177,7 @@ export function SkillListTable({
   onAddSkill,
   resetKey = "",
   latestSkill,
+  readerSkill,
 }: SkillListTableProps) {
   const selectedSkillName = selectedSkillNameProp ?? null;
   const initialCursorSkillName = initialCursorSkillNameProp ?? null;
@@ -188,8 +192,7 @@ export function SkillListTable({
    * stays put when the copy the row opens changes with a rescan. */
   const rowPath = (skill: InstalledSkill): string | undefined => skill.deployments[0]?.path;
 
-  const grouped = groupSkillRows(skills, sort, stats, attention, attentionFilter);
-  const usesBySkill = new Map(stats.map((s) => [s.skill, s.last_30_days]));
+  const grouped = groupSkillRows(skills, sort, usesBySkill, attention, attentionFilter);
   const { statesBySkill } = grouped;
   const buckets = useHeldLayout(
     grouped.buckets,
@@ -340,6 +343,7 @@ export function SkillListTable({
       <SkillListRow
         key={skill.name}
         skill={skill}
+        readerSkill={readerSkill?.(skill.name)}
         scope={scope}
         index={index}
         style={{

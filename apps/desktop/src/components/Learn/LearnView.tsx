@@ -22,12 +22,6 @@ import { HarnessIcon } from "../ui/HarnessIcon";
 import { PageSection } from "../Shell/PageSection";
 import { PageShell } from "../Shell/PageShell";
 import { useAppStore } from "../../store/appStore";
-import type { LearnSection } from "../../store/appStore";
-
-interface LearnViewProps {
-  section?: LearnSection;
-}
-
 type CatalogAgentId = (typeof HARNESS_CATALOG)[number]["id"];
 
 /** How a person calls a skill by name, and the setting that keeps the model from calling it.
@@ -100,26 +94,9 @@ function SectionLink({ label, onClick }: { label: string; onClick: () => void })
   );
 }
 
-/** A section's ref while it is the one asked for. Declared once, so React calls it when that
- * section gets it (the page opens at the section, or the section changes) and not on every
- * render. */
-function scrollToAndFocus(anchor: HTMLDivElement | null) {
-  anchor?.scrollIntoView({ block: "start" });
-  anchor?.focus();
-}
-
-/**
- * Learn's sections. Opened at a `section`, that section scrolls into view and
- * takes focus, so a screen reader lands on the part the user asked for.
- */
-export function LearnView({ section }: LearnViewProps) {
+/** Learn's sections. */
+export function LearnView() {
   const setActiveView = useAppStore((state) => state.setActiveView);
-  const anchor = (key: LearnSection) => ({
-    id: `learn-${key}`,
-    tabIndex: -1,
-    className: "scroll-mt-6 outline-none",
-    ref: key === section ? scrollToAndFocus : undefined,
-  });
 
   const brokenKinds = HEALTH_ISSUE_KIND_ORDER.filter(
     (kind) => HEALTH_ISSUE_SEVERITY[kind] === "error",
@@ -131,165 +108,151 @@ export function LearnView({ section }: LearnViewProps) {
   return (
     <PageShell title="Learn">
       <div className="flex max-w-[70ch] flex-col gap-8 text-body leading-[1.55] text-text-secondary select-text">
-        <div {...anchor("unused")}>
-          <PageSection
-            title="Uses"
-            meta={
-              <SectionLink
-                label="Open Activity"
-                onClick={() => setActiveView({ kind: "activity" })}
-              />
-            }
-          >
-            <div className="flex flex-col gap-3">
-              <p className="m-0">
-                A use is the model running a skill in a recorded session. Skill Studio reads the
-                last 30 days of history from{" "}
-                <span className="inline-flex flex-wrap items-center gap-x-2.5 align-middle">
-                  {USAGE_READERS.map((row) => (
-                    <AgentName key={row.id} id={row.id} label={row.label} />
-                  ))}
-                </span>
-                .
-              </p>
-              <dl className="m-0 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-1.5">
-                {TRIGGERS.map((trigger) => (
-                  <div key={trigger.id} className="contents">
-                    <dt className="font-medium text-text-primary">{trigger.label}</dt>
-                    <dd className="m-0">{trigger.hint}</dd>
-                  </div>
+        <PageSection
+          title="Uses"
+          meta={
+            <SectionLink
+              label="Open Activity"
+              onClick={() => setActiveView({ kind: "activity" })}
+            />
+          }
+        >
+          <div className="flex flex-col gap-3">
+            <p className="m-0">
+              A use is the model running a skill in a recorded session. Skill Studio reads the last
+              30 days of history from{" "}
+              <span className="inline-flex flex-wrap items-center gap-x-2.5 align-middle">
+                {USAGE_READERS.map((row) => (
+                  <AgentName key={row.id} id={row.id} label={row.label} />
                 ))}
-              </dl>
-              <p className="m-0">
-                A skill is “Not used in the last 30 days” when no history Skill Studio can read
-                records a use. An agent whose history it can’t read adds no uses.
-              </p>
-            </div>
-          </PageSection>
-        </div>
+              </span>
+              .
+            </p>
+            <dl className="m-0 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-1.5">
+              {TRIGGERS.map((trigger) => (
+                <div key={trigger.id} className="contents">
+                  <dt className="font-medium text-text-primary">{trigger.label}</dt>
+                  <dd className="m-0">{trigger.hint}</dd>
+                </div>
+              ))}
+            </dl>
+            <p className="m-0">
+              A skill is “Not used in the last 30 days” when no history Skill Studio can read
+              records a use. An agent whose history it can’t read adds no uses.
+            </p>
+          </div>
+        </PageSection>
 
-        <div {...anchor("cost")}>
-          <PageSection
-            title="Skill list and budget"
-            meta={
-              <SectionLink
-                label="Open What it sees"
-                onClick={() => setActiveView({ kind: "listing" })}
-              />
-            }
-          >
-            <div className="flex flex-col gap-3">
-              <p className="m-0">
-                On every turn, an agent puts each skill’s name and description in its skill list.
-                The rest of SKILL.md loads only when the skill runs.{" "}
-                {joinNames(BUDGETED_AGENTS.map((row) => row.label))} cap the list with a budget; as
-                it fills, descriptions step down:
-              </p>
-              <figure className="m-0 overflow-hidden rounded-md border border-border-subtle">
-                <figcaption className="sr-only">One skill at each step of a skill list</figcaption>
-                {LADDER.map((step) => (
-                  <div
-                    key={step.label}
-                    className="grid grid-cols-[120px_minmax(0,1fr)] items-baseline gap-3 border-b border-border-subtle px-3 py-2 last:border-b-0"
-                  >
-                    <span className="text-small font-medium text-text-primary">{step.label}</span>
-                    {step.line == null ? (
-                      <span className="text-small text-text-tertiary">no line</span>
-                    ) : (
-                      <span className="font-mono text-small break-words text-text-primary">
-                        {step.line}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </figure>
-              <p className="m-0">
-                {LISTING_STATE_LABEL.hidden} skills are out of the list and cost nothing: “You
-                only”, turned off in the agent’s settings, or parked.
-              </p>
-            </div>
-          </PageSection>
-        </div>
+        <PageSection
+          title="Skill list and budget"
+          meta={
+            <SectionLink
+              label="Open What it sees"
+              onClick={() => setActiveView({ kind: "listing" })}
+            />
+          }
+        >
+          <div className="flex flex-col gap-3">
+            <p className="m-0">
+              On every turn, an agent puts each skill’s name and description in its skill list. The
+              rest of SKILL.md loads only when the skill runs.{" "}
+              {joinNames(BUDGETED_AGENTS.map((row) => row.label))} cap the list with a budget; as it
+              fills, descriptions step down:
+            </p>
+            <figure className="m-0 overflow-hidden rounded-md border border-border-subtle">
+              <figcaption className="sr-only">One skill at each step of a skill list</figcaption>
+              {LADDER.map((step) => (
+                <div
+                  key={step.label}
+                  className="grid grid-cols-[120px_minmax(0,1fr)] items-baseline gap-3 border-b border-border-subtle px-3 py-2 last:border-b-0"
+                >
+                  <span className="text-small font-medium text-text-primary">{step.label}</span>
+                  {step.line == null ? (
+                    <span className="text-small text-text-tertiary">no line</span>
+                  ) : (
+                    <span className="font-mono text-small break-words text-text-primary">
+                      {step.line}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </figure>
+            <p className="m-0">
+              {LISTING_STATE_LABEL.hidden} skills are out of the list and cost nothing: “You only”,
+              turned off in the agent’s settings, or parked.
+            </p>
+          </div>
+        </PageSection>
 
-        <div {...anchor("invoke")}>
-          <PageSection title="Who can invoke a skill">
-            <div className="flex flex-col gap-3">
-              <p className="m-0">
-                By default a skill is “You or the model”: you call it by name, and the model calls
-                it when its description fits the task. “You only” keeps the model from calling it.
-              </p>
-              <table className="w-full border-collapse text-small">
-                <thead>
-                  <tr className="text-left text-text-tertiary">
-                    <th
-                      scope="col"
-                      className="border-b border-border-subtle py-1.5 pr-4 font-medium"
-                    >
-                      Agent
-                    </th>
-                    <th
-                      scope="col"
-                      className="border-b border-border-subtle py-1.5 pr-4 font-medium"
-                    >
-                      Call it by name
-                    </th>
-                    <th scope="col" className="border-b border-border-subtle py-1.5 font-medium">
-                      Make it “You only”
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {HARNESS_CATALOG.map((row) => {
-                    const invoke = INVOKE_BY_AGENT[row.id];
-                    return (
-                      <tr key={row.id} className="align-top">
-                        <td className="border-b border-border-subtle py-1.5 pr-4">
-                          <AgentName id={row.id} label={row.label} />
-                        </td>
-                        <td className="border-b border-border-subtle py-1.5 pr-4">
-                          <Code>{invoke.call}</Code>
-                        </td>
-                        <td className="border-b border-border-subtle py-1.5">
-                          {invoke.youOnly.length === 1 ? (
-                            <Code>{invoke.youOnly[0]}</Code>
-                          ) : (
-                            <>
-                              <Code>{invoke.youOnly[0]}</Code> → <Code>{invoke.youOnly[1]}</Code>
-                            </>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              <p className="m-0">
-                A SKILL.md setting applies to every agent that reads that folder; Codex’s applies to
-                Codex only. “Model only” exists only in Claude Code:{" "}
-                <Code>user-invocable: false</Code>.
-              </p>
-            </div>
-          </PageSection>
-        </div>
+        <PageSection title="Who can invoke a skill">
+          <div className="flex flex-col gap-3">
+            <p className="m-0">
+              By default a skill is “You or the model”: you call it by name, and the model calls it
+              when its description fits the task. “You only” keeps the model from calling it.
+            </p>
+            <table className="w-full border-collapse text-small">
+              <thead>
+                <tr className="text-left text-text-tertiary">
+                  <th scope="col" className="border-b border-border-subtle py-1.5 pr-4 font-medium">
+                    Agent
+                  </th>
+                  <th scope="col" className="border-b border-border-subtle py-1.5 pr-4 font-medium">
+                    Call it by name
+                  </th>
+                  <th scope="col" className="border-b border-border-subtle py-1.5 font-medium">
+                    Make it “You only”
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {HARNESS_CATALOG.map((row) => {
+                  const invoke = INVOKE_BY_AGENT[row.id];
+                  return (
+                    <tr key={row.id} className="align-top">
+                      <td className="border-b border-border-subtle py-1.5 pr-4">
+                        <AgentName id={row.id} label={row.label} />
+                      </td>
+                      <td className="border-b border-border-subtle py-1.5 pr-4">
+                        <Code>{invoke.call}</Code>
+                      </td>
+                      <td className="border-b border-border-subtle py-1.5">
+                        {invoke.youOnly.length === 1 ? (
+                          <Code>{invoke.youOnly[0]}</Code>
+                        ) : (
+                          <>
+                            <Code>{invoke.youOnly[0]}</Code> → <Code>{invoke.youOnly[1]}</Code>
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <p className="m-0">
+              A SKILL.md setting applies to every agent that reads that folder; Codex’s applies to
+              Codex only. “Model only” exists only in Claude Code:{" "}
+              <Code>user-invocable: false</Code>.
+            </p>
+          </div>
+        </PageSection>
 
-        <div {...anchor("broken")}>
-          <PageSection title={`${ATTENTION_LABEL.broken} and ${ATTENTION_LABEL.warning}`}>
-            <div className="flex flex-col gap-4">
-              <IssueGroup
-                title={ATTENTION_LABEL.broken}
-                lead="An agent does not load the skill."
-                dotClassName="bg-error"
-                kinds={brokenKinds}
-              />
-              <IssueGroup
-                title={ATTENTION_LABEL.warning}
-                lead="Agents still load it, but something drifted."
-                dotClassName="bg-warning"
-                kinds={warningKinds}
-              />
-            </div>
-          </PageSection>
-        </div>
+        <PageSection title={`${ATTENTION_LABEL.broken} and ${ATTENTION_LABEL.warning}`}>
+          <div className="flex flex-col gap-4">
+            <IssueGroup
+              title={ATTENTION_LABEL.broken}
+              lead="An agent does not load the skill."
+              dotClassName="bg-error"
+              kinds={brokenKinds}
+            />
+            <IssueGroup
+              title={ATTENTION_LABEL.warning}
+              lead="Agents still load it, but something drifted."
+              dotClassName="bg-warning"
+              kinds={warningKinds}
+            />
+          </div>
+        </PageSection>
 
         <PageSection title="Parking">
           <div className="flex flex-col gap-3">

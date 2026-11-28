@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import type { BackgroundStatus } from "@skill-studio/lib";
 import { openApp } from "./app-harness";
 
 test.beforeEach(async ({ page }) => {
@@ -108,5 +109,49 @@ test("Uses in 30 days claims no uses only when the sessions read used none", asy
 
   await agent.click();
   await page.getByRole("option", { name: "Cursor" }).click();
+  await expect(uses).toContainText("No readable history");
+});
+
+// Code review round 4: on a first launch, while the 30-day history was still being counted,
+// Cursor (which supplies uses but no session list) said "No readable history".
+test("Uses in 30 days says not counted yet for Cursor while the history is still being counted", async ({
+  page,
+}) => {
+  const counting = (running: boolean, revision: number): BackgroundStatus => ({
+    revision,
+    tasks: [
+      {
+        worker: "invocations",
+        running,
+        last_started_at: "2026-01-01T00:00:00Z",
+        last_finished_at: running ? null : "2026-01-01T00:00:01Z",
+        last_error: null,
+      },
+    ],
+  });
+  await page.evaluate(
+    async (status) => {
+      const harness = window.__harness!;
+      const snapshot = harness.snapshot();
+      await harness.publish({
+        ...snapshot,
+        invocations: snapshot.invocations.map((stats) => ({
+          ...stats,
+          by_harness_30_days: { ...stats.by_harness_30_days, cursor: 0 },
+        })),
+      });
+      await harness.publishBackgroundStatus(status);
+    },
+    counting(true, 1),
+  );
+  await page.getByRole("combobox", { name: "Agent" }).click();
+  await page.getByRole("option", { name: "Cursor" }).click();
+  const uses = page.getByRole("region", { name: "Uses in 30 days" });
+  await expect(uses).toContainText("Not counted yet");
+
+  await page.evaluate(
+    (status) => window.__harness?.publishBackgroundStatus(status),
+    counting(false, 2),
+  );
   await expect(uses).toContainText("No readable history");
 });

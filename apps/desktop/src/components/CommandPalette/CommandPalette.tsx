@@ -268,7 +268,7 @@ export function CommandPalette({ snapshot, requestRescan }: CommandPaletteProps)
         issues,
       ),
       "name",
-      [],
+      new Map(),
       attention,
     ).rows;
     const attentionItems = skillItems(

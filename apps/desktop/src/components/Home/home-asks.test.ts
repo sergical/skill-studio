@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import {
+  applySkillListFilter,
+  defaultSkillListFilter,
+  ownSkillsWithPluginUpdates,
+} from "@skill-studio/lib";
 import type { InstalledSkill, SkillInvocationStats } from "@skill-studio/lib";
 import { buildHarnessSnapshot, deployment, skill } from "../../dev/harness/skill-fixture";
 import { homeAsks, homeCounts, names, promptFor } from "./home-asks";
@@ -54,6 +59,32 @@ describe("homeCounts", () => {
       undefined,
     );
     expect(counts.unused).toEqual(["live-idle"]);
+  });
+
+  it("counts only the broken skills its Skills filter lists, so a parked broken skill adds none", () => {
+    const broken = (name: string, parked: boolean) =>
+      skill({
+        name,
+        parked,
+        spec_violations: ["missing required frontmatter field: description"],
+        deployments: [
+          deployment({
+            agent: parked ? "parked" : "shared",
+            scope: parked ? "parked" : "global",
+            path: parked ? `/h/.agents/skills-parked/${name}` : `/h/.agents/skills/${name}`,
+            spec_violations: ["missing required frontmatter field: description"],
+          }),
+        ],
+      });
+    const skills = [broken("live-broken", false), broken("parked-broken", true)];
+    const counts = homeCounts({ ...buildHarnessSnapshot(), skills }, undefined);
+    const [chip] = homeAsks(counts, []).chips;
+    const listed = applySkillListFilter(ownSkillsWithPluginUpdates(skills), {
+      ...defaultSkillListFilter(),
+      ...chip.filter,
+    });
+    expect(chip).toMatchObject({ id: "broken", count: 1 });
+    expect(listed.map((s) => s.name)).toEqual(["live-broken"]);
   });
 
   it("puts a skill with an unquoted colon in its description under warnings, not broken", () => {
