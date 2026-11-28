@@ -55,3 +55,14 @@ test("selecting costly, unused skills on the chart shows what parking them frees
   await page.getByRole("button", { name: /^Select \d+ to park$/ }).click();
   await expect(page.getByRole("button", { name: "Cancel", exact: true })).toBeVisible();
 });
+
+test("selecting costly, unused skills leaves out a skill no agent with history reads", async ({
+  page,
+}) => {
+  // Claude Code has history; one of the 15 skills sits only in Cursor's folder, and Cursor has
+  // none. Five skills are used, so nine are unused and the Cursor one has no readable history.
+  await page.goto("/?persona=claude-history-cursor-skill");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByRole("button", { name: "Select costly, unused" }).click();
+  await expect(page.getByRole("button", { name: "Select 9 to park" })).toBeVisible();
+});

@@ -6,6 +6,7 @@
 
 import { deploymentLabelFromAgentId, joinNames } from "@skill-studio/lib";
 import type { HarnessListing } from "@skill-studio/lib";
+import { hasBudgetEstimate } from "../Listing/client-allocation";
 import type { HomeFilter, HomeGroups } from "./home-inbox-data";
 
 export type HomeTodoAction =
@@ -57,7 +58,7 @@ export function homeTodos(
       to: { kind: "filter", filter: "warn" },
     });
   for (const row of listings) {
-    if (row.evidence !== "preview" || row.budget === null) continue;
+    if (!hasBudgetEstimate(row)) continue;
     const label = deploymentLabelFromAgentId(row.harness);
     const count = (...states: string[]) =>
       row.entries.filter((e) => states.includes(e.state)).length;

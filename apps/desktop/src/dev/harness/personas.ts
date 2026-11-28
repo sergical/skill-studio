@@ -8,6 +8,7 @@
 
 import { collectDashboardIssues } from "@skill-studio/lib";
 import type { InstalledSkill, SkillSnapshot } from "@skill-studio/lib";
+import { withScannerIdentity } from "./scanned-deployment";
 import { buildHarnessSnapshot } from "./skill-fixture";
 
 export interface Persona {
@@ -124,13 +125,25 @@ const plugin = (skill: InstalledSkill): InstalledSkill => ({
   deployments: skill.deployments.map((d) => ({ ...d, scope: "plugin", agent: "Claude Code" })),
 });
 
+/** Moves a skill's shared-folder copies into one agent's own folder, e.g. `~/.claude/skills/<name>`. */
+const inAgentFolder =
+  (agent: string, dir: string) =>
+  (skill: InstalledSkill): InstalledSkill => ({
+    ...skill,
+    deployments: skill.deployments.map((d) =>
+      d.agent === "shared"
+        ? withScannerIdentity({
+            ...d,
+            agent,
+            path: d.path.replace("/.agents/skills/", `/${dir}/skills/`),
+          })
+        : d,
+    ),
+  });
+
 // A Claude Code user's own copies sit in Claude Code's folder, which its history covers.
-const inClaudeCode = (skill: InstalledSkill): InstalledSkill => ({
-  ...skill,
-  deployments: skill.deployments.map((d) =>
-    d.agent === "shared" ? { ...d, agent: "Claude Code" } : d,
-  ),
-});
+const inClaudeCode = inAgentFolder("Claude Code", ".claude");
+const inCursor = inAgentFolder("Cursor", ".cursor");
 
 function updates(snapshot: SkillSnapshot): SkillSnapshot {
   const count = snapshot.skills.filter((skill) => skill.has_update).length;
@@ -252,6 +265,23 @@ export const PERSONAS = {
     claudeFraction: 0.05,
     expectTop: "no use",
     build: () => withUses(estate(60, same), 5),
+  },
+  "claude-history-cursor-skill": {
+    label: "Claude Code history, one skill only Cursor reads",
+    agents: ["claude-code", "cursor"],
+    claudeFraction: 0.01,
+    expectTop: "no use",
+    build: () => {
+      const base = estate(60, same);
+      // Described skills whose one copy is in the shared folder, so each moves whole into one
+      // agent's folder.
+      const skills = base.skills
+        .filter((s) => s.description)
+        .filter((s) => s.deployments.every((d) => d.agent === "shared" && d.scope === "global"))
+        .slice(0, 15)
+        .map((s, i) => (i === 14 ? inCursor(s) : inClaudeCode(s)));
+      return withUses({ ...base, skills }, 5);
+    },
   },
   "cursor-only": {
     label: "Cursor only, no limit to estimate",

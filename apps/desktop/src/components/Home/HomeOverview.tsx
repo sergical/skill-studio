@@ -11,6 +11,7 @@ import {
   deploymentLabelFromAgentId,
   formatCount,
   skillRows,
+  skillUsageIn30Days,
   joinNames,
 } from "@skill-studio/lib";
 import type { HarnessListing, SkillSnapshot } from "@skill-studio/lib";
@@ -19,6 +20,7 @@ import { PageSection } from "../Shell/PageSection";
 import { HarnessIcon, harnessIdFromLabel } from "../ui/HarnessIcon";
 import { useClientIds } from "../../hooks/useClientRows";
 import { useAppStore } from "../../store/appStore";
+import { hasBudgetEstimate } from "../Listing/client-allocation";
 import { homeTodos } from "./home-todos";
 import type { HomeTodo } from "./home-todos";
 import type { HomeFilter, HomeGroups } from "./home-inbox-data";
@@ -45,9 +47,9 @@ function SpaceRow({ row, open }: { row: HarnessListing; open: () => void }) {
   const cut = count("truncated");
   const names = count("name_only", "omitted");
   const total = full + cut + names;
-  const estimated = row.evidence === "preview" && row.budget !== null;
+  const estimated = hasBudgetEstimate(row);
   const text = !estimated
-    ? `Folders only · ${row.entries.filter((e) => e.scanned).length} found`
+    ? `No estimate · ${row.entries.filter((e) => e.scanned).length} found`
     : names
       ? `${full + cut} of ${total} descriptions fit`
       : cut
@@ -119,8 +121,13 @@ export function HomeOverview({
   const toggleSkillSelection = useAppStore((s) => s.toggleSkillSelection);
   const clearSkillSelection = useAppStore((s) => s.clearSkillSelection);
   const usesBySkill = new Map(ranked.map((row) => [row.skill, row.count]));
-  // The chart needs enough skills to show a spread, and history to place them by use.
-  const chartable = groups.own.filter((skill) => !skill.parked && skill.invocation !== "user-only");
+  const usage = skillUsageIn30Days(snapshot.invocations);
+  // The chart needs enough skills to show a spread, and history to place them by use. A skill
+  // that no agent with history reads has no use count, so it is left off rather than put at zero.
+  const modelSkills = groups.own.filter(
+    (skill) => !skill.parked && skill.invocation !== "user-only",
+  );
+  const chartable = modelSkills.filter((skill) => usage(skill) !== "no-readable-history");
   const showChart = chartable.length >= 10 && historyAgents.length > 0;
   const live = groups.own.filter((skill) => !skill.parked).length;
   const go = (todo: HomeTodo) =>
@@ -179,7 +186,12 @@ export function HomeOverview({
           meta="Right: used more · Up: more room in every message"
         >
           <CostUseChart
-            points={chartable.map((skill) => ({ skill, uses: usesBySkill.get(skill.name) ?? 0 }))}
+            points={chartable.map((skill) => ({
+              skill,
+              uses: usesBySkill.get(skill.name) ?? 0,
+              unused: usage(skill) === "unused",
+            }))}
+            noHistory={modelSkills.length - chartable.length}
             open={open}
             park={(skills) => {
               clearSkillSelection();

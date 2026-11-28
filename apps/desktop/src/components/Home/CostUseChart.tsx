@@ -18,6 +18,8 @@ const PAD = 28;
 export interface CostUsePoint {
   skill: InstalledSkill;
   uses: number;
+  /** Read by an agent with history and no use in 30 days: what "Select costly, unused" picks. */
+  unused: boolean;
 }
 
 interface Box {
@@ -29,14 +31,18 @@ interface Box {
 
 export function CostUseChart({
   points,
+  noHistory,
   open,
   park,
 }: {
   points: CostUsePoint[];
+  /** Skills left off the chart because no agent that reads them has readable history. */
+  noHistory: number;
   open: (name: string) => void;
   park: (skills: InstalledSkill[]) => void;
 }) {
-  const [box, setBox] = useState<Box | null>(null);
+  // A dragged box, or every unused skill. A box around the unused dots could catch a used one.
+  const [box, setBox] = useState<Box | "unused" | null>(null);
   const [dragging, setDragging] = useState(false);
   const maxUses = Math.max(1, ...points.map((p) => p.uses));
   const maxTokens = Math.max(1, ...points.map((p) => p.skill.description_tokens));
@@ -49,12 +55,14 @@ export function CostUseChart({
       (p.uses ? 0 : (index % 9) * 4),
     y: H - PAD - (p.skill.description_tokens / maxTokens) * (H - PAD - 8),
   }));
-  const inBox = (p: { x: number; y: number }) =>
-    box !== null &&
-    p.x >= Math.min(box.x0, box.x1) &&
-    p.x <= Math.max(box.x0, box.x1) &&
-    p.y >= Math.min(box.y0, box.y1) &&
-    p.y <= Math.max(box.y0, box.y1);
+  const inBox = (p: { x: number; y: number; unused: boolean }) =>
+    box === "unused"
+      ? p.unused
+      : box !== null &&
+        p.x >= Math.min(box.x0, box.x1) &&
+        p.x <= Math.max(box.x0, box.x1) &&
+        p.y >= Math.min(box.y0, box.y1) &&
+        p.y <= Math.max(box.y0, box.y1);
   const picked = placed.filter(inBox);
   const freed = picked.reduce((sum, p) => sum + p.skill.description_tokens, 0);
   const usedPicked = picked.filter((p) => p.uses > 0).length;
@@ -65,10 +73,6 @@ export function CostUseChart({
       x: ((event.clientX - rect.left) / rect.width) * W,
       y: ((event.clientY - rect.top) / rect.height) * H,
     };
-  };
-  const selectCostlyUnused = () => {
-    const tokens = placed.filter((p) => !p.uses).map((p) => p.y);
-    setBox({ x0: PAD - 4, x1: PAD + 40, y0: 4, y1: tokens.length ? Math.max(...tokens) + 4 : H });
   };
 
   return (
@@ -87,7 +91,9 @@ export function CostUseChart({
         onPointerMove={(event) => {
           if (!dragging) return;
           const at = toSvg(event);
-          setBox((current) => current && { ...current, x1: at.x, y1: at.y });
+          setBox((current) =>
+            current && current !== "unused" ? { ...current, x1: at.x, y1: at.y } : current,
+          );
         }}
         onPointerUp={() => setDragging(false)}
       >
@@ -114,7 +120,7 @@ export function CostUseChart({
             <title>{`${p.skill.name} · ${p.uses} uses · ${p.skill.description_tokens} tokens`}</title>
           </circle>
         ))}
-        {box && (
+        {box && box !== "unused" && (
           <rect
             x={Math.min(box.x0, box.x1)}
             y={Math.min(box.y0, box.y1)}
@@ -126,7 +132,7 @@ export function CostUseChart({
         )}
       </svg>
       <div className="mt-2 flex min-h-8 flex-wrap items-center gap-3 text-small text-text-secondary">
-        <Button size="sm" variant="outline" onClick={selectCostlyUnused}>
+        <Button size="sm" variant="outline" onClick={() => setBox("unused")}>
           Select costly, unused
         </Button>
         {picked.length ? (
@@ -144,6 +150,12 @@ export function CostUseChart({
           </>
         ) : (
           <span>Drag over the dots to select skills.</span>
+        )}
+        {noHistory > 0 && (
+          <span>
+            {noHistory} not shown · No readable history from the agents that read{" "}
+            {noHistory === 1 ? "it" : "them"}
+          </span>
         )}
       </div>
     </div>

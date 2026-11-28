@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { mockListingReport } from "../../dev/harness/mock-listing";
 import { buildHarnessSnapshot } from "../../dev/harness/skill-fixture";
 import { homeTodos } from "./home-todos";
 
@@ -30,5 +31,15 @@ describe("homeTodos", () => {
       "Checked just now",
     ).map((todo) => todo.id);
     expect(ids).toEqual(["warnings", "updates"]);
+  });
+
+  it("says no skill lost its description when Claude's model window is unknown", () => {
+    const groups = { broken: [], warnings: [], updates: [], unused: [] };
+    const claude = mockListingReport(buildHarnessSnapshot(), {}).listings.filter(
+      (row) => row.harness === "claude-code",
+    );
+    expect(homeTodos(groups, claude, [], "").map((todo) => todo.id)).toEqual(["space-claude-code"]);
+    const unknown = claude.map((row) => ({ ...row, uses_default_context_window: true }));
+    expect(homeTodos(groups, unknown, [], "")).toEqual([]);
   });
 });
