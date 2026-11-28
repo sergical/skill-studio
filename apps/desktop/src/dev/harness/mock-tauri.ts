@@ -578,9 +578,13 @@ export function installMockTauri(
   mockWindows("main");
   // `?latency=<ms>` holds every answer that long, so busy states show as they do with real disk work.
   let latency = Number(new URLSearchParams(location.search).get("latency") ?? 0);
+  /** "Update all" batches asked to stop; like the real op, a stop sent before its batch starts still applies. */
+  const stoppedBatches = new Set<string>();
   mockIPC(
     async (command, rawPayload) => {
-      if (latency > 0) await new Promise((resolve) => setTimeout(resolve, latency));
+      // A Stop lands at once, so it takes effect after the step the batch is on.
+      if (latency > 0 && command !== "cancel_update_all")
+        await new Promise((resolve) => setTimeout(resolve, latency));
       const payload = isObjectInvokeArgs(rawPayload) ? rawPayload : {};
       switch (command) {
         case "check_skill_updates_now":
@@ -1141,12 +1145,21 @@ export function installMockTauri(
               z.object({ deployment_id: z.string().nullish(), owner_id: z.string().nullish() }),
             )
             .parse(payload.targets);
+          const batchId = z.string().nullish().parse(payload.batchId);
           const skillsByName = new Map(currentSnapshot.skills.map((s) => [s.name, s]));
           const items = [];
+          const notRun: string[] = [];
           for (const target of targets) {
             const name = skillNameForTarget(target);
+            if (batchId && stoppedBatches.has(batchId)) {
+              notRun.push(name);
+              continue;
+            }
             const deployment = skillsByName.get(name)?.deployments[0];
+            // Each target takes one answer's latency, so a running batch stays on screen.
             // react-doctor-disable-next-line react-doctor/async-await-in-loop -- fixture applies each update sequentially, mirroring the real op's per-request loop
+            if (latency > 0) await new Promise((resolve) => setTimeout(resolve, latency));
+            // react-doctor-disable-next-line react-doctor/async-await-in-loop -- as above
             await updateSkill(name, (item) => ({
               ...item,
               has_update: false,
@@ -1165,11 +1178,18 @@ export function installMockTauri(
                 tree_hash_after: "fixture-after",
               },
             });
+            // react-doctor-disable-next-line react-doctor/async-await-in-loop -- as above
+            await emit("skills://update-all-progress", {
+              done: items.length,
+              total: targets.length,
+              skill_name: name,
+            });
           }
-          return { items, errors: {}, not_run: [] };
+          return { items, errors: {}, not_run: notRun };
         }
 
         case "cancel_update_all":
+          stoppedBatches.add(z.string().parse(payload.batchId));
           return null;
 
         case "fork_skill": {

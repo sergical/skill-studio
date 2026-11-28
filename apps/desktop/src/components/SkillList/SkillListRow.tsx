@@ -39,6 +39,8 @@ interface SkillListRowProps {
   onOpen: () => void;
   onAct: (label: string, skill: InstalledSkill) => void;
   onCheckedChange: (shiftKey: boolean) => void;
+  /** Whether Update all is on this row now; see `RowFixButton`'s `busy`. */
+  busy?: boolean;
 }
 
 export function SkillListRow({
@@ -57,6 +59,7 @@ export function SkillListRow({
   onOpen,
   onAct,
   onCheckedChange,
+  busy: batchBusy,
 }: SkillListRowProps) {
   const scopedSkill = skillForCoverageScope(skill, scope);
   const note = rowNote(state);
@@ -112,7 +115,7 @@ export function SkillListRow({
         />
       </div>
       <div role="gridcell" className="flex min-w-0 justify-end">
-        <RowFixButton skill={skill} label={state?.action ?? null} onAct={onAct} />
+        <RowFixButton skill={skill} label={state?.action ?? null} onAct={onAct} busy={batchBusy} />
       </div>
     </div>
   );

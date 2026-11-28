@@ -1,6 +1,6 @@
 // ============================================================================
-// useSkillListAct - Row fix dispatch for Home and Skills: Park/Unpark, Fix,
-// and Update act on the deployment target `HomeView` uses, Compare opens the
+// useSkillListAct - Row fix dispatch for Skills: Park/Unpark, Fix,
+// and Update act on the row's deployment target, Compare opens the
 // skill's compare dialog, and any other label opens the skill's own detail,
 // since those flows live there. Fix now covers the repairable spec
 // violations too (invalid YAML frontmatter); any issue `fix_skill` leaves

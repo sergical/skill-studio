@@ -105,13 +105,18 @@ const broken = (skill: InstalledSkill): InstalledSkill => ({
 });
 
 const updateTemplate = buildHarnessSnapshot().skills.find((skill) => skill.update_owner_ids.length);
-const outdated = (skill: InstalledSkill): InstalledSkill => ({
-  ...skill,
-  has_update: true,
-  update_owner_ids: updateTemplate?.update_owner_ids ?? ["fixture"],
-  update_owners: updateTemplate?.update_owners ?? [],
-  update_commit: updateTemplate?.update_commit ?? null,
-});
+/** Each skill gets its own owner, so updating one clears that skill and no other. */
+const outdated = (skill: InstalledSkill): InstalledSkill => {
+  const ownerId = `owner:v1/dotagents/${skill.name}`;
+  const template = updateTemplate?.update_owners[0];
+  return {
+    ...skill,
+    has_update: true,
+    update_owner_ids: [ownerId],
+    update_owners: template ? [{ ...template, owner_id: ownerId }] : [],
+    update_commit: updateTemplate?.update_commit ?? null,
+  };
+};
 
 const youOnly = (skill: InstalledSkill): InstalledSkill => ({
   ...skill,

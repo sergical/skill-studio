@@ -1,5 +1,5 @@
 // ============================================================================
-// RowFixButton - the last cell of every skill row on Home and Skills. One
+// RowFixButton - the last cell of every skill row on Skills. One
 // shape for the whole act: the fix's name, a spinner over that name while it
 // runs, then the past tense ("Updated") until the list is laid out again.
 // The cell never changes width, so the row never moves.

@@ -1,5 +1,5 @@
 // ============================================================================
-// skillBatchUpdates.test - Home "Update all" Cancel, through a mocked IPC bridge
+// skillBatchUpdates.test - "Update all" Cancel, through a mocked IPC bridge
 // ============================================================================
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,9 +9,9 @@ import { updateAllTitle } from "./update-all";
 import {
   getActiveUpdateAll,
   requestUpdateAllStop,
-  runHomeUpdateAll,
-  startHomeUpdateAll,
-  stopHomeUpdateAll,
+  runUpdateAll,
+  startUpdateAll,
+  stopUpdateAll,
 } from "./skillBatchUpdates";
 import { newUpdateAllControl } from "./skillBatchUpdates";
 
@@ -120,7 +120,7 @@ function outcomeFor(skill: string): UpdateOutcome {
   };
 }
 
-describe("Home Update all cancel", () => {
+describe("Update all cancel", () => {
   it("cancel_during_the_fork_phase_calls_cancel_update_all_and_skips_the_owner_batch_or_runs_every_phase_anyway", async () => {
     const control = newUpdateAllControl();
     mockCommands(async (command) => {
@@ -131,7 +131,7 @@ describe("Home Update all cancel", () => {
       return null;
     });
 
-    const tally = await runHomeUpdateAll(
+    const tally = await runUpdateAll(
       [outdated("forked", "fork"), outdated("alpha", "skills-sh"), outdated("beta", "skills-sh")],
       () => {},
       undefined,
@@ -156,7 +156,7 @@ describe("Home Update all cancel", () => {
       return null;
     });
 
-    const tally = await runHomeUpdateAll(
+    const tally = await runUpdateAll(
       [outdated("forked", "fork"), outdated("alpha", "skills-sh")],
       () => {},
       undefined,
@@ -178,7 +178,7 @@ describe("Home Update all cancel", () => {
       };
     });
 
-    const tally = await runHomeUpdateAll(
+    const tally = await runUpdateAll(
       ["alpha", "beta", "gamma"].map((name) => outdated(name, "skills-sh")),
       () => {},
     );
@@ -194,7 +194,7 @@ describe("Home Update all cancel", () => {
     });
 
     await requestUpdateAllStop(control);
-    await runHomeUpdateAll([outdated("alpha", "skills-sh")], () => {}, undefined, control);
+    await runUpdateAll([outdated("alpha", "skills-sh")], () => {}, undefined, control);
 
     const cancel = payloads.find((call) => call.command === "cancel_update_all");
     expect(cancel?.payload).toMatchObject({ batchId: control.batchId });
@@ -212,13 +212,10 @@ describe("Home Update all cancel", () => {
       return null;
     });
 
-    const running = startHomeUpdateAll([
-      outdated("forked", "fork"),
-      outdated("alpha", "skills-sh"),
-    ]);
+    const running = startUpdateAll([outdated("forked", "fork"), outdated("alpha", "skills-sh")]);
     const batchId = getActiveUpdateAll()?.control.batchId;
     // A remounted group knows nothing but the store, so it stops through the store.
-    await stopHomeUpdateAll();
+    await stopUpdateAll();
     releaseFork();
     await running;
 
@@ -241,8 +238,8 @@ describe("Home Update all cancel", () => {
     });
     const updates = [outdated("forked", "fork")];
 
-    const first = startHomeUpdateAll(updates);
-    const second = await startHomeUpdateAll(updates);
+    const first = startUpdateAll(updates);
+    const second = await startUpdateAll(updates);
     releaseFork();
     await first;
 
@@ -269,11 +266,8 @@ describe("Home Update all cancel", () => {
       return null;
     });
 
-    const running = startHomeUpdateAll([
-      outdated("forked", "fork"),
-      outdated("alpha", "skills-sh"),
-    ]);
-    await expect(stopHomeUpdateAll()).rejects.toThrow();
+    const running = startUpdateAll([outdated("forked", "fork"), outdated("alpha", "skills-sh")]);
+    await expect(stopUpdateAll()).rejects.toThrow();
     expect(getActiveUpdateAll()?.isStopping).toBe(false);
     releaseFork();
     const tally = await running;
@@ -307,11 +301,8 @@ describe("Home Update all cancel", () => {
       return null;
     });
 
-    const running = startHomeUpdateAll([
-      outdated("forked", "fork"),
-      outdated("alpha", "skills-sh"),
-    ]);
-    const stopping = stopHomeUpdateAll();
+    const running = startUpdateAll([outdated("forked", "fork"), outdated("alpha", "skills-sh")]);
+    const stopping = stopUpdateAll();
     releaseFork();
     await new Promise((resolve) => setTimeout(resolve, 0));
     rejectCancel(new Error("bridge closed"));

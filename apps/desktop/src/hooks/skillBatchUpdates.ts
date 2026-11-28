@@ -3,6 +3,7 @@
 // callers run `skillsWithLocalEdits` and the edits dialog first.
 // ============================================================================
 
+import { useSyncExternalStore } from "react";
 import type { PluginUpdateResult } from "../lib/skill-api";
 import {
   cancelUpdateAll,
@@ -39,7 +40,7 @@ function pluginBatchUpdater() {
   };
 }
 
-/** Stop request for one `runHomeUpdateAll` batch. */
+/** Stop request for one `runUpdateAll` batch. */
 export interface UpdateAllControl {
   /** Names this batch to the backend, so a Cancel that lands before the batch starts still reaches it. */
   batchId: string;
@@ -65,8 +66,8 @@ export function requestUpdateAllStop(control: UpdateAllControl): Promise<void> {
   return sent;
 }
 
-/** Home's "Update all"; `forkNames` are the edited skills to fork and merge instead of overwrite. `onProgress`'s third argument names the skill that starts next. */
-export async function runHomeUpdateAll(
+/** The Updates group's "Update all"; `forkNames` are the edited skills to fork and merge instead of overwrite. `onProgress`'s third argument names the skill that starts next. */
+export async function runUpdateAll(
   updates: InstalledSkill[],
   onProgress: (done: number, total: number, current: string | null) => void,
   forkNames?: ReadonlySet<string>,
@@ -93,7 +94,7 @@ export async function runHomeUpdateAll(
   }
 }
 
-/** The Home "Update all" batch that is running, kept here so it outlives the component that started it. */
+/** The "Update all" batch that is running, kept here so it outlives the component that started it. */
 export interface ActiveUpdateAll {
   control: UpdateAllControl;
   progress: { done: number; total: number; current: string | null };
@@ -101,29 +102,38 @@ export interface ActiveUpdateAll {
 }
 
 let activeBatch: ActiveUpdateAll | null = null;
+const batchListeners = new Set<() => void>();
 
 function setActiveBatch(next: ActiveUpdateAll | null) {
   activeBatch = next;
+  batchListeners.forEach((listener) => listener());
 }
 
 export function getActiveUpdateAll(): ActiveUpdateAll | null {
   return activeBatch;
 }
 
+function subscribeActiveUpdateAll(listener: () => void) {
+  batchListeners.add(listener);
+  return () => void batchListeners.delete(listener);
+}
+
+/** The running batch, or null; a remounted Updates group reads it again and shows Stop. */
+export function useActiveUpdateAll(): ActiveUpdateAll | null {
+  return useSyncExternalStore(subscribeActiveUpdateAll, getActiveUpdateAll);
+}
+
 /**
- * Starts Home's "Update all" unless one is already running; resolves to the
+ * Starts "Update all" unless one is already running; resolves to the
  * tally, or null when it refused. Two batches would write the same skills, and
  * the second one's id could not stop the first.
  */
-export async function startHomeUpdateAll(
-  updates: InstalledSkill[],
-  forkNames?: ReadonlySet<string>,
-) {
+export async function startUpdateAll(updates: InstalledSkill[], forkNames?: ReadonlySet<string>) {
   if (activeBatch) return null;
   const control = newUpdateAllControl();
   setActiveBatch({ control, progress: { done: 0, total: 0, current: null }, isStopping: false });
   try {
-    return await runHomeUpdateAll(
+    return await runUpdateAll(
       updates,
       (done, total, current) =>
         activeBatch?.control === control &&
@@ -137,7 +147,7 @@ export async function startHomeUpdateAll(
 }
 
 /** Stops the running batch, if any; the same call works from a component mounted after it started. */
-export async function stopHomeUpdateAll(): Promise<void> {
+export async function stopUpdateAll(): Promise<void> {
   const batch = activeBatch;
   if (!batch) return;
   setActiveBatch({ ...batch, isStopping: true });
@@ -152,7 +162,7 @@ export async function stopHomeUpdateAll(): Promise<void> {
   }
 }
 
-/** The list's bulk Update; `forkNames` as for `runHomeUpdateAll`. */
+/** The list's bulk Update; `forkNames` as for `runUpdateAll`. */
 export function runListUpdate(
   skills: InstalledSkill[],
   forkNames: ReadonlySet<string>,

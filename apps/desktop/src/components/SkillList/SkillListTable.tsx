@@ -20,12 +20,14 @@ import type {
 import { groupSkillRows } from "../../lib/skill-list-model";
 import { useHeldLayout } from "../../lib/held-layout";
 import type { SortMode } from "../../lib/skill-list-sort";
+import { useActiveUpdateAll } from "../../hooks/skillBatchUpdates";
 import { useRowCursor, useRowCursorWindowEntry } from "../../hooks/useRowCursor";
 import { RichTooltipScope } from "../ui/RichTooltip";
 import { SkillListEmptyState } from "./SkillListEmptyState";
 import { SkillListGroup } from "./SkillListGroup";
 import { SkillListRow } from "./SkillListRow";
 import { SkillListSelectionBar } from "./SkillListSelectionBar";
+import { UpdateAllButton } from "./UpdateAllButton";
 import { useSkillListAct } from "./useSkillListAct";
 import { useSkillListScrollMargin } from "./useSkillListScrollMargin";
 import { useSkillListSelection } from "./useSkillListSelection";
@@ -209,6 +211,7 @@ export function SkillListTable({
     deploymentPathForSkill,
   );
   const { scrollElement, scrollMargin, setGridElement } = useSkillListScrollMargin();
+  const updateAll = useActiveUpdateAll();
 
   /** The flat item list the virtualizer measures, and each group's offset/size in that same
    * coordinate space - see `buildListItems`. */
@@ -329,7 +332,7 @@ export function SkillListTable({
   /** One skill row - `index` is its position in the grouped `rows` array, for shift-click and
    * `aria-rowindex`; `useRowCursor` (via `skill.name`) drives the roving `tabIndex` instead.
    * `top` is the virtualizer's offset within the row's group container. */
-  function renderRow(skill: InstalledSkill, index: number, top: number) {
+  function renderRow(skill: InstalledSkill, index: number, top: number, group: RowGroup) {
     const checked = selectedPaths.has(rowPath(skill) ?? "");
     const state = statesBySkill.get(skill.name) ?? null;
     const uses = usesBySkill.get(skill.name) ?? 0;
@@ -357,6 +360,9 @@ export function SkillListTable({
         onOpen={() => onSelectSkill(skill.name, deploymentPathForSkill?.(skill))}
         onAct={(label) => void handleAct(label, skill)}
         onCheckedChange={(shiftKey) => handleRowCheckboxClick(index, shiftKey)}
+        busy={
+          updateAll && group === "update" ? updateAll.progress.current === skill.name : undefined
+        }
       />
     );
   }
@@ -391,6 +397,10 @@ export function SkillListTable({
                   group={group}
                   label={ROW_GROUP_LABEL[group]}
                   count={grouped.buckets[group].length}
+                  extra={
+                    group === "update" &&
+                    groupSkills.length > 1 && <UpdateAllButton updates={grouped.buckets.update} />
+                  }
                   open={open}
                   start={groupStart}
                   height={groupHeight}
@@ -398,7 +408,7 @@ export function SkillListTable({
                   virtualItems={virtualItems}
                   scrollMargin={scrollMargin}
                   onToggle={() => toggleGroup(group)}
-                  renderRow={(item, top) => renderRow(item.skill, item.index, top)}
+                  renderRow={(item, top) => renderRow(item.skill, item.index, top, item.group)}
                 />
               );
             })}

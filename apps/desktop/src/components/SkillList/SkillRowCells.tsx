@@ -1,5 +1,5 @@
 // ============================================================================
-// SkillRowCells - the shared cells of a skill row on Home and Skills: the row
+// SkillRowCells - the cells of a skill row on Skills: the row
 // slot (state icon or checkbox), the name, and the note (reason and tokens).
 // ============================================================================
 

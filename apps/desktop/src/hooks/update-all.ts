@@ -1,6 +1,6 @@
 // ============================================================================
 // update-all - "Update all": one batch update for many outdated skills, its
-// progress and its toast, run by `runHomeUpdateAll`.
+// progress and its toast, run by `runUpdateAll`.
 // ============================================================================
 
 import type {
