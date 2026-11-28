@@ -155,7 +155,7 @@ test.afterAll(() => {
     )
     .join("");
   writeFileSync(
-    `${out}/index.html`,
+    `${out}/index-packs.html`,
     `<!doctype html><meta charset="utf-8"><title>Packs states</title><style>body{background:#111;color:#ddd;font:13px -apple-system,sans-serif;margin:24px}h2{font-size:15px;margin:28px 0 8px}small{color:#888;font-weight:400}div{display:flex;gap:12px;align-items:flex-start}figure{margin:0}img{display:block;width:520px;border:1px solid #333;border-radius:6px}figcaption{color:#888;margin-top:4px}</style><h1>Packs states</h1>${rows}`,
   );
 });

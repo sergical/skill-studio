@@ -17,6 +17,7 @@ import { ROW_CLASS } from "../SkillList/skill-row-format";
 import { useAppStore } from "../../store/appStore";
 import type { PackIntent } from "../../store/appStore";
 import { CopyTextButton } from "../ui/CopyTextButton";
+import { checkResult, plural } from "./pack-check-result";
 import { PackPlanDialog } from "./PackPlanDialog";
 
 /** Groups in page order: the tools Skill Studio runs first, then the ones that change elsewhere. */
@@ -41,8 +42,6 @@ const OWNER_NOTE = {
 const PACK_LIST_GRID =
   "grid [grid-template-columns:minmax(13rem,1fr)_fit-content(14rem)_max-content] gap-x-4";
 const PACK_ROW_GRID = "col-span-full grid-cols-subgrid px-3";
-
-const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "" : "s"}`;
 
 const isManagedElsewhere = (pack: Pack) => OWNER_NOTE[pack.kind] !== null;
 
@@ -98,12 +97,38 @@ function PackDetails({ pack }: { pack: Pack }) {
       </span>,
     );
   }
-  if (pack.original) {
+  const { original } = pack;
+  if (original) {
     parts.push(
-      <span key="moved" className="min-w-0 truncate" title={pack.original.source}>
-        Moved from {pack.original.source}
+      <span key="moved" className="min-w-0 truncate" title={original.source}>
+        Moved from {original.source}
       </span>,
     );
+    if (original.remote.state === "failed") {
+      parts.push(
+        <span
+          key="original-failed"
+          className="min-w-0 truncate text-error"
+          title={original.remote.reason}
+        >
+          Original check failed: {original.remote.reason}
+        </span>,
+      );
+    }
+    if (original.differs.length > 0) {
+      parts.push(
+        <span key="differs" className="shrink-0" title={original.differs.join(", ")}>
+          {original.differs.length} differ from the original
+        </span>,
+      );
+    }
+    if (original.not_in_source.length > 0) {
+      parts.push(
+        <span key="not-in-source" className="shrink-0" title={original.not_in_source.join(", ")}>
+          {original.not_in_source.length} only in the original
+        </span>,
+      );
+    }
   }
   return (
     <span className="flex min-w-0 items-baseline gap-1.5 text-small text-text-secondary tabular-nums">
@@ -196,19 +221,6 @@ function PackRow({ pack, onAct }: { pack: Pack; onAct: (intent: PackIntent) => v
       </span>
     </li>
   );
-}
-
-/** One line after an upstream check: what it found across every pack, or that nothing is new. */
-function checkResult(packs: Pack[]): ReactNode {
-  const behind = packs.reduce((sum, pack) => sum + pack.behind_count, 0);
-  const added = packs.reduce((sum, pack) => sum + pack.new_upstream.length, 0);
-  const failed = packs.filter((pack) => pack.remote.state === "failed").length;
-  const parts = [
-    behind > 0 && `${behind} behind`,
-    added > 0 && `${added} new upstream`,
-    failed > 0 && `${plural(failed, "check")} failed`,
-  ].filter(Boolean);
-  return parts.length === 0 ? "Up to date" : parts.join(" · ");
 }
 
 type ListState =

@@ -69,8 +69,10 @@ function scopeLabel(step: PackStep): string {
     : (step.scope.project.split("/").pop() ?? step.scope.project);
 }
 
-const stepKey = (step: PackStep) =>
-  `${step.source}:${step.skill}:${step.scope.scope === "global" ? "global" : step.scope.project}`;
+const scopeKey = (step: PackStep) =>
+  step.scope.scope === "global" ? "global" : step.scope.project;
+
+const stepKey = (step: PackStep) => `${step.source}:${step.skill}:${scopeKey(step)}`;
 
 /** The report as counts, naming only states that have steps: "3 to update · 2 skipped". */
 function countLine(report: PackActionReport): string {
@@ -204,7 +206,8 @@ export function PackPlanDialog({ intent, onClose }: PackPlanDialogProps) {
   const finished = state.phase === "done" || state.phase === "failed";
   const steps = report ? report.steps : [];
   const groups = groupSteps(steps);
-  const showScope = new Set(steps.map(scopeLabel)).size > 1;
+  const showScope = new Set(steps.map(scopeKey)).size > 1;
+  const onlyScope = !showScope && steps[0] ? steps[0].scope : null;
   const showSource = new Set(steps.map((step) => step.source)).size > 1;
 
   return (
@@ -220,6 +223,14 @@ export function PackPlanDialog({ intent, onClose }: PackPlanDialogProps) {
                 : report && countLine(report)}
           </AlertDialogDescription>
         </AlertDialogHeader>
+        {onlyScope && (
+          <p
+            className="m-0 min-w-0 truncate text-small text-text-secondary"
+            title={onlyScope.scope === "global" ? undefined : onlyScope.project}
+          >
+            {onlyScope.scope === "global" ? "Global" : `Project ${onlyScope.project}`}
+          </p>
+        )}
         {steps.length > 0 && (
           <ul aria-label="Steps" className="m-0 max-h-72 list-none overflow-y-auto p-0">
             {groups.map((group) => (

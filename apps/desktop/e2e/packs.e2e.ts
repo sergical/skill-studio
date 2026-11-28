@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { openApp } from "./app-harness";
 
 test.beforeEach(async ({ page }) => {
@@ -49,9 +49,20 @@ test("a skill with local edits is skipped with its reason, and with nothing to r
   await expect(dialog.getByRole("button", { name: "Update", exact: true })).toBeDisabled();
 });
 
-test("a plugin pack sits under Plugins with no Update or Remove, and offers the agent's own update command", async ({
+test("a plugin pack sits under Plugins with no Update or Remove, and Tab reaches and copies the agent's own update command", async ({
   page,
 }) => {
+  await page.evaluate(() => {
+    // The clipboard keeps what was copied on the page, where the test can read it.
+    Object.defineProperty(navigator, "clipboard", {
+      value: {
+        writeText: async (text: string) => {
+          document.documentElement.dataset.copied = text;
+        },
+      },
+    });
+  });
+
   const plugins = page.getByRole("region", { name: /^Plugins/ });
   await expect(plugins).toContainText("The agent updates and removes these");
   const row = plugins.getByRole("listitem", {
@@ -61,14 +72,32 @@ test("a plugin pack sits under Plugins with no Update or Remove, and offers the 
   await expect(row.getByRole("button", { name: "Update", exact: true })).toHaveCount(0);
   await expect(row.getByRole("button", { name: "Remove", exact: true })).toHaveCount(0);
 
+  const command = "claude plugin update changelog-formatter@community-plugins";
+  const copy = row.getByRole("button", { name: `Copy update command: ${command}` });
+  await expect.poll(() => shownOpacity(copy)).toBe(0);
+
   // The copy button shows on keyboard focus, not only on hover.
   await page.getByRole("button", { name: "Add from a repo" }).focus();
-  const copy = row.getByRole("button", {
-    name: "Copy update command: claude plugin update changelog-formatter@community-plugins",
-  });
-  await copy.focus();
-  await expect(copy).toHaveCSS("opacity", "1");
+  for (let presses = 0; presses < 80; presses++) {
+    if (await copy.evaluate((button) => button === document.activeElement)) break;
+    await page.keyboard.press("Tab");
+  }
+  await expect(copy).toBeFocused();
+  await expect.poll(() => shownOpacity(copy)).toBe(1);
+
+  await page.keyboard.press("Enter");
+  await expect.poll(() => page.locator("html").getAttribute("data-copied")).toBe(command);
 });
+
+/** The opacity the element shows on screen: its own times every ancestor's. */
+function shownOpacity(locator: Locator) {
+  return locator.evaluate((element) => {
+    let opacity = 1;
+    for (let node: Element | null = element; node; node = node.parentElement)
+      opacity *= Number(getComputedStyle(node).opacity);
+    return opacity;
+  });
+}
 
 test("Check upstream offers the pack's new skills, and adding them installs them", async ({
   page,
@@ -121,6 +150,8 @@ test("removing a pack asks first, and Confirm removes its skills and drops the r
   const dialog = page.getByRole("alertdialog");
   await expect(dialog.getByRole("heading", { name: "Remove anthropics/skills?" })).toBeVisible();
   await expect(dialog.getByRole("status")).toHaveText("1 to remove");
+  // Its one skill is in one scope, so the dialog names that scope once instead of on the row.
+  await expect(dialog.getByText("Global", { exact: true })).toBeVisible();
   await expect(dialog.getByRole("list", { name: "Steps" })).toHaveText("pdf-processing");
   await dialog.getByRole("button", { name: "Remove 1 skill" }).click();
 
