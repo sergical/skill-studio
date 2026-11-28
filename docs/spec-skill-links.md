@@ -144,8 +144,22 @@ the text of each skill folder through the scope port.
   folder's existing content hash, so a scan rereads only changed folders.
   Names are matched in one pass per file over all names in scope
   (`memchr`, already a core dependency; `aho-corasick` is in `Cargo.lock`
-  through `regex` but would be a new direct dependency). Budget: within the
-  scan budgets of `docs/spec-headless-performance-observability.md`.
+  through `regex` but would be a new direct dependency). The work rides the
+  existing `ScanMemo` (`crates/skill-studio-core/src/scan_memo.rs`), which
+  already cut a no-change desktop rescan of 529 skills from 1,350 to 350 ms
+  by not rereading unchanged folders (`docs/perf/README.md`). Proposed
+  budgets, to be measured with `pnpm run perf:baseline` on the real-shaped
+  profile plus the real-pack snapshots before slice 1 merges:
+  - No-change rescan: zero extra file reads for links.
+  - First scan: links add at most 10% to scan time.
+  - Dialogs: no disk work at click time. `breaks` comes from links already
+    in memory and from the checks the dialogs already run (`park_check`,
+    `turn_off_check`), so the 100 ms p95 input target in
+    `docs/spec-headless-performance-observability.md` still holds.
+  - Store: no extra network. The SKILL.md the detail panel already fetches
+    is the only text read before install.
+  - Map: layout runs only when the map opens, and again only when its shape
+    key changes. The largest checked pack has 59 skills.
 - **Errors**. Follow D7 in `docs/spec-core-primitives.md`. An unreadable
   file is a `not_known` reason on that skill, not an error for the call.
 
@@ -192,8 +206,8 @@ Section 6.
 ### 5.5 CLI
 
 ```
-skill-studio links [<skill>] [--pack <source>] [--agent <id>] [--missing]
-                   [--project-path <path>] [--json]
+skill-studio links [<skill>] [--pack <source> | --path <dir>] [--agent <id>]
+                   [--missing] [--project-path <path>] [--json]
 ```
 
 ```
@@ -216,6 +230,80 @@ One tool, `skill_links`, with the same input and output as the CLI's
 `--json`. Its description tells the agent to call it before it removes,
 parks or turns off a skill, and to show the user what would break. The plan
 tools already return `breaks`.
+
+### 5.7 Flows, step by step
+
+Each flow names what the user does, what Skill Studio does, and what the
+user has at the end. Real skills throughout.
+
+**A. Install `grill-me` from the Skill Store.**
+
+1. The user opens `grill-me` in the Store. The detail panel already fetches
+   its SKILL.md through `get_skill_details`.
+2. Skill Studio reads that one file and finds `Call the Skill tool with
+   "grilling"`. It checks the chosen scope and agents: `grilling` is not
+   there. Under Install: "Runs `grilling`, which you don't have." The line
+   shows on hover. Because only SKILL.md is read before install, a skill
+   whose other files name skills says "Checked SKILL.md; the rest after
+   install".
+3. The install footer has "Also add `grilling` (mattpocock/skills)", ticked,
+   because `grill-me` does nothing without it. A Mentions link is offered
+   unticked; a Lists link is not offered.
+4. Install runs one `npx skills add mattpocock/skills --skill grill-me
+   --skill grilling`, the existing one-call-per-source batching. Each skill
+   gets its own undo event.
+5. The watcher rescans. Only the two new folders are read.
+6. The `grill-me` page's Links card: Uses `grilling`, OK in Claude Code and
+   Codex.
+
+Outcome: a working `grill-me`, one extra tick box, no extra screen. If the
+user unticks, `grill-me` installs alone and Home shows one Missing links row
+with Add.
+
+**A2. Same install, Claude Code only, `grilling` already in
+`~/.agents/skills`.** Codex reads that folder, Claude Code does not. The
+footer says "`grilling` is installed, but Claude Code can't see it" and
+offers Add for Claude Code, which links the existing copy instead of
+downloading again.
+
+**B. Install from the CLI or an agent.**
+`skill-studio pack add mattpocock/skills --skill grill-me --dry-run` lists
+the plan and a `needs` line: "`grill-me` runs `grilling`, which is not
+installed. Add it with `--skill grilling`." A real run without it installs
+`grill-me`, prints the same line, and exits 0: a missing link is a warning,
+not a failure. The MCP `pack_add` result carries the same `needs` list, and
+the tool description tells the agent to ask the user before it adds more.
+
+**C. A month later, tidying up.** Home's Not used in 30 days would list
+`grilling` if nothing ran it directly. Because `grill-me` ran and needs it,
+the row says "Used through `grill-me`, 14 times" and offers no park.
+
+**D. Remove `grilling` anyway.** The skill page's Remove runs the plan. The
+dialog: "6 skills run it: `grill-me` (does nothing without it),
+`grill-with-docs`, `improve-codebase-architecture`, `triage`, `wayfinder`,
+`loop-me`." Keep changes nothing. Remove anyway removes it, Home then shows
+the 6 as Missing links, and Activity's Undo restores `grilling` and clears
+them.
+
+**E. Turn off `setup-matt-pocock-skills` for Codex.** `turn_off_check`
+already runs before the dialog. The dialog adds: "6 skills send you to it.
+In Codex they will point at nothing. Claude Code is not affected."
+
+**F. Update a pack whose links changed.** Check upstream finds an update.
+The update plan lists link changes next to file changes: "`to-spec` now
+hands off to `codebase-design`, which you don't have," with Add in the same
+dialog.
+
+**G. Install pstack as a Claude Code plugin.** `poteto-mode` says to run
+`/deslop` from `cursor-team-kit`. That plugin is not installed, so the Links
+card shows Missing, in `cursor/plugins`. Plugins are installed by the agent,
+so the row shows the agent's command to copy, as plugin packs already do.
+
+**H. A pack author checks a pack before publishing.**
+`skill-studio links --path ./skills` reads a local folder as a pack and
+lists every name that points at nothing in it, for example a skill renamed
+in one place and not another. Exit status 1 when any Needs or Hands off link
+points at nothing, so it can run in the author's CI.
 
 ## 6. The pack map
 
