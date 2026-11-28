@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { openApp } from "./app-harness";
+import { openApp, openSkillsPage } from "./app-harness";
 
 test.beforeEach(async ({ page }) => {
   await openApp(page);
@@ -20,9 +20,11 @@ test("pressing ⌘K on Home focuses the palette input and arrow keys move the pa
   await expect(page.getByRole("option").nth(2)).toHaveAttribute("aria-selected", "true");
 });
 
-test("pressing ⌘K while a Home row has focus moves focus into the palette, and Escape returns it to that row", async ({
+test("pressing ⌘K while a Skills row has focus moves focus into the palette, and Escape returns it to that row", async ({
   page,
 }) => {
+  await openSkillsPage(page);
+  await page.getByRole("textbox", { name: "Filter skills" }).blur();
   // The second row, so a ⌘K that leaks into the grid as "k" (up) would move focus off it.
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");
@@ -53,6 +55,8 @@ test("closing the palette with Escape keeps the page scroll where it was, even w
   page,
 }) => {
   await page.setViewportSize({ width: 1100, height: 480 });
+  await openSkillsPage(page);
+  await page.getByRole("textbox", { name: "Filter skills" }).blur();
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("End");
   const scroller = page

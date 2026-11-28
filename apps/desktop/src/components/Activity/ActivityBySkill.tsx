@@ -30,7 +30,7 @@ export interface SkillUse {
   tooltip: string[];
 }
 
-export function rowTooltip(row: Pick<SkillRow, "byHarness" | "byTrigger">): string[] {
+function rowTooltip(row: Pick<SkillRow, "byHarness" | "byTrigger">): string[] {
   const harnesses = ranked(row.byHarness)
     .map(([id, n]) => `${deploymentLabelFromAgentId(id)} ${formatCount(n)}`)
     .join(" · ");

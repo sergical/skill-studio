@@ -109,18 +109,26 @@ export interface HarnessDetectionState {
   saving: boolean;
 }
 
+/** The agents the app shows: the saved choice, else every detected agent; `undefined` before either is known. */
+export function shownAgentIds(detection: HarnessDetectionState): string[] | undefined {
+  return (
+    detection.choice?.kept ??
+    detection.report?.harnesses.flatMap((h) => (h.state === "not_found" ? [] : [h.id]))
+  );
+}
+
 export type PackIntent =
   | { kind: "update"; source: string | null }
   | { kind: "remove"; source: string }
   | { kind: "add"; source: string; skills: string[]; refPin: string | null };
 
-/** `kept` is the saved agent choice. Pack add installs for the same agents
+/** `shown` is `shownAgentIds`. Pack add installs for the same agents
  * the Add Skill sheet ticks by default; with no agents, `npx skills` writes
  * only `.agents/skills`, which Claude Code does not read. */
 async function packActionCall(
   intent: PackIntent,
   dryRun: boolean,
-  kept: readonly string[],
+  shown: readonly string[] | undefined,
 ): Promise<PackActionReport> {
   switch (intent.kind) {
     case "update":
@@ -138,7 +146,7 @@ async function packActionCall(
         source: intent.source,
         skills: intent.skills,
         ref_pin: intent.refPin,
-        harnesses: defaultSharedInstallAgents(defaults.installed_harnesses, kept),
+        harnesses: defaultSharedInstallAgents(defaults.installed_harnesses, shown),
         project_path: null,
         dry_run: dryRun,
       });
@@ -663,7 +671,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     );
   },
   runPackAction: (intent, dryRun) =>
-    withCommandMessage(packActionCall(intent, dryRun, get().harnessDetection.choice?.kept ?? [])),
+    withCommandMessage(packActionCall(intent, dryRun, shownAgentIds(get().harnessDetection))),
   exportPack: (request) => withCommandMessage(packExport(request)),
 
   checkPastedSkill: (draft) => withCommandMessage(checkPastedSkill(draft)),
@@ -674,7 +682,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           draft,
           agents: defaultSharedInstallAgents(
             defaults.installed_harnesses,
-            get().harnessDetection.choice?.kept ?? [],
+            shownAgentIds(get().harnessDetection),
           ),
           link_mode: "link",
         }),

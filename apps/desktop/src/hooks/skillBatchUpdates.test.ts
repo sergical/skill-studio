@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { Deployment, InstalledSkill, UpdateOutcome } from "@skill-studio/lib";
-import { updateAllTitle } from "../components/Home/home-inbox-data";
+import { updateAllTitle } from "./update-all";
 import {
   getActiveUpdateAll,
   requestUpdateAllStop,

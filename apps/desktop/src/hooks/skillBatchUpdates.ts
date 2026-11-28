@@ -3,7 +3,6 @@
 // callers run `skillsWithLocalEdits` and the edits dialog first.
 // ============================================================================
 
-import { useSyncExternalStore } from "react";
 import type { PluginUpdateResult } from "../lib/skill-api";
 import {
   cancelUpdateAll,
@@ -14,7 +13,7 @@ import {
 } from "../lib/skill-api";
 import { setUpdateAllRunning } from "../lib/skill-busy-message";
 import type { PluginUpdateTarget } from "../lib/skill-lifecycle-target";
-import { updateAllOutdatedSkills } from "../components/Home/home-inbox-data";
+import { updateAllOutdatedSkills } from "./update-all";
 import { runBulkUpdate } from "../components/SkillList/skill-bulk-actions";
 import type { InstalledSkill } from "@skill-studio/lib";
 
@@ -102,25 +101,13 @@ export interface ActiveUpdateAll {
 }
 
 let activeBatch: ActiveUpdateAll | null = null;
-const batchListeners = new Set<() => void>();
 
 function setActiveBatch(next: ActiveUpdateAll | null) {
   activeBatch = next;
-  batchListeners.forEach((listener) => listener());
 }
 
 export function getActiveUpdateAll(): ActiveUpdateAll | null {
   return activeBatch;
-}
-
-function subscribeActiveUpdateAll(listener: () => void) {
-  batchListeners.add(listener);
-  return () => void batchListeners.delete(listener);
-}
-
-/** The running batch, or null; a remounted Home group reads it again and shows Cancel. */
-export function useActiveUpdateAll(): ActiveUpdateAll | null {
-  return useSyncExternalStore(subscribeActiveUpdateAll, getActiveUpdateAll);
 }
 
 /**

@@ -1,5 +1,5 @@
 // ============================================================================
-// home-inbox-data.test - "Update all"'s batching (review round 1's B4 fix:
+// update-all.test - "Update all"'s batching (review round 1's B4 fix:
 // one `update_all_skills` request for every outdated owner instead of one
 // `updateSkill` round trip per skill).
 // ============================================================================
@@ -12,7 +12,7 @@ import type {
   UpdateAllOutcome,
   UpdateOutcome,
 } from "@skill-studio/lib";
-import { updateAllFailureMessage, updateAllOutdatedSkills } from "./home-inbox-data";
+import { updateAllFailureMessage, updateAllOutdatedSkills } from "./update-all";
 
 const noDeployments: Deployment[] = [];
 

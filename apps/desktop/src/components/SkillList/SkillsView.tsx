@@ -14,12 +14,12 @@ import { deploymentForScope } from "./skill-list-deployment";
 import type { SortMode } from "../../lib/skill-list-sort";
 import { SkillListActiveFilters, SkillListFilterBar } from "./SkillListFilterBar";
 import { useProjectFolderActions } from "../../hooks/useProjectFolderActions";
+import { useClientIds } from "../../hooks/useClientRows";
 import { attentionBySkill, attentionCounts, collectDashboardIssues } from "@skill-studio/lib";
 import { applySkillListFilter, isProjectScope, skillForCoverageScope } from "@skill-studio/lib";
 import { ownSkillsView, ownSkillsWithPluginUpdates } from "@skill-studio/lib";
 import type { InstalledSkill, SkillSnapshot } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
-import { ProjectSkillSetPrototype } from "../../prototype/project-skill-set/ProjectSkillSetPrototype";
 
 interface SkillsViewProps extends FirstScanStateProps {
   snapshot: SkillSnapshot | undefined;
@@ -57,6 +57,7 @@ export function SkillsView({
   const excludedProjects = useAppStore((state) => state.excludedProjects);
   const openAddSkillSheet = useAppStore((state) => state.openAddSkillSheet);
   const { addProject, stopTracking } = useProjectFolderActions();
+  const kept = useClientIds();
 
   const excludedProjectSet = new Set(excludedProjects);
   const projects = Array.from(
@@ -72,7 +73,7 @@ export function SkillsView({
   const withPluginUpdates = ownSkillsWithPluginUpdates(allSkills);
   const listedSkills = withPluginUpdates;
   const attention = attentionBySkill(withPluginUpdates, issues);
-  const matches = applySkillListFilter(listedSkills, filter, issues, snapshot?.invocations);
+  const matches = applySkillListFilter(listedSkills, filter, issues, snapshot?.invocations, kept);
   // Each category's count under every other filter, so a pick says how many it will list.
   const attentionTotals = attentionCounts(
     attention,
@@ -81,6 +82,7 @@ export function SkillsView({
       { ...filter, attention: undefined },
       issues,
       snapshot?.invocations,
+      kept,
     ),
   );
   const listedByName = new Map(listedSkills.map((skill) => [skill.name, skill]));
@@ -135,9 +137,6 @@ export function SkillsView({
           observations={snapshot.scan_observations}
           unreadLocationCount={snapshot.unread_roots.length}
         />
-      )}
-      {isProjectScope(filter.scope) && (
-        <ProjectSkillSetPrototype snapshot={snapshot} project={filter.scope.project} />
       )}
       {showCoverage ? (
         <SkillCoverageMatrix

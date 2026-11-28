@@ -38,7 +38,8 @@ test("a plugin-only skill with an update is counted and listed the same on Home,
     });
   }, PLUGIN_SKILL);
 
-  await expect(page.getByRole("button", { name: "Review 1 update" })).toBeVisible();
+  const home = page.getByRole("region", { name: "Your skills at a glance" });
+  await expect(home.getByRole("button", { name: /^1 update$/ })).toBeVisible();
   const skillsPlace = page.getByRole("navigation").getByRole("button", { name: /^Skills/ });
   await expect(skillsPlace).toHaveText(/^Skills\s*1$/);
 

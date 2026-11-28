@@ -1,5 +1,12 @@
 import { expect, test } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { openApp } from "./app-harness";
+
+/** Home's agent tiles; each opens that agent's What it sees. */
+const homeAgents = (page: Page) =>
+  page
+    .getByRole("region", { name: "Your skills at a glance" })
+    .getByRole("list", { name: "Agents" });
 
 test("a larger budget marks the skills that gain a description and gives the setting to paste", async ({
   page,
@@ -36,8 +43,7 @@ test("the Codex listing gives the tier and how far the budget is from the next o
   page,
 }) => {
   await openApp(page);
-  await page
-    .getByRole("group", { name: "Skill space by agent" })
+  await homeAgents(page)
     .getByRole("button", { name: /^Codex/ })
     .click();
   await expect(page.getByRole("combobox", { name: "Agent" })).toContainText("Codex");
@@ -65,7 +71,7 @@ test("a Cursor-only setup can follow a scanned skill from Home and back", async 
     await expect(others).toHaveCount(count - 1);
   }
   await page.getByRole("button", { name: "Continue" }).click();
-  const agents = page.getByRole("group", { name: "Skill space by agent" });
+  const agents = homeAgents(page);
   await expect(agents.getByRole("button")).toHaveCount(1);
   await agents.getByRole("button", { name: /^Cursor/ }).click();
   const agent = page.getByRole("combobox", { name: "Agent", exact: true });
@@ -97,8 +103,7 @@ test("a Cursor-only setup can follow a scanned skill from Home and back", async 
 
 test("an agent comparison shows the source of the skills behind a difference", async ({ page }) => {
   await openApp(page);
-  await page
-    .getByRole("group", { name: "Skill space by agent" })
+  await homeAgents(page)
     .getByRole("button", { name: /^Cursor/ })
     .click();
   await page.getByText("Compare with another agent", { exact: true }).click();
@@ -112,8 +117,7 @@ test("an agent comparison shows the source of the skills behind a difference", a
 
 test("save and remove a personal Codex budget from the agent's settings", async ({ page }) => {
   await openApp(page);
-  await page
-    .getByRole("group", { name: "Skill space by agent" })
+  await homeAgents(page)
     .getByRole("button", { name: /^Codex/ })
     .click();
   const settings = page.getByRole("region", { name: "Codex settings", exact: true });

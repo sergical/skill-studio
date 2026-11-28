@@ -1,5 +1,5 @@
 import { expect, test, type Locator } from "@playwright/test";
-import { openApp, reinstallParkedSkill } from "./app-harness";
+import { openApp, openSkillsPage, reinstallParkedSkill, skillRow } from "./app-harness";
 
 const AA_BODY_TEXT = 4.5;
 
@@ -59,11 +59,8 @@ for (const theme of ["dark", "light"] as const) {
       document.documentElement.dataset.theme = value;
     }, theme);
     const name = await reinstallParkedSkill(page);
-    await page
-      .getByRole("row")
-      .filter({ hasText: name })
-      .getByRole("button", { name: "Resolve" })
-      .click();
+    await openSkillsPage(page, "Skills", name);
+    await skillRow(page, name).getByRole("button", { name: "Resolve" }).click();
     await page.getByRole("menuitem", { name: "Keep live" }).click();
 
     const keepLive = page

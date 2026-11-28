@@ -172,8 +172,12 @@ describe("Install request", () => {
     }).agents;
     expect(defaultSharedInstallAgents(detected, kept)).toEqual(sheet);
     expect(defaultSharedInstallAgents(detected, kept)).toEqual(["opencode"]);
-    expect(defaultSharedInstallAgents(detected, [])).toEqual(["claude-code", "codex", "cursor"]);
-    expect(defaultSharedInstallAgents(["grok-build"], [])).toEqual([]);
+    expect(defaultSharedInstallAgents(detected, undefined)).toEqual([
+      "claude-code",
+      "codex",
+      "cursor",
+    ]);
+    expect(defaultSharedInstallAgents(["grok-build"], undefined)).toEqual([]);
   });
 });
 

@@ -377,7 +377,7 @@ export async function updateSkill(
  * Update every given owner in one backend call
  * (`skill_studio_core::ops::update_all`, one `spawn_blocking` task for the
  * whole batch) - one IPC round trip for the whole batch instead of one
- * `updateSkill` call per owner. `HomeInboxGroups`'s "Update all" uses this
+ * `updateSkill` call per owner. The Skills selection's Update uses this
  * for every non-fork owner target; forks still pull upstream one at a time
  * through `pullForkUpstream`, since that CLI call has no batched form.
  */

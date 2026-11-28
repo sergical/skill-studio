@@ -11,7 +11,6 @@ import {
   attentionCategoryOf,
   describeSpecViolations,
   driftingCopies,
-  HEALTH_ISSUE_SEVERITY,
   isBlockingSpecViolation,
   isUnquotedColonYaml,
   locationSummary,
@@ -21,7 +20,6 @@ import type {
   AttentionCategory,
   AttentionFilter,
   Deployment,
-  HealthIssue,
   HealthIssueKind,
   InstalledSkill,
   SkillAttention,
@@ -173,33 +171,6 @@ export function updateRowState(skill: InstalledSkill): RowState | null {
     detail: null,
     action: "Update",
   };
-}
-
-/** One Home dashboard issue's row state, so a Broken/Warnings row's glyph matches the group it
- * sits in instead of whatever `rowState` would rank the skill's own worst condition as. `detail`
- * is null - Home's row already shows `issue.detail` in its own detail cell, so the glyph tooltip
- * doesn't repeat it. */
-export function issueRowState(issue: HealthIssue): RowState {
-  return {
-    kind: "issue",
-    level: HEALTH_ISSUE_SEVERITY[issue.kind],
-    label: ISSUE_ROW_LABEL[issue.kind],
-    detail: null,
-    action: issueAction(issue.kind),
-  };
-}
-
-/** The same fix a Skills row names for this condition: only a fix that does more than the row
- * click. A linked root and a left-behind copy have their own controls on Home. */
-function issueAction(kind: HealthIssueKind): string | null {
-  switch (kind) {
-    case "spec-violation":
-      return "Fix";
-    case "duplicate":
-      return "Compare";
-    default:
-      return null;
-  }
 }
 
 type DiskLocationKind = "global" | "project";

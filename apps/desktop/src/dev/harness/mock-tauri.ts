@@ -19,9 +19,11 @@ import {
 } from "@skill-studio/lib";
 import type {
   AddSkillOperationEvent,
+  AgentId,
   BackgroundStatus,
   Deployment,
   DiscoverySourceSetting,
+  HarnessesChoice,
   InstalledSkill,
   PastedSkillCheck,
   ProjectFolder,
@@ -210,6 +212,11 @@ export function installMockTauri(
   // or "$EDITOR", or `null` for the system default. See `skill_editor::EditorChoices`.
   let editorPreference: string | null = null;
   const mcpConnections = new Set<string>();
+  // Mirrors the `harnesses` key of `~/.agents/skill-studio.json`: the welcome screen saves it,
+  // and Settings' agent switches change it.
+  let harnessesChoice: HarnessesChoice | null = null;
+  const detectedAgents = (): AgentId[] =>
+    HARNESS_CATALOG.flatMap(({ id }) => (discoverySources.get(id) ? [id] : []));
   const KNOWN_EDITOR_APPS: EditorOption[] = [
     { app_name: "Cursor", label: "Cursor" },
     { app_name: "Visual Studio Code", label: "Visual Studio Code" },
@@ -662,10 +669,20 @@ export function installMockTauri(
             })),
           };
         case "get_harnesses_choice":
-          return null;
-        case "set_harness_enabled":
-          return { kept: [], search_project_folders: true, saved_at: new Date().toISOString() };
+          return harnessesChoice;
+        case "set_harness_enabled": {
+          const { id, enabled } = z.object({ id: z.string(), enabled: z.boolean() }).parse(payload);
+          const kept = (harnessesChoice?.kept ?? detectedAgents()).filter((other) => other !== id);
+          harnessesChoice = {
+            search_project_folders: true,
+            ...harnessesChoice,
+            kept: enabled ? [...kept, id] : kept,
+            saved_at: new Date().toISOString(),
+          };
+          return harnessesChoice;
+        }
         case "save_harnesses_choice":
+          harnessesChoice = z.object({ choice: z.custom<HarnessesChoice>() }).parse(payload).choice;
           return undefined;
         case "get_mcp_connections":
           return [...mcpConnections];
@@ -755,7 +772,7 @@ export function installMockTauri(
           return {
             dotagents_installed: true,
             has_skill_lock: true,
-            installed_harnesses: ["claude-code", "codex", "opencode", "pi", "cursor"],
+            installed_harnesses: detectedAgents(),
             claude_reads_shared_folder: false,
           };
         case "list_github_skills":

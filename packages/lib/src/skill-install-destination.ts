@@ -164,15 +164,15 @@ export function installDestinationFields(input: {
 
 /** The `--agent` set of an install into the shared folder that has no picks
  * of its own: the harnesses the Add Skill sheet ticks before the user
- * changes one, the kept agents or with none kept the detected ones. Pack add
+ * changes one, the shown agents (kept, else detected) or before those are known the detected ones. Pack add
  * uses it, so a pack reaches the same agents as one skill added from the
  * sheet. */
 export function defaultSharedInstallAgents(
   detected: readonly AgentId[],
-  kept: readonly string[],
+  shown: readonly string[] | undefined,
 ): AgentId[] {
   return installDestinationFields({
-    chosen: offeredInstallHarnesses(kept.length > 0 ? kept : detected),
+    chosen: offeredInstallHarnesses(shown ?? detected),
     method: "skills-sh",
     universal: true,
   }).agents;

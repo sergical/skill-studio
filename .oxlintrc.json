@@ -73,7 +73,6 @@
         "apps/desktop/src/components/Activity/ActivityFilters.tsx",
         "apps/desktop/src/components/Activity/SkillHistorySection.tsx",
         "apps/desktop/src/components/AddSkill/AddSkillSheet.tsx",
-        "apps/desktop/src/components/Home/HomeInboxGroups.tsx",
         "apps/desktop/src/components/Settings/AppVersionCard.tsx",
         "apps/desktop/src/components/Settings/CommandHealthCard.tsx",
         "apps/desktop/src/components/Settings/EditorCard.tsx",
