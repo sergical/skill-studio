@@ -9,13 +9,16 @@ Status: draft for review. Evidence:
 working.**
 
 Skills name other skills. Ten of twelve popular packs checked on
-2026-11-27 have links between their skills. Three shapes recur:
+2026-11-27 have links between their skills. Four shapes recur:
 
 - A **wrapper**: `grill-me` (1.6M installs) is one line, `Call the Skill
   tool with "grilling".` Without `grilling` it does nothing.
-- A **base skill**: 23 pstack skills open `../pstack-harness/SKILL.md`; 24
-  Lark skills open `../lark-shared/SKILL.md`. Parking the base breaks most of
-  the pack.
+- A **base skill**: 24 Lark skills open `../lark-shared/SKILL.md`; six Matt
+  Pocock skills send the user to `/setup-matt-pocock-skills`. Parking the
+  base breaks most of the pack.
+- A **link across plugins**: pstack's `poteto-mode` says "Before commit →
+  `/deslop` from the `cursor-team-kit` plugin". Installing pstack alone
+  leaves that step with nothing to run.
 - An **index**: `ask-matt` and `ask-emil` list their whole pack. Removing a
   listed skill leaves a dead menu entry; removing the index breaks nothing.
 
@@ -42,9 +45,8 @@ Strength decides where a link is shown. It is decided per line.
 
 An **index** names at least 5 skills and at least half of its pack, and at
 least half of those lines are list items or table rows. On the checked
-packs this finds `ask-matt`, `ask-emil`, `pstack-poteto-help` and
-`pstack-poteto-mode`, and rejects `executing-plans` (a workflow that hands
-off from prose).
+packs this finds `ask-matt`, `ask-emil` and pstack's `poteto-help`, and
+rejects `executing-plans` (a workflow that hands off from prose).
 
 ### 2.2 What is not a link
 
@@ -67,13 +69,13 @@ always travels with the link.
 
 ### 2.3 Targets
 
-| Target           | Example                                                          | What the user sees                                   |
-| ---------------- | ---------------------------------------------------------------- | ---------------------------------------------------- |
-| Installed skill  | `grilling` in the same scope                                     | Its name; the link state from section 3              |
-| Missing, in pack | `ask-matt` names `pr`, which the pack ships but is left out      | "Not installed" and Add, through `pack_add`          |
-| Missing, unknown | A name no installed skill or known pack has                      | "Not found". Mentions of unknown names are not shown |
-| Another pack     | `pstack-harness` names `emil-unslop-code`                        | The skill and its pack; "Not installed" if absent    |
-| Not a skill      | A subagent (`pstack-poteto-agent`), a plugin command (`/deslop`) | The kind and the name, never a state                 |
+| Target           | Example                                                     | What the user sees                                   |
+| ---------------- | ----------------------------------------------------------- | ---------------------------------------------------- |
+| Installed skill  | `grilling` in the same scope                                | Its name; the link state from section 3              |
+| Missing, in pack | `ask-matt` names `pr`, which the pack ships but is left out | "Not installed" and Add, through `pack_add`          |
+| Missing, unknown | A name no installed skill or known pack has                 | "Not found". Mentions of unknown names are not shown |
+| Another pack     | `poteto-mode` names `/deslop` from `cursor-team-kit`        | The skill and its pack; "Not installed" if absent    |
+| Not a skill      | A subagent (`poteto-agent`), a CLI (`npx hyperframes`)      | The kind and the name, never a state                 |
 
 The pack a missing name belongs to comes from the pack's own listing
 (`pack show --remote`), never a guess from the name.
@@ -87,15 +89,20 @@ the answer fits the machine it runs on.
 - **Needs (path)**: resolve the path from the folder the agent reads A from.
   On a machine where `~/.claude/skills` is a link to `~/.agents/skills`,
   every `../` path resolves for Claude Code. On a machine with per-skill
-  copies in `~/.claude/skills`, `../pstack-harness/SKILL.md` resolves only
-  if `pstack-harness` is copied there too. Project skills resolve inside the
-  project's folder.
+  copies in `~/.claude/skills`, `../lark-shared/SKILL.md` resolves only if
+  `lark-shared` is copied there too. Claude Code does not read
+  `~/.agents/skills`; Codex, OpenCode, pi, Cursor and Grok Build do, so the
+  same copy can resolve for one agent and not another. Project skills
+  resolve inside the project's folder.
 - **Hands off (by name)**: B must be in the agent's own list: a copy it
-  reads, not parked, not turned off for it.
+  reads, not parked, not turned off for it. A plugin install answers to its
+  plugin's prefix too: Claude Code lists pstack's skills as
+  `pstack:poteto-mode`.
 - **Renamed installs**: a copy installed under another name than its
   upstream name still answers to both. If A asks for `grilling` by name and
   the copy is installed as `matt-grilling`, the link is **Renamed**: the
-  agent will not find it by the name A uses.
+  agent will not find it by the name A uses. A port that rewrites the names
+  in its own text (as `sergical/pstack-skills` does) resolves cleanly.
 
 Link states, worst first. A skill's card and row show its worst state:
 
@@ -221,21 +228,21 @@ machines, the routes that reach them and the links between them. What makes
 it good is how it thinks, not how it looks. Each row below is one decision,
 why it works there, and what it becomes here.
 
-| T3 Code decision                                                                                                                                        | Why it works                                                                | Skill Studio                                                                                                                                                                                                           |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The graph is built from what the client knows. It never probes, and a list it could not read is "not known", never "no links".                          | The map never lies about a machine it cannot see.                           | Links come from local text. An unreadable plugin or an unchecked upstream says "links not known".                                                                                                                      |
-| One node per machine, however often it is named.                                                                                                        | A machine is one thing to the user.                                         | One node per skill per scope. Its copies across agents are one node with a state per agent.                                                                                                                            |
-| Edge states are ranked worst first, and a card wears the worst.                                                                                         | The eye goes to what needs attention.                                       | Link states from section 3, worst first.                                                                                                                                                                               |
-| Two links between the same machines at the same access are drawn as one line with two arrowheads.                                                       | Half the lines, same meaning.                                               | Two skills that name each other at the same strength (siblings) are one line.                                                                                                                                          |
-| Many machines with the exact same incoming links become one stack: "a thousand VMs under two hosts cost one node and two lines".                        | The map stays readable at any size.                                         | Skills with the exact same set of skills linking to them become one stack (up to 5 skills share one set in `mattpocock/skills`, `pstack-skills` and `azure-skills`). Unlinked skills fold into one chip past 12 nodes. |
-| Focus lights one hop, because a link does not chain: A linked to B linked to C gives A nothing on C.                                                    | It draws only what is true.                                                 | The same honesty gives the opposite rule: a Needs or Hands off link does chain. If C goes, B fails, so A's step fails. Focus lights direct links strong and indirect ones faint.                                       |
-| Actions on the map (drag a plus onto a machine to link) use the same rule as the dialogs.                                                               | One rule, so the map and the dialog never disagree.                         | Remove, park and Add from the map open the same plan dialogs with the same `breaks`.                                                                                                                                   |
-| Columns that mean something: this client, its environments, machines known only through links.                                                          | Position carries meaning before the user reads a label.                     | Columns by role: index badge on top, then **Start here** (skills nothing in the pack names), **Steps**, **Base** (skills named by several and naming few).                                                             |
-| A shape key: the layout changes only when membership, names or wiring change, never on a status change.                                                 | The map does not jump while the user reads it.                              | The same: a state change recolors, a link change relays out.                                                                                                                                                           |
-| A status line with two numbers, a legend ("How to read the lines"), and a help popover of four rules.                                                   | The user learns the map in one look.                                        | "39 skills · 43 links" for `mattpocock/skills` (index entries are not links), plus "· N missing" when any are. Legend: solid = needs, arrow = hands off, dotted = mentions.                                            |
-| Search with a match count, arrow keys between columns, Esc clears the selection before it closes Settings, zoom and fit.                                | Keyboard users get the whole map; Esc never loses work.                     | The same, with `/` to search.                                                                                                                                                                                          |
-| Every node is a real button over an `aria-hidden` SVG of lines, and the details panel lists every member of a stack.                                    | The drawing is decoration; the buttons and the list are the accessible map. | The same, and the Links card (5.2) is the list view of the selected skill.                                                                                                                                             |
-| Layout is pure and tested: nothing overlaps, the same map whatever order data arrives in, 1000 machines as a few stacks, legible from 560 to 1400 wide. | Those are the rules a user notices when broken.                             | The same four tests, on the fixture packs of section 7.                                                                                                                                                                |
+| T3 Code decision                                                                                                                                        | Why it works                                                                | Skill Studio                                                                                                                                                                                          |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The graph is built from what the client knows. It never probes, and a list it could not read is "not known", never "no links".                          | The map never lies about a machine it cannot see.                           | Links come from local text. An unreadable plugin or an unchecked upstream says "links not known".                                                                                                     |
+| One node per machine, however often it is named.                                                                                                        | A machine is one thing to the user.                                         | One node per skill per scope. Its copies across agents are one node with a state per agent.                                                                                                           |
+| Edge states are ranked worst first, and a card wears the worst.                                                                                         | The eye goes to what needs attention.                                       | Link states from section 3, worst first.                                                                                                                                                              |
+| Two links between the same machines at the same access are drawn as one line with two arrowheads.                                                       | Half the lines, same meaning.                                               | Two skills that name each other at the same strength (siblings) are one line.                                                                                                                         |
+| Many machines with the exact same incoming links become one stack: "a thousand VMs under two hosts cost one node and two lines".                        | The map stays readable at any size.                                         | Skills with the exact same set of skills linking to them become one stack (up to 5 skills share one set in `mattpocock/skills` and `azure-skills`). Unlinked skills fold into one chip past 12 nodes. |
+| Focus lights one hop, because a link does not chain: A linked to B linked to C gives A nothing on C.                                                    | It draws only what is true.                                                 | The same honesty gives the opposite rule: a Needs or Hands off link does chain. If C goes, B fails, so A's step fails. Focus lights direct links strong and indirect ones faint.                      |
+| Actions on the map (drag a plus onto a machine to link) use the same rule as the dialogs.                                                               | One rule, so the map and the dialog never disagree.                         | Remove, park and Add from the map open the same plan dialogs with the same `breaks`.                                                                                                                  |
+| Columns that mean something: this client, its environments, machines known only through links.                                                          | Position carries meaning before the user reads a label.                     | Columns by role: index badge on top, then **Start here** (skills nothing in the pack names), **Steps**, **Base** (skills named by several and naming few).                                            |
+| A shape key: the layout changes only when membership, names or wiring change, never on a status change.                                                 | The map does not jump while the user reads it.                              | The same: a state change recolors, a link change relays out.                                                                                                                                          |
+| A status line with two numbers, a legend ("How to read the lines"), and a help popover of four rules.                                                   | The user learns the map in one look.                                        | "39 skills · 43 links" for `mattpocock/skills` (index entries are not links), plus "· N missing" when any are. Legend: solid = needs, arrow = hands off, dotted = mentions.                           |
+| Search with a match count, arrow keys between columns, Esc clears the selection before it closes Settings, zoom and fit.                                | Keyboard users get the whole map; Esc never loses work.                     | The same, with `/` to search.                                                                                                                                                                         |
+| Every node is a real button over an `aria-hidden` SVG of lines, and the details panel lists every member of a stack.                                    | The drawing is decoration; the buttons and the list are the accessible map. | The same, and the Links card (5.2) is the list view of the selected skill.                                                                                                                            |
+| Layout is pure and tested: nothing overlaps, the same map whatever order data arrives in, 1000 machines as a few stacks, legible from 560 to 1400 wide. | Those are the rules a user notices when broken.                             | The same four tests, on the fixture packs of section 7.                                                                                                                                               |
 
 What we do not take: T3's map is a fleet manager with routes, access levels
 and drag-to-link. Skill Studio has no routes, and drawing links between
@@ -272,12 +279,12 @@ its own `LICENSE` file, in one shared folder (`fixtures/real-packs/`) that
 the core tests, the desktop harness, the CLI checks and the marketing site
 all read:
 
-| Pack                     | Commit    | License, holder                                          | Markdown | Why it is in                                  |
-| ------------------------ | --------- | -------------------------------------------------------- | -------: | --------------------------------------------- |
-| `mattpocock/skills`      | `bbadaa6` | MIT, Matt Pocock                                         |  0.29 MB | Wrapper (`grill-me`), base skills, an index   |
-| `sergical/pstack-skills` | `dd839d3` | MIT, Lauren Tan (generated from `cursor/plugins` pstack) |  0.32 MB | One base skill read by 23 others, two indexes |
-| `obra/superpowers`       | `22f0b46` | MIT, Jesse Vincent                                       |  0.35 MB | `pack:name` hand-offs                         |
-| `emilkowalski/skills`    | `64eb3de` | MIT, Emil Kowalski                                       |  0.36 MB | Path reads, siblings, an index that lists all |
+| Pack                             | Commit    | License, holder    | Markdown | Why it is in                                  |
+| -------------------------------- | --------- | ------------------ | -------: | --------------------------------------------- |
+| `mattpocock/skills`              | `bbadaa6` | MIT, Matt Pocock   |  0.29 MB | Wrapper (`grill-me`), base skills, an index   |
+| `cursor/plugins`, `pstack/` only | `b7b93c3` | MIT, Lauren Tan    |  0.28 MB | An index, links across plugins (`/deslop`)    |
+| `obra/superpowers`               | `22f0b46` | MIT, Jesse Vincent |  0.35 MB | `pack:name` hand-offs                         |
+| `emilkowalski/skills`            | `64eb3de` | MIT, Emil Kowalski |  0.36 MB | Path reads, siblings, an index that lists all |
 
 - Only the skill folders' text files are kept. A README in the folder names
   each pack's source, commit and license, and one script refreshes a pack to
@@ -315,8 +322,11 @@ installs the real packs, set up the way real people install them:
   `improve-codebase-architecture`, the way a dotagents `exclude` leaves them
   out. `ask-matt` and `setup-matt-pocock-skills` still name them, so the map
   shows real dead entries and one real Missing hand-off.
-- `sergical/pstack-skills` with `pstack-harness` turned off for Codex, so
-  Show for Codex lights the 23 skills that read it.
+- `setup-matt-pocock-skills` turned off for Codex, so Show for Codex lights
+  the 6 skills that send the user to it.
+- pstack installed from `cursor/plugins` without the `cursor-team-kit`
+  plugin, so `poteto-mode`'s `/deslop` step shows as Missing, with Add from
+  `cursor/plugins`.
 - Simulated session history in `mock-sessions.ts`: `grill-me` run 14 times
   in 30 days, `grilling` never started directly. This is what makes Home's
   "not used" row and its guard real on screen.
@@ -340,8 +350,9 @@ was connected.
    the 6 skills that run it, and says `grill-me` does nothing without it.
 3. Packs → `mattpocock/skills` → Map. `grilling` lights its 6 users;
    `ask-matt` wears a badge for the 3 skills it lists that are not
-   installed. Then `sergical/pstack-skills` → Show for Codex: the 23 skills
-   that read `pstack-harness` turn red in Codex only.
+   installed. Show for Codex: the 6 skills that need
+   `setup-matt-pocock-skills` turn red in Codex only. Then pstack's map:
+   `poteto-mode`'s `/deslop` step points at a plugin that is not installed.
 
 **CLI and MCP beat:** an agent asked to "clean up my skills" calls
 `skill_links` first and answers: "`grilling` looks unused, but `grill-me`
@@ -349,8 +360,8 @@ runs it. Keep it." The same words as the dialog.
 
 **Homepage:** a sixth scenario in `packages/marketing/src/home/jobs-scenarios.ts`,
 "What breaks if I delete this?". The pain side is the real manual work
-(grep every skills folder for `grilling`, follow each `../pstack-harness`
-path by hand, repeat per agent). The fix side is
+(grep every skills folder for `grilling`, follow each `../` path by hand,
+repeat per agent). The fix side is
 `npx skill-studio@latest links grilling`. The stat line, "10 of 12 popular
 packs link their skills", links to the evidence file. The "Skill links"
 section of the walkthrough draws the `mattpocock/skills` map with the shared
@@ -362,7 +373,9 @@ Each slice is one vertical change, under about 500 lines.
 
 1. The real-pack snapshots, core `skill_links` with the fixtures of
    section 7, `skill-studio links`, the `skill_links` MCP tool, a
-   `flow_parity.rs` row, and a `docs/flows.md` row.
+   `flow_parity.rs` row, a `docs/flows.md` row, and verification layers 1
+   to 4 of section 10. Layer 4 runs before this slice merges, because it
+   decides the per-agent rule.
 2. `breaks` in the remove, park, turn-off and pack remove plans; the dialogs
    show it; the CLI dry runs print it. One e2e spec: removing `grilling`
    lists its 6 users, and Keep changes nothing.
@@ -370,23 +383,79 @@ Each slice is one vertical change, under about 500 lines.
    Not used in 30 days guard; `MissingLink` in `doctor`.
 4. Pack add and the Add Skill sheet offer what picked skills need.
 5. The pack map, with the four layout tests and one e2e spec (select
-   `grilling`, its users light up; Show for Codex on pstack, the users of
-   `pstack-harness` show broken).
+   `grilling`, its users light up; Show for Codex, the users of
+   `setup-matt-pocock-skills` show broken).
 6. The homepage scenario and the walkthrough section.
 
-## 10. Tests, per the testing skill
+## 10. Outcome and how we prove it
 
-One test per user flow at the level the user sees it, and one rule test:
+### 10.1 The outcome
 
-- **Rule**: links are the same whatever order the scan reads folders in.
-- **Flows**: the e2e specs in slices 2 and 5; the CLI/MCP parity row in
-  slice 1.
-- **Real packs**: one corpus test over the four snapshots, checking the
-  links a person checked by hand: `grill-me` hands off to `grilling`, 6
-  skills run `grilling`, 23 pstack skills need `pstack-harness`, `ask-matt`
-  and `ask-emil` are indexes and raise no alerts.
-- **Shapes**: one table test over the core fixtures of section 7, each row
-  checking what the user would see (the `breaks` list or its absence).
+On every machine Skill Studio supports, for every agent it supports, however
+the skills got there:
+
+1. Before a remove, park, turn-off or pack remove, the user sees every skill
+   that would stop working, per agent, each with the line that says so. Index
+   entries and mentions never raise an alert.
+2. The answer matches what the agent itself does. A link reported OK is one
+   the agent can open or run; a link reported Missing is one it cannot.
+3. Desktop, CLI and MCP give the same answer for the same setup.
+4. Where Skill Studio cannot tell, it says "not known", never "fine".
+
+The developer's own machine is one scenario among many (a dotagents port
+with a `matt-` prefix, `~/.claude/skills` linked as a whole to
+`~/.agents/skills`). No check depends on it, and no check reads it.
+
+### 10.2 The scenarios
+
+Each dimension below comes from what Skill Studio already supports
+(`crates/skill-studio-core/src/harness.rs`, `identity.rs`,
+`docs/agent-skill-conventions.md`, `docs/capabilities.md`).
+
+| Dimension        | Values                                                                                                                                                                                                                                                                                                |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Agent            | Claude Code, Codex, OpenCode, pi, Cursor, Grok Build. Claude Code reads only its own folders; the other five also read `~/.agents/skills`.                                                                                                                                                            |
+| How it got there | skills.sh (`npx skills`, global and project lock); dotagents (named, wildcard, wildcard with `exclude`); a Claude Code plugin (pstack from `cursor/plugins`, listed as `pstack:…`); a Codex plugin; a port that renames (`sergical/pstack-skills`); Skill Studio Copy and fork; a folder made by hand |
+| Folder layout    | Shared folder only; per-skill links from an agent folder to the shared one; the whole agent folder linked to the shared one; separate copies per agent; a mix of these                                                                                                                                |
+| Scope            | Global; project; both, with the project copy shadowing the global one                                                                                                                                                                                                                                 |
+| State            | Parked; turned off for one agent; installed under another name; left out of a wildcard; two copies that differ, only one with the link                                                                                                                                                                |
+| Home location    | Default; `CLAUDE_CONFIG_DIR`, `PI_CODING_AGENT_DIR` or `GROK_HOME` set                                                                                                                                                                                                                                |
+| Surface          | Desktop, CLI, MCP                                                                                                                                                                                                                                                                                     |
+| Platform         | macOS on Apple silicon and Intel (what ships). Core and host tests also run on Linux in CI. Windows is not shipped and not covered.                                                                                                                                                                   |
+
+### 10.3 How each scenario is proven
+
+Six layers, cheapest first. Each has an oracle that is not the code under
+test: the thing that decides whether the answer is right.
+
+| Layer               | Proves                                                                         | Oracle                                                                                                                                                                                                                         | Runs                                                                                  |
+| ------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| 1. Real-pack corpus | Detection on real text                                                         | A list of links a person checked line by line, kept next to each snapshot                                                                                                                                                      | CI, Linux and macOS                                                                   |
+| 2. Scenario matrix  | Resolution in every combination of agent, layout, owner, scope, state and home | The file system: for Needs, opening the exact path the agent would open; for Hands off, the agent's list from the listing module, which has its own evidence against real agents (`docs/research/harness-listing-evidence.md`) | Host tests on real temp folders with real links, CI on macOS and Linux                |
+| 3. Real installers  | The setups real tools make, read back through CLI and MCP                      | The files the real `npx skills`, `dotagents` and `claude plugin install` write, from the snapshots served by the local git pack server                                                                                         | `verify-skill-studio`, and the `skills-cli-contract` workflow on macOS                |
+| 4. Real agents      | That OK and Missing match what each agent does                                 | The agent's own transcript, read with Skill Studio's session readers: did it load `grilling` after `grill-me`, did it open `../choreograph/SKILL.md`                                                                           | By hand in a disposable home, before slice 1 merges and on each agent's major version |
+| 5. UI flows         | Dialogs, Home and the map show the core answer                                 | The page as a user reads it, found by role and name                                                                                                                                                                            | e2e on the harness, WebKit and Chromium                                               |
+| 6. Upstream drift   | That a pack changing its links is noticed before users hit it                  | Layer 1 rerun on each pack's latest commit                                                                                                                                                                                     | Weekly CI, report only                                                                |
+
+Layer 2 is one property test: it builds every combination the agent
+catalog allows, and prints any combination that fails. Layer 4 runs each
+agent headless on its cheapest model, with the target skill present and
+absent, in each folder layout; a full pass costs under a dollar. Its table
+of results, with agent versions, goes in `docs/verification/skill-links.md`.
+Layer 4 also settles open question 1.
+
+### 10.4 Done means
+
+- Layer 1: every hand-checked link found and no listed non-link reported,
+  with the count per pack in the PR.
+- Layer 2: every generated combination passes on macOS and Linux, with the
+  combination count in the PR.
+- Layer 3: one evidence folder per installer, with identical CLI and MCP
+  output.
+- Layer 4: a filled table of agent × layout × present or absent, every cell
+  matching the spec's rule. A cell that does not match changes the rule.
+- Layer 5: the e2e specs pass in both engines.
+- No step reads the developer's home, projects or session history.
 
 Rare cases not tested, per the testing skill:
 
@@ -399,10 +468,8 @@ Rare cases not tested, per the testing skill:
 1. **`..` through a link.** When `~/.claude/skills/a` is a link to
    `~/.agents/skills/a`, does the agent resolve `../b` against the link's
    folder or the target's? The operating system uses the target's; a tool
-   that cleans the path first uses the link's. Check with Claude Code and
-   Codex in the `verify-skill-studio` home before slice 1 ships the
-   per-layout rule.
-2. **Index rule.** Two rules on 12 packs found the four index skills and
+   that cleans the path first uses the link's. Layer 4 answers it per agent.
+2. **Index rule.** Two rules on 12 packs found the three index skills and
    rejected the false ones. A pack author could also mark an index in
    `metadata` (the Agent Skills spec has no dependency or index field).
    Propose it upstream after slice 1 shows the heuristic's misses.

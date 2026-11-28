@@ -16,7 +16,7 @@ in one of these forms:
 
 | Form                                         | Example from the packs                                          |
 | -------------------------------------------- | --------------------------------------------------------------- |
-| A path into the other skill's folder         | `read [the pstack harness adapter](../pstack-harness/SKILL.md)` |
+| A path into the other skill's folder         | ``先阅读 [`../lark-shared/SKILL.md`](../lark-shared/SKILL.md)`` |
 | `/name`                                      | `tell the user to run /setup-matt-pocock-skills`                |
 | `pack:name`                                  | `Invoke the superpowers:writing-plans skill.`                   |
 | The Skill tool with the name in quotes       | `Call the Skill tool with "grilling".`                          |
@@ -42,20 +42,20 @@ off to 9 skills from prose, and `remotion-markup`.
 
 ## Results
 
-| Pack (commit)                                                                                                         | Skills | Links | Linked / standalone | Index skills                               | Most needed (skills that name it, not counting indexes) |
-| --------------------------------------------------------------------------------------------------------------------- | -----: | ----: | ------------------: | ------------------------------------------ | ------------------------------------------------------- |
-| [sergical/pstack-skills](https://github.com/sergical/pstack-skills/tree/dd839d3de2bae4805b7ecef09b6584633293dfd5)     |     58 |   141 |              53 / 5 | `pstack-poteto-help`, `pstack-poteto-mode` | `pstack-harness` 23                                     |
-| [microsoft/azure-skills](https://github.com/microsoft/azure-skills/tree/7847020998043c6231929b364c35393b7cdab270)     |     51 |   146 |              48 / 3 | none                                       | `azure-prepare` 13                                      |
-| [mattpocock/skills](https://github.com/mattpocock/skills/tree/bbadaa631c37af594e5a05c9cefacd9956136b18)               |     39 |    69 |              30 / 9 | `ask-matt`                                 | `grilling` 7                                            |
-| [larksuite/cli](https://github.com/larksuite/cli/tree/c5fbf1a52df77d5cb9cac2b1501770b2fb9af7d2)                       |     34 |    97 |              26 / 8 | none                                       | `lark-shared` 24                                        |
-| [heygen-com/hyperframes](https://github.com/heygen-com/hyperframes/tree/b6cfb496b3476e26d2b9171df5e6e611d78e83ae)     |     23 |    52 |              22 / 1 | none                                       | `hyperframes` 17                                        |
-| [juliusbrussee/caveman](https://github.com/juliusbrussee/caveman/tree/e74a11ccdb38b98d15c9f9545787c907dd15f0ab)       |     22 |    18 |             12 / 10 | none                                       | `caveman` 5                                             |
-| [anthropics/skills](https://github.com/anthropics/skills/tree/e4bb5d960d87126ff3b3a8af1a104b7db67560ba)               |     20 |     5 |              6 / 14 | none                                       | `pdf` 2 (not local, see below)                          |
-| [emilkowalski/skills](https://github.com/emilkowalski/skills/tree/64eb3deb9a5fbfa041faf783e0bc3fd635872e9c)           |     20 |    55 |              20 / 0 | `ask-emil`                                 | `review-animations` 8                                   |
-| [obra/superpowers](https://github.com/obra/superpowers/tree/22f0b463e7a5e579904dd6211a520321035526f7)                 |     15 |    30 |              13 / 2 | none                                       | `using-git-worktrees` 4                                 |
-| [remotion-dev/skills](https://github.com/remotion-dev/skills/tree/a3f4098a2afd0e13f6a6f8c8760e275f75457ea9)           |     14 |    23 |              14 / 0 | none                                       | `remotion-markup` 4                                     |
-| [prisma/skills](https://github.com/prisma/skills/tree/b4bebffd0d0c3499c3d342f69380886a28e28880)                       |     11 |    20 |               9 / 2 | none                                       | `prisma-orm-setup` 5                                    |
-| [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills/tree/5a37a6329fbad3666c3207392a6a7c0110e92efb) |      9 |     0 |               0 / 9 | none                                       | none                                                    |
+| Pack (commit)                                                                                                         | Skills | Links | Linked / standalone | Index skills  | Most needed (skills that name it, not counting indexes) |
+| --------------------------------------------------------------------------------------------------------------------- | -----: | ----: | ------------------: | ------------- | ------------------------------------------------------- |
+| [cursor/plugins, `pstack/`](https://github.com/cursor/plugins/tree/b7b93c36be9bcc36a74db438e0fd385d660bc559/pstack)   |     59 |    99 |             48 / 11 | `poteto-help` | `poteto-mode` 7, `unslop` 7                             |
+| [microsoft/azure-skills](https://github.com/microsoft/azure-skills/tree/7847020998043c6231929b364c35393b7cdab270)     |     51 |   146 |              48 / 3 | none          | `azure-prepare` 13                                      |
+| [mattpocock/skills](https://github.com/mattpocock/skills/tree/bbadaa631c37af594e5a05c9cefacd9956136b18)               |     39 |    69 |              30 / 9 | `ask-matt`    | `grilling` 7                                            |
+| [larksuite/cli](https://github.com/larksuite/cli/tree/c5fbf1a52df77d5cb9cac2b1501770b2fb9af7d2)                       |     34 |    97 |              26 / 8 | none          | `lark-shared` 24                                        |
+| [heygen-com/hyperframes](https://github.com/heygen-com/hyperframes/tree/b6cfb496b3476e26d2b9171df5e6e611d78e83ae)     |     23 |    52 |              22 / 1 | none          | `hyperframes` 17                                        |
+| [juliusbrussee/caveman](https://github.com/juliusbrussee/caveman/tree/e74a11ccdb38b98d15c9f9545787c907dd15f0ab)       |     22 |    18 |             12 / 10 | none          | `caveman` 5                                             |
+| [anthropics/skills](https://github.com/anthropics/skills/tree/e4bb5d960d87126ff3b3a8af1a104b7db67560ba)               |     20 |     5 |              6 / 14 | none          | `pdf` 2 (not local, see below)                          |
+| [emilkowalski/skills](https://github.com/emilkowalski/skills/tree/64eb3deb9a5fbfa041faf783e0bc3fd635872e9c)           |     20 |    55 |              20 / 0 | `ask-emil`    | `review-animations` 8                                   |
+| [obra/superpowers](https://github.com/obra/superpowers/tree/22f0b463e7a5e579904dd6211a520321035526f7)                 |     15 |    30 |              13 / 2 | none          | `using-git-worktrees` 4                                 |
+| [remotion-dev/skills](https://github.com/remotion-dev/skills/tree/a3f4098a2afd0e13f6a6f8c8760e275f75457ea9)           |     14 |    23 |              14 / 0 | none          | `remotion-markup` 4                                     |
+| [prisma/skills](https://github.com/prisma/skills/tree/b4bebffd0d0c3499c3d342f69380886a28e28880)                       |     11 |    20 |               9 / 2 | none          | `prisma-orm-setup` 5                                    |
+| [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills/tree/5a37a6329fbad3666c3207392a6a7c0110e92efb) |      9 |     0 |               0 / 9 | none          | none                                                    |
 
 Ten of the twelve packs have links between their skills. Only
 `vercel-labs/agent-skills` is fully standalone. In `anthropics/skills`,
@@ -75,9 +75,9 @@ is `Call the Skill tool with "grilling".` `grilling` has 1.2M installs
 per user, so they cannot say how many installs miss `grilling`, only that
 `grill-me` was installed about 400K more times than the skill it runs.
 
-**Several packs have one base skill that many skills read.** 23 pstack skills
-open `../pstack-harness/SKILL.md`. 24 Lark skills read
-`../lark-shared/SKILL.md`. 17 HeyGen skills name `hyperframes`, though some
+**Several packs have one base skill that many skills read.** 24 Lark skills
+read `../lark-shared/SKILL.md`. Six Matt Pocock skills send the user to
+`/setup-matt-pocock-skills` when the tracker is not set up. 17 HeyGen skills name `hyperframes`, though some
 of those lines mean the CLI of the same name. Removing or parking the base
 skill breaks most of the pack at once.
 
@@ -87,10 +87,23 @@ non-negotiable:** motion-doctrine`), optional ones (`If cost-analysis is
 available`), and siblings (`the counterpart to find-animation-opportunities`).
 The form alone cannot tell them apart; the words around the name can.
 
+**A port can add links the original does not have.** pstack is a Cursor
+plugin in `cursor/plugins`, also listed on skills.sh under that repo. Its
+skills name a skill in another plugin of the same repo: `poteto-mode` says
+"Before commit → `/deslop` from the `cursor-team-kit` plugin". A port for
+other agents,
+[sergical/pstack-skills](https://github.com/sergical/pstack-skills/tree/dd839d3de2bae4805b7ecef09b6584633293dfd5)
+(58 skills, generated from the original), renames every skill with a
+`pstack-` prefix and adds a `pstack-harness` skill that 23 of its skills read
+first. The same pack, installed two ways, has a different base skill and
+different names to resolve.
+
 ## Accuracy
 
 After the path fix, 40 links were drawn at random (seed 7) across all packs
-and each was read by hand against the line that produced it.
+and each was read by hand against the line that produced it. This sample was
+drawn while the pstack row was still the port, so its pstack links name
+`pstack-` skills.
 
 - 37 of 40 point at the right skill, in the right direction. The 3 wrong
   ones: a line that says not to call `lark-approval`, and two lines that name
