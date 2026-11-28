@@ -66,6 +66,7 @@ pub mod ops_invocation;
 mod ops_park_dotagents;
 pub mod ops_recovery;
 mod ops_remove;
+pub mod ops_skill_links;
 pub mod ops_split;
 mod ops_update;
 mod ownership;

@@ -116,8 +116,17 @@ pub fn detect_links(skills: &[SkillText], other_names: &BTreeSet<String>) -> Det
         let mut rows = Vec::new();
         for (file, text) in &skill.files {
             let mut in_list = false;
+            let mut in_fence = false;
             for (index, raw) in text.lines().enumerate() {
                 let line = raw.trim();
+                // Code samples hold import paths and commands, not instructions.
+                if line.starts_with("```") || line.starts_with("~~~") {
+                    in_fence = !in_fence;
+                    continue;
+                }
+                if in_fence {
+                    continue;
+                }
                 // An indented line under a list item belongs to that item.
                 in_list = is_list_line(line)
                     || (in_list && (line.is_empty() || raw.starts_with([' ', '\t'])));
@@ -241,7 +250,14 @@ fn scan_line(
         };
         // A path that stays inside this folder is internal, including a
         // bundled copy of a sibling (`remotion-best-practices/remotion-studio/`).
-        if ups != depth + 1 || folder == skill.folder {
+        let known = by_folder.contains_key(folder) || names.contains(folder);
+        if ups != depth + 1
+            || folder == skill.folder
+            || !(known
+                || std::path::Path::new(rest)
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("md")))
+        {
             continue;
         }
         let to = by_folder.get(folder).copied().unwrap_or(folder);
@@ -256,6 +272,20 @@ fn scan_line(
     }
     let first_dir = file.split('/').next().unwrap_or("");
     let cleaned = strip_paths(line);
+    // A Skill tool call names its target outright, so it counts even when
+    // that skill is not installed: the case the user most needs to see.
+    if lower.contains("skill tool") {
+        for quoted in cleaned.split('"').skip(1).step_by(2) {
+            if !names.contains(quoted) && quoted != skill.name && is_skill_name(quoted) {
+                let strength = if optional {
+                    LinkStrength::Mentions
+                } else {
+                    LinkStrength::HandsOff
+                };
+                rows.push(row(quoted, strength, None));
+            }
+        }
+    }
     for name in names {
         if *name == skill.name || (file.contains('/') && first_dir == *name) {
             continue;
@@ -321,6 +351,17 @@ fn classify(line: &str, lower: &str, start: usize, end: usize) -> Option<LinkStr
         return Some(LinkStrength::Mentions);
     }
     None
+}
+
+/// The Agent Skills name rule: lowercase letters, digits and single
+/// hyphens, 1 to 64 characters, not starting or ending with a hyphen.
+fn is_skill_name(s: &str) -> bool {
+    (1..=64).contains(&s.len())
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && !s.starts_with('-')
+        && !s.ends_with('-')
+        && !s.contains("--")
 }
 
 fn negated(line: &str, start: usize) -> bool {

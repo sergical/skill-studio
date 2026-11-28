@@ -564,11 +564,7 @@ pub(crate) fn listed_skills(
                 if &deployment.root.scope != selected_scope || deployment.symlink_is_broken {
                     continue;
                 }
-                let visible = deployment.harness.as_ref() == Some(&facts.id)
-                    || deployment.root.kind == RootKind::Universal
-                        && facts.reads_universal_root.is_yes()
-                    || harness == AgentId::CURSOR
-                        && matches!(&deployment.root.kind, RootKind::Harness(id) if id.as_str() == AgentId::CLAUDE_CODE || id.as_str() == AgentId::CODEX);
+                let visible = crate::harness::deployment_visible_to(deployment, facts);
                 if !visible && deployment.root.kind != RootKind::Parked {
                     continue;
                 }

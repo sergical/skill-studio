@@ -142,6 +142,23 @@ fn real_packs_give_the_links_a_person_checked_by_hand() {
     assert_eq!(matt.indexes, vec!["ask-matt".to_string()]);
     assert_eq!(strength(&matt, "ask-matt", "pr"), Some(LinkStrength::Lists));
 
+    let without_grilling: Vec<SkillText> = pack("mattpocock_skills")
+        .into_iter()
+        .filter(|s| s.name != "grilling")
+        .collect();
+    let missing = detect_links(&without_grilling, &BTreeSet::new());
+    assert_eq!(
+        strength(&missing, "grill-me", "grilling"),
+        Some(LinkStrength::HandsOff)
+    );
+    assert!(
+        missing
+            .links
+            .iter()
+            .all(|l| l.to != "index" && l.to != "lib"),
+        "code samples are not links"
+    );
+
     let pstack = detect_links(
         &pack("cursor_plugins_pstack"),
         &BTreeSet::from(["deslop".to_string()]),
@@ -185,7 +202,7 @@ fn lines_that_only_look_like_links_are_not_links() {
         synthetic(
             "skill-a",
             &[
-                ("SKILL.md", "Do not call `skill-b` for approvals.\nRun `npx skill-b render`.\nThis is called by `skill-c`.\nA teach moment."),
+                ("SKILL.md", "Do not call `skill-b` for approvals.\nRun `npx skill-b render`.\nThis is called by `skill-c`.\nA teach moment.\n```ts\nimport { x } from \"../skill-b/index\";\n```\nImports `../lib/impl` too."),
                 ("skill-b/REFERENCE.md", "See [skill-b](../skill-b/REFERENCE.md) and `skill-b`."),
             ],
         ),

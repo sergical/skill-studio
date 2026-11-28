@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SkillLinksReport",
+  "description": "Links between installed skills.",
+  "type": "object",
+  "properties": {
+    "links": {
+      "description": "Links, sorted by `from` then `to`.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ResolvedLink"
+      }
+    },
+    "indexes": {
+      "description": "Skills that list most of their pack. Their list entries never alert.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "broken": {
+      "description": "Needs and Hands off links that do not work, counted once per agent.",
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "not_known": {
+      "description": "Skills whose folder could not be read: their links are not known,\nwhich is not the same as having none.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "links",
+    "indexes",
+    "broken",
+    "not_known"
+  ],
+  "$defs": {
+    "ResolvedLink": {
+      "description": "A link with its state for each agent that loads the linking skill.",
+      "type": "object",
+      "properties": {
+        "from": {
+          "description": "The skill whose text names the other.",
+          "type": "string"
+        },
+        "to": {
+          "description": "The skill it names.",
+          "type": "string"
+        },
+        "strength": {
+          "description": "How much `from` depends on `to`.",
+          "$ref": "#/$defs/LinkStrength"
+        },
+        "path": {
+          "description": "For a path link, the path as written.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence": {
+          "description": "The line behind the link.",
+          "$ref": "#/$defs/LinkEvidence",
+          "x-untrusted": true
+        },
+        "agents": {
+          "description": "One entry per agent that loads `from`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentLinkState"
+          }
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "strength",
+        "evidence",
+        "agents"
+      ]
+    },
+    "LinkStrength": {
+      "description": "How much a skill depends on the skill it names. Declared strongest first,\nso the smaller value wins when one skill names another more than once.",
+      "oneOf": [
+        {
+          "description": "Reads the other skill's files, or loads it before it starts.",
+          "type": "string",
+          "const": "needs"
+        },
+        {
+          "description": "Runs the other skill for a step, or sends the user to it.",
+          "type": "string",
+          "const": "hands_off"
+        },
+        {
+          "description": "Names it as related, optional or see-also.",
+          "type": "string",
+          "const": "mentions"
+        },
+        {
+          "description": "An index skill lists it as one of its entries.",
+          "type": "string",
+          "const": "lists"
+        }
+      ]
+    },
+    "LinkEvidence": {
+      "description": "The line that made a link.",
+      "type": "object",
+      "properties": {
+        "file": {
+          "description": "File inside the linking skill's folder, with `/` separators.",
+          "type": "string"
+        },
+        "line": {
+          "description": "1-based line number.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "text": {
+          "description": "The line, trimmed and cut to at most 200 characters.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file",
+        "line",
+        "text"
+      ]
+    },
+    "AgentLinkState": {
+      "description": "One agent's view of a link.",
+      "type": "object",
+      "properties": {
+        "agent": {
+          "description": "The agent with a working copy of the linking skill.",
+          "$ref": "#/$defs/AgentIdentity"
+        },
+        "state": {
+          "description": "Whether the link works for it.",
+          "$ref": "#/$defs/LinkState"
+        }
+      },
+      "required": [
+        "agent",
+        "state"
+      ]
+    },
+    "AgentIdentity": {
+      "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
+      "type": "string"
+    },
+    "LinkState": {
+      "description": "Whether a link works for one agent.",
+      "oneOf": [
+        {
+          "description": "The agent can open the path or run the skill by name.",
+          "type": "string",
+          "const": "ok"
+        },
+        {
+          "description": "No copy of the target anywhere in the scope.",
+          "type": "string",
+          "const": "missing"
+        },
+        {
+          "description": "The agent has a copy, but it is parked or turned off for it.",
+          "type": "string",
+          "const": "off"
+        },
+        {
+          "description": "A copy exists only where this agent does not read it.",
+          "type": "string",
+          "const": "elsewhere"
+        }
+      ]
+    }
+  }
+}

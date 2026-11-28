@@ -794,6 +794,12 @@ pub fn write_schemas(out: Option<PathBuf>) -> ExitCode {
     }
     type SchemaFn = fn() -> schemars::Schema;
     let schemas: &[(&str, SchemaFn)] = &[
+        ("skill_links_request", || {
+            schemars::schema_for!(skill_studio_core::ops_skill_links::SkillLinksRequest)
+        }),
+        ("skill_links_report", || {
+            schemars::schema_for!(skill_studio_core::ops_skill_links::SkillLinksReport)
+        }),
         ("extras_request", || {
             schemars::schema_for!(skill_studio_core::extras::ExtrasRequest)
         }),
@@ -981,6 +987,58 @@ pub fn write_schemas(out: Option<PathBuf>) -> ExitCode {
 }
 
 /// Prints declaration names and paths. No configuration values are available here.
+pub fn print_links_table(
+    envelope: &ResultEnvelope<skill_studio_core::ops_skill_links::SkillLinksReport>,
+) {
+    use skill_studio_core::ops_skill_links::LinkState;
+    use skill_studio_core::skill_links::LinkStrength;
+    print_errors(envelope);
+    let Some(report) = &envelope.data else {
+        return;
+    };
+    for link in &report.links {
+        let strength = match link.strength {
+            LinkStrength::Needs => "needs",
+            LinkStrength::HandsOff => "runs",
+            LinkStrength::Mentions => "mentions",
+            LinkStrength::Lists => "lists",
+        };
+        let agents: Vec<String> = link
+            .agents
+            .iter()
+            .map(|a| {
+                let state = match a.state {
+                    LinkState::Ok => "ok",
+                    LinkState::Missing => "missing",
+                    LinkState::Off => "off",
+                    LinkState::Elsewhere => "elsewhere",
+                };
+                format!("{} {state}", a.agent)
+            })
+            .collect();
+        println!(
+            "{} {strength} {}  [{}]  {}:{}  {}",
+            link.from,
+            link.to,
+            agents.join(", "),
+            link.evidence.file,
+            link.evidence.line,
+            link.evidence.text
+        );
+    }
+    if !report.not_known.is_empty() {
+        println!(
+            "Links not known (folder unreadable): {}",
+            report.not_known.join(", ")
+        );
+    }
+    println!(
+        "{} links, {} broken for some agent",
+        report.links.len(),
+        report.broken
+    );
+}
+
 pub fn print_extras_table(envelope: &ResultEnvelope<skill_studio_core::extras::ExtrasReport>) {
     print_errors(envelope);
     if let Some(report) = &envelope.data {

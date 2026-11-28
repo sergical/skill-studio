@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SkillLinksRequest",
+  "description": "What to report.",
+  "type": "object",
+  "properties": {
+    "skill": {
+      "description": "Only links from or to this skill.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "agent": {
+      "description": "Only this agent's view.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentIdentity"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "missing_only": {
+      "description": "Only Needs and Hands off links that do not work for some agent.",
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "AgentIdentity": {
+      "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
+      "type": "string"
+    }
+  }
+}
