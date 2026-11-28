@@ -21,7 +21,8 @@ interface LoadOptions<T> {
 interface Load<T> {
   /** The loaded data; `undefined` until a load lands. A failed reload keeps the data it had. */
   data: T | undefined;
-  /** The message of the latest load when it failed, else `null`. */
+  /** The message of the last load to land, when it failed; else `null`. It stays through a
+   * reload, until that reload lands. */
   error: string | null;
   /** True while the latest load has not landed. */
   isLoading: boolean;
@@ -90,7 +91,7 @@ export function useLoad<T>(
   const shown = settled !== null && (keepPreviousData || settled.key === key) ? settled : null;
   return {
     data: shown?.data,
-    error: settled !== null && settled.run === run ? settled.error : null,
+    error: shown?.error ?? null,
     isLoading: run !== null && settled?.run !== run,
     reload: () => setRevision((current) => current + 1),
     setData: (data) => {

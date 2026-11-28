@@ -131,14 +131,28 @@
         "no-restricted-properties": [
           "error",
           {
-            "object": "React",
             "property": "useEffect",
             "message": "Effects live in apps/desktop/src/hooks. Load data with useLoad, listen to a backend event with useBackendEvent, or derive the value during render and do the work in the event handler."
           },
           {
-            "object": "React",
             "property": "useLayoutEffect",
             "message": "Effects live in apps/desktop/src/hooks. Load data with useLoad, listen to a backend event with useBackendEvent, or derive the value during render and do the work in the event handler."
+          },
+          {
+            "property": "setTimeout",
+            "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce."
+          },
+          {
+            "property": "setInterval",
+            "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce."
+          },
+          {
+            "property": "requestAnimationFrame",
+            "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce."
+          },
+          {
+            "property": "requestIdleCallback",
+            "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce."
           }
         ],
         "no-restricted-globals": [

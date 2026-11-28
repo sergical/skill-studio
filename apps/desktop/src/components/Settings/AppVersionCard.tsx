@@ -70,9 +70,11 @@ export function AppVersionCard() {
     // status read would erase a "Restart to update" or leave a "checking" that never ends.
     addToast({ type: "error", title: "Couldn't follow update progress", message }),
   );
+  // A failed read shows over an earlier event, as the last of the two to land.
   const updateStatus: UpdateStatus =
-    update.data ??
-    (update.error === null ? { status: "up-to-date" } : { status: "error", message: update.error });
+    update.error !== null
+      ? { status: "error", message: update.error }
+      : (update.data ?? { status: "up-to-date" });
 
   const handleCheckForUpdate = () => {
     update.setData({ status: "checking" });
