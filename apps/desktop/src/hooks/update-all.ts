@@ -102,6 +102,20 @@ export async function updateAllOutdatedSkills(
     const forkedOwnerId = forkableDeployment(skill)?.owner_id;
     return !!forkedOwnerId && skill.update_owner_ids.includes(forkedOwnerId);
   };
+  // The edited Global Universal copy of a skill the user chose to fork, when a fork can no
+  // longer be made (a rescan found an independent copy): it is held, never overwritten.
+  const heldEditedOwner = (skill: (typeof skills)[number]) => {
+    if (forkEdited?.names.has(skill.name) !== true || forksEdit(skill)) return undefined;
+    const ownerId = skill.deployments.find(
+      (deployment) =>
+        deployment.scope === "global" &&
+        deployment.destination === "universal" &&
+        deployment.owner_kind === "skills-sh" &&
+        !deployment.plugin,
+    )?.owner_id;
+    return ownerId && skill.update_owner_ids.includes(ownerId) ? ownerId : undefined;
+  };
+  const held = skills.filter((skill) => heldEditedOwner(skill) !== undefined);
   const pullsUpstream = (skill: (typeof skills)[number]) =>
     skillHasManagedUpdate(skill) && (skill.source_kind === "fork" || forksEdit(skill));
   const forks = skills.filter(pullsUpstream);
@@ -110,11 +124,14 @@ export async function updateAllOutdatedSkills(
   const ownerTargetsOf = (skill: (typeof skills)[number]) => {
     if (skill.source_kind === "fork") return [];
     const targets = skillUpdateOwnerTargets(skill);
+    const heldOwnerId = heldEditedOwner(skill);
+    if (heldOwnerId) return targets.filter((target) => target.owner_id !== heldOwnerId);
     return pullsUpstream(skill) ? excludeForkedOwner(skill, targets) : targets;
   };
   const pluginTargetsOf = (skill: (typeof skills)[number]) =>
     updatePluginInstall ? skillPluginUpdateTargets(skill) : [];
   let total =
+    held.length +
     forks.length +
     skills.flatMap(ownerTargetsOf).length +
     uniquePluginTargets(skills.flatMap(pluginTargetsOf)).length;
@@ -145,6 +162,14 @@ export async function updateAllOutdatedSkills(
     tally.failures += count;
     if (!tally.errors.includes(message)) tally.errors.push(message);
   };
+  for (const skill of held) {
+    failedSkillNames.add(skill.name);
+    copyFailedNames.add(skill.name);
+    fail(
+      1,
+      `Kept ${skill.name} as is: its edited copy can no longer be forked, so it was not updated.`,
+    );
+  }
   // A skill whose copies failed keeps its plugins untouched, and so does every other skill
   // sharing one of those plugins. They leave the total too, so progress still reaches it.
   const blockedPluginKeys = () =>

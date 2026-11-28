@@ -615,6 +615,47 @@ describe("updateAllOutdatedSkills with edited skills", () => {
     expect(calls).toEqual(["update owner:v1/project/edited"]);
   });
 
+  it("update_all_holds_an_edited_copy_chosen_for_a_fork_when_a_rescan_makes_it_unforkable", async () => {
+    const calls: string[] = [];
+    const unforkable = {
+      ...edited,
+      deployments: [
+        ...edited.deployments,
+        {
+          ...canonicalDeployment,
+          id: "dep:v1/edited-claude",
+          destination: "per-harness" as const,
+          backing: { kind: "independent" as const },
+          is_symlink: false,
+          owner_kind: "skills-sh" as const,
+          owner_id: "owner:v1/global/edited-claude",
+        },
+      ],
+    };
+    const tally = await updateAllOutdatedSkills(
+      [unforkable],
+      async (target) => {
+        calls.push(`pull ${target.deployment_id}`);
+        return pulled;
+      },
+      async (targets) => {
+        calls.push(`update ${targets.map((target) => target.owner_id ?? "").join(",")}`);
+        return succeedAll(["edited"]);
+      },
+      undefined,
+      {
+        names: new Set(["edited"]),
+        fork: async (target) => {
+          calls.push(`fork ${target.deployment_id}`);
+          return forkRecord;
+        },
+      },
+    );
+    expect(calls).toEqual([]);
+    expect(tally.failures).toBe(1);
+    expect(tally.skillsSucceeded).toBe(0);
+  });
+
   it("update_all_counts_a_forked_skill_as_failed_when_its_other_copy_fails_or_reports_a_false_success", async () => {
     const tally = await updateAllOutdatedSkills(
       [twoOwners],
