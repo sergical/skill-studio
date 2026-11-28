@@ -9,9 +9,11 @@ export const plural = (count: number, one: string) => `${count} ${one}${count ==
  */
 export function checkResult(packs: Pack[]): string {
   const checked = packs.filter((pack) => pack.remote.state === "checked").length;
-  const failed =
-    packs.filter((pack) => pack.remote.state === "failed").length +
-    packs.filter((pack) => pack.original?.remote.state === "failed").length;
+  // A moved pack's original carries its own source's error, so a pack
+  // counts once however many of its two checks failed.
+  const failed = packs.filter(
+    (pack) => pack.remote.state === "failed" || pack.original?.remote.state === "failed",
+  ).length;
   if (checked === 0 && failed === 0) return "No pack can be checked upstream";
   const behind = packs.reduce((sum, pack) => sum + pack.behind_count, 0);
   const added = packs.reduce((sum, pack) => sum + pack.new_upstream.length, 0);

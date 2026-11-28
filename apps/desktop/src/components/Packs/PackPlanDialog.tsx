@@ -63,14 +63,32 @@ const STATE_ORDER = {
   skipped: 2,
 } satisfies Record<PackStep["state"]["state"], number>;
 
-function scopeLabel(step: PackStep): string {
-  return step.scope.scope === "global"
-    ? "Global"
-    : (step.scope.project.split("/").pop() ?? step.scope.project);
-}
-
 const scopeKey = (step: PackStep) =>
   step.scope.scope === "global" ? "global" : step.scope.project;
+
+/**
+ * Each scope in the plan by a short name: "Global", or the fewest last
+ * folders of a project path that no other project in the plan shares, so
+ * /work/client/app and /work/personal/app read "client/app" and "personal/app".
+ */
+function scopeLabels(steps: PackStep[]): Map<string, string> {
+  const projects = [...new Set(steps.map(scopeKey))].filter((key) => key !== "global");
+  const split = projects.map((project) => project.split("/").filter(Boolean));
+  const labels = new Map<string, string>([["global", "Global"]]);
+  projects.forEach((project, index) => {
+    const parts = split[index];
+    let depth = 1;
+    const suffix = (folders: string[]) => folders.slice(-depth).join("/");
+    while (
+      depth < parts.length &&
+      split.some((other, at) => at !== index && suffix(other) === suffix(parts))
+    ) {
+      depth += 1;
+    }
+    labels.set(project, suffix(parts) || project);
+  });
+  return labels;
+}
 
 const stepKey = (step: PackStep) => `${step.source}:${step.skill}:${scopeKey(step)}`;
 
@@ -119,19 +137,19 @@ function groupSteps(steps: PackStep[]): PackStep[][] {
 interface StepGroupProps {
   /** One step, or skipped or failed steps that share a reason, which shows once. */
   steps: PackStep[];
-  /** Show each step's scope: only when the plan spans more than one. */
-  showScope: boolean;
+  /** Each step's scope by its short name; null when the plan has only one scope. */
+  scopeLabels: Map<string, string> | null;
   /** Show each step's pack: only when the plan spans more than one. */
   showSource: boolean;
 }
 
-function StepGroup({ steps, showScope, showSource }: StepGroupProps) {
+function StepGroup({ steps, scopeLabels, showSource }: StepGroupProps) {
   const state = steps[0].state.state;
   const reason = reasonOf(steps[0]);
   return (
     <li className="flex flex-col gap-0.5 border-b border-border-subtle py-1.5 last:border-b-0">
       {steps.map((step, index) => {
-        const where = [showSource && step.source, showScope && scopeLabel(step)].filter(Boolean);
+        const where = [showSource && step.source, scopeLabels?.get(scopeKey(step))].filter(Boolean);
         return (
           <div key={stepKey(step)} className="flex min-w-0 items-baseline gap-2">
             <span
@@ -140,7 +158,10 @@ function StepGroup({ steps, showScope, showSource }: StepGroupProps) {
               {step.skill}
             </span>
             {where.length > 0 && (
-              <span className="min-w-0 truncate text-caption text-text-tertiary">
+              <span
+                className="min-w-0 truncate text-caption text-text-tertiary"
+                title={step.scope.scope === "project" ? step.scope.project : undefined}
+              >
                 {where.join(" · ")}
               </span>
             )}
@@ -207,6 +228,7 @@ export function PackPlanDialog({ intent, onClose }: PackPlanDialogProps) {
   const steps = report ? report.steps : [];
   const groups = groupSteps(steps);
   const showScope = new Set(steps.map(scopeKey)).size > 1;
+  const labels = showScope ? scopeLabels(steps) : null;
   const onlyScope = !showScope && steps[0] ? steps[0].scope : null;
   const showSource = new Set(steps.map((step) => step.source)).size > 1;
 
@@ -237,7 +259,7 @@ export function PackPlanDialog({ intent, onClose }: PackPlanDialogProps) {
               <StepGroup
                 key={stepKey(group[0])}
                 steps={group}
-                showScope={showScope}
+                scopeLabels={labels}
                 showSource={showSource}
               />
             ))}

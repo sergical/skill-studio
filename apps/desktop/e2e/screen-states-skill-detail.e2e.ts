@@ -53,9 +53,9 @@ interface ShotMeta {
 async function shoot(page: Page, file: string, meta: ShotMeta, errors: string[]) {
   await page.addStyleTag({ content: ".proto-picker { display: none !important; }" });
   await page.waitForTimeout(700);
-  mkdirSync(`${out}/shots`, { recursive: true });
-  await page.screenshot({ path: `${out}/shots/${file}.png` });
-  writeFileSync(`${out}/shots/${file}.json`, JSON.stringify({ ...meta, errors }));
+  mkdirSync(`${out}/shots-skill-detail`, { recursive: true });
+  await page.screenshot({ path: `${out}/shots-skill-detail/${file}.png` });
+  writeFileSync(`${out}/shots-skill-detail/${file}.json`, JSON.stringify({ ...meta, errors }));
   expect(errors).toEqual([]);
 }
 
@@ -112,7 +112,7 @@ for (const c of CASES)
 test.afterAll(() => {
   if (!out) return;
   const figure = (file: string, caption: string, width = 420) =>
-    `<figure><img src="shots/${file}.png" loading="lazy" style="width:${width}px"><figcaption>${caption}</figcaption></figure>`;
+    `<figure><img src="shots-skill-detail/${file}.png" loading="lazy" style="width:${width}px"><figcaption>${caption}</figcaption></figure>`;
   const cases = CASES.map(
     (c) =>
       `<section><h2>${c.name} <small>${c.why}</small></h2><div>${CASE_SIZES.map((size) =>

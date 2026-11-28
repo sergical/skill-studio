@@ -11,17 +11,27 @@ test("a plugin-only skill with an update is counted and listed the same on Home,
   await page.evaluate(async (name) => {
     const harness = window.__harness!;
     const snapshot = harness.snapshot();
-    const template = snapshot.skills.find((skill) => skill.update_owner_ids.length)!;
     const skill = snapshot.skills.find((s) => s.name === name)!;
+    const plugin = skill.deployments.find((d) => d.plugin)!.plugin!;
+    // The owner id the backend gives a plugin update (`plugin_owner_id`).
+    const ownerId = `plugin:${plugin.id}`;
     await harness.publish({
       ...snapshot,
       skills: [
         {
           ...skill,
           has_update: true,
-          update_owner_ids: template.update_owner_ids,
-          update_owners: template.update_owners,
-          update_commit: template.update_commit,
+          update_owner_ids: [ownerId],
+          update_owners: [
+            {
+              owner_id: ownerId,
+              latest_commit: null,
+              latest_commit_at: null,
+              plugin_scope: "user",
+              plugin_project_path: null,
+            },
+          ],
+          update_commit: null,
         },
       ],
       update_check: { ...snapshot.update_check, updates_available: 1 },

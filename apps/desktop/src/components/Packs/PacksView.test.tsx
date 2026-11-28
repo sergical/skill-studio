@@ -115,3 +115,24 @@ it("a moved pack's row keeps what the check found about its original source", as
   const failedRow = screen.getByRole("listitem", { name: "me/other-fork" });
   expect(within(failedRow).getByText(/repository not found/)).toBeTruthy();
 });
+
+it("counts a moved pack's unreachable fork once, not again for its original", async () => {
+  const fork = pack({ source: "me/fork" });
+  const unreachable = { state: "failed", reason: "repository not found" } as const;
+  servePacks(
+    [fork],
+    [
+      {
+        ...fork,
+        remote: unreachable,
+        original: { source: "owner/repo", remote: unreachable, differs: [], not_in_source: [] },
+      },
+    ],
+  );
+  render(<PacksView />);
+
+  await userEvent.click(await screen.findByRole("button", { name: "Check upstream" }));
+
+  const status = await screen.findByRole("status");
+  expect(status.textContent).toBe("0 of 1 checked · 1 check failed");
+});

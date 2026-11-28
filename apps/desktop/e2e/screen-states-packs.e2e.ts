@@ -131,11 +131,11 @@ for (const [state, spec] of Object.entries(STATES))
         await openPacks(page, persona);
         await spec.run(page);
         await page.waitForTimeout(400);
-        mkdirSync(`${out}/shots`, { recursive: true });
+        mkdirSync(`${out}/shots-packs`, { recursive: true });
         const name = `${state}-${persona || "harness"}-${size.name}`;
-        await page.screenshot({ path: `${out}/shots/${name}.png` });
+        await page.screenshot({ path: `${out}/shots-packs/${name}.png` });
         writeFileSync(
-          `${out}/shots/${name}.json`,
+          `${out}/shots-packs/${name}.json`,
           JSON.stringify({ state, persona, size, errors }),
         );
         expect(errors).toEqual([]);
@@ -149,7 +149,7 @@ test.afterAll(() => {
         (persona) =>
           `<section><h2>${state} <small>${persona || "harness"}</small></h2><div>${SIZES.map(
             (size) =>
-              `<figure><img src="shots/${state}-${persona || "harness"}-${size.name}.png" loading="lazy"><figcaption>${size.name} ${size.width}×${size.height}</figcaption></figure>`,
+              `<figure><img src="shots-packs/${state}-${persona || "harness"}-${size.name}.png" loading="lazy"><figcaption>${size.name} ${size.width}×${size.height}</figcaption></figure>`,
           ).join("")}</div></section>`,
       ),
     )

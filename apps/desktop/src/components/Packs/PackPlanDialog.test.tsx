@@ -32,3 +32,23 @@ it("removing a pack installed in one project names that project before Remove", 
   await within(dialog).findByRole("button", { name: "Remove 2 skills" });
   expect(within(dialog).getByText(`Project ${project}`)).toBeTruthy();
 });
+
+it("removing a pack from two projects with the same folder name tells them apart", async () => {
+  const plan: PackActionReport = {
+    dry_run: true,
+    summary: "",
+    steps: ["/work/client/app", "/work/personal/app"].map((project) => ({
+      source: "owner/repo",
+      skill: "review",
+      scope: { scope: "project", project },
+      action: "remove",
+      state: { state: "planned" },
+    })),
+  };
+  useAppStore.setState({ runPackAction: async () => plan });
+  render(<PackPlanDialog intent={{ kind: "remove", source: "owner/repo" }} onClose={() => {}} />);
+
+  const steps = await screen.findByRole("list", { name: "Steps" });
+  expect(within(steps).getByText("client/app")).toBeTruthy();
+  expect(within(steps).getByText("personal/app")).toBeTruthy();
+});
