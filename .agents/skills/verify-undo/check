@@ -40,7 +40,7 @@ MUST_FAIL = {
     "core_claim_before_record": "NoStrandedUndo",
     "core_fail_finish_before_release": "NoStrandedUndo",
     "core_finish_before_mutation": "UndoneMeansFilesBack",
-    "recovery_releases_done_claims": "OneFinishedUndo",
+    "recovery_releases_done_claims": "FinishedUndoKeepsClaim",
 }
 
 FN_START = r"^([ \t]*)(?:pub(?:\([a-z]+\))? )?(?:async )?fn {name}\b"
@@ -141,8 +141,13 @@ def with_break(config: str, mutation: str) -> str:
     return changed
 
 
-def without_rules(config: str, rules: set[str]) -> str:
-    return "\n".join(line for line in config.splitlines() if line.strip() not in rules) + "\n"
+def with_narrowed_rules(config: str, narrowed: dict[str, str]) -> str:
+    """Swaps each rule that has a known finding for the narrower rule that leaves out its cause."""
+    lines = [
+        line.replace(line.strip(), narrowed[line.strip()]) if line.strip() in narrowed else line
+        for line in config.splitlines()
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def function_text(source: str, name: str) -> str | None:
@@ -164,7 +169,7 @@ def changed_code(root: Path, covered: dict) -> list[dict]:
 
 
 def accept(root: Path, covered: dict) -> None:
-    """Rewrites only the hashes and the sync commit, so the file keeps its formatting."""
+    """Rewrites only the hashes and the base commit, so the file keeps its formatting."""
     hashes = [function_hash(root, entry) for entry in covered["functions"]]
     for entry, digest in zip(covered["functions"], hashes):
         if digest == "missing":
@@ -172,13 +177,13 @@ def accept(root: Path, covered: dict) -> None:
     base = subprocess.run(
         ["git", "-C", str(root), "merge-base", "HEAD", "origin/main"], capture_output=True, text=True
     ).stdout.strip()
-    sync = base or covered["sync_commit"]
+    base = base or covered["accepted_on_top_of"]
     remaining = iter(hashes)
     text = re.sub(r'("sha256": ")[^"]*(")', lambda found: found.group(1) + next(remaining) + found.group(2),
                   COVERED.read_text())
-    text = re.sub(r'("sync_commit": ")[^"]*(")', lambda found: found.group(1) + sync + found.group(2), text)
+    text = re.sub(r'("accepted_on_top_of": ")[^"]*(")', lambda found: found.group(1) + base + found.group(2), text)
     COVERED.write_text(text)
-    print(f"Recorded {len(hashes)} functions as confirmed at {sync}.")
+    print(f"Recorded the text of {len(hashes)} functions as confirmed, on top of main at {base}.")
 
 
 def print_path(run: Run, words: dict) -> None:
@@ -207,11 +212,12 @@ def check_config(java: str, jar: Path, name: str, known: list[dict], words: dict
     finding = expected[run.broken]
     print(f"KNOWN  {name}: {run.broken} still breaks. {finding['summary']} {finding['issue']}")
     print_path(run, words)
-    rest = run_tlc(java, jar, without_rules(config, set(expected)))
+    narrowed = {rule: known_finding["except_rule"] for rule, known_finding in expected.items()}
+    rest = run_tlc(java, jar, with_narrowed_rules(config, narrowed))
     if rest.broken is None:
-        print(f"PASS   {name}: the other rules hold in {rest.states} states.")
+        print(f"PASS   {name}: no rule breaks in any other way, in {rest.states} states.")
         return True
-    print(f"FAIL   {name}: {rest.broken} breaks too, and no known finding covers it.")
+    print(f"FAIL   {name}: {rest.broken} breaks in a way the known finding does not cover.")
     print_path(rest, words)
     return False
 
@@ -242,8 +248,8 @@ def check_covered(root: Path, covered: dict) -> bool:
         print("        Read the diff, make the model match the code, run this again, then run "
               "`check --accept`. See SKILL.md, \"When the covered code changes\".")
     else:
-        print(f"PASS   the {len(covered['functions'])} covered functions match the text confirmed "
-              f"at {covered['sync_commit'][:8]}.")
+        print(f"PASS   the {len(covered['functions'])} covered functions match the text the model "
+              f"was confirmed against (accepted on top of main at {covered['accepted_on_top_of'][:8]}).")
     return not changed and not unlisted
 
 

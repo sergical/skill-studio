@@ -233,7 +233,7 @@ removed; do not list individual source files here.
 - Undo: a model checker tries every order of Undo's steps, with a crash
   between any two. When you change `restore_event_body`,
   `recover_interrupted`, `EventStore::restore` or a write of `reverted_by`,
-  run `.agents/skills/verify-undo/check` (about 10 seconds, needs Java, no
+  run `.agents/skills/verify-undo/check` (about 15 seconds, needs Java, no
   Rust build) and follow the `verify-undo` skill for each line it prints.
 
 ## Before you implement an issue

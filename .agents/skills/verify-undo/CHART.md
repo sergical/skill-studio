@@ -15,8 +15,9 @@ shortest path to it.
 ## A change the core wrote
 
 Undo from Activity, `skill-studio restore` or the MCP tool `restore_event`,
-for a change such as an install, update, remove or invocation change. Every
-rule holds.
+for a change such as an update, a remove or an invocation change. This chart
+is the undo that swaps a whole folder back, as for an update. Every rule
+holds.
 
 ```mermaid
 ---
@@ -43,13 +44,13 @@ stateDiagram-v2
   s1 --> s0: the app dies or the undo is recorded as failed
   s1 --> s2: the change is marked undone
   s2 --> s3: the app dies
-  s2 --> s4: the files are swapped back
+  s2 --> s4: the old folder is swapped in
   s3 --> s1: you press Undo or you press Undo with Force
   s2 --> s1: a file write failed: the mark is cleared
   s4 --> s3: the app dies
-  s3 --> s0: the next write clears the mark (the files are not back)
+  s3 --> s0: the next write clears the mark (files not back)
   s4 --> s5: the undo is recorded as finished
-  s3 --> s6: the next write clears the mark (the files are back)
+  s3 --> s6: the next write clears the mark (files back)
   s5 --> s1: you press Undo or you press Undo with Force
   s4 --> s1: a file write failed: the mark is cleared
   s1 --> s6: the app dies or the undo is recorded as failed or Undo is refused: files changed since, it asks for Force
@@ -77,13 +78,15 @@ What to notice:
 - If the app dies after the files are back but before the undo is recorded as
   finished, the files stay back and Undo is still offered. Pressing it asks
   for Force, because the files no longer match the change.
-- A folder swap that was not sealed is reversed by the next write.
+- A folder swap that was not sealed is reversed by the next write, or when
+  the desktop app starts again.
 
 ## A change the desktop wrote
 
 Undo from Activity for a change the desktop's own event store wrote, such as
-a link repair, a per-agent link removal or a frontmatter repair made in the
-app. The rule `NoStrandedUndo` breaks: the red state.
+a link repair or a frontmatter repair made in the app. This chart is the undo
+that writes in one step, as for a link. The rule `NoStrandedUndo` breaks:
+the red state.
 
 ```mermaid
 ---
@@ -122,13 +125,13 @@ stateDiagram-v2
   s1 --> s3: Undo is refused: already undone
   s4 --> s3: the app dies
   s4 --> s5: the undo is recorded as finished
-  s3 --> s6: the next write finds no undo record, so the mark stays
-  s3 --> s0: the next write clears the mark (the files are not back)
+  s3 --> s0: the next write clears the mark (files not back)
   s2 --> s0: a file write failed: the mark is cleared
   s5 --> s1: you press Undo or you press Undo with Force
-  s6 --> s1: you press Undo or you press Undo with Force
-  s3 --> s7: the next write clears the mark (the files are back)
+  s3 --> s6: the next write finds no undo record, so the mark stays
+  s3 --> s7: the next write clears the mark (files back)
   s1 --> s5: the app dies or Undo is refused: already undone
+  s6 --> s1: you press Undo or you press Undo with Force
   s1 --> s6: Undo is refused: already undone
   s7 --> s1: you press Undo or you press Undo with Force
   s1 --> s4: the change is marked undone
@@ -169,4 +172,10 @@ The shortest path to the red state:
 - Steps that do not change what the user can see, such as a check that
   passes.
 - A recovery pass that starts when nothing is left to recover.
+- The other ways of writing the files. An undo that writes in two steps with
+  no journal (the core removing an installed folder, the desktop putting a
+  file back from a backup) adds one state to each chart: if the app dies
+  between the two steps, the files are half put back, and Undo is still
+  offered and asks for Force. The check covers these; a chart of them has
+  about 30 arrows.
 - The charts use 2 Undo requests and 1 crash. The check uses 3 and 2.

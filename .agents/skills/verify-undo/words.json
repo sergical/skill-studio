@@ -2,8 +2,9 @@
   "rules": {
     "TypeOK": "Every value in the model stays one of its allowed values.",
     "NoStrandedUndo": "Once no write is running and the next write has done its recovery, a change is shown as undone only if an undo of it finished.",
-    "UndoneMeansFilesBack": "A change whose undo finished has its files back as they were before it.",
-    "OneFinishedUndo": "A change is undone at most once."
+    "UndoneMeansFilesBack": "Every finished undo has the files back as they were before the change.",
+    "NoStrandedUndoBeyondIssue787": "Once no write is running and the next write has done its recovery, a change is shown as undone only if an undo of it finished. The one cause that issue 787 reports is left out.",
+    "FinishedUndoKeepsClaim": "A finished undo keeps its claim: the change stays shown as undone, so it cannot be undone a second time."
   },
   "steps": {
     "YouAskCoreToUndo": "You ask for Undo of a change the core wrote (Activity, `skill-studio restore`, or MCP `restore_event`).",
@@ -15,7 +16,6 @@
     "CoreChecks": "The core reads the change and checks that it is not claimed and that its files did not change since.",
     "CoreRecordsRestoreRow": "The core backs up the live files and records the restore row as pending.",
     "CoreClaims": "The core claims the change: `reverted_by` gets the restore row's id.",
-    "CoreSwapsFilesIn": "The core swaps the files back. The journal plan of the swap is still open.",
     "CoreClosesPlan": "The core finishes the journal plan.",
     "CoreWriteFails": "A file write fails.",
     "CoreReleasesAfterFailure": "The core releases the claim.",
@@ -26,12 +26,19 @@
     "DesktopClaims": "The desktop claims the change: `reverted_by` gets the id of a restore row that does not exist yet.",
     "DesktopChecksDrift": "The desktop checks that the files did not change since the change.",
     "DesktopRecordsRestoreRow": "The desktop backs up the live files and records the restore row as pending.",
-    "DesktopPutsFilesBack": "The desktop puts the files back.",
     "DesktopWriteFails": "A file write fails.",
     "DesktopFinishesFailed": "The desktop finishes the restore row as failed.",
     "DesktopReleasesAfterFailure": "The desktop releases the claim.",
     "DesktopFinishesDone": "The desktop finishes the restore row as done.",
-    "DesktopStartsUp": "The desktop app starts and marks a pending row interrupted.",
-    "WriterDies": "The app dies: a crash, a force quit or a power cut."
+    "WriterDies": "The app dies: a crash, a force quit or a power cut.",
+    "CoreWritesInOneStep": "The core puts the files back in one atomic write.",
+    "CoreStartsRemovingFolder": "The core starts to remove the folder the change wrote, entry by entry.",
+    "CoreEndsRemovingFolder": "The core removes the rest of the folder.",
+    "CoreSwapsFolderIn": "The core swaps the old folder in. The journal plan of the swap is still open.",
+    "DesktopWritesInOneStep": "The desktop puts the files back in one atomic operation.",
+    "DesktopRemovesLiveFiles": "The desktop removes the live files, before it copies the backup in.",
+    "DesktopCopiesBackupIn": "The desktop copies the backup into place.",
+    "DesktopStartMarksRowInterrupted": "The desktop app starts and marks a pending row interrupted.",
+    "DesktopStartReversesPlan": "The desktop app starts and reverses an unfinished journal plan."
   }
 }

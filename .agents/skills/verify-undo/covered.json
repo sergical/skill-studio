@@ -1,5 +1,5 @@
 {
-  "sync_commit": "526c2c0caa67ec16c4794c0c1ded78b4f88e691d",
+  "accepted_on_top_of": "526c2c0caa67ec16c4794c0c1ded78b4f88e691d",
   "functions": [
     {
       "file": "crates/skill-studio-core/src/ops.rs",
@@ -8,7 +8,9 @@
         "CoreChecks",
         "CoreRecordsRestoreRow",
         "CoreClaims",
-        "CoreSwapsFilesIn",
+        "CoreWritesInOneStep",
+        "CoreStartsRemovingFolder",
+        "CoreEndsRemovingFolder",
         "CoreWriteFails",
         "CoreReleasesAfterFailure",
         "CoreFinishesFailed",
@@ -19,8 +21,20 @@
     {
       "file": "crates/skill-studio-core/src/ops.rs",
       "function": "restore_write_dir",
-      "mirrors": ["CoreSwapsFilesIn", "CoreClosesPlan"],
+      "mirrors": ["CoreSwapsFolderIn", "CoreClosesPlan"],
       "sha256": "638c1bfbd3a9811c02aa5c9227ebed6b914d54b8f02aa3a6575411034a14f447"
+    },
+    {
+      "file": "crates/skill-studio-core/src/ops.rs",
+      "function": "apply_backup_content",
+      "mirrors": ["CoreWritesInOneStep", "CoreSwapsFolderIn"],
+      "sha256": "9684b1d4b757b4e254b0d07faaab21149696d56149c692c28d12339f1e342f34"
+    },
+    {
+      "file": "crates/skill-studio-core/src/ops_remove.rs",
+      "function": "remove_tree_best_effort",
+      "mirrors": ["CoreStartsRemovingFolder", "CoreEndsRemovingFolder"],
+      "sha256": "17b57ef1fb01bf0b44df6d7dbe728d03e19be9715643fc5350cf8e5d8d2d9d00"
     },
     {
       "file": "crates/skill-studio-core/src/events.rs",
@@ -67,7 +81,7 @@
     {
       "file": "crates/skill-studio-core/src/journal.rs",
       "function": "reconcile_scope_journal",
-      "mirrors": ["RecoveryReversesPlan"],
+      "mirrors": ["RecoveryReversesPlan", "DesktopStartReversesPlan"],
       "sha256": "3a278c4c522f045c2d5013106cfa752c03ec4457344f85edde5feb1d67ac0670"
     },
     {
@@ -101,6 +115,12 @@
       "sha256": "5b23929a7120942b4c3b40e149347b6d6f215bf197aa37c3cdac829107b584b8"
     },
     {
+      "file": "crates/skill-studio-host/src/history.rs",
+      "function": "record",
+      "mirrors": ["CoreRecordsRestoreRow"],
+      "sha256": "2961424feff050a3b01cf3df6acd1171af4466e2f250e1b35f6e4c0e48f1d631"
+    },
+    {
       "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
       "function": "restore_with_skill_md_transaction_observer",
       "mirrors": ["DesktopChecksClaim", "DesktopClaims", "DesktopReleasesAfterFailure"],
@@ -112,7 +132,9 @@
       "mirrors": [
         "DesktopChecksDrift",
         "DesktopRecordsRestoreRow",
-        "DesktopPutsFilesBack",
+        "DesktopWritesInOneStep",
+        "DesktopRemovesLiveFiles",
+        "DesktopCopiesBackupIn",
         "DesktopWriteFails",
         "DesktopFinishesFailed",
         "DesktopFinishesDone"
@@ -121,8 +143,31 @@
     },
     {
       "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "apply_inverse_op",
+      "mirrors": [
+        "DesktopWritesInOneStep",
+        "DesktopRemovesLiveFiles",
+        "DesktopCopiesBackupIn",
+        "DesktopWriteFails"
+      ],
+      "sha256": "56356714b008c125606d5f19a8997d5cbe2d9891a8f406b2fca3f6e2fec610e7"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "record_with_bound_paths",
+      "mirrors": ["DesktopRecordsRestoreRow"],
+      "sha256": "6585c773c912c8ca4f31c413caf98ef4e02cfbac0a77cdb3e66bc07b8bc8c8d9"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/undo_files.rs",
+      "function": "restore_from",
+      "mirrors": ["DesktopRemovesLiveFiles", "DesktopCopiesBackupIn"],
+      "sha256": "144dba55a3be67f9f0fc844355df25cb9ec87d9b172b1296838234d0bcfe25ff"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
       "function": "reconcile_at_startup",
-      "mirrors": ["DesktopStartsUp"],
+      "mirrors": ["DesktopStartMarksRowInterrupted"],
       "sha256": "77fd3bab08bbbddc3a23bc80ff2538033375cec3612a429b4434a1eff6e915f1"
     },
     {
@@ -140,8 +185,14 @@
     {
       "file": "apps/desktop/src-tauri/src/lib.rs",
       "function": "reconcile_event_store_at_startup",
-      "mirrors": ["DesktopStartsUp"],
+      "mirrors": ["DesktopStartMarksRowInterrupted"],
       "sha256": "c0744e4841981e9b5644459a433e184c58d9f0c1cb5e7e95c2d315a040d98c10"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/lib.rs",
+      "function": "reconcile_core_journal_at_startup",
+      "mirrors": ["DesktopStartReversesPlan"],
+      "sha256": "5038187aa6ce88c27a5d5322ca76ded9b8e2ffed142e4510023efbe16df1fdac"
     }
   ]
 }
