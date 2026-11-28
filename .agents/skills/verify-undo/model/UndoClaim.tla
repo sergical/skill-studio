@@ -40,7 +40,9 @@ Mutations == {
     "recovery_releases_done_claims", \* history.rs held_restore_claims: drop the status filter
     "core_claim_before_record",      \* ops.rs restore_event_body: claim_revert above record
     "core_fail_finish_before_release", \* ops.rs restore_event_body: finish(Failed) above release_revert
-    "core_finish_before_mutation"    \* ops.rs restore_event_body: finish(Done) above the file write
+    "core_finish_before_mutation",   \* ops.rs restore_event_body: finish(Done) above the file write
+    "desktop_claim_before_record",   \* event_store.rs: claim in `restore`, above `apply_restore`
+    "desktop_fail_finish_before_release" \* event_store.rs fail_claimed_restore: finish(Failed) first
 }
 ASSUME Break \subseteq Mutations
 Broken(m) == m \in Break
@@ -80,13 +82,11 @@ VARIABLES
     asked,       \* how many Undo requests were made so far
     crashes,     \* how many times a writer died so far
     recovered,   \* TRUE once a core write session finished recovery after the last crash
-    bareClaim,   \* issue 787 only: the restore id the desktop died holding a claim for,
-                 \* inside one of the issue's two gaps. Read by one rule, by no action.
     wrote        \* the restore ids whose own write of the files ran to the end.
                  \* Read by one rule, by no action.
 
 vars == <<revertedBy, row, files, shape, plan, pc, job, cur, force, asked, crashes,
-          recovered, bareClaim, wrote>>
+          recovered, wrote>>
 
 Statuses == {"none", "pending", "done", "failed", "interrupted"}
 Steps == {
@@ -95,8 +95,9 @@ Steps == {
     "core_read", "core_record", "core_claim", "core_write", "core_write_rest",
     "core_swap", "core_swap_rest", "core_plan_done", "core_finish",
     "core_fail_release", "core_fail_finish",
-    "desk_read", "desk_claim", "desk_check", "desk_record", "desk_apply",
-    "desk_apply_rest", "desk_finish", "desk_fail_finish", "desk_release"
+    "desk_read", "desk_check", "desk_record", "desk_claim", "desk_apply",
+    "desk_apply_rest", "desk_finish", "desk_release", "desk_fail_finish",
+    "desk_err_release"
 }
 
 TypeOK ==
@@ -112,7 +113,6 @@ TypeOK ==
     /\ asked \in 0..MaxAttempts
     /\ crashes \in 0..MaxCrashes
     /\ recovered \in BOOLEAN
-    /\ bareClaim \in Attempts \cup {None}
     /\ wrote \subseteq Attempts
 
 Init ==
@@ -128,7 +128,6 @@ Init ==
     /\ asked = 0
     /\ crashes = 0
     /\ recovered = TRUE
-    /\ bareClaim = None
     /\ wrote = {}
 
 Idle == pc = "idle"
@@ -162,7 +161,7 @@ YouAskCoreToUndo ==
     /\ force' \in BOOLEAN
     /\ job' = "undo"
     /\ pc' = "rec_release"
-    /\ UNCHANGED <<revertedBy, row, files, shape, plan, crashes, recovered, bareClaim, wrote>>
+    /\ UNCHANGED <<revertedBy, row, files, shape, plan, crashes, recovered, wrote>>
 
 \* Any other core write starts: park, install, update, remove, from the
 \* desktop, the CLI or MCP. It runs the same recovery pass first.
@@ -171,7 +170,7 @@ AnotherWriteStarts ==
     /\ job' = "write"
     /\ pc' = "rec_release"
     /\ UNCHANGED <<revertedBy, row, files, shape, plan, cur, force, asked, crashes,
-                   recovered, bareClaim, wrote>>
+                   recovered, wrote>>
 
 \* events.rs `recover_interrupted`, first loop: release the claim of every
 \* restore row that is still pending or interrupted
@@ -188,8 +187,7 @@ RecoveryReleasesClaim ==
        IN revertedBy' = IF held /\ ~Broken("recovery_skips_release")
                             THEN None ELSE revertedBy
     /\ pc' = "rec_flip"
-    /\ UNCHANGED <<row, files, shape, plan, job, cur, force, asked, crashes, recovered,
-                   bareClaim, wrote>>
+    /\ UNCHANGED <<row, files, shape, plan, job, cur, force, asked, crashes, recovered, wrote>>
 
 \* events.rs `recover_interrupted`, second loop: one `finish(Interrupted)`
 \* per pending row.
@@ -199,14 +197,14 @@ RecoveryMarksRowInterrupted ==
         /\ row[r] = "pending"
         /\ row' = [row EXCEPT ![r] = "interrupted"]
     /\ UNCHANGED <<revertedBy, files, shape, plan, pc, job, cur, force, asked, crashes,
-                   recovered, bareClaim, wrote>>
+                   recovered, wrote>>
 
 RecoveryDoneWithRows ==
     /\ pc = "rec_flip"
     /\ \A r \in Attempts : row[r] # "pending"
     /\ pc' = "rec_journal"
     /\ UNCHANGED <<revertedBy, row, files, shape, plan, job, cur, force, asked, crashes,
-                   recovered, bareClaim, wrote>>
+                   recovered, wrote>>
 
 \* journal.rs `reconcile_scope_journal`, for a plan that never finished:
 \* `reverse_steps` puts back the folder the swap replaced. It can be caught
@@ -219,7 +217,7 @@ RecoveryStartsPuttingFolderBack ==
     /\ files # "partial"
     /\ files' = "partial"
     /\ UNCHANGED <<revertedBy, row, shape, plan, pc, job, cur, force, asked, crashes,
-                   recovered, bareClaim, wrote>>
+                   recovered, wrote>>
 
 RecoveryPutsSwappedFolderBack ==
     /\ pc = "rec_journal"
@@ -227,7 +225,7 @@ RecoveryPutsSwappedFolderBack ==
     /\ files' = plan
     /\ pc' = "rec_plan_close"
     /\ UNCHANGED <<revertedBy, row, shape, plan, job, cur, force, asked, crashes,
-                   recovered, bareClaim, wrote>>
+                   recovered, wrote>>
 
 \* Then `journal.finish` marks the plan reversed, in its own write.
 RecoveryClosesPlan ==
@@ -235,7 +233,7 @@ RecoveryClosesPlan ==
     /\ plan' = "none"
     /\ pc' = "rec_journal"
     /\ UNCHANGED <<revertedBy, row, files, shape, job, cur, force, asked, crashes,
-                   recovered, bareClaim, wrote>>
+                   recovered, wrote>>
 
 \* The pass is over. Only a core write session has released claims, so only
 \* that counts as recovered; desktop startup does not.
@@ -244,8 +242,7 @@ RecoveryEnds ==
     /\ plan = "none"
     /\ recovered' = IF job = "start" THEN recovered ELSE TRUE
     /\ GoTo(IF job = "undo" THEN "core_read" ELSE "idle")
-    /\ UNCHANGED <<revertedBy, row, files, shape, plan, cur, force, asked, crashes,
-                   bareClaim, wrote>>
+    /\ UNCHANGED <<revertedBy, row, files, shape, plan, cur, force, asked, crashes, wrote>>
 
 (***************************************************************************)
 (* Core undo.  ops.rs `restore_event_body`.                                *)
@@ -261,7 +258,7 @@ CoreChecks ==
                 ELSE IF Broken("core_claim_before_record")
                          THEN "core_claim" ELSE "core_record")
     /\ UNCHANGED <<revertedBy, row, files, shape, plan, cur, force, asked, crashes,
-                   recovered, bareClaim, wrote>>
+                   recovered, wrote>>
 
 \* `backup_paths` then `record` (history.rs `record` inserts the row as
 \* pending, with `target_event` in its payload).
@@ -269,8 +266,7 @@ CoreRecordsRestoreRow ==
     /\ pc = "core_record"
     /\ row' = [row EXCEPT ![cur] = "pending"]
     /\ GoTo(IF Broken("core_claim_before_record") THEN "core_write" ELSE "core_claim")
-    /\ UNCHANGED <<revertedBy, files, shape, plan, cur, force, asked, crashes, recovered,
-                   bareClaim, wrote>>
+    /\ UNCHANGED <<revertedBy, files, shape, plan, cur, force, asked, crashes, recovered, wrote>>
 
 \* `claim_revert`: UPDATE ... SET reverted_by = ? WHERE reverted_by IS NULL.
 \* A lost claim finishes the row as failed.
@@ -286,7 +282,7 @@ CoreClaims ==
            ELSE /\ row' = [row EXCEPT ![cur] = IF @ = "none" THEN @ ELSE "failed"]
                 /\ GoTo("idle")
                 /\ UNCHANGED revertedBy
-    /\ UNCHANGED <<files, shape, plan, cur, force, asked, crashes, recovered, bareClaim, wrote>>
+    /\ UNCHANGED <<files, shape, plan, cur, force, asked, crashes, recovered, wrote>>
 
 \* Where the writer goes once the files are written.
 \* (`patch_payload restore_retry` runs just before the write; it changes
@@ -301,7 +297,7 @@ CoreOpensSwapPlan ==
     /\ plan' = files
     /\ pc' = "core_swap"
     /\ UNCHANGED <<revertedBy, row, files, shape, job, cur, force, asked, crashes,
-                   recovered, bareClaim, wrote>>
+                   recovered, wrote>>
 
 \* The write lands at once: `write_atomic`, `remove_file`, or the folder
 \* exchange of a swap.
@@ -311,8 +307,7 @@ CoreWritesAtOnce ==
     /\ files' = "restored"
     /\ wrote' = wrote \cup {cur}
     /\ GoTo(IF pc = "core_swap" THEN "core_plan_done" ELSE AfterCoreWrite)
-    /\ UNCHANGED <<revertedBy, row, shape, plan, cur, force, asked, crashes, recovered,
-                   bareClaim>>
+    /\ UNCHANGED <<revertedBy, row, shape, plan, cur, force, asked, crashes, recovered>>
 
 \* The write is under way and the files are neither old nor new, as when
 \* `remove_tree_best_effort` has deleted some entries of a folder.
@@ -322,15 +317,14 @@ CoreStartsWrite ==
     /\ files' = "partial"
     /\ pc' = IF pc = "core_swap" THEN "core_swap_rest" ELSE "core_write_rest"
     /\ UNCHANGED <<revertedBy, row, shape, plan, job, cur, force, asked, crashes,
-                   recovered, bareClaim, wrote>>
+                   recovered, wrote>>
 
 CoreEndsWrite ==
     /\ pc \in {"core_write_rest", "core_swap_rest"}
     /\ files' = "restored"
     /\ wrote' = wrote \cup {cur}
     /\ GoTo(IF pc = "core_swap_rest" THEN "core_plan_done" ELSE AfterCoreWrite)
-    /\ UNCHANGED <<revertedBy, row, shape, plan, cur, force, asked, crashes, recovered,
-                   bareClaim>>
+    /\ UNCHANGED <<revertedBy, row, shape, plan, cur, force, asked, crashes, recovered>>
 
 \* `restore_write_dir`: the old folder is in quarantine, and
 \* `plan.finish(PlanStatus::Done)` closes the plan.
@@ -338,8 +332,7 @@ CoreClosesPlan ==
     /\ pc = "core_plan_done"
     /\ plan' = "none"
     /\ GoTo(AfterCoreWrite)
-    /\ UNCHANGED <<revertedBy, row, files, shape, cur, force, asked, crashes, recovered,
-                   bareClaim, wrote>>
+    /\ UNCHANGED <<revertedBy, row, files, shape, cur, force, asked, crashes, recovered, wrote>>
 
 \* The primary write returns an error (`mutation_result` is Err), or a later
 \* path cannot be put back (`unrestored` is not empty). The files stay as
@@ -352,35 +345,34 @@ CoreWriteFails ==
     /\ pc' = IF Broken("core_fail_finish_before_release")
                  THEN "core_fail_finish" ELSE "core_fail_release"
     /\ UNCHANGED <<revertedBy, row, files, shape, plan, job, cur, force, asked, crashes,
-                   recovered, bareClaim, wrote>>
+                   recovered, wrote>>
 
 \* `release_revert`, so the change stays undoable.
 CoreReleasesAfterFailure ==
     /\ pc = "core_fail_release"
     /\ revertedBy' = IF revertedBy = cur THEN None ELSE revertedBy
     /\ GoTo(IF Broken("core_fail_finish_before_release") THEN "idle" ELSE "core_fail_finish")
-    /\ UNCHANGED <<row, files, shape, plan, cur, force, asked, crashes, recovered,
-                   bareClaim, wrote>>
+    /\ UNCHANGED <<row, files, shape, plan, cur, force, asked, crashes, recovered, wrote>>
 
 \* `finish(Failed)`.
 CoreFinishesFailed ==
     /\ pc = "core_fail_finish"
     /\ row' = [row EXCEPT ![cur] = "failed"]
     /\ GoTo(IF Broken("core_fail_finish_before_release") THEN "core_fail_release" ELSE "idle")
-    /\ UNCHANGED <<revertedBy, files, shape, plan, cur, force, asked, crashes, recovered,
-                   bareClaim, wrote>>
+    /\ UNCHANGED <<revertedBy, files, shape, plan, cur, force, asked, crashes, recovered, wrote>>
 
 \* `finish(Done)`: the undo is complete.
 CoreFinishesDone ==
     /\ pc = "core_finish"
     /\ row' = [row EXCEPT ![cur] = "done"]
     /\ GoTo(IF Broken("core_finish_before_mutation") THEN "core_write" ELSE "idle")
-    /\ UNCHANGED <<revertedBy, files, shape, plan, cur, force, asked, crashes, recovered,
-                   bareClaim, wrote>>
+    /\ UNCHANGED <<revertedBy, files, shape, plan, cur, force, asked, crashes, recovered, wrote>>
 
 (***************************************************************************)
 (* Desktop undo.  event_store.rs `EventStore::restore` and `apply_restore`.*)
-(* It takes the home lease but runs no recovery pass of its own.           *)
+(* It takes the home lease but runs no recovery pass of its own. It writes *)
+(* in the core's order: record the restore row, then claim; on a failed    *)
+(* write, release the claim, then record the failure.                      *)
 (***************************************************************************)
 
 \* Activity > Undo on a desktop-written change.
@@ -392,41 +384,49 @@ YouAskDesktopToUndo ==
     /\ cur' = asked + 1
     /\ force' \in BOOLEAN
     /\ pc' = "desk_read"
-    /\ UNCHANGED <<revertedBy, row, files, shape, plan, job, crashes, recovered, bareClaim, wrote>>
+    /\ UNCHANGED <<revertedBy, row, files, shape, plan, job, crashes, recovered, wrote>>
 
 \* `restore`: "Event ... was already restored" when `reverted_by` is set.
 DesktopChecksClaim ==
     /\ pc = "desk_read"
-    /\ pc' = IF revertedBy # None THEN "idle" ELSE "desk_claim"
+    /\ pc' = IF revertedBy # None
+                 THEN "idle"
+                 ELSE IF Broken("desktop_claim_before_record")
+                          THEN "desk_claim" ELSE "desk_check"
     /\ UNCHANGED <<revertedBy, row, files, shape, plan, job, cur, force, asked, crashes,
-                   recovered, bareClaim, wrote>>
-
-\* `restore`: UPDATE events SET reverted_by = ?1 WHERE id = ?2 AND
-\* reverted_by IS NULL. The restore row does not exist yet.
-DesktopClaims ==
-    /\ pc = "desk_claim"
-    /\ IF revertedBy = None
-           THEN revertedBy' = cur /\ pc' = "desk_check"
-           ELSE UNCHANGED revertedBy /\ pc' = "idle"
-    /\ UNCHANGED <<row, files, shape, plan, job, cur, force, asked, crashes, recovered,
-                   bareClaim, wrote>>
+                   recovered, wrote>>
 
 \* `apply_restore`: the drift check. A refusal returns Err, and `restore`
-\* then releases the claim.
+\* then runs its release, which finds no claim to release.
 DesktopChecksDrift ==
     /\ pc = "desk_check"
-    /\ pc' = IF files # "changed" /\ ~force THEN "desk_release" ELSE "desk_record"
+    /\ pc' = IF files # "changed" /\ ~force THEN "desk_err_release" ELSE "desk_record"
     /\ UNCHANGED <<revertedBy, row, files, shape, plan, job, cur, force, asked, crashes,
-                   recovered, bareClaim, wrote>>
+                   recovered, wrote>>
 
 \* `apply_restore`: `backup_for_restore`, then `record_with_bound_paths`,
 \* which inserts the row as pending with `target_event` in its payload.
 DesktopRecordsRestoreRow ==
     /\ pc = "desk_record"
     /\ row' = [row EXCEPT ![cur] = "pending"]
-    /\ pc' = "desk_apply"
+    /\ pc' = IF Broken("desktop_claim_before_record") THEN "desk_apply" ELSE "desk_claim"
     /\ UNCHANGED <<revertedBy, files, shape, plan, job, cur, force, asked, crashes,
-                   recovered, bareClaim, wrote>>
+                   recovered, wrote>>
+
+\* `claim_recorded_restore`: UPDATE events SET reverted_by = ?1 WHERE id = ?2
+\* AND reverted_by IS NULL (`claim_event_restore`). A lost claim finishes
+\* the row as failed.
+DesktopClaims ==
+    /\ pc = "desk_claim"
+    /\ IF revertedBy = None
+           THEN /\ revertedBy' = cur
+                /\ pc' = IF Broken("desktop_claim_before_record")
+                             THEN "desk_check" ELSE "desk_apply"
+                /\ UNCHANGED row
+           ELSE /\ row' = [row EXCEPT ![cur] = IF @ = "none" THEN @ ELSE "failed"]
+                /\ pc' = "desk_err_release"
+                /\ UNCHANGED revertedBy
+    /\ UNCHANGED <<files, shape, plan, job, cur, force, asked, crashes, recovered, wrote>>
 
 \* `apply_inverse_op`: the write lands at once, as when a link is removed.
 DesktopWritesAtOnce ==
@@ -435,7 +435,7 @@ DesktopWritesAtOnce ==
     /\ wrote' = wrote \cup {cur}
     /\ pc' = "desk_finish"
     /\ UNCHANGED <<revertedBy, row, shape, plan, job, cur, force, asked, crashes,
-                   recovered, bareClaim>>
+                   recovered>>
 
 \* `apply_inverse_op`: undo_files.rs `restore_from` and `symlink` remove the
 \* live path first.
@@ -444,7 +444,7 @@ DesktopRemovesLiveFiles ==
     /\ files' = "partial"
     /\ pc' = "desk_apply_rest"
     /\ UNCHANGED <<revertedBy, row, shape, plan, job, cur, force, asked, crashes,
-                   recovered, bareClaim, wrote>>
+                   recovered, wrote>>
 
 \* Then they copy the backup, or rename the new link, into place.
 DesktopPutsOldFilesIn ==
@@ -453,39 +453,50 @@ DesktopPutsOldFilesIn ==
     /\ wrote' = wrote \cup {cur}
     /\ pc' = "desk_finish"
     /\ UNCHANGED <<revertedBy, row, shape, plan, job, cur, force, asked, crashes,
-                   recovered, bareClaim>>
+                   recovered>>
 
 \* `apply_inverse_op` returns an error. The files stay as it left them.
 DesktopWriteFails ==
     /\ pc \in {"desk_apply", "desk_apply_rest"}
-    /\ pc' = "desk_fail_finish"
+    /\ pc' = IF Broken("desktop_fail_finish_before_release")
+                 THEN "desk_fail_finish" ELSE "desk_release"
     /\ UNCHANGED <<revertedBy, row, files, shape, plan, job, cur, force, asked, crashes,
-                   recovered, bareClaim, wrote>>
+                   recovered, wrote>>
 
-\* `apply_restore`: `finish(Failed)`, before `restore` releases the claim.
-DesktopFinishesFailed ==
-    /\ pc = "desk_fail_finish"
-    /\ row' = [row EXCEPT ![cur] = "failed"]
-    /\ pc' = "desk_release"
-    /\ UNCHANGED <<revertedBy, files, shape, plan, job, cur, force, asked, crashes,
-                   recovered, bareClaim, wrote>>
-
-\* `restore`: UPDATE events SET reverted_by = NULL WHERE id = ?1 AND
-\* reverted_by = ?2, after `apply_restore` returned Err.
+\* `fail_claimed_restore`: `unclaim_event_restore` first, UPDATE events SET
+\* reverted_by = NULL WHERE id = ?1 AND reverted_by = ?2.
 DesktopReleasesAfterFailure ==
     /\ pc = "desk_release"
     /\ revertedBy' = IF revertedBy = cur THEN None ELSE revertedBy
+    /\ pc' = "desk_fail_finish"
+    /\ UNCHANGED <<row, files, shape, plan, job, cur, force, asked, crashes, recovered,
+                   wrote>>
+
+\* `fail_claimed_restore`: then `finish(Failed)`.
+DesktopFinishesFailed ==
+    /\ pc = "desk_fail_finish"
+    /\ row' = [row EXCEPT ![cur] = "failed"]
+    /\ pc' = "desk_err_release"
+    /\ UNCHANGED <<revertedBy, files, shape, plan, job, cur, force, asked, crashes,
+                   recovered, wrote>>
+
+\* `restore`, after `apply_restore` returned Err: one more
+\* `unclaim_event_restore`. It releases a claim only if one is still held.
+DesktopReleasesOnError ==
+    /\ pc = "desk_err_release"
+    /\ revertedBy' = IF revertedBy = cur THEN None ELSE revertedBy
     /\ pc' = "idle"
     /\ UNCHANGED <<row, files, shape, plan, job, cur, force, asked, crashes, recovered,
-                   bareClaim, wrote>>
+                   wrote>>
 
 \* `apply_restore`: `patch_inverse_post_fingerprint`, then `finish(Done)`.
+\* The patch writes only the restore row's inverse, which no rule reads.
 DesktopFinishesDone ==
     /\ pc = "desk_finish"
     /\ row' = [row EXCEPT ![cur] = "done"]
     /\ pc' = "idle"
     /\ UNCHANGED <<revertedBy, files, shape, plan, job, cur, force, asked, crashes,
-                   recovered, bareClaim, wrote>>
+                   recovered, wrote>>
 
 (***************************************************************************)
 (* The desktop app starts.  The recovery closure in lib.rs `run` takes the *)
@@ -502,29 +513,17 @@ DesktopAppStarts ==
     /\ job' = "start"
     /\ pc' = "rec_flip"
     /\ UNCHANGED <<revertedBy, row, files, shape, plan, cur, force, asked, crashes,
-                   recovered, bareClaim, wrote>>
+                   recovered, wrote>>
 
 (***************************************************************************)
 (* The writer dies: a crash, a force quit, a power cut. What it wrote      *)
 (* stays. What it held in memory is gone. The lease is free again.         *)
 (***************************************************************************)
 
-\* Issue 787, exactly: the desktop dies in one of two gaps while it holds
-\* the claim. Gap 1: after the claim and before the restore row is recorded
-\* (which includes a refusal that has not released the claim yet). Gap 2:
-\* after a failed write was recorded as failed and before the release.
-DiesInIssue787Gap ==
-    /\ Owner = "desktop"
-    /\ cur # None
-    /\ revertedBy = cur
-    /\ \/ pc \in {"desk_check", "desk_record", "desk_release"} /\ row[cur] = "none"
-       \/ pc = "desk_release" /\ row[cur] = "failed"
-
 WriterDies ==
     /\ ~Idle
     /\ crashes < MaxCrashes
     /\ crashes' = crashes + 1
-    /\ bareClaim' = IF DiesInIssue787Gap THEN cur ELSE bareClaim
     /\ pc' = "idle"
     /\ job' = "none"
     /\ cur' = None
@@ -565,6 +564,7 @@ Next ==
     \/ DesktopWriteFails
     \/ DesktopFinishesFailed
     \/ DesktopReleasesAfterFailure
+    \/ DesktopReleasesOnError
     \/ DesktopFinishesDone
     \/ DesktopAppStarts
     \/ WriterDies
@@ -582,14 +582,6 @@ Spec == Init /\ [][Next]_vars
 NoStrandedUndo ==
     (Idle /\ recovered) =>
         (revertedBy = None \/ row[revertedBy] = "done")
-
-\* The same rule, with the one cause that issue 787 reports left out: a
-\* claim the desktop died holding inside one of the issue's two gaps. The
-\* desktop check runs this while the issue is open, so any other way to
-\* strand a change still fails.
-NoStrandedUndoBeyondIssue787 ==
-    (Idle /\ recovered) =>
-        (revertedBy = None \/ row[revertedBy] = "done" \/ revertedBy = bareClaim)
 
 \* An undo is recorded as finished only after its own write of the files
 \* ran to the end, and nothing moves the files afterwards. The model does
@@ -617,8 +609,8 @@ ChartLeavesOutIdleRecovery == ~(job = "write" /\ recovered)
 ChartOfFolderSwap == shape = "journaled_swap" /\ files # "partial" /\ job # "start"
 ChartOfWriteAtOnce == files # "partial"
 
-\* The chart counts two states as one when they differ only in the two
-\* variables that no action reads.
+\* The chart counts two states as one when they differ only in `wrote`,
+\* which no action reads.
 ChartView == <<revertedBy, row, files, shape, plan, pc, job, cur, force, asked, crashes,
                recovered>>
 

@@ -3,7 +3,6 @@
     "TypeOK": "Every value in the model stays one of its allowed values.",
     "NoStrandedUndo": "Once no write is running and the next write has done its recovery, a change is shown as undone only if an undo of it finished.",
     "UndoneMeansFilesBack": "An undo is recorded as finished only after its own write of the files ran to the end, and nothing moves the files afterwards.",
-    "NoStrandedUndoBeyondIssue787": "Once no write is running and the next write has done its recovery, a change is shown as undone only if an undo of it finished. The two gaps that issue 787 reports are left out.",
     "FinishedUndoKeepsClaim": "A finished undo keeps its claim: the change stays shown as undone, so it cannot be undone a second time."
   },
   "steps": {
@@ -22,7 +21,7 @@
     "CoreFinishesDone": "The core finishes the restore row as done.",
     "YouAskDesktopToUndo": "You press Undo in Activity on a change the desktop wrote.",
     "DesktopChecksClaim": "The desktop reads the change and sees that it is not claimed.",
-    "DesktopClaims": "The desktop claims the change: `reverted_by` gets the id of a restore row that does not exist yet.",
+    "DesktopClaims": "The desktop claims the change: `reverted_by` gets the restore row's id.",
     "DesktopChecksDrift": "The desktop checks that the files did not change since the change.",
     "DesktopRecordsRestoreRow": "The desktop backs up the live files and records the restore row as pending.",
     "DesktopWriteFails": "A file write fails.",
@@ -41,6 +40,7 @@
     "DesktopWritesAtOnce": "The desktop puts the files back in one operation.",
     "DesktopPutsOldFilesIn": "The desktop puts the old files into place.",
     "DesktopAppStarts": "The desktop app starts and begins its own recovery, which releases no claim.",
-    "RecoveryStartsPuttingFolderBack": "Recovery starts to put back the folder that an unfinished swap replaced: the files are half way."
+    "RecoveryStartsPuttingFolderBack": "Recovery starts to put back the folder that an unfinished swap replaced: the files are half way.",
+    "DesktopReleasesOnError": "The desktop's Undo ends with an error and releases the claim if it still holds one."
   }
 }

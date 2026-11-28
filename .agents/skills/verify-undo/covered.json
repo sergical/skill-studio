@@ -1,5 +1,5 @@
 {
-  "accepted_on_top_of": "526c2c0caa67ec16c4794c0c1ded78b4f88e691d",
+  "accepted_on_top_of": "ff4b8fa026351277b0ef707d51ca1d6c88a546c6",
   "functions": [
     {
       "file": "crates/skill-studio-core/src/ops.rs",
@@ -150,8 +150,8 @@
     {
       "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
       "function": "restore_with_skill_md_transaction_observer",
-      "mirrors": ["DesktopChecksClaim", "DesktopClaims", "DesktopReleasesAfterFailure"],
-      "sha256": "54fa42c8f296b4ef98c7727a176fb47a683aec3f629e47d1c3e45c79e1ea66bb"
+      "mirrors": ["DesktopChecksClaim", "DesktopReleasesOnError"],
+      "sha256": "015df3ecc80bc71c8eeedb4310073df60fbbcb3ca58b6cc7592ebe19f38634f1"
     },
     {
       "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
@@ -159,11 +159,13 @@
       "mirrors": [
         "DesktopChecksDrift",
         "DesktopRecordsRestoreRow",
+        "DesktopClaims",
         "DesktopWriteFails",
+        "DesktopReleasesAfterFailure",
         "DesktopFinishesFailed",
         "DesktopFinishesDone"
       ],
-      "sha256": "50af4c9d241b59de23dec22d52f73a0c72fcbff8d80cfc5e648d2622639d340b"
+      "sha256": "4560cc4452860a10d89bc8b597e520311c4c2a65256ff46db124b1ee0a24a5a6"
     },
     {
       "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
@@ -180,7 +182,63 @@
       "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
       "function": "record_with_bound_paths",
       "mirrors": ["DesktopRecordsRestoreRow"],
-      "sha256": "6585c773c912c8ca4f31c413caf98ef4e02cfbac0a77cdb3e66bc07b8bc8c8d9"
+      "sha256": "965e270d1b36e31580ad04f02ed68acef1804f0b310a9f4a995bee163e54befc"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "apply_restore_distribute",
+      "mirrors": [
+        "DesktopChecksDrift",
+        "DesktopRecordsRestoreRow",
+        "DesktopClaims",
+        "DesktopWriteFails",
+        "DesktopReleasesAfterFailure",
+        "DesktopFinishesFailed",
+        "DesktopFinishesDone"
+      ],
+      "sha256": "7a0479c4cd5ea62567c9e8aa5a4871fcfa161112f089d223d44b44f8947b2499"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "claim_recorded_restore",
+      "mirrors": ["DesktopClaims"],
+      "sha256": "ba4467d9faddb1aa70290741baac010d49118ba6c067fd60a4bc3365ffc2bc3d"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "claim_event_restore",
+      "mirrors": ["DesktopClaims"],
+      "sha256": "4c4c5490926ab95bf6728b49975b38b610b7b8e001bd88a924b80bab27370f20"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "fail_claimed_restore",
+      "mirrors": ["DesktopReleasesAfterFailure", "DesktopFinishesFailed"],
+      "sha256": "a41e66818def190883963398f11210fb5e7a477ded6ba178f042a9b25ee2f402"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "unclaim_event_restore",
+      "mirrors": ["DesktopReleasesAfterFailure", "DesktopReleasesOnError"],
+      "sha256": "0493d71aa93a16f4dacfc28b7cff2262be7bf5a5edab0e470a06ce6a2b784a3f"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "finish",
+      "mirrors": ["DesktopClaims", "DesktopFinishesFailed", "DesktopFinishesDone"],
+      "sha256": "d32a4becb276171ab4098d1dc971dcf8d831784444011bf7a9a10b8806a6222a"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "patch_inverse_post_fingerprint",
+      "mirrors": ["DesktopFinishesDone"],
+      "sha256": "2658d5500f473777ff043c6c3c92dfb04e5d99db9210445c3a4fe883f2384160"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
+      "function": "backup_for_restore",
+      "mirrors": ["DesktopRecordsRestoreRow"],
+      "sha256": "a46285cfd4393d99a7fb34de8daa90899d30be8f2306858051b8736d52508b95"
     },
     {
       "file": "apps/desktop/src-tauri/src/skills/undo_files.rs",

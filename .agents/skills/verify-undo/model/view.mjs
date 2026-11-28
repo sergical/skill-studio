@@ -72,17 +72,16 @@ const labels = {
   CoreFinishesDone: () => "the undo is recorded as finished",
   DesktopChecksClaim: (from, to) => (to.pc === "idle" ? refusal(from) : "the checks pass"),
   DesktopClaims: () => "the change is marked undone",
-  DesktopChecksDrift: () => "the files are checked",
+  DesktopChecksDrift: (from, to) =>
+    to.pc === "desk_err_release" ? refusal(from) : "the files are checked",
   DesktopRecordsRestoreRow: () => "the undo is recorded",
   DesktopWritesAtOnce: () => "the files are put back",
   DesktopRemovesLiveFiles: () => "the live files are removed",
   DesktopPutsOldFilesIn: () => "the old files are put in",
   DesktopWriteFails: () => "a file write fails",
   DesktopFinishesFailed: () => "the undo is recorded as failed",
-  DesktopReleasesAfterFailure: (from) =>
-    from.row[from.cur] === "failed"
-      ? "a file write failed: the mark is cleared"
-      : "Undo is refused: files changed since, it asks for Force",
+  DesktopReleasesAfterFailure: () => "a file write failed: the mark is cleared",
+  DesktopReleasesOnError: () => "the undo ends without undoing",
   DesktopFinishesDone: () => "the undo is recorded as finished",
   WriterDies: () => "the app dies",
 };

@@ -4,8 +4,11 @@
     .agents/skills/verify-undo/check            run every check
     .agents/skills/verify-undo/check --accept   record the covered code as confirmed
 
-Exit 0: every result is the expected one. Exit 1: something changed; the
-output says what. Exit 2: Java or TLC is missing. SKILL.md explains each result.
+Exit 0: every rule holds, every deliberate break is caught, and the covered
+code is the text the model was confirmed against. Exit 1: one of those is not
+true; the output says which. Exit 2: Java or TLC is missing. There is no list
+of excused failures: a rule that breaks fails the check until the code or the
+model is fixed. SKILL.md explains each result.
 """
 
 from __future__ import annotations
@@ -27,20 +30,23 @@ HERE = Path(__file__).resolve().parent
 MODEL = HERE / "model"
 SPEC = MODEL / "UndoClaim.tla"
 COVERED = HERE / "covered.json"
-KNOWN = HERE / "known-findings.json"
 WORDS = HERE / "words.json"
 
 TLC_VERSION = "1.7.4"
 TLC_URL = f"https://github.com/tlaplus/tlaplus/releases/download/v{TLC_VERSION}/tla2tools.jar"
 TLC_SHA256 = "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 
-# Each mutation in the spec's `Mutations` set, and the rule it must break.
+# Each mutation in the spec's `Mutations` set: the config it runs in and the
+# rule it must break. The two desktop ones are the order the desktop had
+# before issue 787 was fixed.
 MUST_FAIL = {
-    "recovery_skips_release": "NoStrandedUndo",
-    "core_claim_before_record": "NoStrandedUndo",
-    "core_fail_finish_before_release": "NoStrandedUndo",
-    "core_finish_before_mutation": "UndoneMeansFilesBack",
-    "recovery_releases_done_claims": "FinishedUndoKeepsClaim",
+    "recovery_skips_release": ("core", "NoStrandedUndo"),
+    "core_claim_before_record": ("core", "NoStrandedUndo"),
+    "core_fail_finish_before_release": ("core", "NoStrandedUndo"),
+    "core_finish_before_mutation": ("core", "UndoneMeansFilesBack"),
+    "recovery_releases_done_claims": ("core", "FinishedUndoKeepsClaim"),
+    "desktop_claim_before_record": ("desktop", "NoStrandedUndo"),
+    "desktop_fail_finish_before_release": ("desktop", "NoStrandedUndo"),
 }
 
 FN_START = r"^([ \t]*)(?:pub(?:\([a-z]+\))? )?(?:async )?fn {name}\b"
@@ -141,15 +147,6 @@ def with_break(config: str, mutation: str) -> str:
     return changed
 
 
-def with_narrowed_rules(config: str, narrowed: dict[str, str]) -> str:
-    """Swaps each rule that has a known finding for the narrower rule that leaves out its cause."""
-    lines = [
-        line.replace(line.strip(), narrowed[line.strip()]) if line.strip() in narrowed else line
-        for line in config.splitlines()
-    ]
-    return "\n".join(lines) + "\n"
-
-
 def function_text(source: str, name: str) -> str | None:
     """The text of `fn name`, from its first line to its closing brace."""
     start = re.search(FN_START.format(name=re.escape(name)), source, flags=re.M)
@@ -193,45 +190,27 @@ def print_path(run: Run, words: dict) -> None:
         print(f"      {number}. {words['steps'].get(action, action)}  [{action}]")
 
 
-def check_config(java: str, jar: Path, name: str, known: list[dict], words: dict) -> bool:
-    """Runs one checked-in config. True when the result is the expected one."""
-    config = (MODEL / f"UndoClaim.{name}.cfg").read_text()
-    expected = {finding["rule"]: finding for finding in known if finding["config"] == name}
-    run = run_tlc(java, jar, config)
-    if run.broken is None and not expected:
+def check_config(java: str, jar: Path, name: str, words: dict) -> bool:
+    """Runs one checked-in config. True when every rule holds."""
+    run = run_tlc(java, jar, (MODEL / f"UndoClaim.{name}.cfg").read_text())
+    if run.broken is None:
         print(f"PASS   {name}: every rule holds in {run.states} states.")
         return True
-    if run.broken is None:
-        print(f"CHANGED {name}: every rule holds now, but known-findings.json lists "
-              f"{', '.join(expected)}. If the code was fixed, remove the entry and say so in the PR.")
-        return False
-    if run.broken not in expected:
-        print(f"FAIL   {name}: {run.broken} breaks.")
-        print_path(run, words)
-        return False
-    finding = expected[run.broken]
-    print(f"KNOWN  {name}: {run.broken} still breaks. {finding['summary']} {finding['issue']}")
+    print(f"FAIL   {name}: {run.broken} breaks.")
     print_path(run, words)
-    narrowed = {rule: known_finding["except_rule"] for rule, known_finding in expected.items()}
-    rest = run_tlc(java, jar, with_narrowed_rules(config, narrowed))
-    if rest.broken is None:
-        print(f"PASS   {name}: no rule breaks in any other way, in {rest.states} states.")
-        return True
-    print(f"FAIL   {name}: {rest.broken} breaks in a way the known finding does not cover.")
-    print_path(rest, words)
     return False
 
 
 def check_can_fail(java: str, jar: Path) -> bool:
     """Each mutation must break its rule, or a pass of that rule proves nothing."""
-    config = (MODEL / "UndoClaim.core.cfg").read_text()
     all_fail = True
-    for mutation, rule in MUST_FAIL.items():
+    for mutation, (name, rule) in MUST_FAIL.items():
+        config = (MODEL / f"UndoClaim.{name}.cfg").read_text()
         run = run_tlc(java, jar, with_break(config, mutation))
         caught = run.broken == rule
         all_fail = all_fail and caught
         got = f"{rule} breaks in {len(run.steps) - 1} steps" if caught else f"got {run.broken or 'a pass'}"
-        print(f"{'PASS  ' if caught else 'FAIL  '} mutation {mutation}: {got}.")
+        print(f"{'PASS  ' if caught else 'FAIL  '} mutation {mutation} ({name}): {got}.")
     return all_fail
 
 
@@ -269,19 +248,17 @@ def main() -> int:
               "or set JAVA to a java binary.")
         return 2
     jar = find_tlc()
-    known = json.loads(KNOWN.read_text())
     words = json.loads(WORDS.read_text())
     results = [
         check_covered(root, covered),
-        check_config(java, jar, "core", known, words),
-        check_config(java, jar, "desktop", known, words),
+        check_config(java, jar, "core", words),
+        check_config(java, jar, "desktop", words),
         check_can_fail(java, jar),
     ]
     if all(results):
-        open_findings = f" {len(known)} known finding(s) still open." if known else ""
-        print(f"\nAll results are the expected ones.{open_findings}")
+        print("\nEvery rule holds and the covered code matches.")
         return 0
-    print("\nSomething changed. Read the CHANGED and FAIL lines above.")
+    print("\nThe check fails. Read the CHANGED and FAIL lines above.")
     return 1
 
 

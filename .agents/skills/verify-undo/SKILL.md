@@ -22,8 +22,9 @@ reverted` (also with `--force`), and the files were never put back.
 
 Two more rules ride along. An undo is recorded as finished only after its own
 write of the files ran to the end, and nothing moves the files afterwards
-(`UndoneMeansFilesBack`). A finished undo keeps its claim, so a change cannot
-be undone twice (`FinishedUndoKeepsClaim`).
+(`UndoneMeansFilesBack`). This is about the change's main path only; see "Not
+covered". A finished undo keeps its claim, so a change cannot be undone twice
+(`FinishedUndoKeepsClaim`).
 
 The model is [model/UndoClaim.tla](model/UndoClaim.tla). It follows one change
 through Undo by the two pieces of code that can undo it: the core
@@ -41,18 +42,19 @@ or set `JAVA`). The first run downloads TLC 1.7.4 to
 `~/.cache/skill-studio/` and checks its SHA-256; set `TLA2TOOLS` to use a jar
 you already have. It needs no Rust build and writes nothing in the repo.
 
-Exit 0 means every result is the expected one. Exit 1 means something changed.
+Exit 0 means every rule holds, every deliberate break is caught, and the
+covered code is the text the model was confirmed against. Exit 1 means one of
+those is not true. There is no list of excused failures.
 
 ## Read the result
 
 Each line starts with one of these words.
 
-| Line      | Meaning                                                                                               | What to do                                                              |
-| --------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `PASS`    | The rule holds in every state, or a deliberate break was caught.                                      | Nothing.                                                                |
-| `KNOWN`   | A rule breaks, and only by the cause that [known-findings.json](known-findings.json) lists.           | Nothing, unless your change is the fix: then see "Known finding" below. |
-| `FAIL`    | A rule breaks in a new way, or a deliberate break was not caught.                                     | Read the path. Decide: real bug or model error (below).                 |
-| `CHANGED` | A covered function differs from the text the model was confirmed against, or a known finding is gone. | See "When the covered code changes".                                    |
+| Line      | Meaning                                                                   | What to do                                              |
+| --------- | ------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `PASS`    | The rule holds in every state, or a deliberate break was caught.          | Nothing.                                                |
+| `FAIL`    | A rule breaks, or a deliberate break was not caught.                      | Read the path. Decide: real bug or model error (below). |
+| `CHANGED` | A covered function differs from the text the model was confirmed against. | See "When the covered code changes".                    |
 
 A `FAIL` prints the rule in plain words and the shortest path to the break,
 one step per line, with the model action in brackets. To see the path as a
@@ -77,36 +79,40 @@ than a chart can show.
    that only a crash can cause is one SQL statement; write it with `sqlite3`
    on `<home>/.local/share/skill-studio/history/events.sqlite3`, copied from
    the code. If the replay shows the harm, it is a real bug.
-4. For a real bug: do not weaken the rule and do not shrink the model until
-   it passes. Fix the code, or report the path. A bug you report and leave
-   goes in `known-findings.json` with its issue, so the check stays useful
-   for the next change.
+4. For a real bug: fix the code. Do not weaken the rule, do not shrink the
+   model until it passes, and do not add an exception so the check exits 0.
+   If the fix cannot be in the same change, file the bug with the path and
+   leave the check failing: a red check is the true state of the code.
 
 ## Does my change touch the verified code?
 
 Run the check. A `CHANGED` line names each covered function your change
 touched. The covered functions, and the model actions that mirror each:
 
-| File                                                  | Function                                                                | Model actions                                                                   |
-| ----------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `crates/skill-studio-core/src/ops.rs`                 | `restore_event_body`                                                    | every `Core…` action: checks, record, claim, write, finish                      |
-| `crates/skill-studio-core/src/ops.rs`                 | `apply_backup_content`, `restore_write_dir`                             | `CoreOpensSwapPlan`, `CoreWritesAtOnce`, `CoreClosesPlan`                       |
-| `crates/skill-studio-core/src/fsops.rs`               | `swap`                                                                  | `CoreOpensSwapPlan`, `CoreWritesAtOnce`, `CoreWriteFails`                       |
-| `crates/skill-studio-core/src/ops_remove.rs`          | `remove_tree_best_effort`                                               | `CoreStartsWrite`, `CoreEndsWrite`                                              |
-| `crates/skill-studio-core/src/events.rs`              | `recover_interrupted`, `release_restore_claim`                          | `RecoveryReleasesClaim`, `RecoveryMarksRowInterrupted`                          |
-| `crates/skill-studio-core/src/events.rs`              | `settle`                                                                | every action that sets a row's status                                           |
-| `crates/skill-studio-core/src/ports.rs`               | `begin_for`                                                             | recovery runs first, in this order: rows, then the journal                      |
-| `crates/skill-studio-core/src/ports.rs`               | `take`, `acquire_exclusive`                                             | one writer at a time (the home lease)                                           |
-| `crates/skill-studio-core/src/journal.rs`             | `reconcile_scope_journal`, `reconcile`, `reverse_steps`                 | the three `Recovery…` actions that put a swapped folder back and close the plan |
-| `crates/skill-studio-host/src/history.rs`             | `record`, `claim_revert`, `release_revert`                              | `CoreRecordsRestoreRow`, `CoreClaims`, the two release actions                  |
-| `crates/skill-studio-host/src/history.rs`             | `held_restore_claims`, `pending`, `finish`                              | which claims recovery releases, which rows it marks                             |
-| `apps/desktop/src-tauri/src/skills/event_store.rs`    | `restore_with_skill_md_transaction_observer`                            | `DesktopChecksClaim`, `DesktopClaims`, `DesktopReleasesAfterFailure`            |
-| `apps/desktop/src-tauri/src/skills/event_store.rs`    | `apply_restore`, `record_with_bound_paths`                              | drift check, `DesktopRecordsRestoreRow`, the two finish actions                 |
-| `apps/desktop/src-tauri/src/skills/event_store.rs`    | `apply_inverse_op`                                                      | `DesktopWritesAtOnce`, `DesktopWriteFails`                                      |
-| `apps/desktop/src-tauri/src/skills/undo_files.rs`     | `restore_from`, `symlink`                                               | `DesktopRemovesLiveFiles`, `DesktopPutsOldFilesIn`                              |
-| `apps/desktop/src-tauri/src/skills/event_store.rs`    | `reconcile_at_startup`                                                  | `DesktopAppStarts`, then `RecoveryMarksRowInterrupted`                          |
-| `apps/desktop/src-tauri/src/skills/event_commands.rs` | `restore_desktop_event`, `restore_event_with_state`                     | which code undoes a change, and that it holds the lease                         |
-| `apps/desktop/src-tauri/src/lib.rs`                   | `reconcile_event_store_at_startup`, `reconcile_core_journal_at_startup` | `DesktopAppStarts` and the recovery steps it runs                               |
+| File                                                  | Function                                                                | Model actions                                                                    |
+| ----------------------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `crates/skill-studio-core/src/ops.rs`                 | `restore_event_body`                                                    | every `Core…` action: checks, record, claim, write, finish                       |
+| `crates/skill-studio-core/src/ops.rs`                 | `apply_backup_content`, `restore_write_dir`                             | `CoreOpensSwapPlan`, `CoreWritesAtOnce`, `CoreClosesPlan`                        |
+| `crates/skill-studio-core/src/fsops.rs`               | `swap`                                                                  | `CoreOpensSwapPlan`, `CoreWritesAtOnce`, `CoreWriteFails`                        |
+| `crates/skill-studio-core/src/ops_remove.rs`          | `remove_tree_best_effort`                                               | `CoreStartsWrite`, `CoreEndsWrite`                                               |
+| `crates/skill-studio-core/src/events.rs`              | `recover_interrupted`, `release_restore_claim`                          | `RecoveryReleasesClaim`, `RecoveryMarksRowInterrupted`                           |
+| `crates/skill-studio-core/src/events.rs`              | `settle`                                                                | every action that sets a row's status                                            |
+| `crates/skill-studio-core/src/ports.rs`               | `begin_for`                                                             | recovery runs first, in this order: rows, then the journal                       |
+| `crates/skill-studio-core/src/ports.rs`               | `take`, `acquire_exclusive`                                             | one writer at a time (the home lease)                                            |
+| `crates/skill-studio-core/src/journal.rs`             | `reconcile_scope_journal`, `reconcile`, `reverse_steps`                 | the three `Recovery…` actions that put a swapped folder back and close the plan  |
+| `crates/skill-studio-host/src/history.rs`             | `record`, `claim_revert`, `release_revert`                              | `CoreRecordsRestoreRow`, `CoreClaims`, the two release actions                   |
+| `crates/skill-studio-host/src/history.rs`             | `held_restore_claims`, `pending`, `finish`                              | which claims recovery releases, which rows it marks                              |
+| `apps/desktop/src-tauri/src/skills/event_store.rs`    | `restore_with_skill_md_transaction_observer`                            | `DesktopChecksClaim`, `DesktopReleasesOnError`                                   |
+| `apps/desktop/src-tauri/src/skills/event_store.rs`    | `apply_restore`, `apply_restore_distribute`                             | drift check, record, claim, and what follows a failed or finished write          |
+| `apps/desktop/src-tauri/src/skills/event_store.rs`    | `backup_for_restore`, `record_with_bound_paths`                         | `DesktopRecordsRestoreRow`                                                       |
+| `apps/desktop/src-tauri/src/skills/event_store.rs`    | `claim_recorded_restore`, `claim_event_restore`                         | `DesktopClaims`                                                                  |
+| `apps/desktop/src-tauri/src/skills/event_store.rs`    | `fail_claimed_restore`, `unclaim_event_restore`                         | `DesktopReleasesAfterFailure`, `DesktopFinishesFailed`, `DesktopReleasesOnError` |
+| `apps/desktop/src-tauri/src/skills/event_store.rs`    | `finish`, `patch_inverse_post_fingerprint`                              | `DesktopFinishesFailed`, `DesktopFinishesDone`                                   |
+| `apps/desktop/src-tauri/src/skills/event_store.rs`    | `apply_inverse_op`                                                      | `DesktopWritesAtOnce`, `DesktopWriteFails`                                       |
+| `apps/desktop/src-tauri/src/skills/undo_files.rs`     | `restore_from`, `symlink`                                               | `DesktopRemovesLiveFiles`, `DesktopPutsOldFilesIn`                               |
+| `apps/desktop/src-tauri/src/skills/event_store.rs`    | `reconcile_at_startup`                                                  | `DesktopAppStarts`, then `RecoveryMarksRowInterrupted`                           |
+| `apps/desktop/src-tauri/src/skills/event_commands.rs` | `restore_desktop_event`, `restore_event_with_state`                     | which code undoes a change, and that it holds the lease                          |
+| `apps/desktop/src-tauri/src/lib.rs`                   | `reconcile_event_store_at_startup`, `reconcile_core_journal_at_startup` | `DesktopAppStarts` and the recovery steps it runs                                |
 
 One piece of covered code has no hash: the recovery closure in `run`
 (`apps/desktop/src-tauri/src/lib.rs`), which calls
@@ -146,22 +152,28 @@ is that commit plus the branch's change, not the commit alone.
 
 ## The check can fail
 
-A check that was never seen failing proves nothing. The spec has five
+A check that was never seen failing proves nothing. The spec has seven
 switches (`Mutations`), each one edit to the real code: recovery skips the
 release, recovery releases a finished undo's claim, the core claims before it
 records, the core records a failure before it releases, the core records
-success before it writes the files. Every run turns each on alone and
-requires the rule it guards to break. A `FAIL mutation …` line means a rule
-stopped being able to fail: the model lost the step that rule depends on.
+success before it writes the files, the desktop claims before it records, and
+the desktop records a failure before it releases. The last two are the order
+the desktop had until [issue 787](https://github.com/sergical/skill-studio/issues/787)
+was fixed. Every run turns each on alone and requires the rule it guards to
+break. A `FAIL mutation …` line means a rule stopped being able to fail: the
+model lost the step that rule depends on.
 
 ## Bounds and assumptions
 
 - One change, 3 Undo requests, 2 crashes, and each way of writing the files
-  below. 28,595 states for the core, and all of them are checked. A pass
-  covers these bounds, not every history.
+  below. 28,595 states for the core and 7,666 for the desktop, and all of
+  them are checked. A pass covers these bounds, not every history.
 - A crash is the only fault: the process dies between two durable steps and
   what it wrote stays. A single SQL statement that fails while the process
-  lives is not modeled, apart from the file write itself.
+  lives is not modeled, apart from the file write itself. One consequence is
+  known and open: the core ignores a failed release and can then record the
+  undo as failed with the claim still held
+  ([issue 796](https://github.com/sergical/skill-studio/issues/796)).
 - One writer at a time. Every writer takes the exclusive home lease, an OS
   file lock (`crates/skill-studio-host/src/lease.rs`). Desktop startup holds
   it across its whole recovery. The model assumes the lock works.
@@ -188,7 +200,9 @@ stopped being able to fail: the model lost the step that rule depends on.
 - Force retries: `restore_retry`, `displaced_data`, and which snapshot a Redo
   puts back after a forced retry.
 - Events with several paths, links, lock rows or registry rows. The model has
-  one path.
+  one path, the change's main one. For the other paths the core works on a
+  best effort: it records an undo as finished even when a link or a copy
+  could not be put back, and notes the error on the restore row.
 - `make_independent_copy`: its restore keeps its claim on purpose and desktop
   startup resumes it (`skill_independent_copy.rs`).
 - Backup expiry, `recovery drop`, and a journal plan that recovery cannot
@@ -196,23 +210,17 @@ stopped being able to fail: the model lost the step that rule depends on.
 - Unpark, which also writes `reverted_by` on a park row (`ops.rs`,
   `unpark_body`).
 
-## Known finding
+## What it has found
 
-`known-findings.json` lists each rule that breaks today, with its issue and
-its `except_rule`: the same rule with that one cause left out. Today it has
-one entry, [issue 787](https://github.com/sergical/skill-studio/issues/787).
-The desktop claims a change before it records the restore row, and records a
-failed undo before it releases the claim. If the app dies in either gap, the
-change is stranded.
-
-For a config with a known finding the check runs TLC twice: once with the
-rule, which must break, and once with the `except_rule`
-(`NoStrandedUndoBeyondIssue787` in the spec), which must hold. The exception
-is `DiesInIssue787Gap` in the spec: the desktop dies while it holds the claim
-at one of the steps inside those two gaps. So any other way to strand a
-change still prints `FAIL`. When a fix lands, the first run passes, the check
-prints `CHANGED`, and you remove the entry, the `except_rule`, and the
-`bareClaim` variable in the same PR.
+[Issue 787](https://github.com/sergical/skill-studio/issues/787): the desktop
+claimed a change before it recorded the restore row, and recorded a failed
+undo before it released the claim. An app that died in either gap left the
+change shown as undone for good. The desktop check broke `NoStrandedUndo` in
+8 steps. The fix made the desktop use the core's order, and the test
+`a_desktop_undo_cut_off_at_any_history_write_can_run_again_or_the_change_stays_marked_undone`
+in `apps/desktop/src-tauri/src/skills/event_commands.rs` kills the real Undo
+before each of its history writes. That test runs on the code; this check
+runs on the model. Keep both.
 
 ## Files
 
@@ -221,6 +229,6 @@ prints `CHANGED`, and you remove the entry, the `except_rule`, and the
   `model/UndoClaim.desktop.cfg`: the two checks.
 - `model/*.chart.cfg`, `model/view.mjs`: smaller bounds and the user's words,
   for charts.
-- `covered.json`, `known-findings.json`, `words.json`: the coverage record,
-  the open findings, and the plain words the check prints.
+- `covered.json`, `words.json`: the coverage record and the plain words the
+  check prints.
 - `CHART.md`: the state charts.
