@@ -2,7 +2,7 @@
   "rules": {
     "TypeOK": "Every value in the model stays one of its allowed values.",
     "NoStrandedUndo": "Once no write is running and the next write has done its recovery, a change is shown as undone only if an undo of it finished.",
-    "UndoneMeansFilesBack": "An undo is recorded as finished only after its own write of the files ran to the end, and nothing moves the files afterwards.",
+    "UndoneMeansFilesBack": "An undo is recorded as finished only when the files are back as they were before the change, and no step of an undo or of recovery moves them afterwards.",
     "FinishedUndoKeepsClaim": "A finished undo keeps its claim: the change stays shown as undone, so it cannot be undone a second time."
   },
   "steps": {
@@ -41,6 +41,8 @@
     "DesktopPutsOldFilesIn": "The desktop puts the old files into place.",
     "DesktopAppStarts": "The desktop app starts and begins its own recovery, which releases no claim.",
     "RecoveryStartsPuttingFolderBack": "Recovery starts to put back the folder that an unfinished swap replaced: the files are half way.",
-    "DesktopReleasesOnError": "The desktop's Undo ends with an error and releases the claim if it still holds one."
+    "DesktopReleasesOnError": "The desktop's Undo ends with an error and releases the claim if it still holds one.",
+    "CoreFindsFilesAlreadyBack": "The core finds the files already back and writes nothing.",
+    "DesktopFindsFilesAlreadyBack": "The desktop finds the files already back and writes nothing."
   }
 }

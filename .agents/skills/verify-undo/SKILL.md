@@ -20,9 +20,11 @@ finished.
 as undone and offers no Undo, the CLI answers `this event was already
 reverted` (also with `--force`), and the files were never put back.
 
-Two more rules ride along. An undo is recorded as finished only after its own
-write of the files ran to the end, and nothing moves the files afterwards
-(`UndoneMeansFilesBack`). This is about the change's main path only; see "Not
+Two more rules ride along. An undo is recorded as finished only when the
+files are back as they were before the change, and no step of an undo or of
+recovery moves them afterwards (`UndoneMeansFilesBack`). The undo need not
+have written them itself: a retry finishes with no write when an earlier
+attempt already put them back. This is about the change's main path only; see "Not
 covered". A finished undo keeps its claim, so a change cannot be undone twice
 (`FinishedUndoKeepsClaim`).
 
@@ -62,8 +64,8 @@ chart, or a whole flow, read the result with the `/pstack-statechart` skill:
 give it `model/UndoClaim.tla`, one of the two chart configs
 (`model/UndoClaim.core.chart.cfg`, `model/UndoClaim.desktop.chart.cfg`) and
 the view `model/view.mjs`, which holds the user's words for each state and
-step. Use the chart configs for a chart: the check configs have more states
-than a chart can show.
+step. The chart configs use smaller bounds than the check, which has more
+states than a chart can show.
 
 ### A real bug or a model error?
 
@@ -152,22 +154,39 @@ is that commit plus the branch's change, not the commit alone.
 
 ## The check can fail
 
-A check that was never seen failing proves nothing. The spec has seven
-switches (`Mutations`), each one edit to the real code: recovery skips the
-release, recovery releases a finished undo's claim, the core claims before it
-records, the core records a failure before it releases, the core records
-success before it writes the files, the desktop claims before it records, and
-the desktop records a failure before it releases. The last two are the order
-the desktop had until [issue 787](https://github.com/sergical/skill-studio/issues/787)
-was fixed. Every run turns each on alone and requires the rule it guards to
-break. A `FAIL mutation …` line means a rule stopped being able to fail: the
-model lost the step that rule depends on.
+A check that was never seen failing proves nothing. The spec has eight
+switches (`Mutations`), each one edit to the real code:
+
+- recovery skips the release, or releases a finished undo's claim;
+- the core claims before it records, records a failure before it releases,
+  or records success before it writes the files;
+- the desktop does each of those three. The first two are the order it had
+  until [issue 787](https://github.com/sergical/skill-studio/issues/787) was
+  fixed.
+
+Every run turns each on alone and requires the rule it guards to break. Each
+of the three rules has a switch that breaks it for the core and one for the
+desktop, and the check fails if that stops being true. A `FAIL mutation …`
+line means a rule stopped being able to fail: the model lost the step that
+rule depends on.
+
+The check also fails when a model action names no watched function, and when
+`covered.json` names an action the model does not have. The rules and the
+bounds are written in `check` itself, so a run cannot check fewer of them.
 
 ## Bounds and assumptions
 
 - One change, 3 Undo requests, 2 crashes, and each way of writing the files
-  below. 28,595 states for the core and 7,666 for the desktop, and all of
+  below. 12,330 states for the core and 6,833 for the desktop, and all of
   them are checked. A pass covers these bounds, not every history.
+- Every run starts clean: the change is not marked undone, no undo of it was
+  ever recorded, and its files are as it left them. A mark that an older
+  build left behind is outside the model. One is known: a desktop build from
+  before the fix for issue 787 that died in one of its two gaps left a mark
+  that recovery still does not clear
+  ([issue 796](https://github.com/sergical/skill-studio/issues/796)).
+- Only Undo and recovery move the files. A user or another tool editing them
+  between two attempts is not modeled.
 - A crash is the only fault: the process dies between two durable steps and
   what it wrote stays. A single SQL statement that fails while the process
   lives is not modeled, apart from the file write itself. One consequence is
@@ -190,8 +209,8 @@ model lost the step that rule depends on.
 
 ## Not covered
 
-- What the files hold. The model knows that an undo's write ran to the end,
-  not that it reproduced the old tree byte for byte. One gap seen while
+- What the files hold. The model knows that the files were put back, not
+  that the write reproduced the old tree byte for byte. One gap seen while
   reading the code, not checked here: `read_backup_files` in `history.rs`
   returns regular files only, so an empty folder inside a backed-up skill
   folder is not put back by an undo.
@@ -225,8 +244,8 @@ runs on the model. Keep both.
 ## Files
 
 - `check`: the one command. Python 3, standard library only.
-- `model/UndoClaim.tla`: the model. `model/UndoClaim.core.cfg` and
-  `model/UndoClaim.desktop.cfg`: the two checks.
+- `model/UndoClaim.tla`: the model. `check` builds the two configs it runs,
+  one for the core and one for the desktop.
 - `model/*.chart.cfg`, `model/view.mjs`: smaller bounds and the user's words,
   for charts.
 - `covered.json`, `words.json`: the coverage record and the plain words the

@@ -47,8 +47,8 @@ stateDiagram-v2
   s3 --> s1: you press Undo or you press Undo with Force
   s2 --> s1: a file write failed: the mark is cleared
   s2 --> s4: the files are put back
-  s4 --> s3: the app dies
   s3 --> s0: the next write clears the mark (files not back)
+  s4 --> s3: the app dies
   s4 --> s1: a file write failed: the mark is cleared
   s4 --> s5: the undo is recorded as finished
   s3 --> s6: the next write clears the mark (files back)
@@ -65,10 +65,6 @@ stateDiagram-v2
   class s4 blue
   class s5 teal
   class s6 yellow
-  classDef teal fill:#bfe3df,stroke:#5a9b94,color:#1c1c1c
-  classDef blue fill:#c3e0ff,stroke:#5b93cf,color:#1c1c1c
-  classDef yellow fill:#f0dcbf,stroke:#b98f4d,color:#1c1c1c
-  classDef bugPath stroke:#e72e3b,stroke-width:2.5px
 ```
 
 What to notice:
@@ -104,34 +100,34 @@ stateDiagram-v2
   s0: Change in place. Undo offered
   s1: Undo started. Nothing of it shows yet
   s2: Undo running: shown as undone, files not back
-  s3: Undo running: shown as undone, files back
-  s4: Shown as undone, but no undo finished
+  s3: Shown as undone, but no undo finished
+  s4: Undo running: shown as undone, files back
   s5: Undone. Files are back
   s6: Files are back, but Undo is still offered (it asks for Force)
   [*] --> s0
   s0 --> s1: you press Undo or you press Undo with Force
   s1 --> s0: the app dies or the undo ends without undoing
   s1 --> s2: the change is marked undone
-  s2 --> s3: the files are put back
-  s2 --> s4: the app dies
-  s3 --> s4: the app dies
-  s3 --> s5: the undo is recorded as finished
-  s4 --> s1: you press Undo or you press Undo with Force
+  s2 --> s3: the app dies
+  s2 --> s4: the files are put back
+  s3 --> s1: you press Undo or you press Undo with Force
+  s4 --> s3: the app dies
+  s4 --> s5: the undo is recorded as finished
   s2 --> s1: a file write failed: the mark is cleared
+  s3 --> s0: the next write clears the mark (files not back)
   s5 --> s1: you press Undo or you press Undo with Force
-  s4 --> s0: the next write clears the mark (files not back)
-  s1 --> s4: Undo is refused: already undone
-  s4 --> s6: the next write clears the mark (files back)
+  s1 --> s3: Undo is refused: already undone
+  s3 --> s6: the next write clears the mark (files back)
   s1 --> s5: the app dies or Undo is refused: already undone
   s6 --> s1: you press Undo or you press Undo with Force
   s1 --> s6: the undo ends without undoing
-  s1 --> s3: the change is marked undone
-  s3 --> s1: a file write failed: the mark is cleared
+  s1 --> s4: the change is marked undone
+  s4 --> s1: a file write failed: the mark is cleared
   class s0 teal
   class s1 blue
   class s2 blue
-  class s3 blue
-  class s4 yellow
+  class s3 yellow
+  class s4 blue
   class s5 teal
   class s6 yellow
 ```
@@ -139,8 +135,9 @@ stateDiagram-v2
 What to notice:
 
 - The desktop records the undo before it marks the change. If the app dies
-  between the two, nothing shows: the chart goes from "Undo started" back to
-  "Change in place".
+  between the two, the change still offers Undo: the chart goes from "Undo
+  started" back to "Change in place". Activity lists the cut-off undo as
+  interrupted.
 - An undo that was cut off after the mark leaves the change shown as undone
   until the next core write starts. That write clears the mark, and Undo is
   offered again. The desktop app starting again does not clear it.
@@ -152,6 +149,7 @@ What to notice:
 
 - Steps that do not change what the user can see, such as a check that
   passes.
+- A retry that finds the files already back and writes nothing.
 - A recovery pass that starts when nothing is left to recover. The core chart
   also leaves out the desktop app starting again: it marks a cut-off undo and
   reverses an unsealed folder swap, as the next write does, but it does not

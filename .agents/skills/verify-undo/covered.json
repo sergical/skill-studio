@@ -14,7 +14,8 @@
         "CoreWriteFails",
         "CoreReleasesAfterFailure",
         "CoreFinishesFailed",
-        "CoreFinishesDone"
+        "CoreFinishesDone",
+        "CoreFindsFilesAlreadyBack"
       ],
       "sha256": "ea216ca8e4bfc5c78016c5c6ed00998d9581f495e227b70df1c6f0cd7cb3405a"
     },
@@ -174,7 +175,8 @@
         "DesktopWritesAtOnce",
         "DesktopRemovesLiveFiles",
         "DesktopPutsOldFilesIn",
-        "DesktopWriteFails"
+        "DesktopWriteFails",
+        "DesktopFindsFilesAlreadyBack"
       ],
       "sha256": "56356714b008c125606d5f19a8997d5cbe2d9891a8f406b2fca3f6e2fec610e7"
     },
