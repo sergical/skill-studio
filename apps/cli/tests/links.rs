@@ -80,3 +80,26 @@ fn links_show_a_skill_grill_me_cannot_reach_per_agent_the_same_on_cli_and_mcp() 
     assert_eq!(state(&link, "claude-code"), "elsewhere");
     assert_eq!(state(&link, "codex"), "ok");
 }
+
+#[test]
+fn a_prefixed_install_shows_as_renamed_and_an_agent_filter_drops_skills_it_cannot_load() {
+    let home = tempfile::tempdir().unwrap();
+    install(home.path(), "productivity", "grill-me", true);
+    let renamed = home.path().join(".agents/skills/matt-grilling");
+    std::fs::create_dir_all(&renamed).unwrap();
+    let text =
+        std::fs::read_to_string(real_skill("productivity", "grilling").join("SKILL.md")).unwrap();
+    std::fs::write(
+        renamed.join("SKILL.md"),
+        text.replacen("name: grilling", "name: matt-grilling", 1),
+    )
+    .unwrap();
+
+    let (_, link) = grill_me_to_grilling(home.path());
+    assert_eq!(state(&link, "codex"), "renamed");
+
+    std::fs::remove_dir_all(home.path().join(".agents/skills/grill-me")).unwrap();
+    std::fs::create_dir_all(home.path().join(".claude/skills")).unwrap();
+    let claude_only = headless::cli(home.path(), &["links", "grill-me", "--agent", "codex"]);
+    assert!(claude_only["data"]["links"].as_array().unwrap().is_empty());
+}

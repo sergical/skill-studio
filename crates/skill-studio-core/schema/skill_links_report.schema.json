@@ -68,7 +68,7 @@
           "x-untrusted": true
         },
         "agents": {
-          "description": "One entry per agent that loads `from`.",
+          "description": "One entry per agent that loads a copy of `from` holding this link.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/AgentLinkState"
@@ -167,6 +167,11 @@
           "description": "No copy of the target anywhere in the scope.",
           "type": "string",
           "const": "missing"
+        },
+        {
+          "description": "Not found by the name the link uses, but a copy installed under a\nprefixed name (`matt-grilling` for `grilling`) is.",
+          "type": "string",
+          "const": "renamed"
         },
         {
           "description": "The agent has a copy, but it is parked or turned off for it.",

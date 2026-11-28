@@ -1075,7 +1075,7 @@ pub(crate) fn listing_cost(
     Ok(rows)
 }
 
-fn disables_reader(by: DisabledBy, reader: &AgentId) -> bool {
+pub(crate) fn disables_reader(by: DisabledBy, reader: &AgentId) -> bool {
     let owner = match by {
         DisabledBy::StudioMoved => return true,
         DisabledBy::CodexConfig => AgentId::CODEX,

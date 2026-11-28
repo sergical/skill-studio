@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a9a20f7596f1e27546f4b6099e917c188cc13c5b7b4907b8e6acd6bb2b7a12b0 # shrinks to layout = Links, steps = [Install(4261459520572933017), InstallForOne(false, 10431331138715720794)]
+cc e6b3a80d10b66a150fd02190c854eff3178bf3fe98ba6e840efe731ab45ddda2 # shrinks to layout = Links, steps = [InstallForOne(false, 16334888762595978955), AddSkillToolCall(0, 2611570804520007906), Rename(1516), InstallPackForOne(true)]
+cc c77027214ef965e961a79fe649fd6c71a2e9f2f0cfca2685cedb17baedbc156f # shrinks to layout = Links, steps = [Install(13110849040911590926), Park(0), Install(3733533351222419625)]

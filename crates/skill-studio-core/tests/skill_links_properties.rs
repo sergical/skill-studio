@@ -11,7 +11,7 @@
 
 #![cfg(unix)]
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -356,9 +356,108 @@ fn apply(world: &World, catalog: &[(String, PathBuf)], step: &Step) {
     }
 }
 
-/// Every strong link `skill_links` reports must match the oracle for each
-/// agent: listed for exactly the agents that find the linking skill, and
-/// `ok` exactly when that agent can open the path or find the name.
+/// Strong links a person checked by hand in the real packs
+/// (`skill_links_corpus.rs`), as `(from, to, path)`. The oracle uses these
+/// and the lines a step appends, never what `skill_links` found.
+const KNOWN: [(&str, &str, Option<&str>); 13] = [
+    ("grill-me", "grilling", None),
+    ("grill-with-docs", "grilling", None),
+    ("grill-with-docs", "domain-modeling", None),
+    ("triage", "grilling", None),
+    ("triage", "domain-modeling", None),
+    ("triage", "setup-matt-pocock-skills", None),
+    ("to-spec", "setup-matt-pocock-skills", None),
+    (
+        "chief-of-staff",
+        "implement-spec",
+        Some("../implement-spec/SKILL.md"),
+    ),
+    ("chief-of-staff", "retro", Some("../retro/SKILL.md")),
+    ("chief-of-staff", "to-spec", Some("../to-spec/SKILL.md")),
+    (
+        "chief-of-staff",
+        "to-tickets",
+        Some("../to-tickets/SKILL.md"),
+    ),
+    (
+        "find-animation-opportunities",
+        "choreograph",
+        Some("../choreograph/SKILL.md"),
+    ),
+    (
+        "review-animations",
+        "choreograph",
+        Some("../choreograph/SKILL.md"),
+    ),
+];
+
+/// The links the oracle expects from one copy: the known ones for the skill
+/// it came from, plus the exact lines `apply` appended to this copy.
+fn expected_links(name: &str, dir: &Path) -> BTreeMap<String, Option<String>> {
+    let base = name.strip_suffix("-fork").unwrap_or(name);
+    let mut out = BTreeMap::new();
+    for (from, to, path) in KNOWN {
+        if from == base && to != name {
+            out.insert(to.to_string(), path.map(str::to_string));
+        }
+    }
+    let text = fs::read_to_string(dir.join("SKILL.md")).unwrap_or_default();
+    for line in text.lines() {
+        if let Some(to) = line
+            .strip_prefix("Call the Skill tool with \"")
+            .and_then(|r| r.strip_suffix("\"."))
+        {
+            if to != name {
+                out.entry(to.to_string()).or_insert(None);
+            }
+        }
+        if let Some(to) = line
+            .strip_prefix("First read ../")
+            .and_then(|r| r.strip_suffix("/SKILL.md."))
+        {
+            if to != name && to != dir.file_name().unwrap().to_string_lossy() {
+                out.insert(to.to_string(), Some(format!("../{to}/SKILL.md")));
+            }
+        }
+    }
+    out
+}
+
+/// What the file system says about one link for one agent.
+fn oracle_state(
+    world: &World,
+    found: &[(String, PathBuf)],
+    dir: &Path,
+    to: &str,
+    path: Option<&str>,
+) -> LinkState {
+    let reachable = match path {
+        Some(path) => dir.join(path).exists(),
+        None => found.iter().any(|(n, _)| n == to),
+    };
+    if reachable {
+        return LinkState::Ok;
+    }
+    if path.is_none() && found.iter().any(|(n, _)| n.ends_with(&format!("-{to}"))) {
+        return LinkState::Renamed;
+    }
+    let named = |root: &str| {
+        let skill_md = world.path(root).join(to).join("SKILL.md");
+        fs::read_to_string(skill_md)
+            .is_ok_and(|t| frontmatter_fields(&t).get("name").map(String::as_str) == Some(to))
+    };
+    if named(PARKED) {
+        LinkState::Off
+    } else if named(SHARED) || named(CLAUDE) {
+        LinkState::Elsewhere
+    } else {
+        LinkState::Missing
+    }
+}
+
+/// Both directions: every link the oracle expects from a skill an agent
+/// finds is reported for that agent with the oracle's state, and every
+/// strong link reported for an agent comes from a skill that agent finds.
 fn check(world: &World) -> Result<(), TestCaseError> {
     let report = skill_links(
         &runtime(world.home.path()),
@@ -366,46 +465,34 @@ fn check(world: &World) -> Result<(), TestCaseError> {
         &SkillLinksRequest::default(),
     )
     .unwrap();
-    let listings: Vec<(&str, Vec<(String, PathBuf)>)> = AGENTS
-        .iter()
-        .map(|agent| (*agent, listing(world, agent)))
-        .collect();
-    for link in report
-        .links
-        .iter()
-        .filter(|l| matches!(l.strength, LinkStrength::Needs | LinkStrength::HandsOff))
-    {
-        for (agent, found) in &listings {
-            let reported = link.agents.iter().find(|a| a.agent.as_str() == *agent);
-            let Some((_, dir)) = found.iter().find(|(name, _)| *name == link.from) else {
+    for agent in AGENTS {
+        let found = listing(world, agent);
+        for (name, dir) in &found {
+            for (to, path) in expected_links(name, dir) {
+                let expected = oracle_state(world, &found, dir, &to, path.as_deref());
+                let reported = report
+                    .links
+                    .iter()
+                    .find(|l| l.from == *name && l.to == to)
+                    .and_then(|l| l.agents.iter().find(|a| a.agent.as_str() == agent))
+                    .map(|a| a.state);
+                prop_assert_eq!(reported, Some(expected), "{} -> {} for {}", name, to, agent);
+            }
+        }
+        for link in report
+            .links
+            .iter()
+            .filter(|l| matches!(l.strength, LinkStrength::Needs | LinkStrength::HandsOff))
+        {
+            if link.agents.iter().any(|a| a.agent.as_str() == agent) {
                 prop_assert!(
-                    reported.is_none(),
-                    "{agent} does not find {}, but it is reported: {link:?}",
-                    link.from
+                    found.iter().any(|(n, _)| *n == link.from),
+                    "{} does not find {}, but its link to {} is reported",
+                    agent,
+                    link.from,
+                    link.to
                 );
-                continue;
-            };
-            let names: BTreeSet<&str> = found.iter().map(|(n, _)| n.as_str()).collect();
-            let works = match &link.path {
-                Some(path) => {
-                    let file_dir = Path::new(&link.evidence.file)
-                        .parent()
-                        .unwrap_or(Path::new(""));
-                    dir.join(file_dir).join(path).exists()
-                }
-                None => names.contains(link.to.as_str()),
-            };
-            let reported = reported.map(|a| a.state);
-            prop_assert_eq!(
-                reported.map(|s| s == LinkState::Ok),
-                Some(works),
-                "{} -> {} for {}: reported {:?}, the file system says works={}",
-                link.from,
-                link.to,
-                agent,
-                reported,
-                works
-            );
+            }
         }
     }
     Ok(())

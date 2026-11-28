@@ -1010,6 +1010,7 @@ pub fn print_links_table(
                 let state = match a.state {
                     LinkState::Ok => "ok",
                     LinkState::Missing => "missing",
+                    LinkState::Renamed => "renamed",
                     LinkState::Off => "off",
                     LinkState::Elsewhere => "elsewhere",
                 };

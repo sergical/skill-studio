@@ -276,7 +276,12 @@ fn scan_line(
     // that skill is not installed: the case the user most needs to see.
     if lower.contains("skill tool") {
         for quoted in cleaned.split('"').skip(1).step_by(2) {
-            if !names.contains(quoted) && quoted != skill.name && is_skill_name(quoted) {
+            let at = cleaned.find(&format!("\"{quoted}\"")).unwrap_or(0);
+            if !names.contains(quoted)
+                && quoted != skill.name
+                && is_skill_name(quoted)
+                && !negated(&cleaned, at)
+            {
                 let strength = if optional {
                     LinkStrength::Mentions
                 } else {
@@ -284,6 +289,35 @@ fn scan_line(
                 };
                 rows.push(row(quoted, strength, None));
             }
+        }
+    }
+    // A slash command for a skill or plugin that is not installed, such as
+    // "`/deslop` from the `cursor-team-kit` plugin".
+    for (at, _) in cleaned.match_indices('/') {
+        let prior = cleaned[..at].chars().next_back();
+        if prior.is_some_and(|c| c.is_alphanumeric() || c == '.' || c == '_') {
+            continue;
+        }
+        let rest = &cleaned[at + 1..];
+        let end = rest
+            .find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'))
+            .unwrap_or(rest.len());
+        let candidate = &rest[..end];
+        let after = tail(&rest[end..].chars().take(40).collect::<String>(), 40).to_lowercase();
+        if is_skill_name(candidate)
+            && !names.contains(candidate)
+            && candidate != skill.name
+            && (after.contains("skill")
+                || after.contains("plugin")
+                || tail(&cleaned[..at].to_lowercase(), 12).contains("run "))
+            && !negated(&cleaned, at)
+        {
+            let strength = if optional {
+                LinkStrength::Mentions
+            } else {
+                LinkStrength::HandsOff
+            };
+            rows.push(row(candidate, strength, None));
         }
     }
     for name in names {
@@ -401,7 +435,9 @@ fn path_tokens(line: &str) -> Vec<&str> {
             .char_indices()
             .find(|(_, c)| !token_char(*c))
             .map_or(line.len(), |(offset, _)| start + offset);
-        out.push(&line[start..end]);
+        // A path that ends a sentence keeps its period out of the file name.
+        let token = line[start..end].trim_end_matches(['.', ',', ':', ';']);
+        out.push(token);
         search = end.max(start + 3);
     }
     out
