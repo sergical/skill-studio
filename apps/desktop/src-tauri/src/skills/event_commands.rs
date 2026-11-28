@@ -1113,6 +1113,8 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         use std::sync::atomic::{AtomicU64, Ordering};
 
+        struct AppDies;
+
         for write_fails in [false, true] {
             let mut cut = 1;
             loop {
@@ -1133,16 +1135,20 @@ mod tests {
 
                 let writes = AtomicU64::new(0);
                 store.observe_history = Some(Box::new(move |phase| {
-                    let dies = phase != "read" && writes.fetch_add(1, Ordering::SeqCst) + 1 == cut;
-                    assert!(!dies, "fixture: the app dies before history {phase}");
+                    if phase != "read" && writes.fetch_add(1, Ordering::SeqCst) + 1 == cut {
+                        std::panic::panic_any(AppDies);
+                    }
                 }));
                 let lease = WriteLease::for_data_root(&data_root)
                     .try_acquire(home)
                     .unwrap();
-                let died = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let _ = store.restore(&lease, home, &event_id, false);
-                }))
-                .is_err();
+                let undo = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    store.restore(&lease, home, &event_id, false)
+                })) {
+                    Ok(result) => Some(result),
+                    Err(payload) if payload.is::<AppDies>() => None,
+                    Err(payload) => std::panic::resume_unwind(payload),
+                };
                 drop(lease);
                 drop(store);
                 fs::set_permissions(&links, fs::Permissions::from_mode(0o755)).unwrap();
@@ -1172,14 +1178,28 @@ mod tests {
                     "write_fails={write_fails}, cut {cut}: the change is marked undone by {:?}, but no undo finished",
                     target.reverted_by
                 );
-                if !died {
+                let Some(result) = undo else {
+                    cut += 1;
+                    continue;
+                };
+                if write_fails {
+                    let rows = store.list(50, Some("fixture")).unwrap();
+                    let restores: Vec<_> =
+                        rows.iter().filter(|row| row.kind == "restore").collect();
                     assert!(
-                        write_fails || undo_finished,
-                        "an Undo that is not cut off must finish"
+                        result.is_err()
+                            && target.reverted_by.is_none()
+                            && restores.len() == 1
+                            && restores[0].status == "failed",
+                        "an Undo whose write fails must fail and leave the change undoable: {result:?}"
                     );
-                    break;
+                } else {
+                    assert!(
+                        result.is_ok() && undo_finished,
+                        "an Undo that is not cut off must finish: {result:?}"
+                    );
                 }
-                cut += 1;
+                break;
             }
         }
     }
