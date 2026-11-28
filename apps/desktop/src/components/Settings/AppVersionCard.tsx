@@ -9,14 +9,7 @@ import { useEffect, useState } from "react";
 import { Info } from "lucide-react";
 import { Button } from "@skill-studio/ui";
 import type { AppVersion, UpdateStatus } from "@skill-studio/lib";
-import {
-  appVersion,
-  checkForUpdate,
-  getUpdateStatus,
-  installUpdate,
-  invokeErrorMessage,
-  onUpdateStatus,
-} from "../../lib/skill-api";
+import { invokeErrorMessage } from "../../lib/skill-command-error";
 import { useAppStore } from "../../store/appStore";
 import { SettingsCard } from "./SettingsCard";
 
@@ -56,6 +49,11 @@ function updateStatusTone(status: UpdateStatus): string {
 
 export function AppVersionCard() {
   const addToast = useAppStore((state) => state.addToast);
+  const appVersion = useAppStore((state) => state.appVersion);
+  const checkForUpdate = useAppStore((state) => state.checkForUpdate);
+  const getUpdateStatus = useAppStore((state) => state.getUpdateStatus);
+  const installUpdate = useAppStore((state) => state.installUpdate);
+  const onUpdateStatus = useAppStore((state) => state.onUpdateStatus);
   const [info, setInfo] = useState<AppVersion | null>(null);
   const [showNotes, setShowNotes] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ status: "up-to-date" });
@@ -77,7 +75,7 @@ export function AppVersionCard() {
     return () => {
       cancelled = true;
     };
-  }, [addToast]);
+  }, [addToast, appVersion]);
 
   useEffect(() => {
     let cancelled = false;
@@ -107,7 +105,7 @@ export function AppVersionCard() {
       cancelled = true;
       void unlisten.then((fn) => fn?.());
     };
-  }, [addToast]);
+  }, [addToast, getUpdateStatus, onUpdateStatus]);
 
   const handleCheckForUpdate = () => {
     setUpdateStatus({ status: "checking" });

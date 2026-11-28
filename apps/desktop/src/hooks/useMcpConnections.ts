@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { connectMcp, getMcpConnections, invokeErrorMessage } from "../lib/skill-api";
+import { connectMcp, getMcpConnections } from "../lib/skill-api";
+import { invokeErrorMessage } from "../lib/skill-command-error";
 
 export interface McpConnections {
   /** Agent ids that already declare the server; `null` until the first read returns. */

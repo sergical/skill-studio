@@ -7,11 +7,11 @@ import { homeDir } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
 import { isProjectScope } from "@skill-studio/lib";
 import {
-  invokeErrorMessage,
   registerSkillProjects,
   removeSkillProject,
   unregisterSkillProject,
 } from "../lib/skill-api";
+import { invokeErrorMessage } from "../lib/skill-command-error";
 import { useAppStore } from "../store/appStore";
 
 /** Resets the Skills scope to All when it is scoped to `path`, a folder that is no longer tracked.

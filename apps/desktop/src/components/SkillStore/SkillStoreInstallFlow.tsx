@@ -16,11 +16,11 @@ import {
   confirmAddSkillTrust,
   getAddMethodDefaults,
   getAddSkillOperation,
-  invokeErrorMessage,
   onAddSkillOperation,
   registerSkillProjects,
   startAddSkillOperation,
 } from "../../lib/skill-api";
+import { invokeErrorMessage } from "../../lib/skill-command-error";
 import {
   applyAddSkillOperationEvent,
   listenForAddSkillOperation,

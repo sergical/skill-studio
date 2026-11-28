@@ -10,7 +10,6 @@ import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, SyntheticEvent } f
 import { Button, Collapsible, CollapsiblePanel, cn } from "@skill-studio/ui";
 import { formatRelativeTime, shortSha } from "@skill-studio/lib";
 import type { HealthIssue, InstalledSkill, RecentlyUsedSkill } from "@skill-studio/lib";
-import { skillLocalEdits } from "../../lib/skill-api";
 import {
   conflictedSkillsNote,
   skillCanPark,
@@ -460,6 +459,7 @@ function UpdatesGroup({
   start: number;
 }) {
   const addToast = useAppStore((state) => state.addToast);
+  const skillLocalEdits = useAppStore((state) => state.skillLocalEdits);
   const [editedSkills, setEditedSkills] = useState<InstalledSkill[]>([]);
   const [isCheckingEdits, setIsCheckingEdits] = useState(false);
   const activeBatch = useActiveUpdateAll();

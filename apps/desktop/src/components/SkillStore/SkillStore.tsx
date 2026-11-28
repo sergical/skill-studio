@@ -8,12 +8,8 @@ import { SkillSearchBar } from "./SkillSearchBar";
 import { SkillBrowser } from "./SkillBrowser";
 import { SkillDetailPanel } from "./SkillDetailPanel";
 import { InstallProgressModal } from "./InstallProgressModal";
-import {
-  searchSkills,
-  getInstalledSkills,
-  getPopularSkills,
-  invokeErrorMessage,
-} from "../../lib/skill-api";
+import { searchSkills, getInstalledSkills, getPopularSkills } from "../../lib/skill-api";
+import { invokeErrorMessage } from "../../lib/skill-command-error";
 import type {
   SkillSearchResult,
   InstalledSkill,

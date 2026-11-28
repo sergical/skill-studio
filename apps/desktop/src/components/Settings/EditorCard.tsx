@@ -10,12 +10,7 @@ import { useEffect, useState } from "react";
 import { Check, Plus, SquarePen } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Button, RadioGroup, RadioGroupItem } from "@skill-studio/ui";
-import {
-  getEditorChoices,
-  setPreferredEditor,
-  type EditorChoices,
-  type EditorOption,
-} from "../../lib/skill-api";
+import type { EditorChoices, EditorOption } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
 import { SettingsCard } from "./SettingsCard";
 
@@ -40,6 +35,8 @@ function rowsFor(choices: EditorChoices): EditorRow[] {
 
 export function EditorCard() {
   const addToast = useAppStore((state) => state.addToast);
+  const getEditorChoices = useAppStore((state) => state.getEditorChoices);
+  const setPreferredEditor = useAppStore((state) => state.setPreferredEditor);
   const [choices, setChoices] = useState<EditorChoices | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -62,7 +59,7 @@ export function EditorCard() {
     return () => {
       cancelled = true;
     };
-  }, [addToast]);
+  }, [addToast, getEditorChoices]);
 
   const save = async (value: string | null) => {
     if (!choices) return;

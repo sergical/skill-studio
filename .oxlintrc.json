@@ -25,18 +25,10 @@
     "anti-slop/no-unsafe-dictionary-type": "error",
     "anti-slop/no-widen-then-assert": "error",
     "anti-slop/require-safety-comment-for-type-assertion": "error",
-    // React Compiler-family rules not already reached by categories.correctness
-    // (exhaustive-deps, purity, preserve-manual-memoization, etc. are already
-    // "error" via correctness). rules-of-hooks/hooks/no-deriving-state-in-effects
-    // found zero violations in src, so they go straight to "error".
+    // React Compiler-family rules that categories.correctness does not turn on.
     "react/rules-of-hooks": "error",
     "react/hooks": "error",
     "react/no-deriving-state-in-effects": "error",
-    // These fire on real code but the remaining findings need a human call
-    // (e.g. an effect keyed off a value only to retrigger, not to read it,
-    // or a raw useState setter deliberately named apart from a wrapped
-    // callback of the same base name), so they stay "warn" until someone
-    // works through them by hand instead of being silenced.
     "react/exhaustive-effect-dependencies": "error",
     "react/memo-dependencies": "error",
     "react/hook-use-state": "error",
@@ -62,23 +54,12 @@
       "rules": { "anti-slop/no-raw-form-elements": "off" }
     },
     {
-      // Layering rule (plan.md section 7): components go through the store,
-      // not straight to the IPC layer. The excludeFiles list is every
-      // component that already imported skill-api.ts directly on main as
-      // of unit 5.1; they're excluded so the rule doesn't block CI on
-      // pre-existing code. Tracked in the unit 5.1 report for a follow-up
-      // issue to move them onto the store.
+      // Layering rule: components go through the store, not straight to the
+      // IPC layer. The excludeFiles list is the components still to move.
+      // It only shrinks: do not add a file to it.
       "files": ["apps/desktop/src/components/**"],
       "excludeFiles": [
-        "apps/desktop/src/components/Activity/ActivityFilters.tsx",
-        "apps/desktop/src/components/Activity/SkillHistorySection.tsx",
         "apps/desktop/src/components/AddSkill/AddSkillSheet.tsx",
-        "apps/desktop/src/components/Home/HomeInboxGroups.tsx",
-        "apps/desktop/src/components/Settings/AppVersionCard.tsx",
-        "apps/desktop/src/components/Settings/CommandHealthCard.tsx",
-        "apps/desktop/src/components/Settings/EditorCard.tsx",
-        "apps/desktop/src/components/Settings/ProjectFoldersCard.tsx",
-        "apps/desktop/src/components/Settings/TelemetryCard.tsx",
         "apps/desktop/src/components/SkillDetail/LeftBehindDialog.tsx",
         "apps/desktop/src/components/SkillDetail/MakeIndependentCopyDialog.tsx",
         "apps/desktop/src/components/SkillDetail/ParkCopyDialog.tsx",
@@ -88,8 +69,6 @@
         "apps/desktop/src/components/SkillDetail/SkillCompareDialog.tsx",
         "apps/desktop/src/components/SkillDetail/SkillFrontmatterRepairDialog.tsx",
         "apps/desktop/src/components/SkillDetail/SkillPage.tsx",
-        "apps/desktop/src/components/SkillDetail/SkillPropertiesRail.tsx",
-        "apps/desktop/src/components/SkillDetail/SkillProposedEdits.tsx",
         "apps/desktop/src/components/SkillDetail/SkillRepairCard.tsx",
         "apps/desktop/src/components/SkillDetail/UninstallPluginDialog.tsx",
         "apps/desktop/src/components/SkillDetail/useSkillFrontmatterRepair.ts",
@@ -99,12 +78,11 @@
         "apps/desktop/src/components/SkillStore/InstalledSkillLifecycleActions.tsx",
         "apps/desktop/src/components/SkillStore/SkillDetailPanel.tsx",
         "apps/desktop/src/components/SkillStore/SkillStore.tsx",
-        "apps/desktop/src/components/SkillStore/SkillStoreInstallFlow.tsx",
-        "apps/desktop/src/components/ui/MaterializeRootDialog.tsx"
+        "apps/desktop/src/components/SkillStore/SkillStoreInstallFlow.tsx"
       ],
       "rules": {
         "no-restricted-imports": [
-          "warn",
+          "error",
           {
             "patterns": [
               {
@@ -117,12 +95,11 @@
       }
     },
     {
-      // Layering rule (plan.md section 7): the store never imports back
-      // into components.
+      // Layering rule: the store never imports back into components.
       "files": ["apps/desktop/src/store/**"],
       "rules": {
         "no-restricted-imports": [
-          "warn",
+          "error",
           {
             "patterns": [
               {

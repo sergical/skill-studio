@@ -20,8 +20,8 @@ import {
   unforkSkill,
   unparkSkills,
   updatePlugin,
-  invokeErrorMessage,
 } from "../../lib/skill-api";
+import { invokeErrorMessage } from "../../lib/skill-command-error";
 import {
   isLiveCopy,
   lifecycleTargetForDeployment,

@@ -27,7 +27,6 @@ import {
 import { Button } from "@skill-studio/ui";
 import { deploymentLabelFromAgentId, formatRelativeTime } from "@skill-studio/lib";
 import type { SkillEvent } from "@skill-studio/lib";
-import { listSkillEvents, openSkillPath, restoreSkillEvent } from "../../lib/skill-api";
 import { useAppStore } from "../../store/appStore";
 import {
   canRestoreSkillEvent,
@@ -108,6 +107,7 @@ function restoreDescription(event: SkillEvent): string {
 /** Owns the confirm-restore / force-restore-on-conflict flow for one event row. */
 function useRestoreEvent(event: SkillEvent, onRestored: () => void) {
   const addToast = useAppStore((state) => state.addToast);
+  const restoreSkillEvent = useAppStore((state) => state.restoreSkillEvent);
   const [isRestoring, setIsRestoring] = useState(false);
 
   const runRestore = async (force: boolean) => {
@@ -181,6 +181,7 @@ function EventActions({
   reasonId: string;
 }) {
   const addToast = useAppStore((state) => state.addToast);
+  const openSkillPath = useAppStore((state) => state.openSkillPath);
 
   const handleReveal = () => {
     if (!event.backup_path) return;
@@ -289,6 +290,7 @@ function EventRow({ event, onRestored }: { event: SkillEvent; onRestored: () => 
 export function SkillHistorySection() {
   const [events, setEvents] = useState<SkillEvent[] | null>(null);
   const addToast = useAppStore((state) => state.addToast);
+  const listSkillEvents = useAppStore((state) => state.listSkillEvents);
 
   useEffect(() => {
     let cancelled = false;
@@ -307,7 +309,7 @@ export function SkillHistorySection() {
     return () => {
       cancelled = true;
     };
-  }, [addToast]);
+  }, [addToast, listSkillEvents]);
 
   const refresh = () => {
     listSkillEvents()
