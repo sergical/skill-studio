@@ -8,9 +8,9 @@
         "CoreChecks",
         "CoreRecordsRestoreRow",
         "CoreClaims",
-        "CoreWritesInOneStep",
-        "CoreStartsRemovingFolder",
-        "CoreEndsRemovingFolder",
+        "CoreWritesAtOnce",
+        "CoreStartsWrite",
+        "CoreEndsWrite",
         "CoreWriteFails",
         "CoreReleasesAfterFailure",
         "CoreFinishesFailed",
@@ -21,20 +21,26 @@
     {
       "file": "crates/skill-studio-core/src/ops.rs",
       "function": "restore_write_dir",
-      "mirrors": ["CoreSwapsFolderIn", "CoreClosesPlan"],
+      "mirrors": ["CoreOpensSwapPlan", "CoreWritesAtOnce", "CoreWriteFails", "CoreClosesPlan"],
       "sha256": "638c1bfbd3a9811c02aa5c9227ebed6b914d54b8f02aa3a6575411034a14f447"
     },
     {
       "file": "crates/skill-studio-core/src/ops.rs",
       "function": "apply_backup_content",
-      "mirrors": ["CoreWritesInOneStep", "CoreSwapsFolderIn"],
+      "mirrors": ["CoreOpensSwapPlan", "CoreWritesAtOnce"],
       "sha256": "9684b1d4b757b4e254b0d07faaab21149696d56149c692c28d12339f1e342f34"
     },
     {
       "file": "crates/skill-studio-core/src/ops_remove.rs",
       "function": "remove_tree_best_effort",
-      "mirrors": ["CoreStartsRemovingFolder", "CoreEndsRemovingFolder"],
+      "mirrors": ["CoreStartsWrite", "CoreEndsWrite"],
       "sha256": "17b57ef1fb01bf0b44df6d7dbe728d03e19be9715643fc5350cf8e5d8d2d9d00"
+    },
+    {
+      "file": "crates/skill-studio-core/src/fsops.rs",
+      "function": "swap",
+      "mirrors": ["CoreOpensSwapPlan", "CoreWritesAtOnce", "CoreWriteFails"],
+      "sha256": "f5fc789f57cb9b5810bf768b40bd17d00452012bdf15bf72745efe72fad71ae7"
     },
     {
       "file": "crates/skill-studio-core/src/events.rs",
@@ -63,7 +69,7 @@
     {
       "file": "crates/skill-studio-core/src/ports.rs",
       "function": "begin_for",
-      "mirrors": ["YouAskCoreToUndo", "AnotherWriteStarts", "RecoveryReversesPlan"],
+      "mirrors": ["YouAskCoreToUndo", "AnotherWriteStarts", "RecoveryEnds"],
       "sha256": "a359348c748906d113bffa11318c223185143a916feb8040522ffdd1e5410301"
     },
     {
@@ -81,8 +87,14 @@
     {
       "file": "crates/skill-studio-core/src/journal.rs",
       "function": "reconcile_scope_journal",
-      "mirrors": ["RecoveryReversesPlan", "DesktopStartReversesPlan"],
+      "mirrors": ["RecoveryPutsSwappedFolderBack", "RecoveryClosesPlan", "RecoveryEnds"],
       "sha256": "3a278c4c522f045c2d5013106cfa752c03ec4457344f85edde5feb1d67ac0670"
+    },
+    {
+      "file": "crates/skill-studio-core/src/journal.rs",
+      "function": "reconcile",
+      "mirrors": ["RecoveryPutsSwappedFolderBack", "RecoveryClosesPlan"],
+      "sha256": "d3b922e07694e1d98d72db0603ff842f302112d87ccc2ee1076f2dcf8cb98ec7"
     },
     {
       "file": "crates/skill-studio-host/src/history.rs",
@@ -132,9 +144,6 @@
       "mirrors": [
         "DesktopChecksDrift",
         "DesktopRecordsRestoreRow",
-        "DesktopWritesInOneStep",
-        "DesktopRemovesLiveFiles",
-        "DesktopCopiesBackupIn",
         "DesktopWriteFails",
         "DesktopFinishesFailed",
         "DesktopFinishesDone"
@@ -145,9 +154,9 @@
       "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
       "function": "apply_inverse_op",
       "mirrors": [
-        "DesktopWritesInOneStep",
+        "DesktopWritesAtOnce",
         "DesktopRemovesLiveFiles",
-        "DesktopCopiesBackupIn",
+        "DesktopPutsOldFilesIn",
         "DesktopWriteFails"
       ],
       "sha256": "56356714b008c125606d5f19a8997d5cbe2d9891a8f406b2fca3f6e2fec610e7"
@@ -161,13 +170,19 @@
     {
       "file": "apps/desktop/src-tauri/src/skills/undo_files.rs",
       "function": "restore_from",
-      "mirrors": ["DesktopRemovesLiveFiles", "DesktopCopiesBackupIn"],
+      "mirrors": ["DesktopRemovesLiveFiles", "DesktopPutsOldFilesIn"],
       "sha256": "144dba55a3be67f9f0fc844355df25cb9ec87d9b172b1296838234d0bcfe25ff"
+    },
+    {
+      "file": "apps/desktop/src-tauri/src/skills/undo_files.rs",
+      "function": "symlink",
+      "mirrors": ["DesktopRemovesLiveFiles", "DesktopPutsOldFilesIn"],
+      "sha256": "9f56d30852509bed682ad7f7303aa338612296474fc4f53811e4ff4d2b00777d"
     },
     {
       "file": "apps/desktop/src-tauri/src/skills/event_store.rs",
       "function": "reconcile_at_startup",
-      "mirrors": ["DesktopStartMarksRowInterrupted"],
+      "mirrors": ["DesktopAppStarts", "RecoveryMarksRowInterrupted"],
       "sha256": "77fd3bab08bbbddc3a23bc80ff2538033375cec3612a429b4434a1eff6e915f1"
     },
     {
@@ -185,13 +200,13 @@
     {
       "file": "apps/desktop/src-tauri/src/lib.rs",
       "function": "reconcile_event_store_at_startup",
-      "mirrors": ["DesktopStartMarksRowInterrupted"],
+      "mirrors": ["DesktopAppStarts", "RecoveryMarksRowInterrupted"],
       "sha256": "c0744e4841981e9b5644459a433e184c58d9f0c1cb5e7e95c2d315a040d98c10"
     },
     {
       "file": "apps/desktop/src-tauri/src/lib.rs",
       "function": "reconcile_core_journal_at_startup",
-      "mirrors": ["DesktopStartReversesPlan"],
+      "mirrors": ["DesktopAppStarts", "RecoveryPutsSwappedFolderBack", "RecoveryClosesPlan"],
       "sha256": "5038187aa6ce88c27a5d5322ca76ded9b8e2ffed142e4510023efbe16df1fdac"
     }
   ]

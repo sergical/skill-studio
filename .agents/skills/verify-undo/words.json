@@ -2,8 +2,8 @@
   "rules": {
     "TypeOK": "Every value in the model stays one of its allowed values.",
     "NoStrandedUndo": "Once no write is running and the next write has done its recovery, a change is shown as undone only if an undo of it finished.",
-    "UndoneMeansFilesBack": "Every finished undo has the files back as they were before the change.",
-    "NoStrandedUndoBeyondIssue787": "Once no write is running and the next write has done its recovery, a change is shown as undone only if an undo of it finished. The one cause that issue 787 reports is left out.",
+    "UndoneMeansFilesBack": "An undo is recorded as finished only after its write of the files ran to the end, and nothing moves the files afterwards.",
+    "NoStrandedUndoBeyondIssue787": "Once no write is running and the next write has done its recovery, a change is shown as undone only if an undo of it finished. The two gaps that issue 787 reports are left out.",
     "FinishedUndoKeepsClaim": "A finished undo keeps its claim: the change stays shown as undone, so it cannot be undone a second time."
   },
   "steps": {
@@ -12,7 +12,6 @@
     "RecoveryReleasesClaim": "Recovery looks for claims held by restore rows that are pending or interrupted, and releases each one it finds.",
     "RecoveryMarksRowInterrupted": "Recovery marks a pending restore row interrupted.",
     "RecoveryDoneWithRows": "Recovery has no pending row left.",
-    "RecoveryReversesPlan": "Recovery reverses any unfinished journal plan and ends.",
     "CoreChecks": "The core reads the change and checks that it is not claimed and that its files did not change since.",
     "CoreRecordsRestoreRow": "The core backs up the live files and records the restore row as pending.",
     "CoreClaims": "The core claims the change: `reverted_by` gets the restore row's id.",
@@ -31,14 +30,16 @@
     "DesktopReleasesAfterFailure": "The desktop releases the claim.",
     "DesktopFinishesDone": "The desktop finishes the restore row as done.",
     "WriterDies": "The app dies: a crash, a force quit or a power cut.",
-    "CoreWritesInOneStep": "The core puts the files back in one atomic write.",
-    "CoreStartsRemovingFolder": "The core starts to remove the folder the change wrote, entry by entry.",
-    "CoreEndsRemovingFolder": "The core removes the rest of the folder.",
-    "CoreSwapsFolderIn": "The core swaps the old folder in. The journal plan of the swap is still open.",
-    "DesktopWritesInOneStep": "The desktop puts the files back in one atomic operation.",
-    "DesktopRemovesLiveFiles": "The desktop removes the live files, before it copies the backup in.",
-    "DesktopCopiesBackupIn": "The desktop copies the backup into place.",
-    "DesktopStartMarksRowInterrupted": "The desktop app starts and marks a pending row interrupted.",
-    "DesktopStartReversesPlan": "The desktop app starts and reverses an unfinished journal plan."
+    "DesktopRemovesLiveFiles": "The desktop removes the live files, before it puts the old ones in.",
+    "RecoveryPutsSwappedFolderBack": "Recovery puts back the folder that an unfinished swap replaced.",
+    "RecoveryClosesPlan": "Recovery marks the journal plan reversed.",
+    "RecoveryEnds": "The recovery pass ends.",
+    "CoreOpensSwapPlan": "The core records the folder swap in a journal plan.",
+    "CoreWritesAtOnce": "The core puts the files back in one operation.",
+    "CoreStartsWrite": "The core starts to write: the files are half way.",
+    "CoreEndsWrite": "The core finishes the write.",
+    "DesktopWritesAtOnce": "The desktop puts the files back in one operation.",
+    "DesktopPutsOldFilesIn": "The desktop puts the old files into place.",
+    "DesktopAppStarts": "The desktop app starts and begins its own recovery, which releases no claim."
   }
 }

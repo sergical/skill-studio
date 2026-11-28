@@ -16,8 +16,8 @@ shortest path to it.
 
 Undo from Activity, `skill-studio restore` or the MCP tool `restore_event`,
 for a change such as an update, a remove or an invocation change. This chart
-is the undo that swaps a whole folder back, as for an update. Every rule
-holds.
+is the undo that swaps a whole folder back, as for an update, with the swap
+landing at once. Every rule holds.
 
 ```mermaid
 ---
@@ -44,18 +44,18 @@ stateDiagram-v2
   s1 --> s0: the app dies or the undo is recorded as failed
   s1 --> s2: the change is marked undone
   s2 --> s3: the app dies
-  s2 --> s4: the old folder is swapped in
   s3 --> s1: you press Undo or you press Undo with Force
   s2 --> s1: a file write failed: the mark is cleared
-  s4 --> s3: the app dies
+  s2 --> s4: the files are put back
   s3 --> s0: the next write clears the mark (files not back)
+  s4 --> s3: the app dies
+  s4 --> s1: a file write failed: the mark is cleared
   s4 --> s5: the undo is recorded as finished
   s3 --> s6: the next write clears the mark (files back)
   s5 --> s1: you press Undo or you press Undo with Force
-  s4 --> s1: a file write failed: the mark is cleared
   s1 --> s6: the app dies or the undo is recorded as failed or Undo is refused: files changed since, it asks for Force
-  s1 --> s5: the app dies or Undo is refused: already undone
   s6 --> s1: you press Undo or you press Undo with Force
+  s1 --> s5: the app dies or Undo is refused: already undone
   s6 --> s0: the next write reverses the unsealed folder swap
   s1 --> s4: the change is marked undone
   class s0 teal
@@ -84,9 +84,9 @@ What to notice:
 ## A change the desktop wrote
 
 Undo from Activity for a change the desktop's own event store wrote, such as
-a link repair or a frontmatter repair made in the app. This chart is the undo
-that writes in one step, as for a link. The rule `NoStrandedUndo` breaks:
-the red state.
+a link repair or a frontmatter repair made in the app. This chart is the
+undo whose write lands at once. The rule `NoStrandedUndo` breaks: the red
+state.
 
 ```mermaid
 ---
@@ -171,11 +171,15 @@ The shortest path to the red state:
 
 - Steps that do not change what the user can see, such as a check that
   passes.
-- A recovery pass that starts when nothing is left to recover.
-- The other ways of writing the files. An undo that writes in two steps with
-  no journal (the core removing an installed folder, the desktop putting a
-  file back from a backup) adds one state to each chart: if the app dies
-  between the two steps, the files are half put back, and Undo is still
-  offered and asks for Force. The check covers these; a chart of them has
-  about 30 arrows.
+- A recovery pass that starts when nothing is left to recover. The core chart
+  also leaves out the desktop app starting again: it marks a cut-off undo and
+  reverses an unsealed folder swap, as the next write does, but it does not
+  clear the mark.
+- A write that is caught half way. Most undo writes are not one atomic
+  operation: the core removes an installed folder entry by entry, and the
+  desktop removes the live path before it puts the old one in. If the app
+  dies in between, the files are half put back and the change is still shown
+  as undone. After the next write clears the mark, Undo is offered again and
+  asks for Force. The check covers this; the charts would have about 30
+  arrows with it.
 - The charts use 2 Undo requests and 1 crash. The check uses 3 and 2.

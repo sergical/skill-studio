@@ -37,31 +37,32 @@ const refusal = (from) =>
   marked(from)
     ? "Undo is refused: already undone"
     : "Undo is refused: files changed since, it asks for Force";
-const reversed = (who) => `${who} reverses the unsealed folder swap`;
+const who = (v) => (v.job === "start" ? "the desktop app starts again and" : "the next write");
 
 const labels = {
   YouAskCoreToUndo: press,
   YouAskDesktopToUndo: press,
   AnotherWriteStarts: () => "another write starts",
+  DesktopAppStarts: () => "the desktop app starts again",
   RecoveryReleasesClaim: (from, to) =>
     from.revertedBy === to.revertedBy
       ? "the next write looks for a cut-off undo"
       : `the next write clears the mark (${filesAre(to)})`,
-  RecoveryMarksRowInterrupted: () => "the next write notes the cut-off undo",
-  RecoveryDoneWithRows: () => "the next write goes on",
-  RecoveryReversesPlan: (from, to) => {
-    if (from.files !== to.files) return reversed("the next write");
-    return stuck(to)
+  RecoveryMarksRowInterrupted: (from) => `${who(from)} notes the cut-off undo`,
+  RecoveryDoneWithRows: (from) => `${who(from)} goes on`,
+  RecoveryPutsSwappedFolderBack: (from) => `${who(from)} reverses the unsealed folder swap`,
+  RecoveryClosesPlan: (from) => `${who(from)} seals the reversal`,
+  RecoveryEnds: (from, to) =>
+    stuck(to)
       ? "the next write finds no undo record, so the mark stays"
-      : "the next write finds nothing to clear";
-  },
+      : `${who(from)} is done recovering`,
   CoreChecks: (from, to) => (to.pc === "idle" ? refusal(from) : "the checks pass"),
   CoreRecordsRestoreRow: () => "the undo is recorded",
   CoreClaims: () => "the change is marked undone",
-  CoreWritesInOneStep: () => "the files are put back",
-  CoreStartsRemovingFolder: () => "the folder is partly removed",
-  CoreEndsRemovingFolder: () => "the rest of the folder is removed",
-  CoreSwapsFolderIn: () => "the old folder is swapped in",
+  CoreOpensSwapPlan: () => "the folder swap is noted in the journal",
+  CoreWritesAtOnce: () => "the files are put back",
+  CoreStartsWrite: () => "the write of the files starts",
+  CoreEndsWrite: () => "the write of the files ends",
   CoreClosesPlan: () => "the swap is sealed",
   CoreWriteFails: () => "a file write fails",
   CoreReleasesAfterFailure: () => "a file write failed: the mark is cleared",
@@ -71,9 +72,9 @@ const labels = {
   DesktopClaims: () => "the change is marked undone",
   DesktopChecksDrift: () => "the files are checked",
   DesktopRecordsRestoreRow: () => "the undo is recorded",
-  DesktopWritesInOneStep: () => "the files are put back",
+  DesktopWritesAtOnce: () => "the files are put back",
   DesktopRemovesLiveFiles: () => "the live files are removed",
-  DesktopCopiesBackupIn: () => "the backup is copied in",
+  DesktopPutsOldFilesIn: () => "the old files are put in",
   DesktopWriteFails: () => "a file write fails",
   DesktopFinishesFailed: () => "the undo is recorded as failed",
   DesktopReleasesAfterFailure: (from) =>
@@ -81,8 +82,6 @@ const labels = {
       ? "a file write failed: the mark is cleared"
       : "Undo is refused: files changed since, it asks for Force",
   DesktopFinishesDone: () => "the undo is recorded as finished",
-  DesktopStartMarksRowInterrupted: () => "the desktop app starts again",
-  DesktopStartReversesPlan: () => reversed("the desktop app starts again and"),
   WriterDies: () => "the app dies",
 };
 
