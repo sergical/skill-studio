@@ -36,17 +36,18 @@ thinks A needs B.
 
 Strength decides where a link is shown. It is decided per line.
 
-| Strength      | Meaning                                       | Found by                                                                                                   | Shown                                       |
-| ------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
-| **Needs**     | A reads B's files or loads B before it starts | A relative path that resolves into B's folder; "load", "read", "first" before the name                     | Dialogs, skill page, map, `doctor`          |
-| **Hands off** | A runs B for a step, or sends the user to it  | `/b`, `pack:b`, the Skill tool with `"b"`, "invoke", "run", "use the b skill"                              | Dialogs, skill page, map                    |
-| **Mentions**  | A names B as related, optional, or see-also   | The name in backticks, bold, a link label, or "the b skill" with no stronger word; "if available"          | Skill page and map, on demand               |
-| **Lists**     | A is an index and B is one of its entries     | A line in a list item or table row of an index skill (rule below), unless the line is a Needs or Hands off | A badge on the index, never a line or alert |
+| Strength      | Meaning                                       | Found by                                                                                                                                                 | Shown                                       |
+| ------------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| **Needs**     | A reads B's files or loads B before it starts | A relative path that resolves into B's folder; "load", "read", "first" before the name                                                                   | Dialogs, skill page, map, `doctor`          |
+| **Hands off** | A runs B for a step, or sends the user to it  | `/b`, `pack:b`, the Skill tool with `"b"`, "invoke", "run", "use the b skill"                                                                            | Dialogs, skill page, map                    |
+| **Mentions**  | A names B as related, optional, or see-also   | The name in backticks, bold, a link label, or "the b skill" with no stronger word; "if available"                                                        | Skill page and map, on demand               |
+| **Lists**     | A is an index and B is one of its entries     | A list item or table row, or an indented line under one, in an index skill (rule below), whatever words it uses. Its prose lines keep their own strength | A badge on the index, never a line or alert |
 
 An **index** names at least 5 skills and at least half of its pack, and at
 least half of those lines are list items or table rows. On the checked
 packs this finds `ask-matt`, `ask-emil` and pstack's `poteto-help`, and
-rejects `executing-plans` (a workflow that hands off from prose).
+rejects `executing-plans` (a workflow that hands off from prose). Each name on a line is classified on its own, so one line
+can run one skill and mention another.
 
 ### 2.2 What is not a link
 
@@ -63,8 +64,9 @@ Each rule below comes from a wrong match in the evidence:
 - A back reference ("called by `azure-app-onboard`"). It is recorded on B's
   side as a Mentions, never as A needs B.
 
-Measured on 40 random links after these rules: 37 point at the right skill
-in the right direction. The detection is a heuristic, which is why the line
+Measured on 40 random links before the negation and command rules existed:
+37 pointed at the right skill in the right direction, and those two rules
+were written for the 3 that did not. The detection is a heuristic, which is why the line
 always travels with the link.
 
 ### 2.3 Targets
@@ -95,9 +97,20 @@ the answer fits the machine it runs on.
   same copy can resolve for one agent and not another. Project skills
   resolve inside the project's folder.
 - **Hands off (by name)**: B must be in the agent's own list: a copy it
-  reads, not parked, not turned off for it. A plugin install answers to its
+  reads, not parked, not turned off for it, and not hidden by the agent's
+  own settings (a Codex `skills.config` entry, an OpenCode permission),
+  which the listing module already reads. A file that opens is not proof
+  the agent can invoke the skill by name. When the settings cannot be read,
+  the state is Not known. A plugin install answers to its
   plugin's prefix too: Claude Code lists pstack's skills as
   `pstack:poteto-mode`.
+- **Per scope**: an agent runs a skill either globally or inside one
+  project. Each link is resolved per agent and per scope, for every project
+  the scan covered, using the copy that wins in that scope (the pi resolver
+  in `crates/skill-studio-core/src/listing_visibility/pi_listing.rs`
+  already picks it). A global wrapper whose target one project overrides
+  gets one state for that project and another for the rest. The report
+  names the scopes it covered.
 - **Renamed installs**: a copy installed under another name than its
   upstream name still answers to both. If A asks for `grilling` by name and
   the copy is installed as `matt-grilling`, the link is **Renamed**: the
@@ -111,7 +124,9 @@ Link states, worst first. A skill's card and row show its worst state:
 3. **Off**: parked, or turned off for this agent.
 4. **Elsewhere**: a copy exists in another agent's or another scope's
    folder only.
-5. **OK**.
+5. **Not known**: the agent's settings or the target's folder could not be
+   read.
+6. **OK**.
 
 **Not known is not none.** A plugin pack whose files Skill Studio cannot
 read, a folder the scan truncated, or a pack not yet checked upstream gives
@@ -131,17 +146,31 @@ the text of each skill folder through the scope port.
   (`from`, `to`, `strength`, `target_kind`, `state` per agent, `evidence`
   with file, line and text) and a summary (`skills`, `links`, `missing`,
   `not_known`).
-- **Plan reports**. The dry-run plans of `remove`, `park`, turning a skill
-  off for an agent, `pack remove`, and `pack add` with a subset gain a
-  `breaks` list: the Needs and Hands off links that the plan would turn
-  Missing or Off, direct and indirect (section 6.3). CLI, MCP and desktop
-  show the same list because it comes from the same plan.
+- **A preview before every change, on every surface.** Today remove and park
+  have no CLI dry run, and the MCP remove and park tools change files
+  directly; only turn-off has a check (`turn_off_check`). A read-only
+  preview is added for the exact action and targets: remove, park
+  (including batch park), turn-off, pack remove, and pack add with a
+  subset. The CLI takes `--check`, which prints it and changes nothing; the
+  MCP tools take `check: true` and return it. An interactive CLI run prints
+  it before asking to confirm. A `--json` or MCP caller gets it in the
+  response and calls again without `check` to apply. The desktop dialogs
+  show the same preview. Each preview has three lists, per agent and scope:
+  - `breaks`: skills that stay installed and have a Needs or Hands off link
+    the action turns from OK to anything else.
+  - `through`: skills that stay installed whose own links still resolve but
+    reach a skill in `breaks`, or the removed skill, through a chain of
+    Needs and Hands off links, so their workflow loses a step.
+  - `unmet`: skills the action installs whose Needs or Hands off targets
+    will not be reachable.
 - **Doctor**. One new issue kind, `MissingLink`, for a Needs or Hands off
   link in state Missing or Renamed. It shows in `doctor`, on Home, and in
   `skill-studio doctor --json`.
 - **Cost**. The checked packs hold 15 MB of Markdown across 316 skills, 5.2
-  MB for the largest pack. Links are computed per folder and kept by the
-  folder's existing content hash, so a scan rereads only changed folders.
+  MB for the largest pack. Extracted references are kept per folder by its
+  content hash, so a scan rereads only changed folders. Resolving them
+  against the inventory runs on every scan, because installing a target
+  changes the answer for an unchanged wrapper.
   Names are matched in one pass per file over all names in scope
   (`memchr`, already a core dependency; `aho-corasick` is in `Cargo.lock`
   through `regex` but would be a new direct dependency). The work rides the
@@ -152,10 +181,11 @@ the text of each skill folder through the scope port.
   profile plus the real-pack snapshots before slice 1 merges:
   - No-change rescan: zero extra file reads for links.
   - First scan: links add at most 10% to scan time.
-  - Dialogs: no disk work at click time. `breaks` comes from links already
-    in memory and from the checks the dialogs already run (`park_check`,
-    `turn_off_check`), so the 100 ms p95 input target in
-    `docs/spec-headless-performance-observability.md` still holds.
+  - Dialogs: to be measured. `ScanMemo` keeps a folder's result for at
+    most 10 minutes, and `park_check` scans when called, so a preview can
+    cost a scan. The target is the 100 ms p95 input budget in
+    `docs/spec-headless-performance-observability.md`; if a scan does not
+    fit, the dialog shows its plan first and fills in the preview.
   - Store: no extra network. The SKILL.md the detail panel already fetches
     is the only text read before install.
   - Map: layout runs only when the map opens, and again only when its shape
@@ -221,15 +251,16 @@ Listed by: ask-matt
 Removing it breaks: grill-me (directly), 5 others (a step each)
 ```
 
-`remove`, `park` and `pack remove` print the plan's `breaks` in their dry
-run and before they ask to confirm.
+`remove`, `park`, `turn-off` and `pack remove` take `--check`, which prints
+the preview of section 4 and changes nothing.
 
 ### 5.6 MCP
 
 One tool, `skill_links`, with the same input and output as the CLI's
 `--json`. Its description tells the agent to call it before it removes,
-parks or turns off a skill, and to show the user what would break. The plan
-tools already return `breaks`.
+parks or turns off a skill, and to show the user what would break. The
+remove, park, turn-off and pack tools take `check: true` and return the
+preview; their descriptions say to call with it first.
 
 ### 5.7 Every starting point, every action
 
@@ -243,16 +274,19 @@ and after undo.
 
 **Five rules hold for every combination:**
 
-1. **Before.** Every action Skill Studio runs shows, in its plan, the links
-   it would break and the links it would fix, per agent, directly and
-   through other skills. Nothing else.
+1. **Before.** Every action Skill Studio runs shows its preview (section
+   4): `breaks`, `through` and `unmet`, per agent and scope, and the links
+   it would fix. Nothing else.
 2. **After.** The next scan shows exactly the links that changed state. A
    change made outside Skill Studio shows the same way, marked "changed
    outside Skill Studio".
-3. **Predicted equals observed.** A plan's breaks and fixes equal the
-   difference between the scan before and the scan after.
-4. **Undo is exact.** Undo returns every link to its state before the
-   action.
+3. **Predicted equals observed.** Each preview list equals what the scans
+   before and after the action derive: links that left OK, chains of Needs
+   and Hands off links that reach them, unmet targets of installed skills,
+   and links that became OK.
+4. **Undo is exact for journaled actions.** Undoing a Skill Studio action
+   that recorded an event returns every link to its earlier state. A change
+   made outside Skill Studio cannot be undone; the next scan reports it.
 5. **Only real breaks warn.** Needs and Hands off links warn. Mentions,
    index entries and Not known never do.
 
@@ -275,28 +309,31 @@ and after undo.
 the action touches: one other skills need (`grilling`), one that needs
 others (`grill-me`), or an index or standalone skill (`ask-matt`).
 
-| Action                                                                                                    | On a skill others need                                                                                                                           | On a skill that needs others                                                                                                                                                                                            | Index or standalone                               |
-| --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| Install the whole pack                                                                                    | Clears any Missing rows it fixes                                                                                                                 | Offers only needs outside the pack (pstack's `/deslop`)                                                                                                                                                                 | Silent                                            |
-| Install one skill or a subset                                                                             | "Fixes N links" when installed skills were missing it                                                                                            | Offers everything it needs, through other skills too, ticked for Needs and Hands off                                                                                                                                    | Silent                                            |
-| Remove                                                                                                    | Lists every skill that stops working, per agent, direct and indirect; Keep or Remove anyway                                                      | Nothing breaks; silent                                                                                                                                                                                                  | Silent                                            |
-| Park, unpark                                                                                              | As Remove, worded "until you unpark"; unpark lists what it fixes                                                                                 | Silent                                                                                                                                                                                                                  | Silent                                            |
-| Turn off or on for one agent                                                                              | Lists what stops working in that agent only                                                                                                      | Silent                                                                                                                                                                                                                  | Silent                                            |
-| Edit SKILL.md in the editor                                                                               | Changing its own `name:` makes every skill that asks for it by name Renamed; the editor says so before save                                      | A new line naming a missing skill is marked in the editor and goes Missing after save; a typo is "Not found" with the nearest installed name offered; deleting the only line that names a skill drops the link silently | Silent                                            |
-| Edit outside Skill Studio                                                                                 | The same outcomes after the next scan, marked "changed outside"                                                                                  | Same                                                                                                                                                                                                                    | Silent                                            |
-| Make an independent copy or fork                                                                          | Same name: nothing breaks. New name: every skill that asks for the old name goes Renamed, listed in the plan                                     | Keeps its links                                                                                                                                                                                                         | Silent                                            |
-| Split                                                                                                     | Paths other skills read into the part that moves break; listed in the split plan                                                                 | Its own links move with the text that holds them                                                                                                                                                                        | Silent                                            |
-| Move between project and global                                                                           | Skills that read it by path go Elsewhere; listed                                                                                                 | Its path reads into the old scope's skills go Elsewhere; listed                                                                                                                                                         | Silent                                            |
-| Update one skill                                                                                          | If upstream renamed it, skills that ask by the old name go Renamed; listed in the update plan                                                    | "Now needs X" with Add, if upstream added a link; silent if it dropped one. Edited copies are skipped and keep their old links (existing rule)                                                                          | Silent                                            |
-| Update the pack                                                                                           | As above for each skill                                                                                                                          | The skills CLI does not add new upstream skills on update, so a skill that now hands off to a new one goes Missing; the plan says so and offers Add                                                                     | Index lists new names as dead entries until added |
-| Upstream deletes a skill                                                                                  | The local copy stays and nothing breaks. Check upstream says "Removed upstream; N of your skills still need it" so a cleanup does not break them | Silent                                                                                                                                                                                                                  | Silent                                            |
-| Switch the pack to a fork                                                                                 | If the fork lacks a skill, the skills that need it go Missing; in the plan                                                                       | Same                                                                                                                                                                                                                    | Silent                                            |
-| Remove the whole pack                                                                                     | Lists skills in other packs that need it (removing `cursor-team-kit` breaks pstack's `poteto-mode` step)                                         | Silent                                                                                                                                                                                                                  | Silent                                            |
-| Remove outside Skill Studio (Finder, `npx skills remove`, a dotagents `exclude` then `dotagents install`) | No warning is possible before. After the scan: new Missing rows, marked "changed outside", with Add                                              | Silent                                                                                                                                                                                                                  | Silent                                            |
-| A new agent appears (the user installs Codex)                                                             | Links are resolved for it; only its new breaks show                                                                                              | Same                                                                                                                                                                                                                    | Silent                                            |
-| Undo any action above                                                                                     | Every link back to its earlier state; rows clear                                                                                                 | Same                                                                                                                                                                                                                    | Same                                              |
+| Action                                                                                                    | On a skill others need                                                                                                                                                | On a skill that needs others                                                                                                                                                                                            | Index or standalone                               |
+| --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| Install the whole pack                                                                                    | Clears any Missing rows it fixes                                                                                                                                      | Offers only needs outside the pack (pstack's `/deslop`)                                                                                                                                                                 | Silent                                            |
+| Install one skill or a subset                                                                             | "Fixes N links" when installed skills were missing it                                                                                                                 | Offers everything it needs, through other skills too, ticked for Needs and Hands off                                                                                                                                    | Silent                                            |
+| Remove                                                                                                    | Lists every skill that stops working, per agent, direct and indirect; Keep or Remove anyway                                                                           | Nothing breaks; silent                                                                                                                                                                                                  | Silent                                            |
+| Park, unpark                                                                                              | As Remove, worded "until you unpark"; unpark lists what it fixes                                                                                                      | Silent                                                                                                                                                                                                                  | Silent                                            |
+| Turn off or on for one agent                                                                              | Lists what stops working in that agent only                                                                                                                           | Silent                                                                                                                                                                                                                  | Silent                                            |
+| Edit SKILL.md in the editor                                                                               | Changing its own `name:` makes every skill that asks for it by name Renamed; the editor says so before save                                                           | A new line naming a missing skill is marked in the editor and goes Missing after save; a typo is "Not found" with the nearest installed name offered; deleting the only line that names a skill drops the link silently | Silent                                            |
+| Edit outside Skill Studio                                                                                 | The same outcomes after the next scan, marked "changed outside"                                                                                                       | Same                                                                                                                                                                                                                    | Silent                                            |
+| Make an independent copy or fork                                                                          | Same name: nothing breaks. New name: every skill that asks for the old name goes Renamed, listed in the plan                                                          | Keeps its links                                                                                                                                                                                                         | Silent                                            |
+| Split                                                                                                     | Split copies the whole skill to the chosen agents and removes the shared copy, so an agent not chosen loses every name-based hand-off to it; listed in the split plan | Each chosen agent's copy keeps all its links                                                                                                                                                                            | Silent                                            |
+| Move between project and global                                                                           | Skills that read it by path go Elsewhere; listed                                                                                                                      | Its path reads into the old scope's skills go Elsewhere; listed                                                                                                                                                         | Silent                                            |
+| Update one skill                                                                                          | If upstream renamed it, skills that ask by the old name go Renamed; listed in the update plan                                                                         | "Now needs X" with Add, if upstream added a link; silent if it dropped one. Edited copies are skipped and keep their old links (existing rule)                                                                          | Silent                                            |
+| Update the pack                                                                                           | As above for each skill                                                                                                                                               | The skills CLI does not add new upstream skills on update, so a skill that now hands off to a new one goes Missing; the plan says so and offers Add                                                                     | Index lists new names as dead entries until added |
+| Upstream deletes a skill                                                                                  | The local copy stays and nothing breaks. Check upstream says "Removed upstream; N of your skills still need it" so a cleanup does not break them                      | Silent                                                                                                                                                                                                                  | Silent                                            |
+| Switch the pack to a fork                                                                                 | If the fork lacks a skill, the skills that need it go Missing; in the plan                                                                                            | Same                                                                                                                                                                                                                    | Silent                                            |
+| Remove the whole pack                                                                                     | Lists skills in other packs that need it. A plugin pack is removed by its agent, so its row shows the agent's command and the same list                               | Silent                                                                                                                                                                                                                  | Silent                                            |
+| Remove outside Skill Studio (Finder, `npx skills remove`, a dotagents `exclude` then `dotagents install`) | No warning is possible before. After the scan: new Missing rows, marked "changed outside", with Add                                                                   | Silent                                                                                                                                                                                                                  | Silent                                            |
+| A new agent appears (the user installs Codex)                                                             | Links are resolved for it; only its new breaks show                                                                                                                   | Same                                                                                                                                                                                                                    | Silent                                            |
+| Undo a journaled Skill Studio action                                                                      | Every link back to its earlier state; rows clear                                                                                                                      | Same                                                                                                                                                                                                                    | Same                                              |
 
-Each cell is the same five rules applied to that action. The worked
+Each cell is the same five rules applied to that action. The first delivery
+covers remove, park, turn-off and subset install on all three surfaces
+(section 9); the editor, fork, split, move, update and outside-change rows
+are the target for later slices. The worked
 examples below are single rows of this table.
 
 **A. Install `grill-me` from the Skill Store.**
@@ -326,10 +363,16 @@ with Add.
 **A2. Same install, Claude Code only, `grilling` already in
 `~/.agents/skills`.** Codex reads that folder, Claude Code does not. The
 footer says "`grilling` is installed, but Claude Code can't see it" and
-offers Add for Claude Code, which links the existing copy instead of
-downloading again.
+points to the agent switch on `grilling`'s page, which adds Claude Code to
+the existing copy. Pack add cannot do it: it skips a skill that is already
+installed in the scope.
 
-**B. Install from the CLI or an agent.**
+**B. Install from the CLI or an agent.** Today a named-subset
+`pack add --dry-run` does not read upstream text, and `pack show --remote`
+keeps only metadata. Slice 3 makes the plan fetch the source once (the same
+shallow clone `pack add` without `--skill` already makes), keep the
+checkout for the plan, and read the picked skills' Markdown. Offline,
+`unmet` is Not known. Then
 `skill-studio pack add mattpocock/skills --skill grill-me --dry-run` lists
 the plan and a `needs` line: "`grill-me` runs `grilling`, which is not
 installed. Add it with `--skill grilling`." A real run without it installs
@@ -362,7 +405,7 @@ dialog.
 card shows Missing, in `cursor/plugins`. Plugins are installed by the agent,
 so the row shows the agent's command to copy, as plugin packs already do.
 
-**H. A pack author checks a pack before publishing.**
+**H (later). A pack author checks a pack before publishing.**
 `skill-studio links --path ./skills` reads a local folder as a pack and
 lists every name that points at nothing in it, for example a skill renamed
 in one place and not another. Exit status 1 when any Needs or Hands off link
@@ -426,9 +469,9 @@ history around them are built for the purpose. Nothing reads a real home, a
 real project, or a real person's session history.
 
 **Real packs.** Pinned snapshots of four open-source packs, each kept with
-its own `LICENSE` file, in one shared folder (`fixtures/real-packs/`) that
-the core tests, the desktop harness, the CLI checks and the marketing site
-all read:
+its own `LICENSE` file, in `crates/skill-studio-core/tests/fixtures/real-packs/`,
+copied by `tools/refresh-real-packs.sh`, which the core tests, the desktop
+harness, the CLI checks and the marketing site all read:
 
 | Pack                             | Commit    | License, holder    | Markdown | Why it is in                                  |
 | -------------------------------- | --------- | ------------------ | -------: | --------------------------------------------- |
@@ -437,7 +480,11 @@ all read:
 | `obra/superpowers`               | `22f0b46` | MIT, Jesse Vincent |  0.35 MB | `pack:name` hand-offs                         |
 | `emilkowalski/skills`            | `64eb3de` | MIT, Emil Kowalski |  0.36 MB | Path reads, siblings, an index that lists all |
 
-- Only the skill folders' text files are kept. A README in the folder names
+- Only the skill folders' Markdown is kept, plus, for one real plugin
+  install of pstack, `cursor/plugins`' `.claude-plugin` marketplace and
+  plugin manifests and `cursor-team-kit`'s `deslop` skill, so the
+  cross-plugin link is checked once with its target present and once
+  absent. A README in the folder names
   each pack's source, commit and license, and one script refreshes a pack to
   a new commit. A refresh reruns the corpus test below, so a pack that
   changes its links changes the test on purpose, not by surprise.
@@ -469,12 +516,18 @@ from the user's setup, not from a pack:
 **Desktop harness** (`apps/desktop/src/dev/harness`): the fixture estate
 installs the real packs, set up the way real people install them:
 
-- `mattpocock/skills` without `pr`, `teach` and
-  `improve-codebase-architecture`, the way a dotagents `exclude` leaves them
-  out. `ask-matt` and `setup-matt-pocock-skills` still name them, so the map
-  shows real dead entries and one real Missing hand-off.
+- `mattpocock/skills` installed through skills.sh as a subset
+  (`npx skills add mattpocock/skills --skill …`) that leaves out `pr`,
+  `teach` and `improve-codebase-architecture`, with per-skill links for
+  Claude Code. `ask-matt` and `setup-matt-pocock-skills` still name them,
+  so the map shows real dead entries and one real Missing hand-off.
 - `setup-matt-pocock-skills` turned off for Codex, so Show for Codex lights
-  the 6 skills that send the user to it.
+  the skills that send the user to it. This works on a skills.sh install in
+  the per-skill-link layout. The core refuses it for a dotagents-managed
+  skill and splits nothing through a whole-folder link, so the demo does
+  not use either for this beat.
+- A project with a dotagents wildcard and `exclude`, for the left-out-skill
+  case, without turning anything off.
 - pstack installed from `cursor/plugins` without the `cursor-team-kit`
   plugin, so `poteto-mode`'s `/deslop` step shows as Missing, with Add from
   `cursor/plugins`.
@@ -498,8 +551,10 @@ was connected.
 1. Home lists `grilling` as not started in 30 days. The row says "Used
    through `grill-me`, 14 times" and offers no park.
 2. The user removes `grilling` from the skill page anyway. The dialog lists
-   the 6 skills that run it, and says `grill-me` does nothing without it.
-3. Packs → `mattpocock/skills` → Map. `grilling` lights its 6 users;
+   the skills in this install that run it, 5 because
+   `improve-codebase-architecture` is left out, and says `grill-me` does
+   nothing without it. The list and count come from the demo install.
+3. Packs → `mattpocock/skills` → Map. `grilling` lights its users;
    `ask-matt` wears a badge for the 3 skills it lists that are not
    installed. Show for Codex: the 6 skills that need
    `setup-matt-pocock-skills` turn red in Codex only. Then pstack's map:
@@ -522,23 +577,27 @@ layout code from the same snapshot.
 
 Each slice is one vertical change, under about 500 lines.
 
-1. The real-pack snapshots, core `skill_links` with the fixtures of
-   section 7, `skill-studio links`, the `skill_links` MCP tool, a
-   `flow_parity.rs` row, a `docs/flows.md` row, a "Link state" row in
-   `docs/state-machines.md`, and verification layers 1 to 5 of section 10.
-   Layer 5 runs before this slice merges, because it decides the per-agent
-   rule. A later slice that adds an action adds it to layer 2's action
-   generator, not new test cases.
-2. `breaks` in the remove, park, turn-off and pack remove plans; the dialogs
-   show it; the CLI dry runs print it. One e2e spec: removing `grilling`
-   lists its 6 users, and Keep changes nothing.
-3. The skill page Links card; Home's Missing links group; the
-   Not used in 30 days guard; `MissingLink` in `doctor`.
-4. Pack add and the Add Skill sheet offer what picked skills need.
+1. Links (PR #798): the real-pack snapshots, core `skill_links`, `skill-studio
+   links`, the `skill_links` MCP tool, a `docs/flows.md` row, and layers 1, 2
+   and 4 of section 10. Layer 5 runs before the per-agent rule is relied on
+   by a warning.
+2. The preview of section 4 (`breaks`, `through`, `unmet`) for remove,
+   park, turn-off and pack remove: CLI `--check`, MCP `check: true`, and the
+   desktop dialogs. One e2e spec: removing `grilling` lists the skills that
+   run it in the demo install, and Keep changes nothing. Layer 2 gains these
+   actions and the full property P2.
+3. Subset install: the Store and pack add show `unmet` and offer to add it,
+   with the plan reading fetched upstream text.
+4. The skill page Links card, Home's Missing links group, the Not used in
+   30 days guard, and `MissingLink` in `doctor`.
 5. The pack map, with the four layout tests and one e2e spec (select
    `grilling`, its users light up; Show for Codex, the users of
    `setup-matt-pocock-skills` show broken).
 6. The homepage scenario and the walkthrough section.
+
+Later, outside the first delivery: editor warnings and typo suggestions,
+the pack author check (flow H), marking outside changes, and previews for
+fork, split, move and update.
 
 ## 10. Outcome and how we prove it
 
@@ -565,16 +624,16 @@ Each dimension below comes from what Skill Studio already supports
 (`crates/skill-studio-core/src/harness.rs`, `identity.rs`,
 `docs/agent-skill-conventions.md`, `docs/capabilities.md`).
 
-| Dimension        | Values                                                                                                                                                                                                                                                                                                |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Agent            | Claude Code, Codex, OpenCode, pi, Cursor, Grok Build. Claude Code reads only its own folders; the other five also read `~/.agents/skills`.                                                                                                                                                            |
-| How it got there | skills.sh (`npx skills`, global and project lock); dotagents (named, wildcard, wildcard with `exclude`); a Claude Code plugin (pstack from `cursor/plugins`, listed as `pstack:…`); a Codex plugin; a port that renames (`sergical/pstack-skills`); Skill Studio Copy and fork; a folder made by hand |
-| Folder layout    | Shared folder only; per-skill links from an agent folder to the shared one; the whole agent folder linked to the shared one; separate copies per agent; a mix of these                                                                                                                                |
-| Scope            | Global; project; both, with the project copy shadowing the global one                                                                                                                                                                                                                                 |
-| State            | Parked; turned off for one agent; installed under another name; left out of a wildcard; two copies that differ, only one with the link                                                                                                                                                                |
-| Home location    | Default; `CLAUDE_CONFIG_DIR`, `PI_CODING_AGENT_DIR` or `GROK_HOME` set                                                                                                                                                                                                                                |
-| Surface          | Desktop, CLI, MCP                                                                                                                                                                                                                                                                                     |
-| Platform         | macOS on Apple silicon and Intel (what ships). Core and host tests also run on Linux in CI. Windows is not shipped and not covered.                                                                                                                                                                   |
+| Dimension        | Values                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Agent            | Claude Code, Codex, OpenCode, pi, Cursor, Grok Build. Claude Code reads only its own folders; the other five also read `~/.agents/skills`. Cursor also reads the Claude Code and Codex folders. Agent settings can hide a skill: a Codex `skills.config` entry, an OpenCode permission.                                                                             |
+| How it got there | skills.sh (`npx skills`, global and project lock); dotagents (named, wildcard, wildcard with `exclude`); a Claude Code plugin (pstack from `cursor/plugins`, listed as `pstack:…`); a Codex plugin; a port that renames (`sergical/pstack-skills`); Skill Studio Copy and fork; a folder made by hand; a Cursor or Grok Build plugin; pi standalone Markdown skills |
+| Folder layout    | Shared folder only; per-skill links from an agent folder to the shared one; the whole agent folder linked to the shared one; separate copies per agent; a mix of these                                                                                                                                                                                              |
+| Scope            | Global; project; both, with the project copy shadowing the global one                                                                                                                                                                                                                                                                                               |
+| State            | Parked; turned off for one agent; installed under another name; left out of a wildcard; two copies that differ, only one with the link                                                                                                                                                                                                                              |
+| Home location    | Default; `CLAUDE_CONFIG_DIR`, `PI_CODING_AGENT_DIR` or `GROK_HOME` set; the Codex and OpenCode home overrides the host resolves (`crates/skill-studio-host/src/discovery.rs`)                                                                                                                                                                                       |
+| Surface          | Desktop, CLI, MCP                                                                                                                                                                                                                                                                                                                                                   |
+| Platform         | macOS on Apple silicon and Intel (what ships). Core and host tests also run on Linux in CI. Windows is not shipped and not covered.                                                                                                                                                                                                                                 |
 
 ### 10.3 How each scenario is proven
 
@@ -594,11 +653,17 @@ test: the thing that decides whether the answer is right.
 Layer 2 does not list cases. It states what must hold after any action
 and lets random real-world sequences look for a counterexample:
 
-- **Properties, from section 5.7.** P1: for every link and agent, the scan's
-  state equals the oracle's. P2: a plan's breaks and fixes equal the
-  oracle's difference before and after the action. P3: after undo, the
-  oracle sees what it saw before. P4: nothing but a real break raises an
-  alert.
+- **Properties, from section 5.7.** P1: for every link, agent and scope,
+  the scan's state equals the oracle's. P2: each preview list equals what
+  the oracle derives from the states before and after the action (rule 3).
+  P3: after undoing a journaled action, the oracle sees what it saw before.
+  P4: nothing but a real break raises an alert. P1 runs from slice 1; P2
+  and P3 arrive with the previews in slice 2.
+- **What the oracle can and cannot judge.** It opens paths and lists
+  folders, so it judges path reads and folder visibility. It cannot judge
+  invocation by name when an agent setting hides a skill, so generated
+  setups do not change agent settings, and layer 5 judges those against
+  real agents.
 - **Inputs.** A starting point from section 5.7, a folder layout, and a
   random sequence of actions drawn from what a user or a tool can do next
   in that state: install from a real pack, remove, park, unpark, turn off
@@ -631,7 +696,10 @@ A prototype of this layer, run on 2026-11-27 against `mattpocock/skills`,
 
 Layer 5 runs each
 agent headless on its cheapest model, with the target skill present and
-absent, in each folder layout; a full pass costs under a dollar. Its table
+absent, in each folder layout and with a hiding setting; a full pass costs
+under a dollar. It counts a read or an invocation only from a completed
+tool result. The Claude Code usage reader records tool requests, which a
+failed read or a refused invocation also produces. Its table
 of results, with agent versions, goes in `docs/verification/skill-links.md`.
 Layer 5 also settles open question 1.
 
