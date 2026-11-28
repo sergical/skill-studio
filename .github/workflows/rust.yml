@@ -197,3 +197,15 @@ jobs:
           name: mutants-changed-report
           path: mutants.out
           if-no-files-found: ignore
+
+  # Model-checks Undo in every order of its steps, with a crash between any
+  # two (`.agents/skills/verify-undo/SKILL.md`). It fails when a rule breaks
+  # or when a watched function changed and the model was not read against it
+  # again. About 10 seconds: Java from the runner image, no Rust build.
+  verify-undo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: .agents/skills/verify-undo/check

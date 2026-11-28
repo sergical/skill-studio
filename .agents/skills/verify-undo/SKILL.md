@@ -44,6 +44,9 @@ or set `JAVA`). The first run downloads TLC 1.7.4 to
 `~/.cache/skill-studio/` and checks its SHA-256; set `TLA2TOOLS` to use a jar
 you already have. It needs no Rust build and writes nothing in the repo.
 
+CI runs it on every pull request: the `verify-undo` job in
+`.github/workflows/rust.yml`.
+
 Exit 0 means every rule holds, every deliberate break is caught, and the
 covered code is the text the model was confirmed against. Exit 1 means one of
 those is not true. There is no list of excused failures.
