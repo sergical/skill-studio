@@ -9,6 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { clearMocks } from "@tauri-apps/api/mocks";
 import { afterEach, expect, it } from "vitest";
 import { installMockTauri } from "./mock-tauri";
+import { scannerOwnerId } from "./scanned-deployment";
 import {
   buildHarnessSnapshot,
   deployment,
@@ -48,7 +49,7 @@ it("parking commit's global and project copies keeps them apart, and unpark puts
 it("Update all of a skill installed globally and in a project runs each install and clears both badges", async () => {
   const name = "sample";
   const globalOwner = `owner:v1/global/${name}`;
-  const projectOwner = `owner:v1/project/${encodeURIComponent(HARNESS_PROJECT)}/${name}`;
+  const projectOwner = scannerOwnerId("project", HARNESS_PROJECT, name);
   const copy = (owner: string, projectPath: string | null) => ({
     ...deployment({
       agent: "shared",
@@ -122,10 +123,10 @@ it("Update all runs one command per package manager and scope, by each copy's ow
       })),
     });
   const mixedOwners = {
-    global: "owner:v1/dotagents-global/mixed",
-    project: "owner:v1/skills-sh-project/mixed",
+    global: scannerOwnerId("global", null, "mixed"),
+    project: scannerOwnerId("project", HARNESS_PROJECT, "mixed"),
   };
-  const otherOwner = "owner:v1/dotagents-project/other";
+  const otherOwner = scannerOwnerId("project", HARNESS_PROJECT, "other");
   const base = buildHarnessSnapshot();
   const harness = installMockTauri({
     ...base,

@@ -142,6 +142,40 @@ export function scannerMismatches(deployment: Deployment): string[] {
   return problems;
 }
 
+/** The owner id the scanner gives a skills.sh or dotagents copy: core `ops.rs` `owner_id`. */
+export function scannerOwnerId(
+  scope: string,
+  projectPath: string | null | undefined,
+  name: string,
+): string {
+  if (scope === "global") return `owner:v1/global/${name}`;
+  return `owner:v1/project/${projectPath ? encodeIdPath(projectPath) : "-"}/${name}`;
+}
+
+/**
+ * Why the desktop refuses to update `copy` of `skillName` for `ownerId`, or `null`: the owner id
+ * must be the scanner's for this copy (`skill_ownership.rs` `parse_owner_id`), and the copy's id
+ * must still encode its scope and destination (`skill_lifecycle.rs` `revalidate_deployment`).
+ */
+export function updateTargetRefusal(
+  copy: Deployment,
+  skillName: string,
+  ownerId: string | null | undefined,
+): string | null {
+  if (!copy.id.startsWith("dep:v1/")) return `Not a copy id: ${copy.id}`;
+  const [idScope, , idDestination] = copy.id.slice("dep:v1/".length).split("/");
+  if (idScope !== copy.scope) {
+    return `Copy scope drifted: id has ${idScope}, snapshot has ${copy.scope}`;
+  }
+  if (idDestination !== copy.destination) {
+    return `Copy destination drifted: id has ${idDestination}, snapshot has ${copy.destination}`;
+  }
+  if (ownerId != null && ownerId !== scannerOwnerId(copy.scope, copy.project_path, skillName)) {
+    return `Update refused: ${ownerId} is not the owner of ${copy.path}`;
+  }
+  return null;
+}
+
 /** Fields that do not take part in identity, with the scanner's defaults. */
 const ROW_DEFAULTS = {
   owner_kind: "manual",

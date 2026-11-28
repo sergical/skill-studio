@@ -42,6 +42,7 @@ import {
   skill,
 } from "./skill-fixture";
 import { mockListingReport } from "./mock-listing";
+import { updateTargetRefusal } from "./scanned-deployment";
 import { mockSkillSessionsReport } from "./mock-sessions";
 import { mockPackAdd, mockPackChange, mockPackReport } from "./mock-packs";
 
@@ -1179,8 +1180,8 @@ export function installMockTauri(
           const skillsByName = new Map(currentSnapshot.skills.map((s) => [s.name, s]));
           // One run per target owner, as the real updater resolves each target to its owner's
           // copy (`resolve_lifecycle_target`): a target that names no copy is refused, and so is
-          // a copy whose owner kind has no updater, before any command starts (commands.rs
-          // `build_update_request`). The copy's own owner kind picks the package manager, since
+          // one the desktop would not resolve (`updateTargetRefusal`) or a copy whose owner kind
+          // has no updater, before any command starts (commands.rs `build_update_request`). The copy's own owner kind picks the package manager, since
           // one skill can be installed by skills.sh in one scope and dotagents in another.
           interface UpdateRun {
             name: string;
@@ -1206,10 +1207,11 @@ export function installMockTauri(
               target.deployment_id ? d.id === target.deployment_id : d.owner_id === target.owner_id,
             );
             const method = copy?.owner_kind;
-            if (!copy || (method !== "skills-sh" && method !== "dotagents")) {
-              errors[name] = copy
-                ? "Update is not available for this deployment owner"
-                : `Update refused: no copy of ${name} matches ${JSON.stringify(target)}`;
+            const refusal = copy && updateTargetRefusal(copy, name, target.owner_id);
+            if (!copy || refusal || (method !== "skills-sh" && method !== "dotagents")) {
+              errors[name] = !copy
+                ? `Update refused: no copy of ${name} matches ${JSON.stringify(target)}`
+                : (refusal ?? "Update is not available for this deployment owner");
               items.push({ skill: name, outcome: null });
               // react-doctor-disable-next-line react-doctor/async-await-in-loop -- refusals report in target order, as the real op does
               await progress(name);

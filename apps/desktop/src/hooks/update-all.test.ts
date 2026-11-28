@@ -583,6 +583,38 @@ describe("updateAllOutdatedSkills with edited skills", () => {
     expect(tally.skillsSucceeded).toBe(1);
   });
 
+  it("update_all_forks_no_skill_whose_global_copy_left_the_batch_and_only_updates_the_copy_still_in_it", async () => {
+    const calls: string[] = [];
+    const projectOnly = {
+      ...edited,
+      update_owner_ids: ["owner:v1/project/edited"],
+      update_owners: [
+        { owner_id: "owner:v1/project/edited", latest_commit: "next", latest_commit_at: null },
+      ],
+    };
+    await updateAllOutdatedSkills(
+      [projectOnly],
+      async (target) => {
+        calls.push(`pull ${target.deployment_id}`);
+        return pulled;
+      },
+      async (targets) => {
+        const owners = targets.map((target) => target.owner_id ?? "");
+        calls.push(`update ${owners.join(",")}`);
+        return succeedAll(["edited"]);
+      },
+      undefined,
+      {
+        names: new Set(["edited"]),
+        fork: async (target) => {
+          calls.push(`fork ${target.deployment_id}`);
+          return forkRecord;
+        },
+      },
+    );
+    expect(calls).toEqual(["update owner:v1/project/edited"]);
+  });
+
   it("update_all_counts_a_forked_skill_as_failed_when_its_other_copy_fails_or_reports_a_false_success", async () => {
     const tally = await updateAllOutdatedSkills(
       [twoOwners],

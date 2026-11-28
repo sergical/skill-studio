@@ -12,6 +12,7 @@ import type {
 } from "@skill-studio/lib";
 import {
   excludeForkedOwner,
+  forkableDeployment,
   forkTargetForSkill,
   ForkPullError,
   forkThenPull,
@@ -94,9 +95,15 @@ export async function updateAllOutdatedSkills(
   updatePluginInstall?: PluginInstallUpdater,
   shouldStop?: () => boolean | Promise<boolean>,
 ): Promise<UpdateAllTally> {
+  // An edited skill is forked only while the copy a fork replaces (its Global
+  // Universal owner) is still in this batch; its other copies update normally.
+  const forksEdit = (skill: (typeof skills)[number]) => {
+    if (forkEdited?.names.has(skill.name) !== true) return false;
+    const forkedOwnerId = forkableDeployment(skill)?.owner_id;
+    return !!forkedOwnerId && skill.update_owner_ids.includes(forkedOwnerId);
+  };
   const pullsUpstream = (skill: (typeof skills)[number]) =>
-    skillHasManagedUpdate(skill) &&
-    (skill.source_kind === "fork" || forkEdited?.names.has(skill.name) === true);
+    skillHasManagedUpdate(skill) && (skill.source_kind === "fork" || forksEdit(skill));
   const forks = skills.filter(pullsUpstream);
   // A skill forked because it was edited keeps its other owners (project or
   // per-harness copies) on the normal update; only the forked owner is replaced.

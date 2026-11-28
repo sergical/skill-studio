@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
+import { scannerOwnerId, withScannerIdentity } from "../src/dev/harness/scanned-deployment";
 import { HARNESS_PROJECT } from "../src/dev/harness/skill-fixture";
 import { setLatency } from "./app-harness";
 
@@ -61,36 +62,41 @@ test("Stop while Update all runs lets the running command finish and starts no o
 }) => {
   test.slow();
   const shown = await openUpdatesFromHome(page);
-  const { firstCommand, inProject } = await page.evaluate(
-    async ([projectPath]) => {
-      const dotagents = window
-        .__harness!.snapshot()
-        .skills.filter(
-          (skill) => skill.update_owner_ids.length > 0 && skill.source_kind === "dotagents",
-        )
-        .map((skill) => skill.name)
-        .sort();
-      // The last by name, so the global command runs first.
-      const name = dotagents[dotagents.length - 1];
-      // The project's own dotagents ledger owns the moved copy, and the update names that owner,
-      // so the second command resolves to a real copy as the desktop updater requires.
-      const projectOwner = `owner:v1/dotagents/${encodeURIComponent(projectPath)}/${name}`;
+  const { firstCommand, inProject, globalCopy } = await page.evaluate(() => {
+    const dotagents = window
+      .__harness!.snapshot()
+      .skills.filter(
+        (skill) => skill.update_owner_ids.length > 0 && skill.source_kind === "dotagents",
+      )
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    // The last by name, so the global command runs first.
+    const last = dotagents[dotagents.length - 1];
+    return {
+      firstCommand: dotagents.length - 1,
+      inProject: last.name,
+      globalCopy: last.deployments[0],
+    };
+  });
+  // The project's own dotagents ledger owns the moved copy: its id and owner id are the ones the
+  // scanner derives for a project install, so the desktop would run its command.
+  const projectOwner = scannerOwnerId("project", HARNESS_PROJECT, inProject);
+  const projectCopy = withScannerIdentity({
+    ...globalCopy,
+    scope: "project",
+    project_path: HARNESS_PROJECT,
+    path: `${HARNESS_PROJECT}/.agents/skills/${inProject}`,
+    owner_id: projectOwner,
+  });
+  await page.evaluate(
+    async ([name, copy, owner]) => {
       await window.__harness!.updateSkill(name, (skill) => ({
         ...skill,
-        deployments: skill.deployments.slice(0, 1).map((copy) => ({
-          ...copy,
-          id: `${copy.id}-project`,
-          scope: "project" as const,
-          project_path: projectPath,
-          path: `${projectPath}/.agents/skills/${name}`,
-          owner_id: projectOwner,
-        })),
-        update_owner_ids: [projectOwner],
-        update_owners: skill.update_owners.map((owner) => ({ ...owner, owner_id: projectOwner })),
+        deployments: [copy],
+        update_owner_ids: [owner],
+        update_owners: skill.update_owners.map((update) => ({ ...update, owner_id: owner })),
       }));
-      return { firstCommand: dotagents.length - 1, inProject: name };
     },
-    [HARNESS_PROJECT] as const,
+    [inProject, projectCopy, projectOwner] as const,
   );
   // Each command then takes 400 ms, so the first is still running when Stop lands.
   await setLatency(page, 400);

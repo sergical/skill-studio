@@ -8,7 +8,7 @@
 
 import { collectDashboardIssues } from "@skill-studio/lib";
 import type { InstalledSkill, SkillSnapshot } from "@skill-studio/lib";
-import { withScannerIdentity } from "./scanned-deployment";
+import { scannerOwnerId, withScannerIdentity } from "./scanned-deployment";
 import { buildHarnessSnapshot } from "./skill-fixture";
 
 export interface Persona {
@@ -134,7 +134,7 @@ const outdated = (skill: InstalledSkill): InstalledSkill => {
     };
   }
   if (!managed) return skill;
-  const ownerId = `owner:v1/${managed.owner_kind}/${skill.name}`;
+  const ownerId = scannerOwnerId(managed.scope, managed.project_path, skill.name);
   return {
     ...skill,
     deployments: skill.deployments.map((d) =>

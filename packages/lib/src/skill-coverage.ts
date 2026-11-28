@@ -56,13 +56,29 @@ export function isUnresolvedDeployment(deployment: Deployment): boolean {
  * actually see it.
  */
 function isOwnDirDeployment(skill: InstalledSkill, agent: AgentId): boolean {
-  if (skill.parked) return false;
   return ownDeployments(skill).some(
     (d) =>
       agentIdFromDeploymentLabel(d.agent) === agent &&
       (d.scope === "global" || d.scope === "project") &&
-      !d.disabled &&
-      !isUnresolvedDeployment(d),
+      isCopyReadByAgent(skill, d, agent),
+  );
+}
+
+/**
+ * Whether `agent` reads `deployment`, a copy of `skill` in a folder it reads: not when the skill
+ * is parked, the copy is disabled or its link does not resolve, or a shared copy switches `agent`
+ * off (`disabled_readers`). The per-copy half of `skillReadByAgent`.
+ */
+export function isCopyReadByAgent(
+  skill: InstalledSkill,
+  deployment: Deployment,
+  agent: AgentId,
+): boolean {
+  return (
+    !skill.parked &&
+    !deployment.disabled &&
+    !isUnresolvedDeployment(deployment) &&
+    (deployment.agent !== SHARED_AGENT_ID || !(deployment.disabled_readers ?? []).includes(agent))
   );
 }
 
@@ -213,17 +229,11 @@ export function resolveCompareSelection(
 
 /**
  * A broken, disabled, or parked shared-root deployment doesn't make a skill
- * visible via the shared root. When `reader` is set, a shared deployment that
- * explicitly disables that reader does not provide visibility to it.
+ * visible via the shared root, nor does one that explicitly disables `reader`.
  */
-function isSharedRootDeployment(skill: InstalledSkill, reader?: AgentId): boolean {
-  if (skill.parked) return false;
+function isSharedRootDeployment(skill: InstalledSkill, reader: AgentId): boolean {
   return ownDeployments(skill).some(
-    (d) =>
-      d.agent === SHARED_AGENT_ID &&
-      !d.disabled &&
-      !isUnresolvedDeployment(d) &&
-      (reader === undefined || !(d.disabled_readers ?? []).includes(reader)),
+    (d) => d.agent === SHARED_AGENT_ID && isCopyReadByAgent(skill, d, reader),
   );
 }
 
@@ -249,13 +259,11 @@ export function skillVisibleToAgent(
 /** A live plugin copy in `agent`'s own plugin cache. `skillVisibleToAgent` counts only the skill's
  * own global and project deployments. A plugin cache copy can come without its plugin's details. */
 function readsThroughPlugin(skill: InstalledSkill, agent: AgentId): boolean {
-  if (skill.parked) return false;
   return skill.deployments.some(
     (d) =>
       (d.plugin || d.scope === "plugin") &&
       agentIdFromDeploymentLabel(d.agent) === agent &&
-      !d.disabled &&
-      !isUnresolvedDeployment(d),
+      isCopyReadByAgent(skill, d, agent),
   );
 }
 
