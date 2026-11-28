@@ -50,9 +50,13 @@ export function useLoad<T>(
   options: LoadOptions<T> = {},
 ): Load<T> {
   const { keepPreviousData = false, onLoaded, onFailed } = options;
-  const [revision, setRevision] = useState(0);
+  // Each new key and each reload is its own attempt, so a load for a key seen before still
+  // reports loading until it lands.
+  const [attempt, setAttempt] = useState({ key, count: 0 });
+  if (attempt.key !== key) setAttempt({ key, count: attempt.count + 1 });
+  const count = attempt.key === key ? attempt.count : attempt.count + 1;
   const [settled, setSettled] = useState<Settled<T> | null>(null);
-  const run = key === null ? null : `${revision}:${key}`;
+  const run = key === null ? null : `${count}:${key}`;
 
   // An Effect Event, so it reads `run`, `key` and `load` from the render that scheduled the effect.
   const start = useEffectEvent((isCurrent: () => boolean) => {
@@ -93,7 +97,7 @@ export function useLoad<T>(
     data: shown?.data,
     error: shown?.error ?? null,
     isLoading: run !== null && settled?.run !== run,
-    reload: () => setRevision((current) => current + 1),
+    reload: () => setAttempt((current) => ({ key: current.key, count: current.count + 1 })),
     setData: (data) => {
       if (run !== null && key !== null) setSettled({ run, key, data, error: null });
     },
