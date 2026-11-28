@@ -11,6 +11,9 @@ export default defineConfig({
   plugins: [stylex.vite({ useCSSLayers: true }), react(), tailwindcss()],
   test: {
     include: ["src/**/*.browser.test.tsx"],
+    // CI draws these pages without a GPU. The first marketing focus test took 15 to 19 s there
+    // (measured 2026-11-28: clicks of 6.1 s and 4.2 s), so the 15 s default ran out mid-click.
+    testTimeout: 45_000,
     browser: {
       enabled: true,
       headless: true,
