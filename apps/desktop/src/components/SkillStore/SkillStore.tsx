@@ -2,7 +2,7 @@
 // SkillStore - Main skill discovery and management view
 // ============================================================================
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button, Drawer, Tabs, TabsContent, TabsList, TabsTrigger } from "@skill-studio/ui";
 import { SkillSearchBar } from "./SkillSearchBar";
 import { SkillBrowser } from "./SkillBrowser";
@@ -156,6 +156,8 @@ function useSkillStoreData(
   );
   const [morePages, setMorePages] = useState<MorePages | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  // Counts searches and retries, so a "Load more" answer that arrives after one is dropped.
+  const browseRequest = useRef(0);
   const first = firstPage.data;
   // Later pages count only while the first page they continue is still the one shown.
   const more = morePages !== null && morePages.first === first ? morePages : null;
@@ -171,19 +173,29 @@ function useSkillStoreData(
   );
 
   const handleSearch = (query: string) => {
+    browseRequest.current += 1;
+    setIsLoadingMore(false);
     setSearchQuery(query);
     setSubmittedQuery(query);
+  };
+
+  const retry = () => {
+    browseRequest.current += 1;
+    setIsLoadingMore(false);
+    firstPage.reload();
   };
 
   // A Promise chain, not a try/finally statement, so the compiler can still
   // optimize this component (it doesn't support `finally` clauses yet).
   const loadMore = () => {
     if (isLoadingMore || !hasMore || !first) return;
+    const request = browseRequest.current;
     setIsLoadingMore(true);
     const nextPage = (more?.page ?? 0) + 1;
 
     return getPopularSkills(nextPage, LIMIT)
       .then((response) => {
+        if (browseRequest.current !== request) return;
         setMorePages({
           first,
           skills: [...(more?.skills ?? []), ...response.skills],
@@ -192,13 +204,16 @@ function useSkillStoreData(
         });
       })
       .catch((err) => {
+        if (browseRequest.current !== request) return;
         addToast({
           type: "error",
           title: "Load More Failed",
           message: err instanceof Error ? err.message : "Failed to load more skills",
         });
       })
-      .finally(() => setIsLoadingMore(false));
+      .finally(() => {
+        if (browseRequest.current === request) setIsLoadingMore(false);
+      });
   };
 
   return {
@@ -209,7 +224,7 @@ function useSkillStoreData(
     hasMore,
     // Cleared while a new attempt runs, so "Try again" shows the loading state.
     browseError: isLoading ? null : firstPage.error,
-    retry: firstPage.reload,
+    retry,
     searchResultsWithStatus,
     handleSearch,
     loadMore,

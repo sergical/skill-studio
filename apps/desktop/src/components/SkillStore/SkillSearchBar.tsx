@@ -26,7 +26,6 @@ export function SkillSearchBar({
   const inputRef = useRef<HTMLInputElement>(null);
   const debounce = useDelayedCall();
 
-  // Each edit restarts the wait, so the search runs once the typing pauses.
   const change = (next: string) => {
     onChange(next);
     debounce.schedule(() => {
