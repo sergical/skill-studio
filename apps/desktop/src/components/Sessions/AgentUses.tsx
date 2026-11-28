@@ -27,9 +27,17 @@ interface AgentUsesProps {
   harness: string;
   /** Sessions the sessions report read for `harness`: any read means its history is readable. */
   sessionsRead: number;
+  /** Sessions read that used a skill: with any, a history without `harness` has not counted it yet. */
+  sessionsWithUse: number;
 }
 
-export function AgentUses({ snapshot, harness, sessionsRead }: AgentUsesProps) {
+/** What Uses in 30 days says when the history holds no use by the agent. */
+function noUsesText(sessionsRead: number, sessionsWithUse: number) {
+  if (sessionsWithUse > 0) return "Not counted yet.";
+  return sessionsRead > 0 ? "No uses in 30 days." : "No readable history.";
+}
+
+export function AgentUses({ snapshot, harness, sessionsRead, sessionsWithUse }: AgentUsesProps) {
   const [all, setAll] = useState(false);
   const openSkill = useAppStore((s) => s.openSkill);
   const rows = agentUses(snapshot, harness);
@@ -44,7 +52,7 @@ export function AgentUses({ snapshot, harness, sessionsRead }: AgentUsesProps) {
     >
       {!rows ? (
         <p className="m-0 text-small text-text-secondary">
-          {sessionsRead > 0 ? "No uses in 30 days." : "No readable history."}
+          {noUsesText(sessionsRead, sessionsWithUse)}
         </p>
       ) : (
         <>

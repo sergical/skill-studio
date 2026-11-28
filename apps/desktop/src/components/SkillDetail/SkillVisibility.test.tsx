@@ -271,6 +271,37 @@ it("says the list was not read when a refresh fails after an earlier report", as
   expect(row.textContent).not.toContain("Not in its list");
 });
 
+it("marks a listed agent's row as from an earlier read when a refresh fails", async () => {
+  const snapshot = buildHarnessSnapshot();
+  const cached = mockListingReport(snapshot, {});
+  const entry = cached.listings
+    .find((row) => row.harness === "codex")!
+    .entries.find((item) => item.path && item.scanned)!;
+  const skill = snapshot.skills.find((item) =>
+    item.deployments.some((copy) => copy.path === entry.path),
+  )!;
+  let read = false;
+  useAppStore.setState({
+    listingReports: {
+      [listingReportKey(currentListingRequest(null))]: { data: cached, refreshing: false },
+    },
+    readListing: async () => {
+      read = true;
+      throw new Error("Skill list read failed");
+    },
+  });
+  render(
+    <SkillVisibility
+      skill={skill}
+      deployment={skill.deployments.find((copy) => copy.path === entry.path)!}
+      listingScope="global"
+    />,
+  );
+  await vi.waitFor(() => expect(read).toBe(true));
+  await screen.findByText("Skill list read failed");
+  expect((await codexRow()).textContent).toContain("From an earlier read");
+});
+
 function onlyCopy(name: string, copy: InstalledSkill["deployments"][number]) {
   const snapshot = buildHarnessSnapshot();
   const skill = snapshot.skills.find((item) => item.name === name)!;

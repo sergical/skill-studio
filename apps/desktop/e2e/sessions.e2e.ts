@@ -77,10 +77,10 @@ test("Unused names the sessions read and leaves out a skill the 30-day history s
   );
 });
 
-test("Uses in 30 days says no uses, not no readable history, for an agent whose sessions were read", async ({
-  page,
-}) => {
-  // Claude Code's 3 sessions were read, Cursor's none; drop both agents' uses from the history.
+test("Uses in 30 days claims no uses only when the sessions read used none", async ({ page }) => {
+  // Claude Code's 3 sessions read include 1 that used a skill, OpenCode's 1 used none, Cursor's
+  // none were read. Drop all three agents' uses from the history, as on a first launch where the
+  // sessions report arrives before the history counts them.
   await page.evaluate(async () => {
     const harness = window.__harness!;
     const snapshot = harness.snapshot();
@@ -88,15 +88,25 @@ test("Uses in 30 days says no uses, not no readable history, for an agent whose 
       ...snapshot,
       invocations: snapshot.invocations.map((stats) => ({
         ...stats,
-        by_harness_30_days: { ...stats.by_harness_30_days, "claude-code": 0, cursor: 0 },
+        by_harness_30_days: {
+          ...stats.by_harness_30_days,
+          "claude-code": 0,
+          opencode: 0,
+          cursor: 0,
+        },
       })),
     });
   });
   const uses = page.getByRole("region", { name: "Uses in 30 days" });
-  await expect(uses).toContainText("No uses in 30 days");
-  await expect(uses).not.toContainText("No readable history");
+  await expect(uses).toContainText("Not counted yet");
+  await expect(uses).not.toContainText("No uses");
 
-  await page.getByRole("combobox", { name: "Agent" }).click();
+  const agent = page.getByRole("combobox", { name: "Agent" });
+  await agent.click();
+  await page.getByRole("option", { name: "OpenCode" }).click();
+  await expect(uses).toContainText("No uses in 30 days");
+
+  await agent.click();
   await page.getByRole("option", { name: "Cursor" }).click();
   await expect(uses).toContainText("No readable history");
 });

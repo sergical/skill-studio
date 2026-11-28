@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, expect, it, vi } from "vitest";
 import type { HarnessListing, SkillInvocationStats } from "@skill-studio/lib";
 import { mockListingReport } from "../../dev/harness/mock-listing";
 import { buildHarnessSnapshot } from "../../dev/harness/skill-fixture";
@@ -56,4 +56,18 @@ it("shows each skill's uses by this agent, and no readable history when the agen
 it("lists nothing as not fitting when Claude's model window is unknown", () => {
   const { container } = dontFit({ ...row("claude-code"), uses_default_context_window: true }, []);
   expect(container.textContent).toBe("");
+});
+
+it("previews on hover the same prompt that Copy agent prompt copies", async () => {
+  const written: string[] = [];
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: async (text: string) => void written.push(text) },
+  });
+  dontFit(row("codex"), []);
+  const copy = screen.getByRole("button", { name: "Copy agent prompt" });
+  fireEvent.click(copy);
+  await vi.waitFor(() => expect(written).toHaveLength(1));
+  expect(written[0]).toContain("alpha, beta");
+  expect(copy.getAttribute("title")).toBe(written[0]);
 });

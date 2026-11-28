@@ -398,7 +398,7 @@ function projectName(projectPath: string): string {
 }
 
 /** The shortest trailing part of each path that no other path in `paths` ends with. */
-function distinctProjectNames(paths: string[]): Map<string, string> {
+export function distinctProjectNames(paths: string[]): Map<string, string> {
   const names = new Map<string, string>();
   for (const path of paths) {
     const segments = pathSegments(path);

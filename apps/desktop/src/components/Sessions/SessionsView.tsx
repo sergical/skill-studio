@@ -484,7 +484,12 @@ export function SessionsView({ initialHarness, snapshot }: SessionsViewProps) {
               </div>
             )}
             {snapshot && (
-              <AgentUses snapshot={snapshot} harness={harness} sessionsRead={agent.sessions_read} />
+              <AgentUses
+                snapshot={snapshot}
+                harness={harness}
+                sessionsRead={agent.sessions_read}
+                sessionsWithUse={agent.sessions_with_use}
+              />
             )}
             {agent.records === "listing_and_uses" && (
               <Findings findings={findings} skills={skills} />

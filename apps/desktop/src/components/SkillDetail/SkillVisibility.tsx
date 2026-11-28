@@ -81,8 +81,17 @@ interface AgentState {
 }
 
 /** The skill-list cell: the state word, and where it comes from. Without a listing read, an
- * agent's absence from it says nothing. */
-function stateOf({ row, entry }: AgentRow, hasListing: boolean): AgentState {
+ * agent's absence from it says nothing; a row from an earlier report says so. */
+function stateOf(agent: AgentRow, hasListing: boolean, stale: boolean): AgentState {
+  const state = currentStateOf(agent, hasListing);
+  if (!stale || !agent.row) return state;
+  return {
+    ...state,
+    note: state.note ? `From an earlier read · ${state.note}` : "From an earlier read",
+  };
+}
+
+function currentStateOf({ row, entry }: AgentRow, hasListing: boolean): AgentState {
   if (!row || !entry)
     return { label: hasListing ? "Not in its list" : "List not read", cut: false, note: "" };
   if (row.evidence !== "preview") {
@@ -237,7 +246,10 @@ export function SkillVisibility({
 }: SkillVisibilityProps) {
   const project =
     listingScope === "global" ? null : (listingScope ?? deployment.project_path ?? null);
-  const { listings, hasListing, error } = useSkillVisibility(project, deployment.content_hash);
+  const { listings, hasListing, stale, error } = useSkillVisibility(
+    project,
+    deployment.content_hash,
+  );
   const clients = useClientRows(listings);
   const [open, setOpen] = useState<string | null>(initialClient ?? null);
   // The opened copy's entry leads. Any other copy counts: an agent that reads its own copy
@@ -278,7 +290,7 @@ export function SkillVisibility({
       </div>
       <ul aria-label="Agents" className="m-0 flex list-none flex-col p-0">
         {agents.map((agent) => {
-          const state = stateOf(agent, hasListing);
+          const state = stateOf(agent, hasListing, stale);
           const expandable = hasDetail(agent);
           const isOpen = expandable && open === agent.harness;
           // SAFETY: listing rows and the use history key agents by their catalog id.

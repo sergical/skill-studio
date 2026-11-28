@@ -17,6 +17,7 @@ import {
   AlertDialogTitle,
 } from "@skill-studio/ui";
 import type { PackActionReport, PackStep } from "@skill-studio/lib";
+import { distinctProjectNames } from "../../lib/skill-lifecycle-target";
 import { useAppStore } from "../../store/appStore";
 import type { PackIntent } from "../../store/appStore";
 import { advancePackPlan, plannedCount } from "./pack-plan-phase";
@@ -73,21 +74,7 @@ const scopeKey = (step: PackStep) =>
  */
 function scopeLabels(steps: PackStep[]): Map<string, string> {
   const projects = [...new Set(steps.map(scopeKey))].filter((key) => key !== "global");
-  const split = projects.map((project) => project.split("/").filter(Boolean));
-  const labels = new Map<string, string>([["global", "Global"]]);
-  projects.forEach((project, index) => {
-    const parts = split[index];
-    let depth = 1;
-    const suffix = (folders: string[]) => folders.slice(-depth).join("/");
-    while (
-      depth < parts.length &&
-      split.some((other, at) => at !== index && suffix(other) === suffix(parts))
-    ) {
-      depth += 1;
-    }
-    labels.set(project, suffix(parts) || project);
-  });
-  return labels;
+  return new Map([["global", "Global"], ...distinctProjectNames(projects)]);
 }
 
 const stepKey = (step: PackStep) => `${step.source}:${step.skill}:${scopeKey(step)}`;
