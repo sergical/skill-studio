@@ -98,6 +98,88 @@
           }
         ]
       }
+    },
+    {
+      // Effects and timers need judgment to use well, so interface code gets
+      // them only through the shared hooks in apps/desktop/src/hooks. "files"
+      // lists the directories that are already clean. It only grows: add a
+      // directory when its last effect and timer are gone. An override
+      // replaces a rule's options, so this block repeats the layering
+      // pattern from the components block above: without it these
+      // directories would lose that rule.
+      "files": ["apps/desktop/src/components/Settings/**", "apps/desktop/src/components/Packs/**"],
+      "excludeFiles": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/lib/skill-api", "@/lib/skill-api"],
+                "message": "Components read and write skills through the store, not skill-api.ts directly. Add or use a store action instead."
+              }
+            ],
+            "paths": [
+              {
+                "name": "react",
+                "importNames": ["useEffect", "useLayoutEffect"],
+                "message": "Effects live in apps/desktop/src/hooks. Load data with useLoad, listen to a backend event with useBackendEvent, or derive the value during render and do the work in the event handler."
+              }
+            ]
+          }
+        ],
+        "no-restricted-properties": [
+          "error",
+          {
+            "property": "useEffect",
+            "message": "Effects live in apps/desktop/src/hooks. Load data with useLoad, listen to a backend event with useBackendEvent, or derive the value during render and do the work in the event handler."
+          },
+          {
+            "property": "useLayoutEffect",
+            "message": "Effects live in apps/desktop/src/hooks. Load data with useLoad, listen to a backend event with useBackendEvent, or derive the value during render and do the work in the event handler."
+          },
+          {
+            "property": "setTimeout",
+            "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce."
+          },
+          {
+            "property": "setInterval",
+            "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce."
+          },
+          {
+            "property": "requestAnimationFrame",
+            "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce."
+          },
+          {
+            "property": "requestIdleCallback",
+            "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce."
+          }
+        ],
+        "no-restricted-globals": [
+          "error",
+          {
+            "checkGlobalObject": true,
+            "globals": [
+              {
+                "name": "setTimeout",
+                "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce."
+              },
+              {
+                "name": "setInterval",
+                "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce."
+              },
+              {
+                "name": "requestAnimationFrame",
+                "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce."
+              },
+              {
+                "name": "requestIdleCallback",
+                "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce."
+              }
+            ]
+          }
+        ]
+      }
     }
   ]
 }

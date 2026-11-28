@@ -6,9 +6,10 @@
 // sizes its buttons and reports a failure the same way.
 // ============================================================================
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Check, Copy, type LucideIcon } from "lucide-react";
 import { Button } from "@skill-studio/ui";
+import { useDelayedCall } from "../../hooks/useDelayedCall";
 
 interface SettingsCardProps {
   icon: LucideIcon;
@@ -100,8 +101,7 @@ interface CopyButtonProps {
 /** Copies `text` and confirms in place for a moment. */
 export function CopyButton({ text, label }: CopyButtonProps) {
   const [copied, setCopied] = useState(false);
-  const timer = useRef(0);
-  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const reset = useDelayedCall();
   return (
     <Button
       variant="outline"
@@ -109,8 +109,7 @@ export function CopyButton({ text, label }: CopyButtonProps) {
       onClick={() => {
         void navigator.clipboard.writeText(text).then(() => {
           setCopied(true);
-          window.clearTimeout(timer.current);
-          timer.current = window.setTimeout(() => setCopied(false), 1500);
+          reset.schedule(() => setCopied(false), 1500);
         });
       }}
     >
