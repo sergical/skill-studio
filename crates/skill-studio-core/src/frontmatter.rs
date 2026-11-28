@@ -229,7 +229,7 @@ fn plain_fields(block: &str) -> BTreeMap<String, String> {
 
 /// Skill name constraints from the agentskills.io spec: 1-64 chars,
 /// lowercase a-z0-9 and hyphens, no leading/trailing/consecutive hyphens.
-pub(crate) fn is_valid_skill_name(name: &str) -> bool {
+pub fn is_valid_skill_name(name: &str) -> bool {
     if name.is_empty() || name.len() > 64 {
         return false;
     }

@@ -8,7 +8,14 @@
 import { useId, useRef, useState } from "react";
 import type { KeyboardEvent, MouseEvent, PointerEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { calendarWeeks, formatDay, localDateKey, mondayLead, uses } from "@skill-studio/lib";
+import {
+  calendarWeeks,
+  formatCount,
+  formatDay,
+  localDateKey,
+  mondayLead,
+  uses,
+} from "@skill-studio/lib";
 import { useDelayedCall } from "../../hooks/useDelayedCall";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -86,7 +93,7 @@ function Grid({ slots, days, idPrefix, activeKey, selected, tint }: GridProps) {
         data-key={key}
         data-active={activeKey === key ? "" : undefined}
         data-selected={selected === key ? "true" : undefined}
-        className="flex h-8 cursor-default items-center rounded-[3px] bg-bg-tertiary px-2 text-caption tabular-nums text-text-secondary outline-offset-1 data-strong:text-text-primary data-today:font-medium group-focus-visible:data-active:outline-2 group-focus-visible:data-active:outline-text-secondary data-selected:z-1 data-selected:ring-1 data-selected:ring-text-primary data-selected:ring-offset-1 data-selected:ring-offset-bg-primary"
+        className="flex h-8 cursor-pointer items-center rounded-[3px] bg-bg-tertiary px-1.5 text-caption whitespace-nowrap tabular-nums text-text-secondary outline-offset-1 data-strong:text-text-primary data-today:font-medium group-focus-visible:data-active:outline-2 group-focus-visible:data-active:outline-text-secondary data-selected:z-1 data-selected:ring-1 data-selected:ring-text-primary data-selected:ring-offset-1 data-selected:ring-offset-bg-primary"
         data-strong={level >= 2 ? "" : undefined}
         data-today={key === todayKey ? "" : undefined}
         style={{ backgroundColor: shade(level, tint) }}
@@ -121,7 +128,7 @@ export function ActivityHeatmap({
   tint: tintProp,
 }: ActivityHeatmapProps) {
   const selected = selectedProp ?? null;
-  const tint = tintProp ?? "var(--color-accent)";
+  const tint = tintProp ?? "var(--color-data)";
   const idPrefix = useId().replace(/:/g, "");
   const [hoverKey, setHoverKey] = useState<string | null>(null);
   const [activeKey, setActiveKey] = useActiveKey(dates, selected);
@@ -219,6 +226,7 @@ export function ActivityHeatmap({
         setKeyboardOpen(true);
       }
     } else if ((e.key === "Enter" || e.key === " ") && onSelect) {
+      setKeyboardOpen(false);
       onSelect(selected === activeKey ? null : activeKey);
     } else if (e.key === "Escape" && (keyboardOpen || selected)) {
       if (keyboardOpen) setKeyboardOpen(false);
@@ -232,12 +240,13 @@ export function ActivityHeatmap({
 
   const card = shownKey ? renderCard(shownKey) : null;
   const total = Object.values(days).reduce((a, b) => a + b, 0);
+  const peak = Math.max(0, ...dates.map((key) => days[key] ?? 0));
 
   return (
     <div className="flex flex-col gap-1.5">
       <div className="grid grid-cols-7 gap-1 text-caption text-text-tertiary" aria-hidden="true">
         {WEEKDAYS.map((d) => (
-          <span key={d} className="px-2">
+          <span key={d} className="px-1.5">
             {d}
           </span>
         ))}
@@ -264,10 +273,11 @@ export function ActivityHeatmap({
         />
       </div>
       <div
-        className="flex items-center justify-end gap-1 text-caption text-text-tertiary"
+        className="flex items-center justify-end gap-1 text-caption text-text-tertiary tabular-nums"
         aria-hidden="true"
       >
-        <span className="mr-1">Less</span>
+        <span className="mr-1">Uses a day</span>
+        <span className="mr-0.5">0</span>
         {[0, 1, 2, 3, 4].map((level) => (
           <span
             key={level}
@@ -275,7 +285,7 @@ export function ActivityHeatmap({
             style={{ backgroundColor: shade(level, tint) }}
           />
         ))}
-        <span className="ml-1">More</span>
+        <span className="ml-0.5">{formatCount(peak)}</span>
       </div>
       {card &&
         createPortal(

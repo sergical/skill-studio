@@ -1,15 +1,21 @@
 import { useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { Button, Input } from "@skill-studio/ui";
-import { deploymentLabelFromAgentId, homeRelativePath } from "@skill-studio/lib";
-import type { HarnessListing, ListingEntry } from "@skill-studio/lib";
+import {
+  LISTING_STATE_LABEL,
+  deploymentLabelFromAgentId,
+  homeRelativePath,
+} from "@skill-studio/lib";
+import type { HarnessListing } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
+import { PageSection } from "../Shell/PageSection";
+import { SummaryCard, SummaryMetric } from "../ui/SummaryCard";
 import {
   budgetRule,
-  entrySource,
+  folderCounts,
   hasAssumedClaudeWindow,
+  hasBudgetEstimate,
   listedEntries,
-  sourceCounts,
 } from "./client-allocation";
 
 type Setting = NonNullable<HarnessListing["setting"]>;
@@ -55,7 +61,7 @@ function SettingRow({
       onSaved();
       addToast({
         type: "success",
-        title: reset ? "Override removed" : "Client configuration saved",
+        title: reset ? "Override removed" : "Setting saved",
       });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -84,7 +90,7 @@ function SettingRow({
       <span>
         <strong className="block text-small font-medium">{value}</strong>
         <span title={setting.file} className="block break-all text-caption text-text-secondary">
-          {setting.current == null ? "Client default" : homeRelativePath(setting.file)}
+          {setting.current == null ? "Default" : homeRelativePath(setting.file)}
         </span>
       </span>
       {setting.edit_revision ? (
@@ -105,6 +111,8 @@ function SettingRow({
         <Button
           size="sm"
           variant="ghost"
+          // -mr-2.5 cancels the ghost padding, so the icon ends on the section's right edge.
+          className="-mr-2.5"
           onClick={() => void open()}
           disabled={opening}
           aria-label={`Open configuration source for ${setting.key}`}
@@ -168,12 +176,6 @@ function SettingRow({
   );
 }
 
-function sourceExample(entry: ListingEntry) {
-  return (
-    entry.plugin ?? (entry.path && homeRelativePath(entry.path)) ?? "Recorded in the client listing"
-  );
-}
-
 export function ClientConfiguration({
   row,
   onSaved,
@@ -183,72 +185,108 @@ export function ClientConfiguration({
 }) {
   const name = deploymentLabelFromAgentId(row.harness);
   const entries = listedEntries(row);
-  const sources = sourceCounts(entries);
   const project = row.scope.scope === "global" ? null : row.scope.project;
   const preview = row.evidence === "preview";
   const basePrompt = row.base_prompt_skills != null;
   const shortened = entries.filter((e) => e.state === "truncated").length;
   const namesOnly = entries.filter((e) => e.state === "name_only").length;
   const omitted = row.entries.filter((e) => e.state === "omitted").length;
+  const described = entries.length - namesOnly;
+  // Skills the budget left out still count: the agent would have listed them.
+  const offered = entries.length + omitted;
   const session = row.observed_session;
   const assumedWindow = preview && hasAssumedClaudeWindow(row);
+  const fit = [
+    { state: "described" as const, count: described - shortened, mark: "bg-data" },
+    { state: "truncated" as const, count: shortened, mark: "bg-data/45" },
+    { state: "name_only" as const, count: namesOnly, mark: "bg-warning/45" },
+    { state: "omitted" as const, count: omitted, mark: "bg-warning" },
+  ].filter((part) => part.count > 0);
+  const estimate = hasBudgetEstimate(row);
+  const folders = folderCounts(entries);
+  const footnote = assumedWindow
+    ? `${name}’s settings give a percentage, and the model catalog has no window to apply it to.`
+    : basePrompt
+      ? row.notes.join(" ")
+      : !preview
+        ? `Skill Studio has no budget estimate for ${name}.`
+        : row.budget !== null &&
+          `Budget ${row.budget.toLocaleString()} ${row.budget_unit}${
+            row.context_window_tokens
+              ? ` of a ${row.context_window_tokens.toLocaleString()}-token context window`
+              : ""
+          }`;
   return (
     <>
-      <section className="rounded-lg border border-border-subtle bg-bg-secondary p-4">
-        <h2 className="text-heading font-semibold">
-          {basePrompt
-            ? `${row.budget_source} preview`
-            : !preview || row.budget === null
-              ? `Skills in ${name}`
-              : `${name} skill allocation`}
-        </h2>
-        <p className="mt-2 text-display font-semibold leading-tight tabular-nums">
-          {assumedWindow ? (
-            budgetRule(row)
-          ) : !preview || row.budget === null ? (
-            <>
-              {entries.length.toLocaleString()}{" "}
-              <span className="text-heading font-medium">
-                {entries.length === 1 ? "skill" : "skills"}{" "}
-                {basePrompt ? "in the skills section" : preview ? "in the estimate" : "found"}
-              </span>
-            </>
-          ) : (
-            <>
-              {row.budget.toLocaleString()}{" "}
-              <span className="text-heading font-medium">{row.budget_unit}</span>
-            </>
-          )}
-        </p>
-        {preview && row.budget !== null && !assumedWindow && (
+      <SummaryCard title={basePrompt ? `${row.budget_source} preview` : `What ${name} sees`}>
+        {assumedWindow ? (
+          <SummaryMetric value={budgetRule(row)} unit="budget, model window unknown" />
+        ) : estimate ? (
+          <SummaryMetric
+            value={`${described.toLocaleString()} of ${offered.toLocaleString()}`}
+            unit={`${offered === 1 ? "skill keeps" : "skills keep"} a description`}
+          />
+        ) : (
+          <SummaryMetric
+            value={entries.length.toLocaleString()}
+            unit={`${entries.length === 1 ? "skill" : "skills"} ${
+              basePrompt
+                ? "in the skills section"
+                : preview
+                  ? "in the estimate"
+                  : folders.length === 1
+                    ? `in ${homeRelativePath(folders[0][0])}`
+                    : "in its folders"
+            }`}
+          />
+        )}
+        {estimate && fit.length > 1 && (
+          <>
+            <div
+              role="img"
+              aria-label={fit
+                .map((part) => `${LISTING_STATE_LABEL[part.state]} ${part.count}`)
+                .join(", ")}
+              className="mt-4 flex h-2 gap-px overflow-hidden rounded-full bg-bg-tertiary"
+            >
+              {fit.map((part) => (
+                <span key={part.state} className={part.mark} style={{ flex: part.count }} />
+              ))}
+            </div>
+            <ul aria-hidden className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-small">
+              {fit.map((part) => (
+                <li key={part.state} className="flex items-center gap-1.5 text-text-secondary">
+                  <span className={`size-2 rounded-full ${part.mark}`} />
+                  {LISTING_STATE_LABEL[part.state]}
+                  <span className="text-text-primary tabular-nums">{part.count}</span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+        {!preview && folders.length > 1 && (
+          <ul aria-label="Folders" className="mt-4 flex flex-col gap-1 text-small">
+            {folders.slice(0, 5).map(([folder, count]) => (
+              <li key={folder} className="flex items-baseline gap-3">
+                <span className="w-8 text-right text-text-primary tabular-nums">{count}</span>
+                <span className="min-w-0 truncate text-text-secondary" title={folder}>
+                  {homeRelativePath(folder)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {footnote && <p className="mt-4 text-small text-text-secondary">{footnote}</p>}
+        {session && (
           <p className="mt-1 text-small text-text-secondary">
-            {budgetRule(row)}
-            {row.context_window_tokens
-              ? ` · ${row.context_window_tokens.toLocaleString()}-token context window`
+            Last session listed {session.listed} skills
+            {session.model ? ` · ${session.model}` : ""}
+            {session.at && Number.isFinite(Date.parse(session.at))
+              ? ` · ${new Date(session.at).toLocaleString()}`
               : ""}
           </p>
         )}
-        <p className="mt-3 border-t border-border-subtle pt-2.5 text-small">
-          {assumedWindow ? (
-            <>
-              Model window unknown. {name}’s settings give a percentage. The model catalog could not
-              confirm how many characters that allows.
-            </>
-          ) : basePrompt ? (
-            row.notes.join(" ")
-          ) : !preview ? (
-            `From folders ${name} reads in this scope.`
-          ) : (
-            <>
-              Estimated listing · <strong>{entries.length} entries</strong>
-              {shortened ? ` · ${shortened} shortened` : ""}
-              {namesOnly ? ` · ${namesOnly} name only` : ""}
-              {!shortened && !namesOnly && entries.length > 0 ? " · All descriptions fit" : ""}
-              {omitted ? ` · ${omitted} left out` : ""}
-            </>
-          )}
-        </p>
-      </section>
+      </SummaryCard>
       {row.base_prompt_skills && (
         <details className="rounded-md border border-border-subtle px-3 py-2">
           <summary className="cursor-pointer text-small">Preview the skills section</summary>
@@ -258,8 +296,7 @@ export function ClientConfiguration({
         </details>
       )}
       {row.setting && (
-        <section aria-label="Effective settings">
-          <h3 className="mb-2 text-heading font-semibold">Effective settings</h3>
+        <PageSection title={`${name} settings`}>
           {row.configured_model && (
             <div className="grid grid-cols-[minmax(9rem,1fr)_minmax(9rem,1.1fr)_auto] gap-3 border-t border-border-subtle py-2.5 text-small">
               <span>Configured model</span>
@@ -284,7 +321,7 @@ export function ClientConfiguration({
                     : null
             }
             setting={row.setting}
-            label="Listing budget"
+            label="Skill list budget"
             value={budgetRule(row)}
             project={project}
           />
@@ -296,7 +333,7 @@ export function ClientConfiguration({
               onSaved={onSaved}
               inputValue={row.description_char_limit}
               setting={row.description_limit_setting}
-              label="Per-skill description"
+              label="Description limit"
               value={`${row.description_char_limit.toLocaleString()} characters`}
               project={project}
             />
@@ -306,74 +343,7 @@ export function ClientConfiguration({
               Managed by chezmoi. Edit the source, then run <code>chezmoi apply</code>.
             </p>
           )}
-        </section>
-      )}
-      {preview && (
-        <section aria-label="Listing sources">
-          <h3 className="text-heading font-semibold">
-            Where the {entries.length} entries come from
-          </h3>
-          <div className="mt-2 divide-y divide-border-subtle rounded-md border border-border-subtle px-3">
-            {(["Skill folder", "Plugin", "Session record"] as const).map((source) => {
-              const count = sources[source];
-              const title = {
-                "Skill folder": "Scanned skill folders",
-                Plugin: "Scanned plugin entries",
-                "Session record": "Added from session records",
-              }[source];
-              const heading = (
-                <span className="inline-flex w-[calc(100%-1.5rem)] justify-between text-small">
-                  <span>{title}</span>
-                  <strong className="tabular-nums">{count}</strong>
-                </span>
-              );
-              if (!count)
-                return (
-                  <div key={source} className="py-1.5 pl-4 text-text-tertiary">
-                    {heading}
-                  </div>
-                );
-              return (
-                <details key={source} className="py-1.5">
-                  <summary className="cursor-pointer">{heading}</summary>
-                  <div className="my-2 ml-4 space-y-1.5">
-                    {source === "Session record" && (
-                      <p className="text-caption text-text-secondary">
-                        The client listed these entries in a recorded session. The folder scan could
-                        not attribute them to an installation.
-                      </p>
-                    )}
-                    {entries
-                      .filter((e) => entrySource(e) === source)
-                      .slice(0, 3)
-                      .map((e) => (
-                        <p className="text-small" key={e.name + (e.path ?? "")}>
-                          {e.name}{" "}
-                          <span className="break-all text-caption text-text-secondary">
-                            {sourceExample(e)}
-                          </span>
-                        </p>
-                      ))}
-                    {count > 3 && (
-                      <p className="text-caption text-text-secondary">
-                        3 of {count} shown. Browse all entries below.
-                      </p>
-                    )}
-                  </div>
-                </details>
-              );
-            })}
-          </div>
-        </section>
-      )}
-      {session && (
-        <p className="text-small text-text-secondary">
-          Last recorded listing · {session.listed} entries
-          {session.model ? ` · ${session.model}` : ""}
-          {session.at && Number.isFinite(Date.parse(session.at))
-            ? ` · ${new Date(session.at).toLocaleString()}`
-            : ""}
-        </p>
+        </PageSection>
       )}
     </>
   );

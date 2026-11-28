@@ -1,5 +1,5 @@
 // ============================================================================
-// TelemetryCard - Settings' "Telemetry" card: the switch for crash reports,
+// TelemetryCard - Settings' "Telemetry" section: the switch for crash reports,
 // operation timings, WebView errors, and screen performance. Off in the registry by default; the
 // welcome screen offers it on and writes the user's explicit choice; this
 // card lets the user change it later - see the Rust `telemetry_commands` and
@@ -7,11 +7,10 @@
 // can't carry.
 // ============================================================================
 
-import { Bug } from "lucide-react";
 import { useLoad } from "../../hooks/useLoad";
 import { useAppStore } from "../../store/appStore";
 import { SwitchControl } from "../ui/SwitchControl";
-import { SettingsCard } from "./SettingsCard";
+import { PageSection } from "../Shell/PageSection";
 
 export function TelemetryCard() {
   const addToast = useAppStore((state) => state.addToast);
@@ -39,20 +38,22 @@ export function TelemetryCard() {
   };
 
   return (
-    <SettingsCard
-      icon={Bug}
+    <PageSection
       title="Telemetry"
-      description="Sends where in its own code a crash or error happened, how long each action took, and how fast each screen loads and responds. Skill Studio removes everything sensitive first: no skill names, files, paths, or machine name. It uses this data only to improve the app."
-    >
-      <label className="flex h-9 cursor-pointer items-center gap-2 px-2 text-body text-text-secondary">
-        <span className="flex-1">Send crash and performance data</span>
+      meta={
         <SwitchControl
           checked={enabled}
           onCheckedChange={toggle}
           disabled={telemetry.isLoading}
           ariaLabel="Telemetry"
         />
-      </label>
-    </SettingsCard>
+      }
+    >
+      <p className="m-0 max-w-prose text-small text-pretty text-text-tertiary">
+        Sends crash and error locations in Skill Studio's own code, how long each action took, and
+        how fast each screen responds. Skill names, files, paths and the machine name are removed
+        before it leaves this Mac.
+      </p>
+    </PageSection>
   );
 }

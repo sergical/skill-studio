@@ -1,5 +1,5 @@
 // ============================================================================
-// SkillListSelectionBar - The docked bar on Home and Skills that appears once
+// SkillListSelectionBar - The docked bar on Skills that appears once
 // any row is checked. One skill: its name, its fix, Open, then the other
 // actions. Several: the count and the bulk actions (Park/Unpark, Invocation,
 // Update, Pack, Remove). Pack writes the selected skills into a new folder
@@ -36,7 +36,7 @@ import { useSkillBulkActions } from "./useSkillBulkActions";
 
 interface SkillListSelectionBarProps {
   /** The project Pack takes each skill's copy from: the project the owning list is scoped to,
-   * or null for the home. Passed in, not read from the store, because Home shows the bar too. */
+   * or null for the home folder. */
   packProjectPath: string | null;
   /** The skills whose rows are checked, in list order. */
   selectedSkills: InstalledSkill[];

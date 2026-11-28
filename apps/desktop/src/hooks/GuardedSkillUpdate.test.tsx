@@ -5,12 +5,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { Toaster, toast } from "sonner";
-import { HomeInboxGrid } from "../components/Home/HomeInboxGroups";
-import { computeHomeGroups } from "../components/Home/home-inbox-data";
 import { runHeaderUpdate } from "../components/SkillDetail/skill-page-actions";
+import { useSkillBulkActions } from "../components/SkillList/useSkillBulkActions";
 import { updatePluginInstall } from "./skillBatchUpdates";
 import { Button } from "@skill-studio/ui";
 import { deployment, skill } from "../dev/harness/skill-fixture";
+import type { InstalledSkill } from "@skill-studio/lib";
 import { useGuardedSkillUpdate } from "./useGuardedSkillUpdate";
 
 const shared = {
@@ -84,6 +84,16 @@ function Update() {
   );
 }
 
+function SelectionUpdate({ skills }: { skills: InstalledSkill[] }) {
+  const { run } = useSkillBulkActions(() => {});
+  return (
+    <>
+      <Button onClick={() => void run({ kind: "update" }, skills)}>Update selection</Button>
+      <Toaster />
+    </>
+  );
+}
+
 afterEach(() => {
   cleanup();
   clearMocks();
@@ -110,7 +120,7 @@ it("fork and update reports a failed pull and still updates the plugin instead o
   expect(pluginUpdates).toBe(1);
 });
 
-it("Home Update all displays both plugin failures instead of discarding the second reason", async () => {
+it("Skills selection Update displays both plugin failures instead of discarding the second reason", async () => {
   const updates = ["alpha", "beta"].map((name) =>
     skill({
       name,
@@ -145,44 +155,12 @@ it("Home Update all displays both plugin failures instead of discarding the seco
       throw new Error(String(args.pluginId).startsWith("alpha") ? "alpha refused" : "beta refused");
     throw new Error(`unexpected ${command}`);
   });
-  const noop = () => {};
-  render(
-    <>
-      <HomeInboxGrid
-        groups={{ ...computeHomeGroups(undefined), updates }}
-        live={{ ...computeHomeGroups(undefined), updates }}
-        starts={{ broken: 0, warn: 0, upd: 0, unused: 2, rec: 2 }}
-        filter={null}
-        onClearFilter={noop}
-        isGroupVisible={(id) => id === "upd"}
-        isGroupExpanded={() => true}
-        toggleGroup={noop}
-        onSelectSkill={noop}
-        onShowAllIssues={noop}
-        onShowAllUpdates={noop}
-        onShowAllUnused={noop}
-        onShowAllRecent={noop}
-        onConvertLinkedRoot={noop}
-        containerRef={noop}
-        onGridKeyDown={noop}
-        followRow={noop}
-        wiring={{
-          rowRef: () => noop,
-          tabIndexFor: () => 0,
-          isChecked: () => false,
-          hasSelection: false,
-          onToggle: noop,
-          act: noop,
-        }}
-      />
-      <Toaster />
-    </>,
-  );
-  await userEvent.click(screen.getByRole("button", { name: "Update all" }));
+  render(<SelectionUpdate skills={updates} />);
+  await userEvent.click(screen.getByRole("button", { name: "Update selection" }));
   expect(await screen.findByText(/alpha refused.*beta refused/)).toBeTruthy();
 });
 
-it("Home Update all refreshes a shared marketplace once instead of refreshing it for each plugin", async () => {
+it("Skills selection Update refreshes a shared marketplace once instead of refreshing it for each plugin", async () => {
   const updates = ["alpha", "beta"].map((name) =>
     skill({
       name,
@@ -220,41 +198,9 @@ it("Home Update all refreshes a shared marketplace once instead of refreshing it
     }
     throw new Error(`unexpected ${command}`);
   });
-  const noop = () => {};
-  render(
-    <>
-      <HomeInboxGrid
-        groups={{ ...computeHomeGroups(undefined), updates }}
-        live={{ ...computeHomeGroups(undefined), updates }}
-        starts={{ broken: 0, warn: 0, upd: 0, unused: 2, rec: 2 }}
-        filter={null}
-        onClearFilter={noop}
-        isGroupVisible={(id) => id === "upd"}
-        isGroupExpanded={() => true}
-        toggleGroup={noop}
-        onSelectSkill={noop}
-        onShowAllIssues={noop}
-        onShowAllUpdates={noop}
-        onShowAllUnused={noop}
-        onShowAllRecent={noop}
-        onConvertLinkedRoot={noop}
-        containerRef={noop}
-        onGridKeyDown={noop}
-        followRow={noop}
-        wiring={{
-          rowRef: () => noop,
-          tabIndexFor: () => 0,
-          isChecked: () => false,
-          hasSelection: false,
-          onToggle: noop,
-          act: noop,
-        }}
-      />
-      <Toaster />
-    </>,
-  );
-  await userEvent.click(screen.getByRole("button", { name: "Update all" }));
-  expect(await screen.findByText("Updated 2 of 2 skills")).toBeTruthy();
+  render(<SelectionUpdate skills={updates} />);
+  await userEvent.click(screen.getByRole("button", { name: "Update selection" }));
+  expect(await screen.findByText("Updated 2 skills")).toBeTruthy();
   expect(skips).toEqual([false, true]);
 });
 

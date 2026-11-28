@@ -88,4 +88,24 @@ describe("deploymentForScope", () => {
     ]);
     expect(deploymentForScope(skill, "global")).toBe("/g/clean");
   });
+
+  it("the_claude_code_filter_opens_the_live_plugin_copy_not_the_disabled_personal_copy", () => {
+    const skill = fixtureSkill([
+      fixtureDeployment({
+        agent: "Claude Code",
+        path: "/home/.claude/skills/find-bugs",
+        disabled: true,
+      }),
+      fixtureDeployment({
+        agent: "Claude Code",
+        scope: "plugin",
+        path: "/home/.claude/plugins/cache/m/p/skills/find-bugs",
+        plugin: { name: "p", version: null, harness: "Claude Code", marketplace: "m", id: "p@m" },
+      }),
+    ]);
+    const [own] = ownSkillsView([skill]);
+    expect(deploymentForScope(own, "all", "Claude Code", skill)).toBe(
+      "/home/.claude/plugins/cache/m/p/skills/find-bugs",
+    );
+  });
 });

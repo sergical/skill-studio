@@ -9,8 +9,6 @@ import { Button } from "@skill-studio/ui";
 import { Toaster, toast } from "sonner";
 import { useGuardedSkillUpdate } from "../../hooks/useGuardedSkillUpdate";
 import { deployment, skill } from "../../dev/harness/skill-fixture";
-import { HomeInboxGrid } from "../Home/HomeInboxGroups";
-import { computeHomeGroups } from "../Home/home-inbox-data";
 import { useSkillBulkActions } from "../SkillList/useSkillBulkActions";
 import { UpdateOverwritesEditsDialog } from "./UpdateOverwritesEditsDialog";
 
@@ -71,42 +69,6 @@ function SelectionUpdate() {
   );
 }
 
-const noop = () => {};
-function HomeUpdate() {
-  return (
-    <>
-      <HomeInboxGrid
-        groups={{ ...computeHomeGroups(undefined), updates }}
-        live={{ ...computeHomeGroups(undefined), updates }}
-        starts={{ broken: 0, warn: 0, upd: 0, unused: 2, rec: 2 }}
-        filter={null}
-        onClearFilter={noop}
-        isGroupVisible={(id) => id === "upd"}
-        isGroupExpanded={() => true}
-        toggleGroup={noop}
-        onSelectSkill={noop}
-        onShowAllIssues={noop}
-        onShowAllUpdates={noop}
-        onShowAllUnused={noop}
-        onShowAllRecent={noop}
-        onConvertLinkedRoot={noop}
-        containerRef={noop}
-        onGridKeyDown={noop}
-        followRow={noop}
-        wiring={{
-          rowRef: () => noop,
-          tabIndexFor: () => 0,
-          isChecked: () => false,
-          hasSelection: false,
-          onToggle: noop,
-          act: noop,
-        }}
-      />
-      <Toaster />
-    </>
-  );
-}
-
 afterEach(() => {
   cleanup();
   clearMocks();
@@ -114,20 +76,17 @@ afterEach(() => {
 });
 
 it.each(
-  ["Home", "Selection"].flatMap((surface) =>
-    [true, false].flatMap((skip) =>
-      ["{Enter}", " "].map((key) => ({
-        surface,
-        skip,
-        key,
-        choice: skip ? "skip" : "overwrite",
-        keyName: key === " " ? "Space" : "Enter",
-      })),
-    ),
+  [true, false].flatMap((skip) =>
+    ["{Enter}", " "].map((key) => ({
+      skip,
+      key,
+      choice: skip ? "skip" : "overwrite",
+      keyName: key === " " ? "Space" : "Enter",
+    })),
   ),
 )(
-  "$surface mixed edited Update can fork and $choice others with $keyName or loses the edit choice",
-  async ({ surface, skip, key }) => {
+  "Selection mixed edited Update can fork and $choice others with $keyName or loses the edit choice",
+  async ({ skip, key }) => {
     const forkTargets: unknown[] = [];
     const updateTargets: unknown[] = [];
     mockIPC((command, args) => {
@@ -176,8 +135,8 @@ it.each(
       throw new Error(`unexpected ${command}`);
     });
     const user = userEvent.setup();
-    render(surface === "Home" ? <HomeUpdate /> : <SelectionUpdate />);
-    const entry = surface === "Home" ? "Update all" : "Update selection";
+    render(<SelectionUpdate />);
+    const entry = "Update selection";
     await user.click(screen.getByRole("button", { name: entry }));
     await screen.findByRole("alertdialog");
     await user.keyboard("{Escape}");
@@ -192,8 +151,7 @@ it.each(
     expect(document.activeElement).toBe(choice);
     await user.keyboard(key);
     await waitFor(() => expect(forkTargets).toHaveLength(1));
-    if (surface === "Home") await screen.findByRole("button", { name: "Update all" });
-    else await screen.findByText("Finished");
+    await screen.findByText("Finished");
     expect(updateTargets).toEqual(skip ? [] : [{ owner_id: "owner:v1/global/beta" }]);
     expect(screen.queryByRole("alertdialog")).toBeNull();
   },

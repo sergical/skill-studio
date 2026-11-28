@@ -1,275 +1,311 @@
 // ============================================================================
-// LearnView - Explainer sections for Home's "why does this matter" links:
-// broken installs, invocation policy, prompt cost, unused skills. Content is
-// copied verbatim from popover-spec.md's `LEARN` object.
+// LearnView - What Skill Studio's words mean: uses, the skill list and its
+// budget, who can invoke a skill, Broken and Warnings, and parking. Facts
+// come from the shared catalog, issue map and labels in @skill-studio/lib, so
+// a new agent or issue kind shows up here without a copy edit.
 // ============================================================================
 
+import type { ReactNode } from "react";
+import {
+  ATTENTION_LABEL,
+  HARNESS_CATALOG,
+  HEALTH_ISSUE_KIND_LABEL,
+  HEALTH_ISSUE_KIND_ORDER,
+  HEALTH_ISSUE_SEVERITY,
+  LISTING_STATE_LABEL,
+  joinNames,
+  TRIGGERS,
+} from "@skill-studio/lib";
+import { Button } from "@skill-studio/ui";
+import type { HealthIssueKind } from "@skill-studio/lib";
 import { HarnessIcon } from "../ui/HarnessIcon";
+import { PageSection } from "../Shell/PageSection";
 import { PageShell } from "../Shell/PageShell";
-import type { LearnSection } from "../../store/appStore";
+import { useAppStore } from "../../store/appStore";
+type CatalogAgentId = (typeof HARNESS_CATALOG)[number]["id"];
 
-interface LearnViewProps {
-  section?: LearnSection;
-}
+/** How a person calls a skill by name, and the setting that keeps the model from calling it.
+ * Source: docs/agent-skill-conventions.md, "Invocation control and per-agent off settings". */
+const INVOKE_BY_AGENT = {
+  "claude-code": { call: "/name", youOnly: ["disable-model-invocation: true"] },
+  codex: {
+    call: "$name",
+    youOnly: ["agents/openai.yaml", "policy.allow_implicit_invocation: false"],
+  },
+  opencode: { call: "/name", youOnly: ["disable-model-invocation: true"] },
+  pi: { call: "/skill:name", youOnly: ["disable-model-invocation: true"] },
+  cursor: { call: "/name", youOnly: ["disable-model-invocation: true"] },
+  "grok-build": { call: "/name", youOnly: ["disable-model-invocation: true"] },
+} as const satisfies Record<CatalogAgentId, { call: string; youOnly: readonly string[] }>;
 
-const SECTIONS: { key: LearnSection; title: string }[] = [
-  { key: "broken", title: "Broken and warnings" },
-  { key: "invoke", title: "Who can invoke a skill" },
-  { key: "cost", title: "Prompt cost" },
-  { key: "unused", title: "Not used in 30 days" },
+const ISSUE_MEANING = {
+  "broken-symlink": "A link points at a folder that no longer exists.",
+  "spec-violation":
+    "The name or frontmatter breaks the agentskills.io spec, so the agent skips the skill.",
+  "parked-but-reinstalled": "You parked it, then an installer put it back, so it loads again.",
+  "linked-root":
+    "An agent’s whole skills folder links to the Universal folder, so one skill can’t be turned off for that agent alone.",
+  duplicate: "Two copies have different content, so two agents behave differently.",
+  "spec-warning": "The frontmatter works for some agents and not for others.",
+  "lock-only": ".skill-lock.json lists the skill, but it has no folder on disk.",
+} as const satisfies Record<HealthIssueKind, string>;
+
+const EXAMPLE_SKILL = "pdf-tools";
+const EXAMPLE_DESCRIPTION = "Extract text and tables from PDF files and fill forms";
+
+const LADDER: { label: string; line: string | null }[] = [
+  { label: LISTING_STATE_LABEL.described, line: `- ${EXAMPLE_SKILL}: ${EXAMPLE_DESCRIPTION}` },
+  { label: LISTING_STATE_LABEL.truncated, line: `- ${EXAMPLE_SKILL}: Extract text…` },
+  { label: LISTING_STATE_LABEL.name_only, line: `- ${EXAMPLE_SKILL}` },
+  { label: LISTING_STATE_LABEL.omitted, line: null },
 ];
 
-/** A heading's ref while its section is the one asked for. Declared once, so React calls it when
- * that heading gets it (the page opens at the section, or the section changes) and not on every
- * render. */
-function scrollToAndFocus(heading: HTMLHeadingElement | null) {
-  heading?.scrollIntoView({ block: "start" });
-  heading?.focus();
+const BUDGETED_AGENTS = HARNESS_CATALOG.filter((row) =>
+  row.verifiedVisibility.some((source) => source.exposure.startsWith("Budgeted")),
+);
+const USAGE_READERS = HARNESS_CATALOG.filter((row) => row.usageReader);
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-/**
- * The four explainer sections behind Home's "Learn more →" links. When
- * opened at a given `section`, that section scrolls into view and takes
- * focus so a screen reader lands on the content the user asked for, not the
- * page top.
- */
-export function LearnView({ section }: LearnViewProps) {
+function Code({ children }: { children: ReactNode }) {
+  return (
+    <code className="rounded-[3px] bg-bg-tertiary px-1 py-px font-mono text-small text-text-primary">
+      {children}
+    </code>
+  );
+}
+
+function AgentName({ id, label }: { id: CatalogAgentId; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-text-primary">
+      <HarnessIcon harness={id} size={14} />
+      {label}
+    </span>
+  );
+}
+
+function SectionLink({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <Button variant="link" className="h-auto p-0 text-small" onClick={onClick}>
+      {label}
+    </Button>
+  );
+}
+
+/** Learn's sections. */
+export function LearnView() {
+  const setActiveView = useAppStore((state) => state.setActiveView);
+
+  const brokenKinds = HEALTH_ISSUE_KIND_ORDER.filter(
+    (kind) => HEALTH_ISSUE_SEVERITY[kind] === "error",
+  );
+  const warningKinds = HEALTH_ISSUE_KIND_ORDER.filter(
+    (kind) => HEALTH_ISSUE_SEVERITY[kind] === "warning",
+  );
+
   return (
     <PageShell title="Learn">
-      <div className="grid grid-cols-[180px_minmax(0,1fr)] items-start gap-8">
-        <nav className="sticky top-6 flex flex-col gap-0.5">
-          {SECTIONS.map(({ key, title }) => (
-            <a
-              key={key}
-              href={`#learn-${key}`}
-              className={`rounded-sm px-2.5 py-1.5 text-body text-text-secondary no-underline hover:bg-bg-hover hover:text-text-primary ${
-                key === section ? "bg-accent-softer text-accent" : ""
-              }`}
-              aria-current={key === section ? "true" : undefined}
-            >
-              {title}
-            </a>
-          ))}
-        </nav>
-        <div className="flex max-w-[65ch] select-text flex-col gap-9 text-body leading-[1.55] text-text-secondary">
-          <section id="learn-broken" className="flex scroll-mt-6 flex-col gap-2">
-            <h3
-              className="m-0 mb-1 text-heading font-semibold text-text-primary"
-              tabIndex={-1}
-              ref={section === "broken" ? scrollToAndFocus : undefined}
-            >
-              Broken and warnings
-            </h3>
+      <div className="flex max-w-[70ch] flex-col gap-8 text-body leading-[1.55] text-text-secondary select-text">
+        <PageSection
+          title="Uses"
+          meta={
+            <SectionLink
+              label="Open Activity"
+              onClick={() => setActiveView({ kind: "activity" })}
+            />
+          }
+        >
+          <div className="flex flex-col gap-3">
             <p className="m-0">
-              Skill Studio sorts every issue by what an agent experiences, not by where the issue
-              comes from.
+              A use is the model running a skill in a recorded session. Skill Studio reads the last
+              30 days of history from{" "}
+              <span className="inline-flex flex-wrap items-center gap-x-2.5 align-middle">
+                {USAGE_READERS.map((row) => (
+                  <AgentName key={row.id} id={row.id} label={row.label} />
+                ))}
+              </span>
+              .
             </p>
-            <h4 className="mt-2 mb-0 text-body font-semibold text-text-primary">Broken</h4>
-            <p className="m-0">An agent loads nothing, or something you did not intend.</p>
-            <ul className="m-0 flex flex-col gap-1 pl-4.5">
-              <li>
-                <b className="font-medium text-text-primary">Broken link</b>: a symlink points at a
-                folder that no longer exists.
-              </li>
-              <li>
-                <b className="font-medium text-text-primary">Spec violation</b>: the name or
-                frontmatter breaks the agentskills.io spec, so the loader skips the skill.
-              </li>
-              <li>
-                <b className="font-medium text-text-primary">Parked copy left behind</b>: you parked
-                it, then an installer put it back. It runs again.
-              </li>
-            </ul>
-            <h4 className="mt-2 mb-0 text-body font-semibold text-text-primary">Warnings</h4>
-            <p className="m-0">Everything still loads, but the state drifted.</p>
-            <ul className="m-0 flex flex-col gap-1 pl-4.5">
-              <li>
-                <b className="font-medium text-text-primary">Copies differ</b>: the same skill has
-                different content in two places, so two agents behave differently.
-              </li>
-              <li>
-                <b className="font-medium text-text-primary">Lock entry only</b>:{" "}
-                <code className="rounded-[3px] bg-bg-tertiary px-1 py-px font-mono text-small text-text-primary">
-                  .skill-lock.json
-                </code>{" "}
-                lists a skill that has no folder on disk.
-              </li>
-            </ul>
-          </section>
+            <dl className="m-0 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-1.5">
+              {TRIGGERS.map((trigger) => (
+                <div key={trigger.id} className="contents">
+                  <dt className="font-medium text-text-primary">{trigger.label}</dt>
+                  <dd className="m-0">{trigger.hint}</dd>
+                </div>
+              ))}
+            </dl>
+            <p className="m-0">
+              A skill is “Not used in the last 30 days” when no history Skill Studio can read
+              records a use. An agent whose history it can’t read adds no uses.
+            </p>
+          </div>
+        </PageSection>
 
-          <section id="learn-invoke" className="flex scroll-mt-6 flex-col gap-2">
-            <h3
-              className="m-0 mb-1 text-heading font-semibold text-text-primary"
-              tabIndex={-1}
-              ref={section === "invoke" ? scrollToAndFocus : undefined}
-            >
-              Who can invoke a skill
-            </h3>
+        <PageSection
+          title="Skill list and budget"
+          meta={
+            <SectionLink
+              label="Open What it sees"
+              onClick={() => setActiveView({ kind: "listing" })}
+            />
+          }
+        >
+          <div className="flex flex-col gap-3">
             <p className="m-0">
-              Every agent auto-invokes a skill when its description matches the task, and lets you
-              call it by name. The agentskills.io spec has no field to limit either side; the limits
-              below are agent extensions. Skill Studio reads the frontmatter ones, so the Home
-              numbers reflect what Claude Code sees. <i>Model only</i> exists in Claude Code alone
-              and is meant for background knowledge that makes no sense as a command.
+              On every turn, an agent puts each skill’s name and description in its skill list. The
+              rest of SKILL.md loads only when the skill runs.{" "}
+              {joinNames(BUDGETED_AGENTS.map((row) => row.label))} cap the list with a budget; as it
+              fills, descriptions step down:
             </p>
-            <table className="my-1 w-full border-collapse text-small">
+            <figure className="m-0 overflow-hidden rounded-md border border-border-subtle">
+              <figcaption className="sr-only">One skill at each step of a skill list</figcaption>
+              {LADDER.map((step) => (
+                <div
+                  key={step.label}
+                  className="grid grid-cols-[120px_minmax(0,1fr)] items-baseline gap-3 border-b border-border-subtle px-3 py-2 last:border-b-0"
+                >
+                  <span className="text-small font-medium text-text-primary">{step.label}</span>
+                  {step.line == null ? (
+                    <span className="text-small text-text-tertiary">no line</span>
+                  ) : (
+                    <span className="font-mono text-small break-words text-text-primary">
+                      {step.line}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </figure>
+            <p className="m-0">
+              {LISTING_STATE_LABEL.hidden} skills are out of the list and cost nothing: “You only”,
+              turned off in the agent’s settings, or parked.
+            </p>
+          </div>
+        </PageSection>
+
+        <PageSection title="Who can invoke a skill">
+          <div className="flex flex-col gap-3">
+            <p className="m-0">
+              By default a skill is “You or the model”: you call it by name, and the model calls it
+              when its description fits the task. “You only” keeps the model from calling it.
+            </p>
+            <table className="w-full border-collapse text-small">
               <thead>
-                <tr>
-                  <th className="border-b border-border-subtle px-2 py-1.5 text-left align-top font-medium text-text-tertiary">
+                <tr className="text-left text-text-tertiary">
+                  <th scope="col" className="border-b border-border-subtle py-1.5 pr-4 font-medium">
                     Agent
                   </th>
-                  <th className="border-b border-border-subtle px-2 py-1.5 text-left align-top font-medium text-text-tertiary">
-                    You invoke with
+                  <th scope="col" className="border-b border-border-subtle py-1.5 pr-4 font-medium">
+                    Call it by name
                   </th>
-                  <th className="border-b border-border-subtle px-2 py-1.5 text-left align-top font-medium text-text-tertiary">
-                    Restrict the model
+                  <th scope="col" className="border-b border-border-subtle py-1.5 font-medium">
+                    Make it “You only”
                   </th>
                 </tr>
               </thead>
               <tbody>
-                <tr>
-                  <td className="border-b border-border-subtle px-2 py-1.5 text-left align-top whitespace-nowrap text-text-primary">
-                    <span className="inline-flex items-center gap-1">
-                      <HarnessIcon harness="claude-code" size={13} /> Claude Code
-                    </span>
-                  </td>
-                  <td className="border-b border-border-subtle px-2 py-1.5 text-left align-top">
-                    <code className="rounded-[3px] bg-bg-tertiary px-1 py-px font-mono text-small text-text-primary">
-                      /name
-                    </code>
-                  </td>
-                  <td className="border-b border-border-subtle px-2 py-1.5 text-left align-top">
-                    <code className="rounded-[3px] bg-bg-tertiary px-1 py-px font-mono text-small text-text-primary">
-                      disable-model-invocation: true
-                    </code>{" "}
-                    (you only) ·{" "}
-                    <code className="rounded-[3px] bg-bg-tertiary px-1 py-px font-mono text-small text-text-primary">
-                      user-invocable: false
-                    </code>{" "}
-                    (model only)
-                  </td>
-                </tr>
-                <tr>
-                  <td className="border-b border-border-subtle px-2 py-1.5 text-left align-top whitespace-nowrap text-text-primary">
-                    pi
-                  </td>
-                  <td className="border-b border-border-subtle px-2 py-1.5 text-left align-top">
-                    <code className="rounded-[3px] bg-bg-tertiary px-1 py-px font-mono text-small text-text-primary">
-                      /skill:name
-                    </code>
-                  </td>
-                  <td className="border-b border-border-subtle px-2 py-1.5 text-left align-top">
-                    <code className="rounded-[3px] bg-bg-tertiary px-1 py-px font-mono text-small text-text-primary">
-                      disable-model-invocation: true
-                    </code>
-                  </td>
-                </tr>
-                <tr>
-                  <td className="border-b border-border-subtle px-2 py-1.5 text-left align-top whitespace-nowrap text-text-primary">
-                    <span className="inline-flex items-center gap-1">
-                      <HarnessIcon harness="codex" size={13} /> Codex
-                    </span>
-                  </td>
-                  <td className="border-b border-border-subtle px-2 py-1.5 text-left align-top">
-                    <code className="rounded-[3px] bg-bg-tertiary px-1 py-px font-mono text-small text-text-primary">
-                      $name
-                    </code>
-                  </td>
-                  <td className="border-b border-border-subtle px-2 py-1.5 text-left align-top">
-                    <code className="rounded-[3px] bg-bg-tertiary px-1 py-px font-mono text-small text-text-primary">
-                      agents/openai.yaml
-                    </code>{" "}
-                    →{" "}
-                    <code className="rounded-[3px] bg-bg-tertiary px-1 py-px font-mono text-small text-text-primary">
-                      policy.allow_implicit_invocation: false
-                    </code>
-                  </td>
-                </tr>
-                <tr>
-                  <td className="border-b border-border-subtle px-2 py-1.5 text-left align-top whitespace-nowrap text-text-primary">
-                    <span className="inline-flex items-center gap-1">
-                      <HarnessIcon harness="opencode" size={13} /> OpenCode
-                    </span>
-                  </td>
-                  <td className="border-b border-border-subtle px-2 py-1.5 text-left align-top">
-                    <code className="rounded-[3px] bg-bg-tertiary px-1 py-px font-mono text-small text-text-primary">
-                      skill
-                    </code>{" "}
-                    tool
-                  </td>
-                  <td className="border-b border-border-subtle px-2 py-1.5 text-left align-top">
-                    <code className="rounded-[3px] bg-bg-tertiary px-1 py-px font-mono text-small text-text-primary">
-                      permission.skill
-                    </code>{" "}
-                    in{" "}
-                    <code className="rounded-[3px] bg-bg-tertiary px-1 py-px font-mono text-small text-text-primary">
-                      opencode.json
-                    </code>
-                  </td>
-                </tr>
-                <tr>
-                  <td className="border-b border-border-subtle px-2 py-1.5 text-left align-top whitespace-nowrap text-text-primary">
-                    <span className="inline-flex items-center gap-1">
-                      <HarnessIcon harness="cursor" size={13} /> Cursor
-                    </span>
-                  </td>
-                  <td className="border-b border-border-subtle px-2 py-1.5 text-left align-top">
-                    unknown
-                  </td>
-                  <td className="border-b border-border-subtle px-2 py-1.5 text-left align-top">
-                    unknown
-                  </td>
-                </tr>
+                {HARNESS_CATALOG.map((row) => {
+                  const invoke = INVOKE_BY_AGENT[row.id];
+                  return (
+                    <tr key={row.id} className="align-top">
+                      <td className="border-b border-border-subtle py-1.5 pr-4">
+                        <AgentName id={row.id} label={row.label} />
+                      </td>
+                      <td className="border-b border-border-subtle py-1.5 pr-4">
+                        <Code>{invoke.call}</Code>
+                      </td>
+                      <td className="border-b border-border-subtle py-1.5">
+                        {invoke.youOnly.length === 1 ? (
+                          <Code>{invoke.youOnly[0]}</Code>
+                        ) : (
+                          <>
+                            <Code>{invoke.youOnly[0]}</Code> → <Code>{invoke.youOnly[1]}</Code>
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
             <p className="m-0">
-              Frontmatter edits the Universal file, so they apply to every agent that reads the same
-              folder or symlink. Codex and OpenCode settings apply to that agent only.
+              A SKILL.md setting applies to every agent that reads that folder; Codex’s applies to
+              Codex only. “Model only” exists only in Claude Code:{" "}
+              <Code>user-invocable: false</Code>.
             </p>
-          </section>
+          </div>
+        </PageSection>
 
-          <section id="learn-cost" className="flex scroll-mt-6 flex-col gap-2">
-            <h3
-              className="m-0 mb-1 text-heading font-semibold text-text-primary"
-              tabIndex={-1}
-              ref={section === "cost" ? scrollToAndFocus : undefined}
-            >
-              Prompt cost
-            </h3>
-            <p className="m-0">
-              An agent puts the{" "}
-              <b className="font-medium text-text-primary">name and description</b> of every skill
-              the model may invoke into the prompt, on every turn. The body of SKILL.md loads only
-              when the skill runs.
-            </p>
-            <p className="m-0">
-              Home counts those description tokens for skills marked <i>you or the model</i> and{" "}
-              <i>model only</i>. Skills marked <i>you only</i> stay out of the prompt and cost
-              nothing until you run them.
-            </p>
-            <p className="m-0">
-              To lower the number: park skills you have not used, or shorten descriptions. Parking
-              is the bigger lever.
-            </p>
-          </section>
+        <PageSection title={`${ATTENTION_LABEL.broken} and ${ATTENTION_LABEL.warning}`}>
+          <div className="flex flex-col gap-4">
+            <IssueGroup
+              title={ATTENTION_LABEL.broken}
+              lead="An agent does not load the skill."
+              dotClassName="bg-error"
+              kinds={brokenKinds}
+            />
+            <IssueGroup
+              title={ATTENTION_LABEL.warning}
+              lead="Agents still load it, but something drifted."
+              dotClassName="bg-warning"
+              kinds={warningKinds}
+            />
+          </div>
+        </PageSection>
 
-          <section id="learn-unused" className="flex scroll-mt-6 flex-col gap-2">
-            <h3
-              className="m-0 mb-1 text-heading font-semibold text-text-primary"
-              tabIndex={-1}
-              ref={section === "unused" ? scrollToAndFocus : undefined}
-            >
-              Not used in the last 30 days
-            </h3>
+        <PageSection title="Parking">
+          <div className="flex flex-col gap-3">
             <p className="m-0">
-              Uses come from the history files of Claude Code, Codex, OpenCode, pi, Cursor, and Grok
-              Build. An agent you turn off under “Search history from” in Settings is left out of
-              every count. Each use also records how it started: you typed the skill’s name, the
-              model called the skill, or the model only opened its SKILL.md.
+              Park takes a global skill away from every agent at once and keeps it, so you can bring
+              it back. Skill Studio moves its folder and removes Claude Code’s link to it:
             </p>
-          </section>
-        </div>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-small text-text-primary">
+              <span>~/.agents/skills/{EXAMPLE_SKILL}</span>
+              <span aria-hidden="true" className="text-text-tertiary">
+                →
+              </span>
+              <span className="sr-only">moves to</span>
+              <span>~/.agents/skills-parked/{EXAMPLE_SKILL}</span>
+            </div>
+            <p className="m-0">
+              Unpark puts both back. A parked skill leaves every skill list, so it costs no budget.
+            </p>
+          </div>
+        </PageSection>
       </div>
     </PageShell>
+  );
+}
+
+function IssueGroup({
+  title,
+  lead,
+  dotClassName,
+  kinds,
+}: {
+  title: string;
+  lead: string;
+  dotClassName: string;
+  kinds: HealthIssueKind[];
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-2">
+        <span aria-hidden="true" className={`size-2 rounded-full ${dotClassName}`} />
+        <h3 className="m-0 text-body font-semibold text-text-primary">{title}</h3>
+        <span className="text-text-secondary">· {lead}</span>
+      </div>
+      <dl className="m-0 grid grid-cols-[minmax(0,14rem)_minmax(0,1fr)] gap-x-4 gap-y-1.5 pl-4">
+        {kinds.map((kind) => (
+          <div key={kind} className="contents">
+            <dt className="font-medium text-text-primary">
+              {capitalize(HEALTH_ISSUE_KIND_LABEL[kind].singular)}
+            </dt>
+            <dd className="m-0">{ISSUE_MEANING[kind]}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   );
 }

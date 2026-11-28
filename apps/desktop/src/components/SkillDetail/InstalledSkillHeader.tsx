@@ -8,6 +8,7 @@
 import { AlertTriangle, ExternalLink } from "lucide-react";
 import { Button } from "@skill-studio/ui";
 import {
+  basename,
   describeFrontmatterErrorLine,
   describeSpecViolations,
   describeFrontmatterRepair,
@@ -27,6 +28,7 @@ import type {
 } from "@skill-studio/lib";
 import { useSkillInstalls } from "../../hooks/useSkillInstalls";
 import { TooltipControl } from "../ui/TooltipControl";
+import { SkillDescription } from "./SkillDescription";
 import { skillSourceLine } from "./skill-source-line";
 import { skillUpstreamNote } from "./skill-upstream-note";
 import {
@@ -64,6 +66,17 @@ function parkedChipLabel(parkedAt: string | null | undefined): string {
   return `Parked · ${date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`;
 }
 
+/** "Claude Code does not load it in agent-studio: its link is broken." A Universal folder link
+ * stops every agent that reads that folder. */
+function brokenLinkLine(deployment: Deployment): string {
+  const where = deployment.project_path ? ` in ${basename(deployment.project_path)}` : "";
+  const who =
+    deployment.agent === "shared"
+      ? "Agents that read the Universal folder do"
+      : `${deployment.agent} does`;
+  return `${who} not load it${where}: its link is broken.`;
+}
+
 /**
  * The installed skill header is identity only: title, description, and state
  * chips, followed by any blocking violation for the rendered copy. It shows
@@ -93,6 +106,8 @@ export function InstalledSkillHeader({
     ),
   ];
   const nonBlockingCount = nonBlockingNotes.length;
+  // A broken link is what puts the skill under Broken on Home and Skills; say so at the top.
+  const brokenLinks = own.filter((d) => d.symlink_is_broken);
   // The red violation line names only the deployment whose SKILL.md the page
   // actually renders - other deployments' violations show on their own
   // Locations rows instead (see `SkillLocationsCard`). Home's spec-violation
@@ -113,13 +128,19 @@ export function InstalledSkillHeader({
   const nameFormatNote = (renderedDeployment?.spec_violations ?? []).find(
     (v) => specViolationSeverity(v) === "note" && v.startsWith('name "'),
   );
-  const yamlViolation = blockingViolations.find((violation) =>
+  // The YAML error sits on the red line when no agent can read the file, and on the yellow line
+  // when only some agents skip it (an unquoted colon); its repair buttons go with it.
+  const yamlViolation = (renderedDeployment?.spec_violations ?? []).find((violation) =>
     violation.startsWith("invalid YAML frontmatter at line "),
   );
-  const hasMalformedYaml = yamlViolation !== undefined;
+  const yamlLine = !yamlViolation
+    ? null
+    : isBlockingSpecViolation(yamlViolation)
+      ? ("error" as const)
+      : ("warning" as const);
   const yamlLocation = yamlViolation ? parseYamlFrontmatterError(yamlViolation) : null;
   // Conflicting invocation keys are a non-blocking note with their own line and Fix;
-  // every other repair belongs to the red violation line.
+  // every other repair belongs to the line of the violation it fixes.
   const lineKind = frontmatterRepairKindsFor(renderedDeployment).find(
     (kind) => kind !== "invocation-conflict",
   );
@@ -139,6 +160,7 @@ export function InstalledSkillHeader({
       : null;
   const fixLine = fixLineFor({
     lineKind,
+    yamlLine,
     hasMismatchLine: warningViolations.some(
       (v) => frontmatterRepairKindForViolation(v) === "name-mismatch",
     ),
@@ -149,9 +171,25 @@ export function InstalledSkillHeader({
       Fix
     </Button>
   ) : null;
-  const violationText = quoteRepair
+  const yamlText = quoteRepair
     ? describeFrontmatterRepair(quoteRepair, yamlLocation?.column)
-    : (lineHint ?? describeSpecViolations(blockingViolations));
+    : lineHint;
+  const yamlControls = (
+    <>
+      {quoteRepair && (
+        <Button size="sm" onClick={() => onQuoteRepair?.(quoteRepair)}>
+          Quote the {quoteRepair.key}
+        </Button>
+      )}
+      {fixLine === yamlLine && lineRepair
+        ? lineFixButton
+        : onEditManually && (
+            <Button size="sm" variant="outline" onClick={() => onEditManually(yamlLocation?.line)}>
+              Edit manually
+            </Button>
+          )}
+    </>
+  );
 
   return (
     <header className="flex flex-col gap-4">
@@ -188,11 +226,7 @@ export function InstalledSkillHeader({
             </a>
           </p>
         )}
-        {skill.description && (
-          <p className="mt-3 select-text text-pretty text-body leading-[1.5] text-text-secondary">
-            {skill.description}
-          </p>
-        )}
+        {skill.description && <SkillDescription key={skill.description} text={skill.description} />}
       </div>
 
       {(skill.parked || skill.update_owner_ids.length > 0 || nonBlockingCount > 0) && (
@@ -217,39 +251,34 @@ export function InstalledSkillHeader({
         </div>
       )}
 
+      {brokenLinks.map((d) => (
+        <p key={d.id} className="m-0 flex items-center gap-2 text-small text-error">
+          <AlertTriangle size={13} aria-hidden="true" />
+          {brokenLinkLine(d)}
+        </p>
+      ))}
       {blockingViolations.length > 0 && (
         <div className="flex items-center gap-2 text-small text-error">
           <AlertTriangle size={13} />
-          <span>{violationText}</span>
-          {quoteRepair && (
-            <Button size="sm" onClick={() => onQuoteRepair?.(quoteRepair)}>
-              Quote the {quoteRepair.key}
-            </Button>
-          )}
-          {hasMalformedYaml &&
-            (fixLine === "error" && lineRepair
-              ? lineFixButton
-              : onEditManually && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => onEditManually(yamlLocation?.line)}
-                  >
-                    Edit manually
-                  </Button>
-                ))}
-          {!quoteRepair && !hasMalformedYaml && onEditManually && (
-            <Button size="sm" variant="outline" onClick={() => onEditManually()}>
-              Edit SKILL.md
-            </Button>
-          )}
+          <span>
+            {(yamlLine === "error" && yamlText) || describeSpecViolations(blockingViolations)}
+          </span>
+          {yamlLine === "error"
+            ? yamlControls
+            : onEditManually && (
+                <Button size="sm" variant="outline" onClick={() => onEditManually()}>
+                  Edit SKILL.md
+                </Button>
+              )}
         </div>
       )}
       {warningViolations.length > 0 && (
         <div className="flex items-center gap-2 text-small text-warning">
           <AlertTriangle size={13} />
-          <span>{describeSpecViolations(warningViolations)}</span>
-          {fixLine === "warning" && lineFixButton}
+          <span>
+            {(yamlLine === "warning" && yamlText) || describeSpecViolations(warningViolations)}
+          </span>
+          {yamlLine === "warning" ? yamlControls : fixLine === "warning" && lineFixButton}
         </div>
       )}
       {nameFormatNote && (

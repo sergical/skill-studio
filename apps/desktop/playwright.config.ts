@@ -1,6 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const PORT = 1440;
+// Worktrees run their harness at the same time and the server is reused, so each run on a
+// shared machine sets its own E2E_PORT; otherwise one worktree's tests run another's code.
+const PORT = Number(process.env.E2E_PORT ?? 1440);
 
 // The whole app on the dev harness (`src/dev/harness`), driven with real key presses. WebKit is
 // the engine the Tauri window uses on macOS; Chromium catches the cases where they differ.

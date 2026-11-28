@@ -3,9 +3,16 @@
 // ============================================================================
 
 import { describe, expect, it } from "vitest";
+import { attentionBySkill, collectDashboardIssues } from "@skill-studio/lib";
 import type { Deployment, InstalledSkill } from "@skill-studio/lib";
 import { buildScopeGroups, skillRollup } from "../SkillDetail/skill-location-status";
 import { rowGroup, rowState } from "./skill-row-state";
+
+/** The group the Skills table puts `skill` in, from the same issues Home lists. */
+function groupOf(skill: InstalledSkill) {
+  const attention = attentionBySkill([skill], collectDashboardIssues([skill]));
+  return rowGroup(skill, attention.get(skill.name));
+}
 
 function fixtureDeployment(overrides: Partial<Deployment> = {}): Deployment {
   return {
@@ -66,34 +73,36 @@ function fixtureSkill(overrides: Partial<InstalledSkill> = {}): InstalledSkill {
 }
 
 describe("rowState", () => {
-  it("shows the Fix action for a skill whose only issue is invalid YAML frontmatter", () => {
+  it("shows the Fix action as a warning for an unquoted colon in the YAML, which most agents still load", () => {
     const skill = fixtureSkill({
-      spec_violations: ["invalid YAML frontmatter at line 3, column 1: mapping values not allowed"],
+      spec_violations: [
+        "invalid YAML frontmatter at line 3, column 1: mapping values are not allowed in this context (unquoted colon in a value)",
+      ],
     });
     const state = rowState(skill);
     expect(state?.kind).toBe("violation");
-    expect(state?.level).toBe("error");
+    expect(state?.level).toBe("warning");
     expect(state?.action).toBe("Fix");
   });
 
-  it("keeps a notes-only skill Healthy, or a harmless length note would crowd Needs attention", () => {
+  it("keeps a notes-only skill Healthy, or a harmless length note would crowd Warnings", () => {
     const note = "description exceeds 1024 characters";
     const skill = fixtureSkill({
       spec_violations: [note],
       deployments: [fixtureDeployment({ spec_violations: [note] })],
     });
     expect(rowState(skill)).toBeNull();
-    expect(rowGroup(skill)).toBe("healthy");
+    expect(groupOf(skill)).toBe("healthy");
   });
 
-  it("puts a name-mismatch skill in Needs attention as a warning, so agents' different names get checked", () => {
+  it("puts a name-mismatch skill in Warnings, so agents' different names get checked", () => {
     const mismatch = 'name "other" does not match its directory name "find-bugs"';
     const skill = fixtureSkill({
       spec_violations: [mismatch],
       deployments: [fixtureDeployment({ spec_violations: [mismatch] })],
     });
     expect(rowState(skill)?.level).toBe("warning");
-    expect(rowGroup(skill)).toBe("attention");
+    expect(groupOf(skill)).toBe("warning");
   });
 });
 

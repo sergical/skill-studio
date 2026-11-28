@@ -1,21 +1,25 @@
 // ============================================================================
 // Skill Studio - skill-list-filter
 // Pure filter over a skill list: scope (all/global/parked/project), one
-// harness, one source kind, one issue kind, and a free-text query. Shared by
-// SkillListFilterBar and SkillsView so the filter bar's controls and the
-// list they drive never drift apart.
+// harness, one source kind, one attention category or issue kind, and a
+// free-text query. Shared by SkillListFilterBar and SkillsView so the filter
+// bar's controls and the list they drive never drift apart.
 // ============================================================================
 
+import { skillUsageIn30Days } from "./home-summary";
+import { attentionBySkill, attentionCategoryOf } from "./skill-attention";
+import type { AttentionFilter } from "./skill-attention";
 import type { HealthIssueKind } from "./skill-health";
 import { agentsCoveredByDeployment, collectDashboardIssues } from "./skill-health";
+import { agentIdFromDeploymentLabel, skillReadByAgent } from "./skill-coverage";
 import { pluginDeployments } from "./skill-plugin-partition";
 import type {
+  AgentId,
   Deployment,
   InstalledSkill,
   SkillInvocationStats,
   SkillSourceKind,
 } from "./skill-types";
-import { hasUpdate } from "./skill-updates";
 
 /** Which own skills `applySkillListFilter` considers before the other fields narrow it further. */
 export type SkillListFilterScope = "all" | "global" | "parked" | { project: string };
@@ -26,14 +30,14 @@ export interface SkillListFilter {
   /** An `AgentId` display label (e.g. "Claude Code"), one at a time. */
   harness?: string;
   source?: SkillSourceKind;
-  /** `"any"` keeps every skill with at least one issue, regardless of kind - Home's "Show all N". */
-  issue?: HealthIssueKind | "any";
+  /** Keeps the skills in one attention category (Broken, Warnings, Updates), or in any of them. */
+  attention?: AttentionFilter;
+  /** Keeps the skills with one issue kind. */
+  issue?: HealthIssueKind;
   /** Matches `skill.invocation` exactly. */
   invocation?: InstalledSkill["invocation"];
-  /** Whether the skill had any invocations in the last 30 days. */
+  /** Used in the last 30 days, or unused by `skillUsageIn30Days` (an agent that reads it has history). */
   usage?: "used-30d" | "unused-30d";
-  /** Keeps only skills the background update check found a newer commit for. */
-  update?: "available";
   query: string;
 }
 
@@ -88,6 +92,11 @@ export function deploymentMatchesHarness(deployment: Deployment, harness: string
   return agentsCoveredByDeployment(deployment.agent).includes(harness);
 }
 
+/** `agent` is the filter's agent id; `null` or `shared` for a label no agent has, which lists nothing. */
+function readsSkill(skill: InstalledSkill, agent: AgentId | "shared" | null): boolean {
+  return agent !== null && agent !== "shared" && skillReadByAgent(skill, agent) !== "none";
+}
+
 /** Hyphens, underscores, slashes, dots, and spaces all count as one word break. */
 const WORD_BREAK = /[\s\-_/.]+/;
 
@@ -121,33 +130,30 @@ function matchesQuery(skill: InstalledSkill, query: string): boolean {
  * from the caller, computed once and shared - passed in rather than
  * recomputed here so a caller filtering a large list repeatedly doesn't pay
  * for it more than once per render. `invocations` is `SkillSnapshot.invocations`
- * (or equivalent), needed only when `filter.usage` is set.
+ * (or equivalent), needed only when `filter.usage` is set; `agents` are the agents the user keeps,
+ * so the unused list matches Home's count (see `skillUsageIn30Days`). `readerOf` gives a skill with
+ * its plugin copies, so the agent filter lists what the row's agent icons show (`skillReadByAgent`).
  */
 export function applySkillListFilter(
   skills: InstalledSkill[],
   filter: SkillListFilter,
   issues = collectDashboardIssues(skills),
   invocations?: SkillInvocationStats[],
+  agents?: readonly string[],
+  readerOf: (skill: InstalledSkill) => InstalledSkill = (skill) => skill,
 ): InstalledSkill[] {
   const skillsWithIssue = filter.issue
-    ? new Set(
-        issues
-          .filter((i) => filter.issue === "any" || i.kind === filter.issue)
-          .map((i) => i.skill.name),
-      )
+    ? new Set(issues.filter((i) => i.kind === filter.issue).map((i) => i.skill.name))
     : null;
-  const usesIn30DaysBySkill = filter.usage
-    ? new Map(invocations?.map((stat) => [stat.skill, stat.last_30_days]))
-    : null;
+  const attention = filter.attention ? attentionBySkill(skills, issues) : null;
+  const usage = filter.usage ? skillUsageIn30Days(invocations ?? [], agents) : null;
+  const harness = filter.harness ? agentIdFromDeploymentLabel(filter.harness) : undefined;
 
   return skills.filter((skill) => {
     if (!matchesScope(skill, filter.scope)) return false;
-    const harness = filter.harness;
     if (
-      harness &&
-      !skillForCoverageScope(skill, filter.scope).deployments.some((d) =>
-        deploymentMatchesHarness(d, harness),
-      )
+      harness !== undefined &&
+      !readsSkill(skillForCoverageScope(readerOf(skill), filter.scope), harness)
     ) {
       return false;
     }
@@ -161,12 +167,12 @@ export function applySkillListFilter(
       return false;
     }
     if (skillsWithIssue && !skillsWithIssue.has(skill.name)) return false;
-    if (filter.update === "available" && !hasUpdate(skill)) return false;
+    if (attention && attentionCategoryOf(attention.get(skill.name), filter.attention) === null)
+      return false;
     if (filter.invocation && skill.invocation !== filter.invocation) return false;
-    if (usesIn30DaysBySkill) {
-      const usedIn30Days = (usesIn30DaysBySkill.get(skill.name) ?? 0) > 0;
-      if (filter.usage === "used-30d" && !usedIn30Days) return false;
-      if (filter.usage === "unused-30d" && usedIn30Days) return false;
+    if (usage) {
+      const want = filter.usage === "used-30d" ? "used" : "unused";
+      if (usage(skill) !== want) return false;
     }
     if (!matchesQuery(skill, filter.query)) return false;
     return true;

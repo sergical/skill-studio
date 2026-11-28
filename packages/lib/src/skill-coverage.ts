@@ -56,13 +56,29 @@ export function isUnresolvedDeployment(deployment: Deployment): boolean {
  * actually see it.
  */
 function isOwnDirDeployment(skill: InstalledSkill, agent: AgentId): boolean {
-  if (skill.parked) return false;
   return ownDeployments(skill).some(
     (d) =>
       agentIdFromDeploymentLabel(d.agent) === agent &&
       (d.scope === "global" || d.scope === "project") &&
-      !d.disabled &&
-      !isUnresolvedDeployment(d),
+      isCopyReadByAgent(skill, d, agent),
+  );
+}
+
+/**
+ * Whether `agent` reads `deployment`, a copy of `skill` in a folder it reads: not when the skill
+ * is parked, the copy is disabled or its link does not resolve, or a shared copy switches `agent`
+ * off (`disabled_readers`). The per-copy half of `skillReadByAgent`.
+ */
+export function isCopyReadByAgent(
+  skill: InstalledSkill,
+  deployment: Deployment,
+  agent: AgentId,
+): boolean {
+  return (
+    !skill.parked &&
+    !deployment.disabled &&
+    !isUnresolvedDeployment(deployment) &&
+    (deployment.agent !== SHARED_AGENT_ID || !(deployment.disabled_readers ?? []).includes(agent))
   );
 }
 
@@ -213,17 +229,11 @@ export function resolveCompareSelection(
 
 /**
  * A broken, disabled, or parked shared-root deployment doesn't make a skill
- * visible via the shared root. When `reader` is set, a shared deployment that
- * explicitly disables that reader does not provide visibility to it.
+ * visible via the shared root, nor does one that explicitly disables `reader`.
  */
-function isSharedRootDeployment(skill: InstalledSkill, reader?: AgentId): boolean {
-  if (skill.parked) return false;
+function isSharedRootDeployment(skill: InstalledSkill, reader: AgentId): boolean {
   return ownDeployments(skill).some(
-    (d) =>
-      d.agent === SHARED_AGENT_ID &&
-      !d.disabled &&
-      !isUnresolvedDeployment(d) &&
-      (reader === undefined || !(d.disabled_readers ?? []).includes(reader)),
+    (d) => d.agent === SHARED_AGENT_ID && isCopyReadByAgent(skill, d, reader),
   );
 }
 
@@ -246,6 +256,32 @@ export function skillVisibleToAgent(
   return "none";
 }
 
+/** A live plugin copy in `agent`'s own plugin cache. `skillVisibleToAgent` counts only the skill's
+ * own global and project deployments. A plugin cache copy can come without its plugin's details. */
+function readsThroughPlugin(skill: InstalledSkill, agent: AgentId): boolean {
+  return skill.deployments.some(
+    (d) =>
+      (d.plugin || d.scope === "plugin") &&
+      agentIdFromDeploymentLabel(d.agent) === agent &&
+      isCopyReadByAgent(skill, d, agent),
+  );
+}
+
+/**
+ * How `agent` reads `skill`: `skillVisibleToAgent`, or `plugin` through a live plugin copy. The one
+ * reader rule for the Skills row's agent icons, the agent filter and the coverage grid, so a row
+ * that shows an agent's icon is also listed under that agent and marked in its column. Pass the
+ * skill with its plugin copies.
+ */
+export function skillReadByAgent(
+  skill: InstalledSkill,
+  agent: AgentId,
+): "own" | "shared" | "plugin" | "none" {
+  const visible = skillVisibleToAgent(skill, agent);
+  if (visible !== "none") return visible;
+  return readsThroughPlugin(skill, agent) ? "plugin" : "none";
+}
+
 // ============================================================================
 // Skill x agent matrix (moved from skill-stats.ts): now reflects effective
 // visibility rather than raw per-agent deployments.
@@ -264,7 +300,7 @@ export type AgentMatrixLabel = (typeof AGENT_MATRIX_LABELS)[number];
  * the matrix keeps showing the local breakage worth fixing.
  */
 export interface AgentMatrixCell {
-  state: "own" | "shared" | "none";
+  state: "own" | "shared" | "plugin" | "none";
   isSymlink: boolean;
   isBroken: boolean;
 }
@@ -279,7 +315,7 @@ export interface AgentMatrixRow {
 const EMPTY_CELL: AgentMatrixCell = { state: "none", isSymlink: false, isBroken: false };
 
 function cellForAgent(skill: InstalledSkill, agent: AgentId): AgentMatrixCell {
-  const state = skillVisibleToAgent(skill, agent);
+  const state = skillReadByAgent(skill, agent);
   const own = ownDeployments(skill);
   const ownDeployment = own.find(
     (d) =>
@@ -296,6 +332,7 @@ function cellForAgent(skill: InstalledSkill, agent: AgentId): AgentMatrixCell {
     }
     return EMPTY_CELL;
   }
+  if (state === "plugin") return { state, isSymlink: false, isBroken: false };
 
   const deployment = state === "own" ? ownDeployment : own.find((d) => d.agent === SHARED_AGENT_ID);
 

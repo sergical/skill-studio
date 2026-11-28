@@ -1,7 +1,6 @@
 // ============================================================================
-// GroupHead - a list's sticky group header: chevron, label, count, and an
-// optional trailing action. Shared by Home's inbox groups and the Skills
-// list's state groups so both read as one product.
+// GroupHead - the sticky header of a Skills list state group: chevron,
+// label, count, and an optional trailing action (Update all on Updates).
 // ============================================================================
 
 import type { ReactNode } from "react";

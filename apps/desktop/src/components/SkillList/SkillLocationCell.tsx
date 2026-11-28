@@ -28,26 +28,34 @@ function LocationItem({ location }: { location: DiskLocation }) {
     setTruncated(isClipped());
   }
 
+  // Global is the usual place, so it is the globe alone and a project install stands out by name.
+  if (!isProject) {
+    return (
+      <RichTooltip content={<span className="text-small">{location.name}</span>}>
+        <span
+          role="img"
+          aria-label={location.name}
+          className="inline-flex shrink-0 items-center text-text-tertiary"
+        >
+          <Globe size={13} aria-hidden />
+        </span>
+      </RichTooltip>
+    );
+  }
   const chip = (
     <span
-      className={`inline-flex items-center gap-1 ${isProject ? "min-w-0 max-w-[120px]" : "shrink-0"}`}
+      className="inline-flex min-w-0 max-w-[120px] items-center gap-1"
       // Outside a shared scope the chip only becomes a tooltip trigger once hovered and clipped.
-      onPointerEnter={isProject && !handle ? checkTruncated : undefined}
-      onFocus={isProject && !handle ? checkTruncated : undefined}
+      onPointerEnter={handle ? undefined : checkTruncated}
+      onFocus={handle ? undefined : checkTruncated}
     >
-      {isProject ? (
-        <FolderGit2 size={13} className="shrink-0 text-text-tertiary" aria-hidden />
-      ) : (
-        <Globe size={13} className="shrink-0 text-text-tertiary" aria-hidden />
-      )}
+      <FolderGit2 size={13} className="shrink-0 text-text-tertiary" aria-hidden />
       <span ref={nameRef} className="truncate text-small text-text-secondary">
         {location.name}
       </span>
     </span>
   );
-  // The Global chip is already the word "Global" - there's no fact left for a tooltip to add. A
-  // project chip only gets one once its name has actually clipped.
-  if (!isProject) return chip;
+  // A project chip only gets a tooltip once its name has actually clipped.
   const content = <span className="text-small">{location.name}</span>;
   // In a scope the chip is always a trigger - swapping elements on hover would miss the hover that
   // caused it - and the shared tooltip shows nothing when the name fits.

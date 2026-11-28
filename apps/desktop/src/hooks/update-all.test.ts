@@ -1,123 +1,18 @@
 // ============================================================================
-// home-inbox-data.test - "Update all"'s batching (review round 1's B4 fix:
+// update-all.test - "Update all"'s batching (review round 1's B4 fix:
 // one `update_all_skills` request for every outdated owner instead of one
 // `updateSkill` round trip per skill).
 // ============================================================================
 
 import { describe, expect, it } from "vitest";
-import { ownSkillsView } from "@skill-studio/lib";
 import type {
   Deployment,
   ForkRecord,
-  HealthIssue,
-  InstalledSkill,
   UpdateAllItem,
   UpdateAllOutcome,
   UpdateOutcome,
 } from "@skill-studio/lib";
-import { buildHarnessSnapshot } from "../../dev/harness/skill-fixture";
-import {
-  computeHomeGroups,
-  homeRowState,
-  issueDeploymentPath,
-  updateAllFailureMessage,
-  updateAllOutdatedSkills,
-} from "./home-inbox-data";
-
-function fixtureDeployment(overrides: Partial<Deployment> = {}): Deployment {
-  return {
-    id: "dep:v1/global/universal/find-bugs",
-    destination: "universal",
-    owner_kind: "manual",
-    mutability: "read-only",
-    backing: { kind: "canonical" },
-    agent: "shared",
-    scope: "global",
-    path: "/home/.agents/skills/find-bugs",
-    is_symlink: false,
-    symlink_is_broken: false,
-    content_hash: "abc",
-    disabled: false,
-    codex_implicit_invocation: null,
-    disabled_by: null,
-    invocation: "both",
-    spec_violations: [],
-    shared_via_whole_dir_link: false,
-    ...overrides,
-  };
-}
-
-function fixtureSkill(overrides: Partial<InstalledSkill> = {}): InstalledSkill {
-  return {
-    name: "find-bugs",
-    source: "getsentry/find-bugs",
-    source_type: "github",
-    installed_at: "2026-01-01T00:00:00Z",
-    has_update: false,
-    source_kind: "dotagents",
-    deployments: [fixtureDeployment()],
-    has_spec: true,
-    spec_violations: [],
-    skill_md_tokens: 0,
-    description_tokens: 0,
-    folder_bytes: 0,
-    file_count: 0,
-    content_hash: "",
-    content_hashes: [],
-    frontmatter_fields: {},
-    folder_truncated: false,
-    parked: false,
-    invocation: "both",
-    update_owners: [],
-    update_owner_ids: [],
-    description: null,
-    fork: null,
-    parked_at: null,
-    skill_path: null,
-    source_url: null,
-    update_commit: null,
-    update_commit_at: null,
-    updated_at: null,
-    ...overrides,
-  };
-}
-
-describe("homeRowState", () => {
-  it("a_warnings_group_row_for_a_skill_with_an_update_shows_the_warning_glyph_or_names_the_update_that_outranked_it", () => {
-    const skill = fixtureSkill({ update_owner_ids: ["x"] });
-    const issue: HealthIssue = {
-      kind: "linked-root",
-      skill,
-      detail: "Claude Code reads the Universal folder through a root link",
-      harness: "claude-code",
-      harnessLabel: "Claude Code",
-      root: "/home/.agents/skills",
-    };
-    const state = homeRowState("warn", skill, issue);
-    expect(state?.kind).toBe("issue");
-    expect(state?.level).toBe("warning");
-  });
-
-  it("an_updates_group_row_for_a_skill_with_an_update_and_a_blocking_violation_shows_the_update_glyph_or_names_the_violation_that_would_outrank_it", () => {
-    // `rowState`'s ladder puts a blocking spec violation ahead of "update available"; the
-    // Updates group still shows "update" for this skill, since `updateRowState` only reads
-    // `update_owner_ids` - unlike `rowState`, it never runs the violation rung.
-    const skill = fixtureSkill({
-      update_owner_ids: ["x"],
-      spec_violations: ["invalid YAML frontmatter at line 3, column 1: mapping values not allowed"],
-    });
-    const state = homeRowState("upd", skill, null);
-    expect(state?.kind).toBe("update");
-  });
-
-  it("an_unused_group_row_for_a_skill_with_a_spec_violation_shows_the_ladder_glyph_or_names_the_missing_state", () => {
-    const skill = fixtureSkill({
-      spec_violations: ["invalid YAML frontmatter at line 3, column 1: mapping values not allowed"],
-    });
-    const state = homeRowState("unused", skill, null);
-    expect(state?.kind).toBe("violation");
-  });
-});
+import { updateAllFailureMessage, updateAllOutdatedSkills } from "./update-all";
 
 const noDeployments: Deployment[] = [];
 
@@ -187,50 +82,6 @@ function failAll(items: UpdateAllItem["skill"][]): UpdateAllOutcome {
     not_run: [],
   };
 }
-
-describe("computeHomeGroups", () => {
-  it("parked_skills_leave_who_can_invoke_prompt_cost_and_the_unused_group_or_home_counts_skills_no_agent_reads", () => {
-    // The scan keeps a parked skill in the snapshot, with `parked` set and every copy in the parked scope.
-    const parkedSkill = (name: string, overrides: Partial<InstalledSkill>) =>
-      fixtureSkill({
-        name,
-        parked: true,
-        parked_at: "2026-11-01T00:00:00Z",
-        deployments: [
-          fixtureDeployment({
-            agent: "parked",
-            scope: "parked",
-            path: `/home/.agents/skills-parked/universal/${name}`,
-          }),
-        ],
-        ...overrides,
-      });
-    const base = buildHarnessSnapshot();
-    const usedIn30Days = (skill: string) => ({ ...base.invocations[0], skill, last_30_days: 3 });
-    const groups = computeHomeGroups({
-      ...base,
-      skills: [
-        fixtureSkill({ name: "live-used", invocation: "both", description_tokens: 10 }),
-        fixtureSkill({ name: "live-idle", invocation: "model-only", description_tokens: 20 }),
-        fixtureSkill({ name: "live-manual", invocation: "user-only", description_tokens: 40 }),
-        parkedSkill("parked-used", { invocation: "both", description_tokens: 100 }),
-        parkedSkill("parked-idle", { invocation: "model-only", description_tokens: 200 }),
-        parkedSkill("parked-manual", { invocation: "user-only", description_tokens: 400 }),
-      ],
-      invocations: [usedIn30Days("live-used"), usedIn30Days("parked-used")],
-    });
-
-    expect(groups.inv).toEqual({ both: 1, modelOnly: 1, userOnly: 1 });
-    expect(groups.cost).toEqual({
-      totalTokens: 30,
-      usedTokens: 10,
-      usedCount: 1,
-      idleTokens: 20,
-      idleCount: 1,
-    });
-    expect(groups.unused.map((skill) => skill.name)).toEqual(["live-idle", "live-manual"]);
-  });
-});
 
 describe("updateAllOutdatedSkills", () => {
   it("update_all_sends_one_request_for_every_outdated_owner_or_names_the_extra_call", async () => {
@@ -565,61 +416,6 @@ describe("updateAllFailureMessage", () => {
   });
 });
 
-describe("issueDeploymentPath", () => {
-  const ERROR = 'name "Find Bugs" is not a valid skill name';
-
-  it("a_spec_violation_issue_opens_the_warned_copy_instead_of_the_clean_first_copy_or_the_warning_stays_hidden", () => {
-    const skill = fixtureSkill({
-      deployments: [
-        fixtureDeployment({ path: "/a/clean" }),
-        fixtureDeployment({ path: "/b/warned", spec_violations: [ERROR] }),
-      ],
-    });
-    const issue: HealthIssue = { kind: "spec-violation", skill, detail: ERROR };
-    expect(issueDeploymentPath(issue)).toBe("/b/warned");
-  });
-
-  it("a_spec_warning_issue_opens_the_copy_with_the_warning_not_an_earlier_copy_with_an_error_or_the_page_shows_a_different_problem_than_the_row", () => {
-    const mismatch = 'name "other" does not match its directory name "find-bugs"';
-    const skill = fixtureSkill({
-      deployments: [
-        fixtureDeployment({
-          path: "/a/errored",
-          spec_violations: ["missing required frontmatter field: description"],
-        }),
-        fixtureDeployment({ path: "/b/mismatch", spec_violations: [mismatch] }),
-      ],
-    });
-    const issue: HealthIssue = { kind: "spec-warning", skill, detail: mismatch };
-    expect(issueDeploymentPath(issue)).toBe("/b/mismatch");
-  });
-
-  it("a_non_spec_issue_names_no_copy_so_the_page_opens_its_default", () => {
-    const skill = fixtureSkill({
-      deployments: [fixtureDeployment({ path: "/b/warned", spec_violations: [ERROR] })],
-    });
-    const issue: HealthIssue = { kind: "broken-symlink", skill, detail: "broken" };
-    expect(issueDeploymentPath(issue)).toBeUndefined();
-  });
-
-  it("a_skill_also_shipped_by_a_plugin_opens_the_warned_own_copy_not_the_plugin_copy_in_the_own_view", () => {
-    const skill = fixtureSkill({
-      deployments: [
-        fixtureDeployment({ path: "/own/warned", spec_violations: [ERROR] }),
-        fixtureDeployment({
-          path: "/plugin/errored",
-          spec_violations: [ERROR],
-          plugin: { name: "p", version: null, harness: "Claude Code", marketplace: "m", id: "p@m" },
-        }),
-      ],
-      spec_violations: [ERROR],
-    });
-    const [own] = ownSkillsView([skill]);
-    const issue: HealthIssue = { kind: "spec-violation", skill: own, detail: ERROR };
-    expect(issueDeploymentPath(issue)).toBe("/own/warned");
-  });
-});
-
 describe("updateAllOutdatedSkills with edited skills", () => {
   const edited = {
     ...ownerSkill("edited", "owner:v1/global/edited"),
@@ -785,6 +581,79 @@ describe("updateAllOutdatedSkills with edited skills", () => {
     expect(tally.attempted).toBe(2);
     expect(tally.succeeded).toBe(2);
     expect(tally.skillsSucceeded).toBe(1);
+  });
+
+  it("update_all_forks_no_skill_whose_global_copy_left_the_batch_and_only_updates_the_copy_still_in_it", async () => {
+    const calls: string[] = [];
+    const projectOnly = {
+      ...edited,
+      update_owner_ids: ["owner:v1/project/edited"],
+      update_owners: [
+        { owner_id: "owner:v1/project/edited", latest_commit: "next", latest_commit_at: null },
+      ],
+    };
+    await updateAllOutdatedSkills(
+      [projectOnly],
+      async (target) => {
+        calls.push(`pull ${target.deployment_id}`);
+        return pulled;
+      },
+      async (targets) => {
+        const owners = targets.map((target) => target.owner_id ?? "");
+        calls.push(`update ${owners.join(",")}`);
+        return succeedAll(["edited"]);
+      },
+      undefined,
+      {
+        names: new Set(["edited"]),
+        fork: async (target) => {
+          calls.push(`fork ${target.deployment_id}`);
+          return forkRecord;
+        },
+      },
+    );
+    expect(calls).toEqual(["update owner:v1/project/edited"]);
+  });
+
+  it("update_all_holds_an_edited_copy_chosen_for_a_fork_when_a_rescan_makes_it_unforkable", async () => {
+    const calls: string[] = [];
+    const unforkable = {
+      ...edited,
+      deployments: [
+        ...edited.deployments,
+        {
+          ...canonicalDeployment,
+          id: "dep:v1/edited-claude",
+          destination: "per-harness" as const,
+          backing: { kind: "independent" as const },
+          is_symlink: false,
+          owner_kind: "skills-sh" as const,
+          owner_id: "owner:v1/global/edited-claude",
+        },
+      ],
+    };
+    const tally = await updateAllOutdatedSkills(
+      [unforkable],
+      async (target) => {
+        calls.push(`pull ${target.deployment_id}`);
+        return pulled;
+      },
+      async (targets) => {
+        calls.push(`update ${targets.map((target) => target.owner_id ?? "").join(",")}`);
+        return succeedAll(["edited"]);
+      },
+      undefined,
+      {
+        names: new Set(["edited"]),
+        fork: async (target) => {
+          calls.push(`fork ${target.deployment_id}`);
+          return forkRecord;
+        },
+      },
+    );
+    expect(calls).toEqual([]);
+    expect(tally.failures).toBe(1);
+    expect(tally.skillsSucceeded).toBe(0);
   });
 
   it("update_all_counts_a_forked_skill_as_failed_when_its_other_copy_fails_or_reports_a_false_success", async () => {

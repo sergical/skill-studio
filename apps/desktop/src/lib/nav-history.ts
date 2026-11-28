@@ -41,7 +41,6 @@ function isSameLocation(
     const resolve = (view: typeof left) => view.deploymentPath ?? defaults?.get(view.name);
     return left.name === right.name && resolve(left) === resolve(right);
   }
-  if (left.kind === "learn" && right.kind === "learn") return left.section === right.section;
   return true;
 }
 

@@ -165,9 +165,60 @@ describe("unusedSkills", () => {
       fixtureSkill({ name: "mango", invocation: "both" }),
       fixtureSkill({ name: "used-up", invocation: "both" }),
     ];
-    const invocations = [fixtureStats({ skill: "used-up", last_30_days: 4 })];
+    const invocations = [
+      fixtureStats({
+        skill: "used-up",
+        last_30_days: 4,
+        by_harness_30_days: { "claude-code": 4 },
+      }),
+    ];
     const result = unusedSkills(skills, invocations);
     expect(result.map((s) => s.name)).toEqual(["apple", "mango", "zebra"]);
+  });
+
+  it("calls nothing unused when no history could be read", () => {
+    expect(unusedSkills([fixtureSkill({ name: "apple" })], [])).toEqual([]);
+  });
+
+  it("calls a skill unused only when an agent that reads it has history", () => {
+    const cursorOnly = fixtureSkill({
+      name: "cursor-only",
+      deployments: [fixtureDeployment({ agent: "Cursor", path: "/home/.cursor/skills/x" })],
+    });
+    const shared = fixtureSkill({
+      name: "shared",
+      deployments: [fixtureDeployment({ agent: "shared", path: "/home/.agents/skills/x" })],
+    });
+    const claude = fixtureSkill({ name: "claude" });
+    const claudeHistory = [
+      fixtureStats({ skill: "other", last_30_days: 2, by_harness_30_days: { "claude-code": 2 } }),
+    ];
+    expect(unusedSkills([cursorOnly, shared, claude], claudeHistory).map((s) => s.name)).toEqual([
+      "claude",
+    ]);
+    const codexHistory = [
+      fixtureStats({ skill: "other", last_30_days: 2, by_harness_30_days: { codex: 2 } }),
+    ];
+    expect(unusedSkills([cursorOnly, shared, claude], codexHistory).map((s) => s.name)).toEqual([
+      "shared",
+    ]);
+  });
+
+  it("counts only the kept agents' history, so a turned-off agent's records add no unused skill", () => {
+    const cursorOnly = fixtureSkill({
+      name: "cursor-only",
+      deployments: [fixtureDeployment({ agent: "Cursor", path: "/home/.cursor/skills/x" })],
+    });
+    const claude = fixtureSkill({ name: "claude" });
+    const history = [
+      fixtureStats({ skill: "other", last_30_days: 2, by_harness_30_days: { "claude-code": 2 } }),
+      fixtureStats({ skill: "claude", last_30_days: 1, by_harness_30_days: { cursor: 1 } }),
+    ];
+    expect(unusedSkills([cursorOnly, claude], history).map((s) => s.name)).toEqual(["cursor-only"]);
+    // With Cursor off, its use of "claude" no longer counts and its history reads nothing.
+    expect(unusedSkills([cursorOnly, claude], history, ["claude-code"]).map((s) => s.name)).toEqual(
+      ["claude"],
+    );
   });
 });
 

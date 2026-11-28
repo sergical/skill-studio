@@ -17,10 +17,10 @@ async function activityAgentChoices(page: Page): Promise<string[]> {
   return choices.slice(1).map((choice) => choice.replace(/[\d,]+$/, "").trim());
 }
 
-test("turning off an agent under Search history from takes it out of Activity's agent filter, and turning it on puts it back", async ({
+test("turning off Find projects for an agent takes it out of Activity's agent filter, and turning it on puts it back", async ({
   page,
 }) => {
-  const codex = page.getByRole("switch", { name: "Codex" });
+  const codex = page.getByRole("switch", { name: "Find projects in Codex history" });
   await expect(codex).toBeChecked();
 
   await codex.click();
@@ -37,7 +37,7 @@ test("turning off an agent under Search history from takes it out of Activity's 
   expect(await activityAgentChoices(page)).toContain("Codex");
 });
 
-test("an agent picked in Activity's filter and then turned off stays unpicked when it is turned on again", async ({
+test("an agent picked in Activity's filter and then turned off under Find projects stays unpicked when it is turned on again", async ({
   page,
 }) => {
   await openSidebarPage(page, "Activity");
@@ -46,7 +46,7 @@ test("an agent picked in Activity's filter and then turned off stays unpicked wh
   await page.keyboard.press("Escape");
 
   await openSidebarPage(page, "Settings");
-  const codex = page.getByRole("switch", { name: "Codex" });
+  const codex = page.getByRole("switch", { name: "Find projects in Codex history" });
   await codex.click();
   await expect(codex).not.toBeChecked();
   await codex.click();

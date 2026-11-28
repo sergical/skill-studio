@@ -20,6 +20,21 @@ function asSentence(text: string): string {
   return /[.!?]$/.test(capitalized) ? capitalized : `${capitalized}.`;
 }
 
+/**
+ * True for the YAML error an unquoted `: ` inside a plain value causes (`description: Use it when:
+ * …`). Strict YAML reads it as a nested mapping. Codex and OpenCode quote the value and load the
+ * skill, and Claude Code reads it line by line, so only pi skips it.
+ */
+export function isUnquotedColonYaml(violation: string): boolean {
+  // The scanner adds this note only after checking the colon can be quoted (`UNQUOTED_COLON_NOTE`
+  // in crates/skill-studio-core/src/frontmatter_repair.rs); bad indentation gives the same parser
+  // message without it.
+  return (
+    violation.startsWith("invalid YAML frontmatter") &&
+    violation.endsWith("(unquoted colon in a value)")
+  );
+}
+
 /** What the agents do with one violation, or "" when there is nothing to add. */
 export function describeSpecViolationImpact(violation: string): string {
   if (violation === "missing required frontmatter field: description") {
@@ -28,8 +43,11 @@ export function describeSpecViolationImpact(violation: string): string {
   if (violation === "missing required frontmatter field: name") {
     return "OpenCode skips it without a warning. Claude Code, Codex, and pi use the folder name.";
   }
+  if (isUnquotedColonYaml(violation)) {
+    return "pi skips it. Claude Code, Codex, and OpenCode still load it.";
+  }
   if (violation.startsWith("invalid YAML frontmatter")) {
-    return "pi skips it. Claude Code, Codex, and OpenCode repair it and load it.";
+    return "Codex, OpenCode, and pi skip it. Claude Code loads it without its description.";
   }
   const mismatch = /^name "(.*)" does not match its directory name "(.*)"$/s.exec(violation);
   if (mismatch) {

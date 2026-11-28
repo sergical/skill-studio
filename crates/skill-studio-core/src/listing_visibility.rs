@@ -174,7 +174,8 @@ pub struct HarnessListing {
     pub budget_source: String,
     /// Context window in tokens, when known.
     pub context_window_tokens: Option<u64>,
-    /// Effective Claude Code skillListingMaxDescChars in this scope.
+    /// The most characters of one description the agent lists: Claude Code's
+    /// skillListingMaxDescChars in this scope, or Codex's fixed cap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description_char_limit: Option<usize>,
     /// The layer controlling the Claude Code per-skill cap, independent of its total budget.
@@ -2130,7 +2131,7 @@ fn codex_listing(
             .model
             .zip(settings.model_file)
             .map(|(name, file)| ConfiguredListingModel { name, file }),
-        description_char_limit: None,
+        description_char_limit: Some(CODEX_DESCRIPTION_CAP),
         description_limit_setting: None,
         context_source: if budget.default_context {
             "unknown".into()

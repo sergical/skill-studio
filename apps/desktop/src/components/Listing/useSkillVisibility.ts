@@ -1,8 +1,7 @@
-import { useListingReport, useSessionsReport } from "../../hooks/useStoreReports";
+import { useListingReport } from "../../hooks/useStoreReports";
 
 export function useSkillVisibility(projectPath: string | null, contentHash: string) {
   const listing = useListingReport(projectPath, contentHash);
-  const history = useSessionsReport(projectPath, 50, contentHash);
   const listings =
     listing?.data?.listings.filter((r) =>
       projectPath === null
@@ -11,7 +10,10 @@ export function useSkillVisibility(projectPath: string | null, contentHash: stri
     ) ?? [];
   return {
     listings,
-    history: history?.data,
+    // An earlier report kept after a failed read is not a read of the current list.
+    hasListing: Boolean(listing?.data) && !listing?.error,
+    /** `listings` come from that earlier report, not from the latest read. */
+    stale: Boolean(listing?.data) && Boolean(listing?.error),
     error: listing?.error,
   };
 }

@@ -1,42 +1,52 @@
 import { useReducer, useState } from "react";
-import { Copy } from "lucide-react";
 import { Button, Input } from "@skill-studio/ui";
-import { HARNESS_CATALOG, deploymentLabelFromAgentId, homeRelativePath } from "@skill-studio/lib";
+import {
+  HARNESS_CATALOG,
+  LISTING_STATE_LABEL,
+  deploymentLabelFromAgentId,
+  homeRelativePath,
+} from "@skill-studio/lib";
 import type {
   HarnessListing,
   ListingEntry,
   ListingReport,
   ListingRequest,
   ListingState,
+  SkillInvocationStats,
   SkillSnapshot,
 } from "@skill-studio/lib";
 import { useClientRows } from "../../hooks/useClientRows";
+import { AgentTabs } from "./AgentTabs";
 import { CompareClients } from "./CompareClients";
+import { PageSection } from "../Shell/PageSection";
 import { PageShell } from "../Shell/PageShell";
+import { CopyTextButton } from "../ui/CopyTextButton";
 import { SelectControl } from "../ui/SelectControl";
 import { ClientConfiguration } from "./ClientConfiguration";
-import { entrySource, hasAssumedClaudeWindow } from "./client-allocation";
+import {
+  agentUses30Days,
+  entrySource,
+  folderCounts,
+  hasAssumedClaudeWindow,
+  hasBudgetEstimate,
+  listedEntries,
+  sourceCounts,
+} from "./client-allocation";
 import { currentListingRequest, useListingReport } from "../../hooks/useStoreReports";
 import { listingReportKey, useAppStore } from "../../store/appStore";
-
-const STATE_LABEL = {
-  described: "Described",
-  truncated: "Shortened",
-  name_only: "Name only",
-  omitted: "Omitted",
-  hidden: "Hidden",
-} satisfies Record<ListingState, string>;
 
 const STATE_CLASS = {
   described: "text-text-primary",
   truncated: "text-text-secondary",
   name_only: "text-text-tertiary",
-  omitted: "text-destructive-text",
+  omitted: "text-warning",
   hidden: "text-text-quaternary",
 } satisfies Record<ListingState, string>;
 
 const GRID = "[grid-template-columns:minmax(0,1fr)_96px_96px_96px_76px] gap-x-3 px-3";
 const GLOBAL = "global";
+/** One row of the box that holds the tools for digging further. */
+const DISCLOSURE = "px-3 py-2";
 const STATE_ORDER = { omitted: 0, name_only: 1, truncated: 2, described: 3, hidden: 4 };
 
 const hasDescription = (state: ListingState | undefined) =>
@@ -88,7 +98,7 @@ const BUDGET_INPUTS = new Map<
 
 function StateText({ state }: { state: ListingState | null | undefined }) {
   if (!state) return <span className="text-caption text-text-quaternary">-</span>;
-  return <span className={`text-caption ${STATE_CLASS[state]}`}>{STATE_LABEL[state]}</span>;
+  return <span className={`text-caption ${STATE_CLASS[state]}`}>{LISTING_STATE_LABEL[state]}</span>;
 }
 
 const TIER_LABEL = {
@@ -101,7 +111,7 @@ function ClientReference({ harness }: { harness: string }) {
   const client = HARNESS_CATALOG.find((item) => item.id === harness);
   if (!client?.verifiedVisibility.length) return null;
   return (
-    <details className="border-t border-border-subtle py-2">
+    <details className={DISCLOSURE}>
       <summary className="cursor-pointer text-small">How {client.label} lists skills</summary>
       {client.verifiedVisibility.map((reference) => (
         <div key={reference.revision} className="mt-3 space-y-1 text-small">
@@ -143,26 +153,30 @@ function ClientReference({ harness }: { harness: string }) {
 }
 
 function Summary({ row, budget }: { row: HarnessListing; budget: number }) {
-  const count = (state: ListingState) => row.entries.filter((e) => e.state === state).length;
-  const listed = row.entries.length - count("hidden");
+  const sources = Object.entries(sourceCounts(listedEntries(row))).filter(([, n]) => n > 0);
   return (
     <div className="flex flex-col gap-1 text-small text-text-secondary">
-      <p className="m-0 text-body text-text-primary">
-        {count("described") + count("truncated")} of {listed} listed skills keep a description.{" "}
-        {count("truncated") > 0 && `${count("truncated")} are shortened. `}
-        {count("name_only") > 0 && `${count("name_only")} show a name only. `}
-        {count("omitted") > 0 && `${count("omitted")} are left out. `}
-        {count("hidden") > 0 && `${count("hidden")} are hidden.`}
+      <p className="m-0">
+        Skills from{" "}
+        {sources.map(([source, n]) => `${source.toLowerCase()}s ${n.toLocaleString()}`).join(" · ")}
       </p>
       <p className="m-0">
         Budget {budget.toLocaleString()} {row.budget_unit}.{" "}
-        {!row.thresholds && `The full listing is ${row.full_size.toLocaleString()}. `}
+        {!row.thresholds && `The full skill list is ${row.full_size.toLocaleString()}. `}
         {row.budget_source}.
       </p>
       {row.description_char_limit != null && (
         <p className="m-0">
-          Per-skill limit {row.description_char_limit.toLocaleString()} characters (
-          <code>skillListingMaxDescChars</code>).
+          Per-skill limit {row.description_char_limit.toLocaleString()} characters
+          {row.description_limit_setting ? (
+            <>
+              {" "}
+              (<code>{row.description_limit_setting.key}</code>)
+            </>
+          ) : (
+            ", fixed"
+          )}
+          .
         </p>
       )}
       {row.context_window_tokens !== null && (
@@ -174,12 +188,12 @@ function Summary({ row, budget }: { row: HarnessListing; budget: number }) {
       )}
       {row.thresholds && (
         <section
-          aria-label="Listing tier"
+          aria-label="Skill list tier"
           className="mt-1 flex max-w-[68ch] flex-col gap-1 rounded-md border border-border-subtle p-3"
         >
           <p className="m-0 text-body text-text-primary">{TIER_LABEL[row.thresholds.tier]}</p>
           <p className="m-0 tabular-nums">
-            Full listing {row.thresholds.full_cost.toLocaleString()} {row.budget_unit}. Names and
+            Full skill list {row.thresholds.full_cost.toLocaleString()} {row.budget_unit}. Names and
             paths only {row.thresholds.names_only_cost.toLocaleString()}, of which the skill roots
             table is {row.thresholds.roots_table_cost.toLocaleString()}.
           </p>
@@ -197,15 +211,11 @@ function Summary({ row, budget }: { row: HarnessListing; budget: number }) {
 
 function SettingCard({ row, tried }: { row: HarnessListing; tried: HarnessListing | null }) {
   const setting = (tried ?? row).setting;
-  const [copied, setCopied] = useState(false);
   if (!setting) return null;
   const file = setting.chezmoi_source ?? setting.file;
-  const copy = () => {
-    void navigator.clipboard.writeText(setting.snippet).then(() => setCopied(true));
-  };
   return (
     <section
-      aria-label="Listing setting"
+      aria-label="Setting to paste"
       className="flex flex-col gap-2 rounded-md border border-border-subtle p-3 text-small"
     >
       <p className="m-0 text-text-secondary">
@@ -222,15 +232,11 @@ function SettingCard({ row, tried }: { row: HarnessListing; tried: HarnessListin
         <pre className="m-0 min-w-0 flex-1 overflow-x-auto rounded-sm bg-bg-secondary px-2 py-1 text-caption">
           {setting.snippet}
         </pre>
-        <Button
-          variant="outline"
-          size="sm"
+        <CopyTextButton
+          text={setting.snippet}
+          label="Copy"
           className="rounded-sm px-2 text-text-secondary"
-          onClick={copy}
-        >
-          <Copy size={12} />
-          {copied ? "Copied" : "Copy"}
-        </Button>
+        />
       </div>
     </section>
   );
@@ -240,12 +246,15 @@ function EntryRow({
   entry,
   tried,
   scanOnly,
+  showPath,
   hasRecording,
   onOpen,
 }: {
   entry: ListingEntry;
   tried: ListingEntry | undefined;
   scanOnly: boolean;
+  /** Off when every skill sits in the one folder the summary already names. */
+  showPath: boolean;
   hasRecording: boolean;
   onOpen?: () => void;
 }) {
@@ -254,7 +263,7 @@ function EntryRow({
     <li
       aria-label={entry.name}
       data-changed={changed || undefined}
-      className={`grid min-h-8 items-center ${scanOnly ? "grid-cols-[minmax(8rem,1fr)_minmax(0,2fr)] gap-3 px-3" : GRID} ${changed ? "bg-bg-hover" : ""}`}
+      className={`grid min-h-8 items-center ${scanOnly ? "grid-cols-[minmax(8rem,1fr)_minmax(0,2fr)] gap-3" : GRID} ${changed ? "bg-bg-hover" : ""}`}
     >
       <span
         className="min-w-0 truncate text-body text-text-primary"
@@ -272,10 +281,12 @@ function EntryRow({
         ) : (
           entry.name
         )}
-        <span className="text-caption text-text-tertiary">
-          {" "}
-          · {entry.plugin ?? entrySource(entry)}
-        </span>
+        {(entry.plugin || !entry.scanned) && (
+          <span className="text-caption text-text-tertiary">
+            {" "}
+            · {entry.plugin ?? entrySource(entry)}
+          </span>
+        )}
         {entry.hidden_reason && (
           <span className="text-caption text-text-tertiary"> ({entry.hidden_reason})</span>
         )}
@@ -288,9 +299,9 @@ function EntryRow({
       </span>
       {scanOnly ? (
         <span className="truncate text-caption text-text-secondary" title={entry.path ?? undefined}>
-          {entry.path && homeRelativePath(entry.path)}
+          {showPath && entry.path && homeRelativePath(entry.path)}
           {hasRecording && entry.observed && (
-            <span className="block">Last recorded listing · {STATE_LABEL[entry.observed]}</span>
+            <span className="block">Last session · {LISTING_STATE_LABEL[entry.observed]}</span>
           )}
         </span>
       ) : (
@@ -307,6 +318,92 @@ function EntryRow({
         </>
       )}
     </li>
+  );
+}
+
+/** A prompt for the user's agent: it can read the same report through the Skill Studio MCP. */
+function parkPrompt(agent: string, names: string[]) {
+  return `Use the Skill Studio MCP listing tool to check which skills ${agent} lists by name only or not at all. Then help me decide which to park so the rest keep their descriptions. They are: ${names.join(", ")}.`;
+}
+
+/** The skills past the line: the ones this agent knows by name only, or not at all. Without a
+ * budget estimate on a known model window, nothing can be called cut. */
+export function DontFit({
+  row,
+  invocations,
+  open,
+  canOpen,
+}: {
+  row: HarnessListing;
+  invocations: SkillInvocationStats[];
+  open: (entry: ListingEntry) => void;
+  canOpen: (entry: ListingEntry) => boolean;
+}) {
+  const [all, setAll] = useState(false);
+  // This agent's own uses: another agent's uses say nothing about what this one needs.
+  const uses = agentUses30Days(invocations, row.harness);
+  const out = row.entries.filter((e) => e.state === "name_only" || e.state === "omitted");
+  if (uses) out.sort((a, b) => (uses.get(a.name) ?? 0) - (uses.get(b.name) ?? 0));
+  if (!out.length || !hasBudgetEstimate(row)) return null;
+  const shown = all ? out : out.slice(0, 8);
+  const prompt = parkPrompt(
+    deploymentLabelFromAgentId(row.harness),
+    out.map((entry) => entry.name),
+  );
+  return (
+    <PageSection
+      title={`Don’t fit · ${out.length}`}
+      meta={
+        <>
+          <span>{uses ? "Fewest uses in 30 days first" : "No readable history"}</span>
+          <CopyTextButton
+            variant="ghost"
+            className="-mr-2.5"
+            label="Copy agent prompt"
+            text={prompt}
+            title={prompt}
+          />
+        </>
+      }
+    >
+      <ul aria-label="Skills that don’t fit" className="border-t border-border-subtle">
+        {shown.map((entry) => (
+          <li
+            key={entryKey(entry)}
+            className="grid min-h-9 grid-cols-[minmax(0,1fr)_auto_5.5rem] items-center gap-3 border-b border-border-subtle"
+          >
+            {canOpen(entry) ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="-ml-2.5 max-w-[calc(100%+0.625rem)] justify-start truncate text-body font-normal"
+                onClick={() => open(entry)}
+              >
+                {entry.name}
+              </Button>
+            ) : (
+              <span className="truncate text-body">{entry.name}</span>
+            )}
+            <span
+              className={`text-small ${entry.state === "omitted" ? "text-warning" : "text-text-secondary"}`}
+            >
+              {LISTING_STATE_LABEL[entry.state]}
+            </span>
+            <span
+              className={`text-right text-small tabular-nums ${uses?.get(entry.name) ? "text-text-secondary" : "text-text-tertiary"}`}
+            >
+              {uses &&
+                `${(uses.get(entry.name) ?? 0).toLocaleString()} ${uses.get(entry.name) === 1 ? "use" : "uses"}`}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {out.length > shown.length && (
+        <Button size="sm" variant="ghost" className="mt-1 -ml-2.5" onClick={() => setAll(true)}>
+          Show all {out.length}
+        </Button>
+      )}
+    </PageSection>
   );
 }
 
@@ -352,11 +449,11 @@ function BudgetComparison({
     (e) => hasDescription(e.state) && !hasDescription(triedByKey.get(entryKey(e))?.state),
   ).length;
   return (
-    <details className="rounded-md border border-border-subtle px-3 py-2">
+    <details className={DISCLOSURE}>
       <summary className="cursor-pointer text-small">Preview a different budget</summary>
       <p className="my-2 text-caption text-text-secondary">
-        This preview estimates a different budget. Changes to your client are made under Effective
-        settings.
+        An estimate only. To change the budget, edit it under{" "}
+        {deploymentLabelFromAgentId(row.harness)} settings.
       </p>
       <form
         className="flex flex-wrap items-center gap-2"
@@ -498,12 +595,88 @@ export function ListingView({ snapshot, initialHarness, initialScope }: ListingV
     ...(snapshot?.projects ?? []).map((p) => ({ value: p, label: p })),
   ];
   const preview = row?.evidence === "preview";
+  const manyFolders = row ? folderCounts(listedEntries(row)).length > 1 : false;
+
+  const skillList = (
+    <>
+      <Input
+        aria-label="Find an entry"
+        placeholder={
+          !preview ? "Search by name or path" : "Search by name, plugin, source, or path"
+        }
+        value={query}
+        onChange={(event) => {
+          change({ query: event.target.value, limit: 25 });
+        }}
+        className={preview ? "my-2" : "mb-2"}
+      />
+
+      {preview && (
+        <div
+          className={`grid h-8 items-center border-b border-border-subtle text-caption text-text-tertiary ${GRID}`}
+        >
+          <span>Skill</span>
+          <span>Now</span>
+          <span>{tried ? "At new budget" : ""}</span>
+          <span>{row?.observed_session ? "Last session" : ""}</span>
+          <span className="text-right">Characters</span>
+        </div>
+      )}
+      <ul aria-label="Skill list" className="m-0 list-none p-0">
+        {shown.slice(0, limit).map((entry) => {
+          const owner = entry.path && byPath.get(entry.path);
+          return (
+            <EntryRow
+              key={entryKey(entry)}
+              entry={entry}
+              tried={triedByKey.get(entryKey(entry))}
+              scanOnly={!preview}
+              showPath={manyFolders}
+              hasRecording={Boolean(row?.observed_session)}
+              onOpen={
+                owner && entry.path
+                  ? () =>
+                      openSkill(owner, entry.path ?? undefined, undefined, {
+                        kind: "listing",
+                        harness,
+                        scope,
+                      })
+                  : undefined
+              }
+            />
+          );
+        })}
+      </ul>
+      {!shown.length && <p className="my-2 text-small text-text-secondary">No matching entries.</p>}
+      {shown.length > limit && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className={preview ? undefined : "-ml-2.5"}
+          onClick={() => change({ limit: limit + 25 })}
+        >
+          Show more ({limit} of {shown.length})
+        </Button>
+      )}
+      {hiddenCount > 0 && !onlyChanges && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className={`mt-1 rounded-sm px-2 text-text-secondary ${preview ? "" : "-ml-2"}`}
+          aria-pressed={showHidden}
+          onClick={() => change({ showHidden: !showHidden })}
+        >
+          {showHidden ? "Hide hidden skills" : `Show ${hiddenCount} hidden skills`}
+        </Button>
+      )}
+    </>
+  );
 
   return (
     <PageShell
-      title="Client configuration"
+      title="Agents"
       refreshing={refreshing}
-      subtitle="Skills available to each client"
+      toolbar={<AgentTabs tab="listing" harness={harness} />}
       actions={
         <>
           <Button
@@ -547,11 +720,13 @@ export function ListingView({ snapshot, initialHarness, initialScope }: ListingV
       {!row ? (
         current?.data && (
           <p className="m-0 text-small text-text-secondary">
-            No selected client has a report in this scope. Choose clients in Settings.
+            {harnesses.length || !snapshot
+              ? "Skill Studio has no skill list for this agent in this scope yet. Its recorded uses are on the What it used tab."
+              : "None of the agents you turned on has a skill list Skill Studio can read. Turn on more agents in Settings."}
           </p>
         )
       ) : (
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-8">
           <ClientConfiguration
             row={row}
             onSaved={() => {
@@ -560,107 +735,61 @@ export function ListingView({ snapshot, initialHarness, initialScope }: ListingV
             }}
           />
           {preview && row.budget !== null && (
-            <BudgetComparison
-              key={scope + harness}
+            <DontFit
               row={row}
-              tried={tried}
-              changes={changes}
-              triedByKey={triedByKey}
-              onlyChanges={onlyChanges}
-              onToggle={() => change({ onlyChanges: !onlyChanges })}
-              onTry={(request) => {
-                change({ tryRequest: request });
-                refreshListing({ ...base, ...request });
-              }}
-            />
-          )}
-          {preview && row.budget !== null && (
-            <details className="rounded-md border border-border-subtle px-3 py-2">
-              <summary className="cursor-pointer text-small text-text-secondary">
-                How the estimate was calculated
-              </summary>
-              <div className="mt-3 flex flex-col gap-3">
-                <Summary row={row} budget={row.budget} />
-              </div>
-            </details>
-          )}
-          <details
-            open={!preview || undefined}
-            key={scope + harness + "entries"}
-            className="rounded-md border border-border-subtle px-3 py-2"
-          >
-            <summary className="cursor-pointer text-small">
-              {!preview ? "Skills found in folders" : "Browse individual entries"}
-            </summary>
-            <Input
-              aria-label="Find an entry"
-              placeholder={
-                !preview ? "Search by name or path" : "Search by name, plugin, source, or path"
-              }
-              value={query}
-              onChange={(event) => {
-                change({ query: event.target.value, limit: 25 });
-              }}
-              className="my-2"
-            />
-
-            {preview && (
-              <div
-                className={`grid h-8 items-center border-b border-border-subtle text-caption text-text-tertiary ${GRID}`}
-              >
-                <span>Skill</span>
-                <span>Now</span>
-                <span>{tried ? "At new budget" : ""}</span>
-                <span>{row.observed_session ? "Last session" : ""}</span>
-                <span className="text-right">Chars shown</span>
-              </div>
-            )}
-            <ul aria-label="Listing" className="m-0 list-none p-0">
-              {shown.slice(0, limit).map((entry) => {
+              invocations={snapshot?.invocations ?? []}
+              open={(entry) => {
                 const owner = entry.path && byPath.get(entry.path);
-                return (
-                  <EntryRow
-                    key={entryKey(entry)}
-                    entry={entry}
-                    tried={triedByKey.get(entryKey(entry))}
-                    scanOnly={!preview}
-                    hasRecording={Boolean(row.observed_session)}
-                    onOpen={
-                      owner && entry.path
-                        ? () =>
-                            openSkill(owner, entry.path ?? undefined, undefined, {
-                              kind: "listing",
-                              harness,
-                              scope,
-                            })
-                        : undefined
-                    }
-                  />
-                );
-              })}
-            </ul>
-            {!shown.length && (
-              <p className="my-2 text-small text-text-secondary">No matching entries.</p>
-            )}
-            {shown.length > limit && (
-              <Button size="sm" variant="ghost" onClick={() => change({ limit: limit + 25 })}>
-                Show more ({limit} of {shown.length})
-              </Button>
-            )}
-            {hiddenCount > 0 && !onlyChanges && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="mt-1 rounded-sm px-2 text-text-secondary"
-                aria-pressed={showHidden}
-                onClick={() => change({ showHidden: !showHidden })}
-              >
-                {showHidden ? "Hide hidden skills" : `Show ${hiddenCount} hidden skills`}
-              </Button>
-            )}
-          </details>
-          <ClientReference key={row.harness} harness={row.harness} />
-          <CompareClients row={row} clients={clients} />
+                if (owner && entry.path)
+                  openSkill(owner, entry.path, undefined, { kind: "listing", harness, scope });
+              }}
+              canOpen={(entry) => Boolean(entry.path && byPath.get(entry.path))}
+            />
+          )}
+          {preview ? (
+            /* The tools for digging further share one box, one row each. */
+            <div className="flex flex-col divide-y divide-border-subtle rounded-md border border-border-subtle">
+              <details key={scope + harness + "entries"} className={DISCLOSURE}>
+                <summary className="cursor-pointer text-small">Every skill</summary>
+                {skillList}
+              </details>
+              {row.budget !== null && (
+                <BudgetComparison
+                  key={scope + harness}
+                  row={row}
+                  tried={tried}
+                  changes={changes}
+                  triedByKey={triedByKey}
+                  onlyChanges={onlyChanges}
+                  onToggle={() => change({ onlyChanges: !onlyChanges })}
+                  onTry={(request) => {
+                    change({ tryRequest: request });
+                    refreshListing({ ...base, ...request });
+                  }}
+                />
+              )}
+              <CompareClients row={row} clients={clients} />
+              {row.budget !== null && (
+                <details className={DISCLOSURE}>
+                  <summary className="cursor-pointer text-small">
+                    How the estimate was calculated
+                  </summary>
+                  <div className="mt-3 mb-1 flex flex-col gap-3">
+                    <Summary row={row} budget={row.budget} />
+                  </div>
+                </details>
+              )}
+              <ClientReference key={row.harness} harness={row.harness} />
+            </div>
+          ) : (
+            <>
+              <PageSection title="Skills">{skillList}</PageSection>
+              <div className="flex flex-col divide-y divide-border-subtle rounded-md border border-border-subtle empty:hidden">
+                <CompareClients row={row} clients={clients} />
+                <ClientReference key={row.harness} harness={row.harness} />
+              </div>
+            </>
+          )}
         </div>
       )}
     </PageShell>

@@ -19,10 +19,13 @@ import {
 } from "@skill-studio/lib";
 import type {
   AddSkillOperationEvent,
+  AgentId,
   BackgroundStatus,
   Deployment,
   DiscoverySourceSetting,
+  HarnessesChoice,
   InstalledSkill,
+  PastedSkillCheck,
   ProjectFolder,
   RemoveOutcome,
   SkillEvent,
@@ -39,6 +42,7 @@ import {
   skill,
 } from "./skill-fixture";
 import { mockListingReport } from "./mock-listing";
+import { updateTargetRefusal } from "./scanned-deployment";
 import { mockSkillSessionsReport } from "./mock-sessions";
 import { mockPackAdd, mockPackChange, mockPackReport } from "./mock-packs";
 
@@ -82,6 +86,11 @@ interface HarnessControl {
   writeSkillMd(path: string, content: string): void;
   /** Holds every later answer `ms` long, like `?latency=<ms>`, without slowing the app's start. */
   setLatency(ms: number): void;
+  /** How many update commands Update all has started, each a `npx skills` or `dotagents` call. */
+  updateCommandsStarted(): number;
+  /** Keeps each update command running until `releaseUpdateCommands`, so a test can act mid-command. */
+  holdUpdateCommands(): void;
+  releaseUpdateCommands(): void;
 }
 
 declare global {
@@ -110,6 +119,36 @@ const addRequestSchema = z
   })
   .passthrough();
 type AddRequestLike = z.infer<typeof addRequestSchema>;
+
+const pastedDraftSchema = z.object({
+  text: z.string(),
+  name: z.string(),
+  description: z.string(),
+});
+
+/** Mirrors `skill_create::check_draft` for the two problems the Paste tab acts on: the frontmatter
+ * fence wins, else the Name and Description fields fill it. */
+function checkPastedDraft(draft: z.infer<typeof pastedDraftSchema>): PastedSkillCheck {
+  const text = draft.text.replace(/\r\n/g, "\n").replace(/^[\n \t]+/, "");
+  const fence = /^---\n([\s\S]*?)\n---(\n|$)/.exec(text);
+  const field = (key: "name" | "description") =>
+    (fence
+      ? new RegExp(`^${key}:[ \t]*(.+)$`, "m").exec(fence[1])?.[1].trim()
+      : draft[key].trim()) || null;
+  const name = field("name");
+  const description = field("description");
+  const problems = [
+    ...(name ? [] : ["missing required frontmatter field: name"]),
+    ...(description ? [] : ["missing required frontmatter field: description"]),
+  ];
+  return {
+    has_frontmatter: fence !== null,
+    name,
+    description,
+    problems,
+    can_save: !problems.length,
+  };
+}
 
 const SOURCE_KIND_BY_METHOD = {
   dotagents: "dotagents",
@@ -146,7 +185,10 @@ const DISCOVERY_HARNESSES = HARNESS_CATALOG.flatMap((row) =>
 
 /** Installs the mock Tauri IPC layer and returns the control the harness (or the marketing
  * capture page) drives it with. */
-export function installMockTauri(initial: SkillSnapshot): HarnessControl {
+export function installMockTauri(
+  initial: SkillSnapshot,
+  setup: { agents?: string[]; claudeFraction?: number } = {},
+): HarnessControl {
   let currentSnapshot = initial;
   let configuredTokens: string | null = null;
   // Mirrors the event store: newest first, as `list_skill_events` returns it. A remove keeps the
@@ -170,12 +212,17 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
   // `crates/skill-studio-core`, and `get_tracked_projects` reads it back.
   let trackedProjects: TrackedProjects = { added: [ARCHIVED_CLIENT_PROJECT], excluded: [] };
   const discoverySources = new Map<string, boolean>(
-    DISCOVERY_HARNESSES.map((harness) => [harness, true]),
+    DISCOVERY_HARNESSES.map((harness) => [harness, setup.agents?.includes(harness) ?? true]),
   );
   // Mirrors `preferred_editor` in `~/.agents/skill-studio.json` - an app name, a `.app` path,
   // or "$EDITOR", or `null` for the system default. See `skill_editor::EditorChoices`.
   let editorPreference: string | null = null;
   const mcpConnections = new Set<string>();
+  // Mirrors the `harnesses` key of `~/.agents/skill-studio.json`: the welcome screen saves it,
+  // and Settings' agent switches change it.
+  let harnessesChoice: HarnessesChoice | null = null;
+  const detectedAgents = (): AgentId[] =>
+    HARNESS_CATALOG.flatMap(({ id }) => (discoverySources.get(id) ? [id] : []));
   const KNOWN_EDITOR_APPS: EditorOption[] = [
     { app_name: "Cursor", label: "Cursor" },
     { app_name: "Visual Studio Code", label: "Visual Studio Code" },
@@ -537,9 +584,15 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
   mockWindows("main");
   // `?latency=<ms>` holds every answer that long, so busy states show as they do with real disk work.
   let latency = Number(new URLSearchParams(location.search).get("latency") ?? 0);
+  /** "Update all" batches asked to stop; like the real op, a stop sent before its batch starts still applies. */
+  const stoppedBatches = new Set<string>();
+  let updateCommandsStarted = 0;
+  let commandGate: { promise: Promise<void>; release: () => void } | null = null;
   mockIPC(
     async (command, rawPayload) => {
-      if (latency > 0) await new Promise((resolve) => setTimeout(resolve, latency));
+      // A Stop lands at once, so it takes effect after the step the batch is on.
+      if (latency > 0 && command !== "cancel_update_all")
+        await new Promise((resolve) => setTimeout(resolve, latency));
       const payload = isObjectInvokeArgs(rawPayload) ? rawPayload : {};
       switch (command) {
         case "check_skill_updates_now":
@@ -628,10 +681,20 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
             })),
           };
         case "get_harnesses_choice":
-          return null;
-        case "set_harness_enabled":
-          return { kept: [], search_project_folders: true, saved_at: new Date().toISOString() };
+          return harnessesChoice;
+        case "set_harness_enabled": {
+          const { id, enabled } = z.object({ id: z.string(), enabled: z.boolean() }).parse(payload);
+          const kept = (harnessesChoice?.kept ?? detectedAgents()).filter((other) => other !== id);
+          harnessesChoice = {
+            search_project_folders: true,
+            ...harnessesChoice,
+            kept: enabled ? [...kept, id] : kept,
+            saved_at: new Date().toISOString(),
+          };
+          return harnessesChoice;
+        }
         case "save_harnesses_choice":
+          harnessesChoice = z.object({ choice: z.custom<HarnessesChoice>() }).parse(payload).choice;
           return undefined;
         case "get_mcp_connections":
           return [...mcpConnections];
@@ -721,7 +784,7 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
           return {
             dotagents_installed: true,
             has_skill_lock: true,
-            installed_harnesses: ["claude-code", "codex", "opencode", "pi", "cursor"],
+            installed_harnesses: detectedAgents(),
             claude_reads_shared_folder: false,
           };
         case "list_github_skills":
@@ -746,8 +809,35 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
             skills: [{ name: "frontend-design", path: "frontend-design" }],
             truncated: false,
           };
-        case "update_plugin":
+        case "update_plugin": {
+          // Clears this install's update from every skill the plugin ships, as the next scan does.
+          const request = z
+            .object({
+              pluginId: z.string(),
+              scope: z.string(),
+              projectPath: z.string().nullish(),
+            })
+            .parse(payload);
+          const ownerId = `plugin:${request.pluginId}`;
+          const isThisInstall = (owner: InstalledSkill["update_owners"][number]) =>
+            owner.owner_id === ownerId &&
+            (owner.plugin_scope ?? "user") === request.scope &&
+            (owner.plugin_project_path ?? null) === (request.projectPath ?? null);
+          await publish({
+            ...currentSnapshot,
+            skills: currentSnapshot.skills.map((item) => {
+              if (!item.update_owners.some(isThisInstall)) return item;
+              const owners = item.update_owners.filter((owner) => !isThisInstall(owner));
+              return {
+                ...item,
+                has_update: owners.length > 0,
+                update_owner_ids: [...new Set(owners.map((owner) => owner.owner_id))],
+                update_owners: owners,
+              };
+            }),
+          });
           return { outcome: "updated", message: null };
+        }
         case "set_plugin_enabled":
         case "uninstall_plugin":
           return undefined;
@@ -773,7 +863,15 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
               codex_max_context_tokens: z.number().nullish(),
             })
             .parse(payload.request);
-          return mockListingReport(currentSnapshot, request, configuredTokens);
+          return mockListingReport(
+            currentSnapshot,
+            {
+              ...request,
+              claude_budget_fraction: request.claude_budget_fraction ?? setup.claudeFraction,
+            },
+            configuredTokens,
+            setup.agents,
+          );
         }
         case "save_listing_setting": {
           const { value } = z
@@ -1082,35 +1180,122 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
               z.object({ deployment_id: z.string().nullish(), owner_id: z.string().nullish() }),
             )
             .parse(payload.targets);
+          const batchId = z.string().nullish().parse(payload.batchId);
           const skillsByName = new Map(currentSnapshot.skills.map((s) => [s.name, s]));
-          const items = [];
+          // One run per target owner, as the real updater resolves each target to its owner's
+          // copy (`resolve_lifecycle_target`): a target that names no copy is refused, and so is
+          // one the desktop would not resolve (`updateTargetRefusal`) or a copy whose owner kind
+          // has no updater, before any command starts (commands.rs `build_update_request`). The copy's own owner kind picks the package manager, since
+          // one skill can be installed by skills.sh in one scope and dotagents in another.
+          interface UpdateRun {
+            name: string;
+            ownerId: string | null;
+            method: string | undefined;
+            scope: string;
+            path: string;
+          }
+          const items: { skill: string; outcome: Record<string, string> | null }[] = [];
+          const errors: Record<string, string> = {};
+          const runs: UpdateRun[] = [];
+          let finished = 0;
+          const progress = (skillName: string) =>
+            emit("skills://update-all-progress", {
+              done: ++finished,
+              total: targets.length,
+              skill_name: skillName,
+            });
           for (const target of targets) {
             const name = skillNameForTarget(target);
-            const deployment = skillsByName.get(name)?.deployments[0];
-            // react-doctor-disable-next-line react-doctor/async-await-in-loop -- fixture applies each update sequentially, mirroring the real op's per-request loop
-            await updateSkill(name, (item) => ({
-              ...item,
-              has_update: false,
-              update_owner_ids: [],
-              update_owners: [],
-              update_commit: null,
-              update_commit_at: null,
-            }));
-            items.push({
-              skill: name,
-              outcome: {
-                event_id: `fixture-update-${name}`,
-                skill: name,
-                deployment_path: deployment?.path ?? `${HARNESS_HOME}/.agents/skills/${name}`,
-                tree_hash_before: "fixture-before",
-                tree_hash_after: "fixture-after",
-              },
+            const skillItem = skillsByName.get(name);
+            const copy = skillItem?.deployments.find((d) =>
+              target.deployment_id ? d.id === target.deployment_id : d.owner_id === target.owner_id,
+            );
+            const method = copy?.owner_kind;
+            const refusal = copy && updateTargetRefusal(copy, name, target.owner_id);
+            if (!copy || refusal || (method !== "skills-sh" && method !== "dotagents")) {
+              errors[name] = !copy
+                ? `Update refused: no copy of ${name} matches ${JSON.stringify(target)}`
+                : (refusal ?? "Update is not available for this deployment owner");
+              items.push({ skill: name, outcome: null });
+              // react-doctor-disable-next-line react-doctor/async-await-in-loop -- refusals report in target order, as the real op does
+              await progress(name);
+              continue;
+            }
+            runs.push({
+              name,
+              ownerId: target.owner_id ?? copy.owner_id ?? null,
+              method,
+              scope: copy.project_path ?? "global",
+              path: copy.path,
             });
           }
-          return { items, errors: {}, not_run: [] };
+          // One command per run, as the real updater sends: consecutive skills.sh owners of one
+          // scope share one `npx skills update`, and one `dotagents install` refreshes every
+          // dotagents owner of its scope. Stop lets the running command finish and starts no other.
+          const commandFrom = (start: number, done: ReadonlySet<UpdateRun>): UpdateRun[] => {
+            const first = runs[start];
+            const fits = (run: UpdateRun) =>
+              !done.has(run) && run.method === first.method && run.scope === first.scope;
+            if (first.method === "dotagents") return runs.slice(start).filter(fits);
+            if (first.method !== "skills-sh") return [first];
+            const command = [first];
+            for (const next of runs.slice(start + 1)) {
+              if (!fits(next)) break;
+              command.push(next);
+            }
+            return command;
+          };
+          const notRun: string[] = [];
+          const done = new Set<UpdateRun>();
+          for (const [index, run] of runs.entries()) {
+            if (done.has(run)) continue;
+            if (batchId && stoppedBatches.has(batchId)) {
+              notRun.push(run.name);
+              continue;
+            }
+            const command = commandFrom(index, done);
+            updateCommandsStarted += 1;
+            // Each command takes one answer's latency, so a running batch stays on screen.
+            // react-doctor-disable-next-line react-doctor/async-await-in-loop -- fixture runs each command in turn, mirroring the real op's loop
+            if (latency > 0) await new Promise((resolve) => setTimeout(resolve, latency));
+            // react-doctor-disable-next-line react-doctor/async-await-in-loop -- as above
+            if (commandGate) await commandGate.promise;
+            for (const updated of command) {
+              done.add(updated);
+              // Clears only this owner's badge, as `clear_update_flag` does.
+              // react-doctor-disable-next-line react-doctor/async-await-in-loop -- as above
+              await updateSkill(updated.name, (item) => {
+                const owners = item.update_owner_ids.filter((id) => id !== updated.ownerId);
+                return {
+                  ...item,
+                  has_update: owners.length > 0,
+                  update_owner_ids: owners,
+                  update_owners: item.update_owners.filter(
+                    (owner) => owner.owner_id !== updated.ownerId,
+                  ),
+                  update_commit: owners.length > 0 ? item.update_commit : null,
+                  update_commit_at: owners.length > 0 ? item.update_commit_at : null,
+                };
+              });
+              items.push({
+                skill: updated.name,
+                outcome: {
+                  event_id: `fixture-update-${updated.name}-${updated.scope}`,
+                  skill: updated.name,
+                  deployment_path: updated.path,
+                  tree_hash_before: "fixture-before",
+                  tree_hash_after: "fixture-after",
+                },
+              });
+              // react-doctor-disable-next-line react-doctor/async-await-in-loop -- as above
+              await progress(updated.name);
+            }
+          }
+          return { items, errors, not_run: notRun };
         }
 
         case "cancel_update_all":
+          stoppedBatches.add(z.string().parse(payload.batchId));
           return null;
 
         case "fork_skill": {
@@ -1142,6 +1327,47 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
         case "add_skill": {
           const request = addRequestSchema.parse(payload.request);
           return (await addSkills(request))[0];
+        }
+        case "check_pasted_skill":
+          return checkPastedDraft(pastedDraftSchema.parse(payload.draft));
+        case "create_pasted_skill": {
+          const draft = pastedDraftSchema.parse(
+            z.object({ draft: z.unknown() }).parse(payload.request).draft,
+          );
+          const check = checkPastedDraft(draft);
+          if (!check.can_save || !check.name || !check.description) {
+            throw new Error(`Cannot save this skill: ${check.problems[0]}`);
+          }
+          const name = check.name;
+          if (currentSnapshot.skills.some((item) => item.name === name)) {
+            throw new Error(
+              "a copy already exists at this destination; install does not overwrite one",
+            );
+          }
+          const added = buildAddedSkill(
+            {
+              scope: "global",
+              method: "copy",
+              source: { kind: "local", skillName: name, repo: null, url: null },
+            },
+            name,
+            check.description,
+          );
+          const text = draft.text.trim();
+          harnessSkillContent.set(
+            `${HARNESS_HOME}/.agents/skills/${name}/SKILL.md`,
+            check.has_frontmatter
+              ? `${text}\n`
+              : `---\nname: ${name}\ndescription: ${check.description}\n---\n\n${text}\n`,
+          );
+          await publish({ ...currentSnapshot, skills: [...currentSnapshot.skills, added] });
+          return {
+            name,
+            tool: "copy",
+            command: "ops::install (copy)",
+            deployments_created: added.deployments.map((entry) => entry.path),
+            warning: null,
+          };
         }
         case "start_add_skill_operation":
         case "start_add_skills_operation": {
@@ -1311,6 +1537,18 @@ export function installMockTauri(initial: SkillSnapshot): HarnessControl {
     },
     setLatency: (ms) => {
       latency = ms;
+    },
+    updateCommandsStarted: () => updateCommandsStarted,
+    holdUpdateCommands: () => {
+      let release = () => {};
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      commandGate = { promise, release };
+    },
+    releaseUpdateCommands: () => {
+      commandGate?.release();
+      commandGate = null;
     },
   };
 }

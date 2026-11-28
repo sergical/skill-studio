@@ -12,6 +12,7 @@ import type {
   FrontmatterQuoteRepair,
   FrontmatterRepairKind,
   InstalledSkill,
+  SkillInvocationStats,
   UpstreamAhead,
 } from "@skill-studio/lib";
 import type { ActiveView } from "../../store/appStore";
@@ -41,6 +42,8 @@ interface SkillPageProps {
   skill: InstalledSkill | null;
   /** The snapshot's forks whose original repo is ahead. */
   upstreamAhead?: UpstreamAhead[];
+  /** The snapshot's 30-day use history, for each agent's uses on the Agents section. */
+  invocations?: SkillInvocationStats[];
   /** The specific deployment the caller clicked, when known - see `ActiveView`'s "skill" kind. */
   deploymentPath?: string;
   onBack: () => void;
@@ -196,6 +199,7 @@ function useSkillMdContent({ skill, skillMdPath, deployment, addToast }: UseSkil
 export function SkillPage({
   skill,
   upstreamAhead,
+  invocations,
   deploymentPath,
   onBack,
   onRemoveComplete,
@@ -315,6 +319,7 @@ export function SkillPage({
       key={deployment.path}
       skill={skill}
       deployment={deployment}
+      invocations={invocations}
       initialClient={from.kind === "listing" ? from.harness : undefined}
       listingScope={from.kind === "listing" ? from.scope : undefined}
     />
@@ -326,60 +331,61 @@ export function SkillPage({
       parent={{ label: backLabel(from), onClick: onBack }}
       actions={<SkillPageHeaderActions actions={pageActions} />}
     >
-      <div className="grid grid-cols-1 gap-8 min-[900px]:grid-cols-[minmax(0,1fr)_260px]">
-        <div className="flex min-w-0 flex-col gap-6">
-          <InstalledSkillHeader
-            skill={skill}
-            upstreamAhead={upstreamAhead}
-            deployment={deployment ?? undefined}
-            frontmatterRepairs={frontmatterRepairs}
-            isFrontmatterPreviewSettled={isFrontmatterPreviewSettled}
-            skillMdContent={rawContent}
-            onQuoteRepair={isPluginManaged ? undefined : handleQuoteRepair}
-            onFixRepair={setOpenRepairKind}
-            onEditManually={isPluginManaged ? undefined : openEditor}
-          />
-
-          {from.kind === "listing" && visibility}
-          <SkillLocationsCard skill={skill} onCompareCopies={() => setIsCompareOpen(true)} />
-
-          {deployment && isDeploymentBroken ? (
-            <SkillRepairCard skill={skill} deployment={deployment} />
-          ) : (
-            <SkillMarkdownCard
-              deploymentUnresolved={deploymentUnresolved}
-              ownDeploymentOptions={editableDeployments(skill)}
+      <div className="@container">
+        <div className="grid grid-cols-1 gap-8 @[48rem]:grid-cols-[minmax(0,1fr)_260px]">
+          <div className="flex min-w-0 flex-col gap-8">
+            <InstalledSkillHeader
+              skill={skill}
+              upstreamAhead={upstreamAhead}
               deployment={deployment ?? undefined}
-              onSelectDeployment={(path) => openSkill(skill.name, path)}
-              rawContent={rawContent}
-              isLoadingContent={isLoadingContent}
-              loadError={loadError}
-              onRetry={handleRetryLoad}
-              editState={
-                editorOpenedContent !== null
-                  ? {
-                      kind: "editing",
-                      openedContent: editorOpenedContent,
-                      isDirty: isEditorDirty,
-                      isSaving,
-                    }
-                  : { kind: "viewing" }
-              }
-              onStartEdit={startEditing}
-              saveLabel={needsForkToSave ? "Fork and save" : "Save"}
-              onSave={handleSave}
-              onCancelEdit={() => {
-                setEditorOpenedContent(null);
-                setIsEditorDirty(false);
-              }}
-              onDirtyChange={setIsEditorDirty}
-              highlightLine={editorHighlightLine}
+              frontmatterRepairs={frontmatterRepairs}
+              isFrontmatterPreviewSettled={isFrontmatterPreviewSettled}
+              skillMdContent={rawContent}
+              onQuoteRepair={isPluginManaged ? undefined : handleQuoteRepair}
+              onFixRepair={setOpenRepairKind}
+              onEditManually={isPluginManaged ? undefined : openEditor}
             />
-          )}
-          {from.kind !== "listing" && visibility}
-        </div>
 
-        <SkillPropertiesRail skill={skill} selectedPlugin={deployment?.plugin} />
+            {visibility}
+            <SkillLocationsCard skill={skill} onCompareCopies={() => setIsCompareOpen(true)} />
+
+            {deployment && isDeploymentBroken ? (
+              <SkillRepairCard skill={skill} deployment={deployment} />
+            ) : (
+              <SkillMarkdownCard
+                deploymentUnresolved={deploymentUnresolved}
+                ownDeploymentOptions={editableDeployments(skill)}
+                deployment={deployment ?? undefined}
+                onSelectDeployment={(path) => openSkill(skill.name, path)}
+                rawContent={rawContent}
+                isLoadingContent={isLoadingContent}
+                loadError={loadError}
+                onRetry={handleRetryLoad}
+                editState={
+                  editorOpenedContent !== null
+                    ? {
+                        kind: "editing",
+                        openedContent: editorOpenedContent,
+                        isDirty: isEditorDirty,
+                        isSaving,
+                      }
+                    : { kind: "viewing" }
+                }
+                onStartEdit={startEditing}
+                saveLabel={needsForkToSave ? "Fork and save" : "Save"}
+                onSave={handleSave}
+                onCancelEdit={() => {
+                  setEditorOpenedContent(null);
+                  setIsEditorDirty(false);
+                }}
+                onDirtyChange={setIsEditorDirty}
+                highlightLine={editorHighlightLine}
+              />
+            )}
+          </div>
+
+          <SkillPropertiesRail skill={skill} selectedPlugin={deployment?.plugin} />
+        </div>
       </div>
 
       {isCompareOpen && (

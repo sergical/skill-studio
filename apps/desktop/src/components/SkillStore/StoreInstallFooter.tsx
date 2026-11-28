@@ -55,7 +55,7 @@ export function StoreInstallFooter({
         ) : (
           <>
             <Download size={16} />
-            Install Skill
+            Install
           </>
         )}
       </Button>

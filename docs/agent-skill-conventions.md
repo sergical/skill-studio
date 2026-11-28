@@ -361,6 +361,12 @@ Universal deployment or separate Per harness copies. For Per harness, the backen
 copies the fetched source into each selected harness path and rejects an empty
 selection. Project scope uses the same layout below the selected project.
 
+The sheet's **Paste** tab makes a new skill from pasted text (a whole SKILL.md,
+or the instructions plus a name and description). The desktop builds the file,
+shows `validate_skill`'s problems before saving, and writes it as a Global
+Universal Copy through the same `ops::install`, so it is a Copy Skill Studio
+owns. It refuses a folder that already exists.
+
 ## Trials (removed)
 
 The 24-hour trial install was removed in #285. There is no time-boxed install
@@ -574,7 +580,7 @@ or Codex's 8000-character fallback, as 2000 estimated tokens. The
 `limit_source` and `uses_default_context_window` fields state the fallback.
 An unknown limit is null with source `no known limit`.
 
-`skill-studio listing`, the MCP `listing` tool and the desktop Client configuration
+`skill-studio listing`, the MCP `listing` tool and the desktop Agents page (What it sees)
 page report each skill's state per agent and scope: `described`, `truncated`,
 `name_only`, `omitted` or `hidden` (manual-only, off in settings, parked,
 plugin off or installed for another project, or rejected by Codex). Inputs
@@ -615,8 +621,8 @@ recorded listing with its skill uses.
   `- name: description (file: rN/...)`. Plugin skills are `plugin:name`. A
   skill that is not in the block was omitted. A description shorter than the
   scanned one (whitespace collapsed) is reported as shortened.
-- **OpenCode 2.3.2** saves the current skill IDs, names and descriptions for each session in the instruction blob referenced by `current_values["core/skill-guidance"]`. The saved set reflects that agent’s permissions and auto-invocation settings. Client configuration shows current folder discovery. Sessions shows the saved guidance.
-- **pi 1.6.0** formats the base prompt from eligible skills in loader order. Client configuration previews the default read tool and scanned roots in a trusted project, including XML-escaped locations. Sessions reads the most recent structured system skills section on the saved JSONL branch, including replacements and explicit removal. An extension can also force a different outgoing prompt without recording it.
+- **OpenCode 2.3.2** saves the current skill IDs, names and descriptions for each session in the instruction blob referenced by `current_values["core/skill-guidance"]`. The saved set reflects that agent’s permissions and auto-invocation settings. What it sees shows current folder discovery. What it used shows the saved guidance.
+- **pi 1.6.0** formats the base prompt from eligible skills in loader order. What it sees previews the default read tool and scanned roots in a trusted project, including XML-escaped locations. What it used reads the most recent structured system skills section on the saved JSONL branch, including replacements and explicit removal. An extension can also force a different outgoing prompt without recording it.
 - **Cursor and Grok Build** have usage readers and folder discovery. The version-specific [listing research](research/harness-listing-evidence.md) describes additional sources.
 
 Uses come from the same parsers as Activity ("Skill uses"): a skill tool

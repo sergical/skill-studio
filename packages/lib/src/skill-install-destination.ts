@@ -39,16 +39,14 @@ export function installDestinationError(
   universal: boolean,
   chosen: readonly AgentId[],
 ): string | null {
-  return !universal && chosen.length === 0 ? "Select at least one harness." : null;
+  return !universal && chosen.length === 0 ? "Pick at least one agent." : null;
 }
 
-/** Harnesses the picker shows: Claude Code, plus every harness detected on
- * this machine or kept on the first-run screen, in declaration order. */
-export function offeredInstallHarnesses(
-  detected: readonly AgentId[],
-  kept: readonly string[],
-): AgentId[] {
-  const offered = new Set<string>(["claude-code", ...detected, ...kept]);
+/** Harnesses the picker shows: the agents the rest of the app shows (`shown`:
+ * the ones kept on the first-run screen or in Settings, else the ones
+ * detected on this machine), in declaration order. */
+export function offeredInstallHarnesses(shown: readonly string[]): AgentId[] {
+  const offered = new Set(shown);
   return INSTALL_HARNESSES.map((h) => h.id).filter((id) => offered.has(id));
 }
 
@@ -166,14 +164,15 @@ export function installDestinationFields(input: {
 
 /** The `--agent` set of an install into the shared folder that has no picks
  * of its own: the harnesses the Add Skill sheet ticks before the user
- * changes one. Pack add uses it, so a pack reaches the same agents as one
- * skill added from the sheet, Claude Code included. */
+ * changes one, the shown agents (kept, else detected) or before those are known the detected ones. Pack add
+ * uses it, so a pack reaches the same agents as one skill added from the
+ * sheet. */
 export function defaultSharedInstallAgents(
   detected: readonly AgentId[],
-  kept: readonly string[],
+  shown: readonly string[] | undefined,
 ): AgentId[] {
   return installDestinationFields({
-    chosen: offeredInstallHarnesses(detected, kept),
+    chosen: offeredInstallHarnesses(shown ?? detected),
     method: "skills-sh",
     universal: true,
   }).agents;

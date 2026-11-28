@@ -585,7 +585,7 @@ function updateAvailableSkill(
   sizing: SizingFields,
 ): InstalledSkill {
   const deploymentList = [
-    globalUniversal(name, "v1"),
+    { ...globalUniversal(name, "v1"), owner_id: `owner:v1/global/${name}` },
     globalLinked(name, "Claude Code", ".claude", "v1"),
   ];
   return skill({
@@ -594,10 +594,10 @@ function updateAvailableSkill(
     description,
     deployments: deploymentList,
     has_update: true,
-    update_owner_ids: [`owner:v1/dotagents/${name}`],
+    update_owner_ids: [`owner:v1/global/${name}`],
     update_owners: [
       {
-        owner_id: `owner:v1/dotagents/${name}`,
+        owner_id: `owner:v1/global/${name}`,
         latest_commit: "abc1234",
         latest_commit_at: "2026-09-10T00:00:00.000Z",
       },

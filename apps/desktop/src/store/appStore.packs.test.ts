@@ -52,7 +52,7 @@ it("adding a pinned pack's new skills sends the pack's pin, so they install from
   ]);
 });
 
-it("adding a pack installs for the agents the Add Skill sheet ticks, else Claude Code never sees the pack", async () => {
+it("adding a pack installs for the agents the Add Skill sheet ticks, else a pack reaches other agents than one skill", async () => {
   const calls: unknown[] = [];
   mockPackAdd(calls, ["codex", "pi"]);
   useAppStore.getState().setHarnessDetection({
@@ -68,7 +68,7 @@ it("adding a pack installs for the agents the Add Skill sheet ticks, else Claude
 
   expect(calls).toEqual([
     {
-      request: expect.objectContaining({ harnesses: ["claude-code", "codex", "cursor"] }),
+      request: expect.objectContaining({ harnesses: ["cursor"] }),
     },
   ]);
 });

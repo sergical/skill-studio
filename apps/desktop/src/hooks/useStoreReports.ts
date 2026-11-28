@@ -22,20 +22,24 @@ export function currentListingRequest(projectPath: string | null): ListingReques
 
 /**
  * The cached listing report for the home (`null`) or one project. `contentHash` is what the
- * caller knows the report was computed from: a new value reads the report again.
+ * caller knows the report was computed from: a new value reads the report again. While
+ * `enabled` is false nothing is read; once it is true again, a hash already read is not read
+ * again. A report missing from the cache, as after a skill list setting is saved, is read again.
  */
-export function useListingReport(projectPath: string | null, contentHash = "") {
+export function useListingReport(projectPath: string | null, contentHash = "", enabled = true) {
   const report = useAppStore(
     (state) => state.listingReports[listingReportKey(currentListingRequest(projectPath))],
   );
+  const missing = report === undefined;
   const lastRead = useRef<string | null>(null);
 
   useEffect(() => {
+    if (!enabled) return;
     const read = JSON.stringify([projectPath, contentHash]);
-    if (lastRead.current === read) return;
+    if (lastRead.current === read && !missing) return;
     lastRead.current = read;
     useAppStore.getState().refreshListing(currentListingRequest(projectPath));
-  }, [projectPath, contentHash]);
+  }, [projectPath, contentHash, enabled, missing]);
 
   return report;
 }

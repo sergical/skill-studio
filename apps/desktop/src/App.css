@@ -45,6 +45,9 @@
   /* Focus ring: the accent itself, so it clears 3:1 on both surfaces
      (6.1:1 dark, 5.7:1 light) instead of the previous low-contrast grey. */
   --color-border-focus: var(--color-accent);
+  /* Data: bars, heatmap cells and other counts drawn as shapes. It shares the
+     accent hue today; charts use this name so the two jobs can split later. */
+  --color-data: var(--color-accent);
 
   /* Text hierarchy */
   --color-text-primary: oklch(0.967 0.001 286.375);
@@ -179,6 +182,7 @@
   --color-border-subtle: oklch(0 0 0 / 0.04);
   --color-border-strong: oklch(0 0 0 / 0.22);
   --color-border-focus: var(--color-accent);
+  --color-data: var(--color-accent);
 
   --color-text-primary: oklch(0.141 0.004 285.823);
   --color-text-secondary: oklch(0.141 0.004 285.823 / 0.7);
@@ -260,6 +264,35 @@ body {
 ::selection {
   background: var(--color-accent-soft);
   color: var(--color-text-primary);
+}
+/* Disclosures: every <summary> gets the same chevron the app's other rows use,
+   instead of the engine's triangle. A summary that draws its own marker sets
+   data-own-marker. */
+summary {
+  list-style: none;
+}
+summary::-webkit-details-marker {
+  display: none;
+}
+summary:not([data-own-marker])::before {
+  content: "";
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 6px;
+  vertical-align: -1px;
+  background-color: var(--color-text-tertiary);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 18 6-6-6-6'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  transition: rotate 150ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+details[open] > summary:not([data-own-marker])::before {
+  rotate: 90deg;
+}
+@media (prefers-reduced-motion: reduce) {
+  summary::before {
+    transition: none;
+  }
 }
 /* Underlines from font metrics, so they sit below descenders instead of through them. */
 :where(a, [class*="link"]) {

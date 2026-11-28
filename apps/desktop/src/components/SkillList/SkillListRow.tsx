@@ -10,21 +10,27 @@ import type { InstalledSkill, SkillListFilterScope } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
 import { HarnessStack } from "./HarnessStack";
 import { RowFixButton } from "./RowFixButton";
-import { NoteCell, SkillNameCell, SlotCell } from "./SkillRowCells";
+import { NoteCell, RowMetric, SkillNameCell, SlotCell } from "./SkillRowCells";
 import { ROW_CLASS, SKILL_ROW_GRID, selectedRowClass } from "./skill-row-format";
 import { SkillLocationCell } from "./SkillLocationCell";
 import { rowClickOpensSkill } from "./skill-row-click";
-import { DEFAULT_HARNESS_LIST, whereFacts } from "./skill-row-state";
+import { DEFAULT_HARNESS_LIST, rowNote, whereFacts } from "./skill-row-state";
 import type { RowState } from "./skill-row-state";
 
 interface SkillListRowProps {
   skill: InstalledSkill;
+  /** `skill` with its plugin copies too, for the agent icons; `skill` when absent. */
+  readerSkill?: InstalledSkill;
   scope: SkillListFilterScope;
   /** This row's position in the grouped `rows` array - `aria-rowindex` and shift-click. */
   index: number;
   /** The virtualizer's absolute positioning within the row's group container. */
   style: CSSProperties;
   state: RowState | null;
+  /** Uses in the last 30 days, 0 when none were recorded. */
+  uses: number;
+  /** The list is sorted by Largest: the row's number is its size, not its uses. */
+  sizeSort: boolean;
   checked: boolean;
   /** Whether any row in the table is checked. */
   hasSelection: boolean;
@@ -35,14 +41,19 @@ interface SkillListRowProps {
   onOpen: () => void;
   onAct: (label: string, skill: InstalledSkill) => void;
   onCheckedChange: (shiftKey: boolean) => void;
+  /** Whether Update all is on this row now; see `RowFixButton`'s `busy`. */
+  busy?: boolean;
 }
 
 export function SkillListRow({
   skill,
+  readerSkill,
   scope,
   index,
   style,
   state,
+  uses,
+  sizeSort,
   checked,
   hasSelection,
   isOpenSkill,
@@ -51,9 +62,10 @@ export function SkillListRow({
   onOpen,
   onAct,
   onCheckedChange,
+  busy: batchBusy,
 }: SkillListRowProps) {
   const scopedSkill = skillForCoverageScope(skill, scope);
-  const note = state ? [state.label, state.detail].filter(Boolean).join(" · ") : undefined;
+  const note = rowNote(state);
   const busy = useAppStore((s) => s.rowActs.get(skill.name) === null);
   return (
     <div
@@ -95,13 +107,21 @@ export function SkillListRow({
         <SkillLocationCell locations={whereFacts(scopedSkill, DEFAULT_HARNESS_LIST).locations} />
       </div>
       <div role="gridcell" className="contents">
-        <HarnessStack skill={scopedSkill} harnessList={DEFAULT_HARNESS_LIST} />
+        <HarnessStack
+          skill={skillForCoverageScope(readerSkill ?? skill, scope)}
+          harnessList={DEFAULT_HARNESS_LIST}
+        />
       </div>
       <div role="gridcell" className="contents">
-        <NoteCell skill={skill} note={note} />
+        <NoteCell
+          skill={skill}
+          note={note}
+          title={state ? [state.label, state.detail].filter(Boolean).join("\n") : undefined}
+          metric={<RowMetric skill={skill} uses={uses} sizeSort={sizeSort} />}
+        />
       </div>
       <div role="gridcell" className="flex min-w-0 justify-end">
-        <RowFixButton skill={skill} label={state?.action ?? null} onAct={onAct} />
+        <RowFixButton skill={skill} label={state?.action ?? null} onAct={onAct} busy={batchBusy} />
       </div>
     </div>
   );

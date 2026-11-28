@@ -17,12 +17,12 @@ interface SkillContentProps {
 
 export function SkillContent({ skill, skillMd, isLoading }: SkillContentProps) {
   return (
-    <div className="mx-5 mb-4 overflow-hidden rounded-md border border-border">
+    <div className="mx-5 mb-4 shrink-0 overflow-hidden rounded-md border border-border">
       <div className="flex items-center gap-1.5 border-b border-border bg-bg-tertiary px-3 py-2 text-caption font-medium tracking-[0.04em] text-text-secondary uppercase">
         <FileText size={14} />
         <span>SKILL.md</span>
       </div>
-      <div className="max-h-[400px] overflow-y-auto bg-bg-secondary">
+      <div className="max-h-64 overflow-y-auto bg-bg-secondary">
         {isLoading ? (
           <div className="flex items-center justify-center gap-2 p-6 text-small text-text-tertiary">
             <span className="size-3.5 animate-spin rounded-full border-2 border-border border-t-accent" />

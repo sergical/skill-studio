@@ -8,41 +8,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
-import {
-  ArrowLeft,
-  ArrowRight,
-  BookOpen,
-  Boxes,
-  Layers,
-  LayoutDashboard,
-  ListTree,
-  MessagesSquare,
-  Moon,
-  Plus,
-  Puzzle,
-  RefreshCw,
-  Search,
-  Settings as SettingsIcon,
-  Sun,
-  Activity as ActivityIcon,
-} from "lucide-react";
+import { Search } from "lucide-react";
 import { Dialog, DialogContent, Input, Kbd } from "@skill-studio/ui";
 import type { SkillSnapshot } from "@skill-studio/lib";
-import { keyShortcutsFor, SHORTCUTS } from "../../lib/app-shortcuts";
+import { keyShortcutsFor } from "../../lib/app-shortcuts";
 import { useAppStore } from "../../store/appStore";
-import { RowGlyph } from "../SkillList/SkillRowCells";
-import { rowGroup, rowState } from "../SkillList/skill-row-state";
-import type { RowGroup } from "../SkillList/skill-row-state";
-import { gotoItems, rankItems, SECTION_LABEL, skillItems } from "./command-palette-items";
+import { rankItems, SECTION_LABEL } from "./command-palette-items";
 import type { PaletteItem, PaletteSection } from "./command-palette-items";
-
-/** Same three labels `SkillListTable` uses for its state groups - kept in sync by hand since
- * the palette's skill rows and the table's group headers should always read the same way. */
-const GROUP_LABEL = {
-  attention: "Needs attention",
-  healthy: "Healthy",
-  parked: "Parked",
-} satisfies Record<RowGroup, string>;
+import { usePaletteItems } from "./usePaletteItems";
 
 interface CommandPaletteProps {
   snapshot: SkillSnapshot | undefined;
@@ -56,15 +29,6 @@ const NO_ANIMATION =
 export function CommandPalette({ snapshot, requestRescan }: CommandPaletteProps) {
   const open = useAppStore((state) => state.commandPaletteOpen);
   const setOpen = useAppStore((state) => state.setCommandPaletteOpen);
-  const setActiveView = useAppStore((state) => state.setActiveView);
-  const openSkill = useAppStore((state) => state.openSkill);
-  const openAddSkillSheet = useAppStore((state) => state.openAddSkillSheet);
-  const requestSkillSearchFocus = useAppStore((state) => state.requestSkillSearchFocus);
-  const resolvedTheme = useAppStore((state) => state.resolvedTheme);
-  const addToast = useAppStore((state) => state.addToast);
-  const setTheme = useAppStore((state) => state.setTheme);
-  const goBack = useAppStore((state) => state.goBack);
-  const goForward = useAppStore((state) => state.goForward);
 
   const [query, setQuery] = useState("");
   const [highlight, setHighlight] = useState(0);
@@ -90,99 +54,7 @@ export function CommandPalette({ snapshot, requestRescan }: CommandPaletteProps)
     item.run();
   }
 
-  const items: PaletteItem[] = (() => {
-    const actions: PaletteItem[] = [
-      {
-        id: "action-add-skill",
-        section: "actions",
-        label: SHORTCUTS.addSkill.label,
-        icon: <Plus size={14} />,
-        shortcut: SHORTCUTS.addSkill,
-        run: () => openAddSkillSheet(),
-      },
-      {
-        id: "action-back",
-        section: "actions",
-        label: SHORTCUTS.back.label,
-        icon: <ArrowLeft size={14} />,
-        shortcut: SHORTCUTS.back,
-        run: () => goBack(),
-      },
-      {
-        id: "action-forward",
-        section: "actions",
-        label: SHORTCUTS.forward.label,
-        icon: <ArrowRight size={14} />,
-        shortcut: SHORTCUTS.forward,
-        run: () => goForward(),
-      },
-      {
-        id: "action-sync",
-        section: "actions",
-        label: SHORTCUTS.sync.label,
-        icon: <RefreshCw size={14} />,
-        run: () => {
-          addToast({
-            type: "info",
-            title: "Rescanning skills…",
-            message: "The list updates when it finishes.",
-          });
-          requestRescan().catch((err) =>
-            addToast({
-              type: "error",
-              title: "Couldn't rescan",
-              message: err instanceof Error ? err.message : "Unknown error",
-            }),
-          );
-        },
-      },
-      {
-        id: "action-filter-skills",
-        section: "actions",
-        label: "Filter skills",
-        icon: <Search size={14} />,
-        shortcut: SHORTCUTS.filterSkills,
-        run: () => {
-          setActiveView({ kind: "skills" });
-          requestSkillSearchFocus();
-        },
-      },
-      {
-        id: "action-toggle-theme",
-        section: "actions",
-        label: SHORTCUTS.toggleTheme.label,
-        icon: resolvedTheme === "dark" ? <Sun size={14} /> : <Moon size={14} />,
-        run: () => setTheme(resolvedTheme === "dark" ? "light" : "dark"),
-      },
-    ];
-
-    const goto = gotoItems(
-      [
-        { label: "Home", icon: <LayoutDashboard size={14} />, view: { kind: "home" } },
-        { label: "Skills", icon: <Layers size={14} />, view: { kind: "skills" } },
-        { label: "Plugins", icon: <Puzzle size={14} />, view: { kind: "plugins" } },
-        { label: "Packs", icon: <Boxes size={14} />, view: { kind: "packs" } },
-        { label: "Client configuration", icon: <ListTree size={14} />, view: { kind: "listing" } },
-        { label: "Sessions", icon: <MessagesSquare size={14} />, view: { kind: "sessions" } },
-        { label: "Activity", icon: <ActivityIcon size={14} />, view: { kind: "activity" } },
-        { label: "Learn", icon: <BookOpen size={14} />, view: { kind: "learn" } },
-        { label: "Settings", icon: <SettingsIcon size={14} />, view: { kind: "settings" } },
-      ],
-      setActiveView,
-    );
-
-    const skills = skillItems(
-      snapshot?.skills ?? [],
-      (skill) => GROUP_LABEL[rowGroup(skill, rowState(skill))],
-      (skill) => {
-        const state = rowState(skill);
-        return state && <RowGlyph state={state} size={14} />;
-      },
-      (skill) => openSkill(skill.name),
-    );
-
-    return [...actions, ...goto, ...skills];
-  })();
+  const items = usePaletteItems(snapshot, requestRescan);
 
   const results = rankItems(items, query);
 
@@ -243,12 +115,11 @@ export function CommandPalette({ snapshot, requestRescan }: CommandPaletteProps)
     ? `command-palette-option-${results[highlight].id}`
     : undefined;
 
-  // Grouped for rendering, in the same order `rankItems` already produced.
-  const sections: { section: PaletteSection; items: PaletteItem[] }[] =
-    // SAFETY: these three string literals are exactly the `PaletteSection` union's members.
-    (["actions", "goto", "skills"] as PaletteSection[])
-      .map((section) => ({ section, items: results.filter((item) => item.section === section) }))
-      .filter((group) => group.items.length > 0);
+  // Grouped for rendering, in the order `rankItems` produced, so the highlight moves down the
+  // list as drawn.
+  const sections: { section: PaletteSection; items: PaletteItem[] }[] = [
+    ...new Set(results.map((item) => item.section)),
+  ].map((section) => ({ section, items: results.filter((item) => item.section === section) }));
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -283,7 +154,12 @@ export function CommandPalette({ snapshot, requestRescan }: CommandPaletteProps)
           className="max-h-[420px] overflow-y-auto py-1 pl-1 gutter-pr-1"
         >
           {sections.map(({ section, items: sectionItems }) => (
-            <div key={section} role="group" aria-label={SECTION_LABEL[section]}>
+            <div
+              key={section}
+              role="group"
+              aria-label={SECTION_LABEL[section]}
+              className="not-first:mt-2"
+            >
               <div className="px-2 pt-1.5 pb-1 text-caption text-text-tertiary">
                 {SECTION_LABEL[section]}
               </div>

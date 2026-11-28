@@ -6,19 +6,23 @@
 
 import {
   AGENT_MATRIX_LABELS,
+  ATTENTION_LABEL,
+  ATTENTION_ORDER,
+  attentionCategoryOf,
   describeSpecViolations,
   driftingCopies,
-  HEALTH_ISSUE_SEVERITY,
   isBlockingSpecViolation,
+  isUnquotedColonYaml,
   locationSummary,
-  parentDirectory,
 } from "@skill-studio/lib";
 import type {
   AgentId,
+  AttentionCategory,
+  AttentionFilter,
   Deployment,
-  HealthIssue,
   HealthIssueKind,
   InstalledSkill,
+  SkillAttention,
 } from "@skill-studio/lib";
 import { buildScopeGroups, skillRollup } from "../SkillDetail/skill-location-status";
 import { harnessIdFromLabel } from "../ui/HarnessIcon";
@@ -58,7 +62,8 @@ function parkedChipLabel(parkedAt: string | null | undefined): string {
 }
 
 /** The one thing this row most needs to say, in ladder order: blocking spec
- * violation, then the folder rollup, then an update or parked.
+ * violation, then an unquoted colon in the YAML (most agents still load it, Fix quotes it),
+ * then the folder rollup, then an update or parked.
  * `null` when the skill is unremarkable. */
 export function rowState(skill: InstalledSkill): RowState | null {
   const blocking = skill.spec_violations.filter(isBlockingSpecViolation);
@@ -68,6 +73,16 @@ export function rowState(skill: InstalledSkill): RowState | null {
       level: "error",
       label: "Blocking spec violation",
       detail: describeSpecViolations(blocking),
+      action: "Fix",
+    };
+  }
+  const colonYaml = skill.spec_violations.filter(isUnquotedColonYaml);
+  if (colonYaml.length > 0) {
+    return {
+      kind: "violation",
+      level: "warning",
+      label: ISSUE_ROW_LABEL["spec-warning"],
+      detail: describeSpecViolations(colonYaml),
       action: "Fix",
     };
   }
@@ -111,6 +126,40 @@ export function rowState(skill: InstalledSkill): RowState | null {
   return null;
 }
 
+/** "Global · Claude Code: Broken link." -> "Claude Code"; "Global: SKILL.md: ..." -> "SKILL.md: ...".
+ * The scope prefix repeats the row's Where column, so the note keeps only the agent, or the
+ * condition itself when no single agent owns it. */
+function detailWithoutScope(detail: string): string {
+  const split = detail.indexOf(": ");
+  if (split === -1) return detail;
+  const where = detail.slice(0, split).split(" · ");
+  const scopeParts = where[0] === "Project" ? 2 : 1;
+  if (where[0] !== "Global" && where[0] !== "Project") return detail;
+  const agent = where.slice(scopeParts).join(" · ");
+  return agent || detail.slice(split + 2);
+}
+
+/** The Skills row's note: only what the group header, the Where column and the fix button do
+ * not already say. A spec violation shows its reason, a folder issue its count and the agent it
+ * hits, an update nothing (the group and the button say it), a parked skill the day it parked. */
+export function rowNote(state: RowState | null): string | undefined {
+  if (!state) return undefined;
+  switch (state.kind) {
+    case "violation":
+      return state.detail ?? state.label;
+    case "rollup":
+      return state.detail ? `${state.label} · ${detailWithoutScope(state.detail)}` : state.label;
+    case "update":
+      return undefined;
+    case "parked": {
+      const day = state.label.replace(/^Parked( · )?/, "");
+      return day ? `Since ${day}` : undefined;
+    }
+    case "issue":
+      return state.label;
+  }
+}
+
 /** The "Update available" rung on its own, so the Updates group can show it without running the
  * rest of `rowState`'s ladder (a spec violation or rollup issue would otherwise outrank it). */
 export function updateRowState(skill: InstalledSkill): RowState | null {
@@ -122,33 +171,6 @@ export function updateRowState(skill: InstalledSkill): RowState | null {
     detail: null,
     action: "Update",
   };
-}
-
-/** One Home dashboard issue's row state, so a Broken/Warnings row's glyph matches the group it
- * sits in instead of whatever `rowState` would rank the skill's own worst condition as. `detail`
- * is null - Home's row already shows `issue.detail` in its own detail cell, so the glyph tooltip
- * doesn't repeat it. */
-export function issueRowState(issue: HealthIssue): RowState {
-  return {
-    kind: "issue",
-    level: HEALTH_ISSUE_SEVERITY[issue.kind],
-    label: ISSUE_ROW_LABEL[issue.kind],
-    detail: null,
-    action: issueAction(issue.kind),
-  };
-}
-
-/** The same fix a Skills row names for this condition: only a fix that does more than the row
- * click. A linked root and a left-behind copy have their own controls on Home. */
-function issueAction(kind: HealthIssueKind): string | null {
-  switch (kind) {
-    case "spec-violation":
-      return "Fix";
-    case "duplicate":
-      return "Compare";
-    default:
-      return null;
-  }
 }
 
 type DiskLocationKind = "global" | "project";
@@ -192,16 +214,8 @@ export interface HarnessReach {
   entries: LocationEntry[];
 }
 
-/** The Universal folder (`~/.agents/skills`) itself: whether the skill has a
- * copy there. */
-export interface Universal {
-  present: boolean;
-  path: string | null;
-}
-
 interface WhereFacts {
   locations: DiskLocation[];
-  universal: Universal;
   harnesses: HarnessReach[];
 }
 
@@ -274,7 +288,7 @@ function locationEntry(d: Deployment, harness: AgentId | "shared"): LocationEntr
 const HOW_SEVERITY = { broken: 3, linked: 2, own: 1, universal: 0 } satisfies Record<How, number>;
 
 /** Splits a skill's deployments into the disk locations they sit in and the
- * harnesses that reach them, plus the Universal folder's own facts.
+ * harnesses that reach them.
  * `harnessList` defaults to `DEFAULT_HARNESS_LIST`'s six. */
 export function whereFacts(
   skill: InstalledSkill,
@@ -299,17 +313,10 @@ export function whereFacts(
     }
   }
 
-  let universalPresent = false;
-  let universalPath: string | null = null;
-
   for (const d of skill.deployments) {
     const harness = resolveHarness(d.agent, harnessList);
     if (!harness) continue;
     const entry = locationEntry(d, harness);
-    if (harness === "shared") {
-      universalPresent = true;
-      universalPath = parentDirectory(d.path);
-    }
     const key = d.scope === "project" && d.project_path ? `project:${d.project_path}` : "global";
     locationsByKey.get(key)?.entries.push(entry);
   }
@@ -347,27 +354,29 @@ export function whereFacts(
     };
   });
 
-  return {
-    locations,
-    universal: {
-      present: universalPresent,
-      path: universalPath,
-    },
-    harnesses,
-  };
+  return { locations, harnesses };
 }
 
-/** The list's three state groups, in display order. */
-export type RowGroup = "attention" | "healthy" | "parked";
+/** The list's state groups: what needs the user, most serious first, then healthy, then parked. */
+export type RowGroup = AttentionCategory | "healthy" | "parked";
 
-/** Which group a row sorts into: a decision-worthy state first, then a quiet
- * "parked" fact, else healthy. Pass `state` when the caller already has it
- * from `rowState(skill)` to avoid computing it twice. */
+/** Every state group, in display order. */
+export const ROW_GROUP_ORDER: readonly RowGroup[] = [...ATTENTION_ORDER, "healthy", "parked"];
+
+/** Each state group's header label - the Skills table's and the command palette's. */
+export const ROW_GROUP_LABEL = {
+  ...ATTENTION_LABEL,
+  healthy: "Healthy",
+  parked: "Parked",
+} satisfies Record<RowGroup, string>;
+
+/** Which group a row sorts into: the attention category Home lists the skill under (the one
+ * `filter` picked, else its most serious), then a quiet "parked" fact, else healthy.
+ * `attention` is the skill's entry from `attentionBySkill`. */
 export function rowGroup(
   skill: InstalledSkill,
-  state: RowState | null = rowState(skill),
+  attention: SkillAttention | undefined,
+  filter?: AttentionFilter,
 ): RowGroup {
-  if (state !== null && state.kind !== "parked") return "attention";
-  if (skill.parked || state?.kind === "parked") return "parked";
-  return "healthy";
+  return attentionCategoryOf(attention, filter) ?? (skill.parked ? "parked" : "healthy");
 }

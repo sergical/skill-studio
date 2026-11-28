@@ -5,6 +5,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { applySkillListFilter, defaultSkillListFilter } from "./skill-list-filter";
+import type { SkillListFilter } from "./skill-list-filter";
 import type { Deployment, InstalledSkill, SkillInvocationStats } from "./skill-types";
 
 function fixtureStats(overrides: Partial<SkillInvocationStats> = {}): SkillInvocationStats {
@@ -165,16 +166,22 @@ describe("applySkillListFilter", () => {
     expect(dotagentsResult.map((s) => s.name)).toEqual(["mixed"]);
   });
 
-  it('issue "any" keeps skills with at least one issue, of any kind', () => {
+  it("each attention category keeps the skills Home lists under it, and a skill in two shows in both", () => {
     const skills = [
       fixtureSkill({
-        name: "broken",
+        name: "broken-and-stale",
         deployments: [fixtureDeployment({ symlink_is_broken: true })],
+        update_owner_ids: ["owner-1"],
       }),
+      fixtureSkill({ name: "stale", update_owner_ids: ["owner-1"] }),
       fixtureSkill({ name: "healthy" }),
     ];
-    const result = applySkillListFilter(skills, { scope: "all", issue: "any", query: "" });
-    expect(result.map((s) => s.name)).toEqual(["broken"]);
+    const names = (attention: SkillListFilter["attention"]) =>
+      applySkillListFilter(skills, { scope: "all", attention, query: "" }).map((s) => s.name);
+    expect(names("broken")).toEqual(["broken-and-stale"]);
+    expect(names("warning")).toEqual([]);
+    expect(names("update")).toEqual(["broken-and-stale", "stale"]);
+    expect(names("any")).toEqual(["broken-and-stale", "stale"]);
   });
 
   it("query matches name, description, and source, case-insensitively", () => {
@@ -230,24 +237,11 @@ describe("applySkillListFilter", () => {
     expect(result.map((s) => s.name)).toEqual(["model-only"]);
   });
 
-  it("keeps only skills with an update available", () => {
-    const skills = [
-      fixtureSkill({ name: "stale", update_owner_ids: ["owner-1"] }),
-      fixtureSkill({ name: "current", update_owner_ids: [] }),
-    ];
-
-    const result = applySkillListFilter(skills, {
-      scope: "all",
-      update: "available",
-      query: "",
-    });
-
-    expect(result.map((s) => s.name)).toEqual(["stale"]);
-  });
-
   it("filters by 30-day usage", () => {
     const skills = [fixtureSkill({ name: "used" }), fixtureSkill({ name: "unused" })];
-    const invocations = [fixtureStats({ skill: "used", last_30_days: 3 })];
+    const invocations = [
+      fixtureStats({ skill: "used", last_30_days: 3, by_harness_30_days: { "claude-code": 3 } }),
+    ];
 
     const usedResult = applySkillListFilter(
       skills,
@@ -264,6 +258,46 @@ describe("applySkillListFilter", () => {
       invocations,
     );
     expect(unusedResult.map((s) => s.name)).toEqual(["unused"]);
+  });
+
+  it("lists no skill as unused when no agent that reads it has history", () => {
+    const unused = { scope: "all", usage: "unused-30d", query: "" } as const;
+    const skills = [
+      fixtureSkill({ name: "claude" }),
+      fixtureSkill({
+        name: "cursor-only",
+        deployments: [fixtureDeployment({ agent: "Cursor", path: "/home/.cursor/skills/x" })],
+      }),
+    ];
+    expect(applySkillListFilter(skills, unused, undefined, [])).toEqual([]);
+    const claudeHistory = [
+      fixtureStats({ skill: "other", last_30_days: 1, by_harness_30_days: { "claude-code": 1 } }),
+    ];
+    expect(
+      applySkillListFilter(skills, unused, undefined, claudeHistory).map((s) => s.name),
+    ).toEqual(["claude"]);
+  });
+
+  it("lists as unused only what the kept agents' history says, as Home counts it", () => {
+    const unused = { scope: "all", usage: "unused-30d", query: "" } as const;
+    const skills = [
+      fixtureSkill({ name: "claude" }),
+      fixtureSkill({
+        name: "cursor-only",
+        deployments: [fixtureDeployment({ agent: "Cursor", path: "/home/.cursor/skills/x" })],
+      }),
+    ];
+    const history = [
+      fixtureStats({ skill: "other", last_30_days: 1, by_harness_30_days: { "claude-code": 1 } }),
+      fixtureStats({ skill: "elsewhere", last_30_days: 1, by_harness_30_days: { cursor: 1 } }),
+    ];
+    expect(applySkillListFilter(skills, unused, undefined, history).map((s) => s.name)).toEqual([
+      "claude",
+      "cursor-only",
+    ]);
+    expect(
+      applySkillListFilter(skills, unused, undefined, history, ["claude-code"]).map((s) => s.name),
+    ).toEqual(["claude"]);
   });
 });
 

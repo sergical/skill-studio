@@ -21,6 +21,7 @@ pub mod github_skill_listing;
 pub mod harness_first_run;
 pub mod skill_add_operation;
 pub mod skill_assembly;
+pub mod skill_create;
 pub mod skill_deployment;
 pub mod skill_doctor;
 pub mod skill_dto;

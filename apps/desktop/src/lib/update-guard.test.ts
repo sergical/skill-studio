@@ -15,7 +15,7 @@ const sources = import.meta.glob<string>("../**/*.{ts,tsx}", {
 /**
  * The only files allowed to mention an update command, even as a value: the
  * IPC wrapper, the guard hook, and the batch wrappers, whose callers must run
- * `skillsWithLocalEdits` first (the second test pins that).
+ * `skillsWithLocalEdits` or `editedUpdateCopies` first (the second test pins that).
  */
 const ALLOWED = [
   "/skill-api.ts",
@@ -45,8 +45,8 @@ describe("update entry points", () => {
   it("every_caller_of_a_batch_update_helper_checks_for_local_edits_first_or_update_all_overwrites_silently", () => {
     const unguarded = Object.entries(sources)
       .filter(([path]) => !path.includes(".test.") && !path.includes("/skillBatchUpdates.ts"))
-      .filter(([, text]) => /\b(runHomeUpdateAll|startHomeUpdateAll|runListUpdate)\(/.test(text))
-      .filter(([, text]) => !/\bskillsWithLocalEdits\(/.test(text))
+      .filter(([, text]) => /\b(runUpdateAll|startUpdateAll|runListUpdate)\(/.test(text))
+      .filter(([, text]) => !/\b(skillsWithLocalEdits|editedUpdateCopies)\(/.test(text))
       .map(([path]) => path);
     expect(unguarded).toEqual([]);
   });

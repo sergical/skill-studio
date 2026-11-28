@@ -1,17 +1,19 @@
 // ============================================================================
-// HarnessStack - the avatar-group stack: the reached harnesses overlap into
-// one shape, the Universal folder leads when present, and past `MAX_DISCS`
-// the rest fold into a "+N" disc.
+// HarnessStack - the avatar-group stack: the agents that read the skill, from
+// their own folder or the Universal folder, overlap into one shape, and past
+// `MAX_DISCS` the rest fold into a "+N" disc.
 // ============================================================================
 
 import type { ReactNode } from "react";
+import { skillReadByAgent } from "@skill-studio/lib";
 import type { InstalledSkill } from "@skill-studio/lib";
+import { useClientIds } from "../../hooks/useClientRows";
 import { RichTooltip } from "../ui/RichTooltip";
-import { HarnessGlyph, HarnessMark, UniversalMark } from "./HarnessMark";
+import { HarnessGlyph, HarnessMark } from "./HarnessMark";
 import { whereFacts } from "./skill-row-state";
 import type { HarnessListEntry, HarnessReach } from "./skill-row-state";
 
-/** Past this many discs (the Universal folder counted as one), the rest fold into a "+N" disc. */
+/** Past this many discs, the rest fold into a "+N" disc. */
 const MAX_DISCS = 5;
 
 /** The "+N" disc's tooltip: one line per hidden harness, glyph and label only - no how word,
@@ -35,8 +37,8 @@ function OverflowTooltip({ overflow }: { overflow: HarnessReach[] }) {
  * `-ml-1` (4px) overlap after the first so the group reads as one shape until
  * a disc is singled out on hover, and `group-hover:ring-bg-secondary` so the
  * row hover doesn't leave the ring looking detached from its fill. A disabled
- * or parked disc only mutes its glyph - `HarnessMark` already does that, so
- * the disc itself needs no separate disabled treatment. */
+ * disc only mutes its glyph - `HarnessMark` already does that, so the disc
+ * itself needs no separate disabled treatment. */
 function Disc({ first, children }: { first: boolean; children: ReactNode }) {
   return (
     <span
@@ -49,8 +51,31 @@ function Disc({ first, children }: { first: boolean; children: ReactNode }) {
   );
 }
 
-/** The reached-harness stack: the Universal folder disc first when present, then one disc per
- * reached harness up to `MAX_DISCS`, then a "+N" overflow disc. */
+/** The agents that read `skill`, among the ones the app shows: an agent with a copy, link or live
+ * plugin copy in its own folder keeps that deployment's how, and one that reads it only through
+ * the Universal folder shows as reading the Universal folder's source. */
+function readingHarnesses(
+  skill: InstalledSkill,
+  harnessList: HarnessListEntry[],
+  shown: string[] | undefined,
+): HarnessReach[] {
+  const { harnesses } = whereFacts(skill, harnessList);
+  const shownSet = shown && new Set(shown);
+  return harnesses.flatMap((reach): HarnessReach[] => {
+    if (shownSet && !shownSet.has(reach.harness)) return [];
+    switch (skillReadByAgent(skill, reach.harness)) {
+      case "own":
+      case "plugin":
+        return [reach];
+      case "shared":
+        return [{ ...reach, reached: true, how: "universal", disabled: false }];
+      case "none":
+        return [];
+    }
+  });
+}
+
+/** One disc per agent that reads the skill, up to `MAX_DISCS`, then a "+N" overflow disc. */
 export function HarnessStack({
   skill,
   harnessList,
@@ -58,33 +83,20 @@ export function HarnessStack({
   skill: InstalledSkill;
   harnessList: HarnessListEntry[];
 }) {
-  const facts = whereFacts(skill, harnessList);
-  const { universal, harnesses } = facts;
-  const reached = harnesses.filter((h) => h.reached);
-  if (!universal.present && reached.length === 0) {
+  const readers = readingHarnesses(skill, harnessList, useClientIds());
+  if (readers.length === 0) {
     return <span className="text-small text-text-tertiary">—</span>;
   }
-  const discs: ReactNode[] = [];
-  if (universal.present) {
-    discs.push(
-      <Disc key="universal" first={discs.length === 0}>
-        <UniversalMark universal={universal} size={11} />
-      </Disc>,
-    );
-  }
-  const budget = MAX_DISCS - discs.length;
-  const shown = reached.slice(0, budget);
-  const overflow = reached.slice(budget);
-  for (const reach of shown) {
-    discs.push(
-      <Disc key={reach.harness} first={discs.length === 0}>
-        <HarnessMark reach={reach} size={11} parked={skill.parked} />
-      </Disc>,
-    );
-  }
+  const shown = readers.slice(0, MAX_DISCS);
+  const overflow = readers.slice(MAX_DISCS);
+  const discs: ReactNode[] = shown.map((reach, index) => (
+    <Disc key={reach.harness} first={index === 0}>
+      <HarnessMark reach={reach} size={11} />
+    </Disc>
+  ));
   if (overflow.length > 0) {
     discs.push(
-      <Disc key="overflow" first={discs.length === 0}>
+      <Disc key="overflow" first={false}>
         <RichTooltip content={<OverflowTooltip overflow={overflow} />}>
           <span className="text-caption tabular-nums text-text-tertiary">
             +{overflow.length}

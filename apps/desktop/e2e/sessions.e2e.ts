@@ -1,41 +1,41 @@
 import { expect, test } from "@playwright/test";
+import type { BackgroundStatus } from "@skill-studio/lib";
 import { openApp } from "./app-harness";
 
 test.beforeEach(async ({ page }) => {
   await openApp(page);
-  await page.getByRole("navigation").getByRole("button", { name: "Sessions" }).click();
-  await expect(page.getByRole("heading", { name: "Sessions", level: 1 })).toBeVisible();
+  await page.getByRole("navigation").getByRole("button", { name: "Agents" }).click();
+  await page.getByRole("tab", { name: "What it used" }).click();
+  await expect(page.getByRole("heading", { name: "Agents", level: 1 })).toBeVisible();
 });
 
-test("the Sessions page groups skills by finding and lists the sessions behind them", async ({
+test("the What it used tab groups skills by finding and lists the sessions behind them", async ({
   page,
 }) => {
-  await page.getByText("Findings and listing definitions", { exact: true }).click();
+  const used = page.getByRole("region", { name: "What Claude Code used" });
+  await expect(used).toContainText("1 of 3");
+  await expect(used).toContainText("1 possibly missed one");
+  await page.getByText("What the words mean", { exact: true }).click();
   await expect(page.getByRole("region", { name: "What the words mean" })).toContainText(
     "Name only",
   );
-  await expect(
-    page.getByText("3 sessions read: 1 used a skill, 1 possibly missed one."),
-  ).toBeVisible();
 
-  const nameOnly = page.getByRole("region", { name: "Used while listed by name only" });
-  await expect(nameOnly.getByRole("listitem")).toHaveCount(1);
-  const neverUsed = page.getByRole("region", {
-    name: "Listed in nearly every session, never used",
-  });
-  await expect(neverUsed.getByRole("listitem")).toHaveCount(1);
-  await expect(
-    page.getByRole("region", { name: "Possibly missed" }).getByRole("listitem"),
-  ).toHaveCount(1);
+  // One row per skill, each naming its findings.
+  const findings = page.getByRole("list", { name: "Skills with findings" }).getByRole("listitem");
+  await expect(findings).toHaveCount(2);
+  await expect(findings.filter({ hasText: "Used by name only" })).toHaveCount(1);
+  await expect(findings.filter({ hasText: "Possibly missed" })).toHaveCount(1);
 
   // Open the recorded work, then narrow the list to sessions with a finding.
-  const sessions = page.getByRole("region", { name: "Sessions" }).locator(":scope > ul > li");
+  const sessions = page
+    .getByRole("region", { name: "Recent sessions" })
+    .locator(":scope > ul > li");
   await expect(sessions).toHaveCount(3);
   await sessions.first().locator("summary").first().click();
-  await expect(sessions.first().getByText(/skills listed/)).toBeVisible();
+  await expect(sessions.first().getByText(/Listed \d+ skills/)).toBeVisible();
   await sessions
     .first()
-    .getByText(/Recorded listing ·/)
+    .getByText(/Skill list in this session ·/)
     .click();
   await expect(page.getByRole("list", { name: "Recorded skills" })).toContainText(
     "Original wording from the session.",
@@ -44,11 +44,9 @@ test("the Sessions page groups skills by finding and lists the sessions behind t
     .getByRole("listitem")
     .filter({ has: page.getByText("Original wording from the session.", { exact: true }) })
     .last();
-  await expect(captured).toContainText("shortened");
+  await expect(captured).toContainText("Shortened");
   await page.getByRole("button", { name: "Show only sessions with findings" }).click();
   await expect(sessions).toHaveCount(2);
-
-  await page.getByText("Findings and listing definitions", { exact: true }).click();
 
   // An agent that records no listing says so instead of showing empty sessions.
   await page.getByRole("combobox", { name: "Agent" }).click();
@@ -56,5 +54,104 @@ test("the Sessions page groups skills by finding and lists the sessions behind t
   await expect(
     page.getByText("Skill Studio does not yet read saved listings for Cursor."),
   ).toBeVisible();
-  await expect(page.getByRole("region", { name: "Sessions" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Recent sessions" })).toHaveCount(0);
+});
+
+test("Unused names the sessions read and leaves out a skill the 30-day history shows as used", async ({
+  page,
+}) => {
+  // code-review is listed in all 3 sessions and used in none, but has uses in the last 30 days.
+  const findings = page.getByRole("list", { name: "Skills with findings" });
+  await expect(findings.getByRole("listitem")).toHaveCount(2);
+  await expect(findings.getByRole("listitem", { name: "code-review" })).toHaveCount(0);
+
+  await page.evaluate(async () => {
+    const harness = window.__harness!;
+    const snapshot = harness.snapshot();
+    await harness.publish({
+      ...snapshot,
+      invocations: snapshot.invocations.filter((stats) => stats.skill !== "code-review"),
+    });
+  });
+  await expect(findings.getByRole("listitem", { name: "code-review" })).toContainText(
+    "Unused in these 3 sessions with a skill list",
+  );
+});
+
+test("Uses in 30 days claims no uses only when the sessions read used none", async ({ page }) => {
+  // Claude Code's 3 sessions read include 1 that used a skill, OpenCode's 1 used none, Cursor's
+  // none were read. Drop all three agents' uses from the history, as on a first launch where the
+  // sessions report arrives before the history counts them.
+  await page.evaluate(async () => {
+    const harness = window.__harness!;
+    const snapshot = harness.snapshot();
+    await harness.publish({
+      ...snapshot,
+      invocations: snapshot.invocations.map((stats) => ({
+        ...stats,
+        by_harness_30_days: {
+          ...stats.by_harness_30_days,
+          "claude-code": 0,
+          opencode: 0,
+          cursor: 0,
+        },
+      })),
+    });
+  });
+  const uses = page.getByRole("region", { name: "Uses in 30 days" });
+  await expect(uses).toContainText("Not counted yet");
+  await expect(uses).not.toContainText("No uses");
+
+  const agent = page.getByRole("combobox", { name: "Agent" });
+  await agent.click();
+  await page.getByRole("option", { name: "OpenCode" }).click();
+  await expect(uses).toContainText("No uses in 30 days");
+
+  await agent.click();
+  await page.getByRole("option", { name: "Cursor" }).click();
+  await expect(uses).toContainText("No readable history");
+});
+
+// Code review round 4: on a first launch, while the 30-day history was still being counted,
+// Cursor (which supplies uses but no session list) said "No readable history".
+test("Uses in 30 days says not counted yet for Cursor while the history is still being counted", async ({
+  page,
+}) => {
+  const counting = (running: boolean, revision: number): BackgroundStatus => ({
+    revision,
+    tasks: [
+      {
+        worker: "invocations",
+        running,
+        last_started_at: "2026-01-01T00:00:00Z",
+        last_finished_at: running ? null : "2026-01-01T00:00:01Z",
+        last_error: null,
+      },
+    ],
+  });
+  await page.evaluate(
+    async (status) => {
+      const harness = window.__harness!;
+      const snapshot = harness.snapshot();
+      await harness.publish({
+        ...snapshot,
+        invocations: snapshot.invocations.map((stats) => ({
+          ...stats,
+          by_harness_30_days: { ...stats.by_harness_30_days, cursor: 0 },
+        })),
+      });
+      await harness.publishBackgroundStatus(status);
+    },
+    counting(true, 1),
+  );
+  await page.getByRole("combobox", { name: "Agent" }).click();
+  await page.getByRole("option", { name: "Cursor" }).click();
+  const uses = page.getByRole("region", { name: "Uses in 30 days" });
+  await expect(uses).toContainText("Not counted yet");
+
+  await page.evaluate(
+    (status) => window.__harness?.publishBackgroundStatus(status),
+    counting(false, 2),
+  );
+  await expect(uses).toContainText("No readable history");
 });

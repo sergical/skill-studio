@@ -18,14 +18,26 @@ it("shows a budget-free preview and a saved listing independently", () => {
   };
   const report = { ...row, harness: "pi", budget: null, setting: null };
   const { rerender } = render(<ClientConfiguration row={report} onSaved={() => {}} />);
-  expect(screen.getByLabelText("Listing sources")).toBeTruthy();
-  expect(screen.queryByText(/Last recorded listing/)).toBeNull();
+  expect(screen.queryByText(/Last session listed/)).toBeNull();
   rerender(
     <ClientConfiguration
       row={{ ...report, evidence: "discovery", observed_session: session }}
       onSaved={() => {}}
     />,
   );
-  expect(screen.queryByLabelText("Listing sources")).toBeNull();
-  expect(screen.getByText(/Last recorded listing.*3 entries.*recorded-model/)).toBeTruthy();
+  expect(screen.getByText(/Last session listed 3 skills.*recorded-model/)).toBeTruthy();
+});
+
+it("counts skills the budget left out in the headline and the bar", () => {
+  const row = mockListingReport(buildHarnessSnapshot(), {}).listings[0];
+  const [first] = row.entries;
+  const entries = [
+    { ...first, name: "a", path: "/a", state: "described" as const },
+    { ...first, name: "b", path: "/b", state: "described" as const },
+    { ...first, name: "c", path: "/c", state: "omitted" as const },
+  ];
+  render(<ClientConfiguration row={{ ...row, entries }} onSaved={() => {}} />);
+  expect(screen.getByText("2 of 3")).toBeTruthy();
+  expect(screen.getByText("skills keep a description")).toBeTruthy();
+  expect(screen.getByRole("img", { name: "Full description 2, Not listed 1" })).toBeTruthy();
 });

@@ -102,12 +102,12 @@ describe("skillListFilter", () => {
   });
 
   it("a Home navigation replaces the whole filter, so an earlier update filter does not survive a usage one", () => {
-    useAppStore.getState().replaceSkillListFilter({ update: "available" });
+    useAppStore.getState().replaceSkillListFilter({ attention: "update" });
     useAppStore.getState().replaceSkillListFilter({ usage: "unused-30d" });
 
     const filter = useAppStore.getState().skillListFilter;
     expect(filter.usage).toBe("unused-30d");
-    expect(filter.update).toBeUndefined();
+    expect(filter.attention).toBeUndefined();
   });
 
   it("resetting a scoped filter also clears its stale selection", () => {

@@ -4,25 +4,43 @@
 // Claude keeps descriptions in skill
 // order while they fit 1,000,000 tokens x 3 characters x the fraction, the
 // shape of `skill_studio_core::listing_visibility`; enough for the view's flow.
+// Each agent lists only the copies in the folders it reads, as the core does.
 // ============================================================================
 
-import type { HarnessListing, ListingEntry, ListingReport, SkillSnapshot } from "@skill-studio/lib";
+import { deploymentLabelFromAgentId } from "@skill-studio/lib";
+import type {
+  HarnessListing,
+  InstalledSkill,
+  ListingEntry,
+  ListingReport,
+  SkillSnapshot,
+} from "@skill-studio/lib";
 
 const CONTEXT_TOKENS = 1_000_000;
 
-function entries(snapshot: SkillSnapshot, budget: number): ListingEntry[] {
-  const skills = snapshot.skills.filter((skill) =>
-    skill.deployments.some((d) => d.scope === "global"),
-  );
+/** The deployment labels of the global folders each estimated agent reads. */
+const READS = new Map([
+  ["claude-code", new Set(["Claude Code"])],
+  ["codex", new Set(["shared", "Codex"])],
+]);
+
+function entries(snapshot: SkillSnapshot, budget: number, harness: string): ListingEntry[] {
+  const reads = READS.get(harness) ?? new Set(["shared"]);
+  const copyOf = (skill: InstalledSkill) =>
+    // The core skips a copy whose link points nowhere, so a broken copy is not listed.
+    skill.deployments.find(
+      (d) => d.scope === "global" && reads.has(d.agent) && !d.symlink_is_broken,
+    );
+  const skills = snapshot.skills.filter((skill) => copyOf(skill));
   let left = budget - skills.reduce((sum, s) => sum + s.name.length + 3, 0);
   return skills.map((skill) => {
     const full = skill.description?.length ?? 0;
     const hidden = skill.parked || skill.invocation === "user-only";
-    const fits = !hidden && full + 2 <= left;
+    const fits = !hidden && full > 0 && full + 2 <= left;
     if (fits) left -= full + 2;
     return {
       name: skill.name,
-      path: skill.deployments.find((copy) => copy.scope === "global")?.path ?? null,
+      path: copyOf(skill)?.path ?? null,
       state: hidden ? "hidden" : fits ? "described" : "name_only",
       hidden_reason: skill.parked ? "parked" : hidden ? "manual-only" : null,
       shown_description_chars: fits ? full : 0,
@@ -43,7 +61,7 @@ function row(
   snapshot: SkillSnapshot,
   configuredTokens: string | null = null,
 ): HarnessListing {
-  const list = entries(snapshot, budget);
+  const list = entries(snapshot, budget, harness);
   if (harness === "codex") {
     list.push({
       name: "skill-installer",
@@ -75,7 +93,7 @@ function row(
       harness === "claude-code"
         ? {
             key: "skillListingBudgetFraction",
-            current: "0.0001",
+            current: String(budget / CONTEXT_TOKENS / 3),
             file: "~/.claude/settings.json",
             chezmoi_source: "~/.local/share/chezmoi/private_dot_claude/private_settings.json.tmpl",
             snippet: `"skillListingBudgetFraction": ${budget / CONTEXT_TOKENS / 3}`,
@@ -112,9 +130,10 @@ export function mockListingReport(
   snapshot: SkillSnapshot,
   request: { claude_budget_fraction?: number | null; codex_max_context_tokens?: number | null },
   configuredTokens: string | null = null,
+  agents?: string[],
 ): ListingReport {
   const fraction = request.claude_budget_fraction ?? 0.0001;
-  return {
+  const report: ListingReport = {
     listings: [
       row("claude-code", Math.floor(CONTEXT_TOKENS * 3 * fraction), "characters", snapshot),
       row(
@@ -159,5 +178,36 @@ export function mockListingReport(
         }),
       },
     ],
+  };
+  // A persona with fewer agents gets only their rows, as the real report lists installed agents.
+  // Agents with no estimate in this mock (OpenCode, pi, Grok Build) get a folder-scan row like
+  // Cursor's, listing the same global skills, so their counts are not zero.
+  if (!agents) return report;
+  const cursor = report.listings.find((row) => row.harness === "cursor");
+  const estimated = new Set(report.listings.map((row) => row.harness));
+  const kept = new Set(agents);
+  const discovered = agents.flatMap((agent) => {
+    if (!cursor || estimated.has(agent)) return [];
+    // Each agent reads its own folders and the shared one, not Cursor's.
+    const label = deploymentLabelFromAgentId(agent);
+    const reads = new Set(
+      snapshot.skills.flatMap((skill) =>
+        skill.deployments.some(
+          (d) =>
+            d.scope === "global" &&
+            !d.symlink_is_broken &&
+            (d.agent === label || d.agent === "shared"),
+        )
+          ? [skill.name]
+          : [],
+      ),
+    );
+    return [
+      { ...cursor, harness: agent, entries: cursor.entries.filter((e) => reads.has(e.name)) },
+    ];
+  });
+  return {
+    ...report,
+    listings: [...report.listings, ...discovered].filter((row) => kept.has(row.harness)),
   };
 }

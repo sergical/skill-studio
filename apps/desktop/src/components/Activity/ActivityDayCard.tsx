@@ -14,10 +14,9 @@ interface ActivityDayCardProps {
   stats: SkillInvocationStats[];
   dayKey: string;
   filter: ActivityFilter;
-  hint?: string;
 }
 
-export function ActivityDayCard({ stats, dayKey, filter, hint }: ActivityDayCardProps) {
+export function ActivityDayCard({ stats, dayKey, filter }: ActivityDayCardProps) {
   const day = dayBreakdown(stats, dayKey, filter);
   const skills = ranked(day.bySkill);
   const harnesses = ranked(day.byHarness);
@@ -42,7 +41,7 @@ export function ActivityDayCard({ stats, dayKey, filter, hint }: ActivityDayCard
           )}
         </div>
       )}
-      {filter.harness === "all" && harnesses.length > 0 && (
+      {filter.harness === "all" && harnesses.length > 1 && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border-subtle pt-2">
           {harnesses.map(([id, n]) => {
             // SAFETY: harness ids come off the wire as plain strings; every one this page can
@@ -57,7 +56,6 @@ export function ActivityDayCard({ stats, dayKey, filter, hint }: ActivityDayCard
           })}
         </div>
       )}
-      {hint && <span className="text-caption text-text-tertiary">{hint}</span>}
     </div>
   );
 }

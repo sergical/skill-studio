@@ -14,6 +14,9 @@ import type {
   AddMethodDefaults,
   AddSkillOperationEvent,
   AddSkillRequest,
+  CreatePastedSkillRequest,
+  PastedSkillCheck,
+  PastedSkillDraft,
   AddSkillResult,
   AddSkillsRequest,
   AgentId,
@@ -361,7 +364,7 @@ export async function updateSkill(
  * Update every given owner in one backend call
  * (`skill_studio_core::ops::update_all`, one `spawn_blocking` task for the
  * whole batch) - one IPC round trip for the whole batch instead of one
- * `updateSkill` call per owner. `HomeInboxGroups`'s "Update all" uses this
+ * `updateSkill` call per owner. The Skills selection's Update uses this
  * for every non-fork owner target; forks still pull upstream one at a time
  * through `pullForkUpstream`, since that CLI call has no batched form.
  */
@@ -491,6 +494,18 @@ export async function unforkSkill(target: LifecycleTarget): Promise<void> {
  */
 export async function addSkill(request: AddSkillRequest): Promise<AddSkillResult> {
   return callCommand("add_skill", { request });
+}
+
+/** Build the SKILL.md a pasted draft becomes and validate it. Writes nothing. */
+export async function checkPastedSkill(draft: PastedSkillDraft): Promise<PastedSkillCheck> {
+  return callCommand("check_pasted_skill", { draft });
+}
+
+/** Write a pasted draft as a new Global Universal skill. Refuses an existing skill folder. */
+export async function createPastedSkill(
+  request: CreatePastedSkillRequest,
+): Promise<AddSkillResult> {
+  return callCommand("create_pasted_skill", { request });
 }
 
 /** Event name every background Add Skill status is emitted on. */

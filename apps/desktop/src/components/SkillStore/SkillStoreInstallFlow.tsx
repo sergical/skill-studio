@@ -17,7 +17,7 @@ import {
   listenForAddSkillOperation,
   useAddSkillListenerRef,
 } from "../../hooks/useAddSkillOperation";
-import { useKeptHarnesses } from "../../hooks/useKeptHarnesses";
+import { useClientIds } from "../../hooks/useClientRows";
 import { useLoad } from "../../hooks/useLoad";
 import { useAppStore } from "../../store/appStore";
 import type { SkillInstallCompletion } from "./InstallControls";
@@ -57,7 +57,7 @@ export function SkillStoreInstallFlow({
   // `null` until the user changes one, so the default follows `detected`.
   const [pickedHarnesses, setPickedHarnesses] = useState<AgentId[] | null>(null);
   const [universal, setUniversal] = useState(true);
-  const keptHarnesses = useKeptHarnesses();
+  const shownHarnesses = useClientIds();
   const [installScope, setInstallScope] = useState<InstallScope>("global");
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [isInstalling, setIsInstalling] = useState(false);
@@ -137,7 +137,7 @@ export function SkillStoreInstallFlow({
     finishOperation(incoming);
   };
 
-  const offeredHarnesses = offeredInstallHarnesses(detected, keptHarnesses);
+  const offeredHarnesses = offeredInstallHarnesses(shownHarnesses ?? detected);
   const chosenHarnesses = chosenInstallHarnesses(
     offeredHarnesses,
     pickedHarnesses,

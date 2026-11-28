@@ -20,13 +20,13 @@ export function TrustConfirmFooter({
 }) {
   return (
     <div className="flex flex-col gap-3 border-t border-border px-5 py-4">
-      <div>
+      <div className="flex flex-col gap-1">
         <p className="m-0 text-body font-medium text-text-primary">Trust this repository?</p>
-        <ul className="m-0 mt-1 list-inside list-disc text-small text-text-secondary">
-          <li>{untrustedIdentity ?? "this repository"}</li>
-        </ul>
-        <p className="m-0 mt-2 text-caption text-text-tertiary">
-          Skills from this source can run on your machine. Confirm only if you trust it.
+        <p className="m-0 font-mono text-small break-all text-text-secondary">
+          {untrustedIdentity ?? "this repository"}
+        </p>
+        <p className="m-0 text-caption text-text-tertiary">
+          Skills from it can run code on your machine. Trust it only if you know who publishes it.
         </p>
       </div>
       <div className="flex justify-end gap-2">

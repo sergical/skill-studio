@@ -1,21 +1,19 @@
 // ============================================================================
-// HarnessMark - shared harness/Universal-folder marks: a fixed-size box that
-// shows the harness's brand icon, dimmed to the `--color-icon-muted` tone
-// when the harness doesn't reach the skill, badged with a small link glyph
-// anchored to the icon when it reaches the skill only through the Universal
-// folder. Every reached mark has a one-line tooltip naming the harness and
-// how it reaches the skill, since the 11px badge is too small to carry that
-// alone.
+// HarnessMark - one reading harness's mark: a fixed-size box that shows the
+// harness's brand icon, badged with a small link glyph anchored to the icon
+// when its copy links to the Universal folder. Every mark has a one-line
+// tooltip naming the harness and how it reaches the skill, since the 11px
+// badge is too small to carry that alone.
 // ============================================================================
 
-import { Layers, Link2, Link2Off } from "lucide-react";
+import { Link2, Link2Off } from "lucide-react";
 import { HarnessIcon } from "../ui/HarnessIcon";
 import { RichTooltip } from "../ui/RichTooltip";
-import type { HarnessReach, Universal } from "./skill-row-state";
+import type { HarnessReach } from "./skill-row-state";
 
 export { HarnessIcon as HarnessGlyph } from "../ui/HarnessIcon";
 
-function harnessMarkAriaLabel(reach: HarnessReach, parked: boolean): string {
+function harnessMarkAriaLabel(reach: HarnessReach): string {
   const how =
     reach.how === "linked"
       ? "link to the Universal folder"
@@ -24,15 +22,14 @@ function harnessMarkAriaLabel(reach: HarnessReach, parked: boolean): string {
         : reach.how === "universal"
           ? "source in the Universal folder"
           : "own copy";
-  const state = parked ? "parked" : reach.disabled ? "disabled" : null;
-  return state ? `${reach.label} · ${how} · ${state}` : `${reach.label} · ${how}`;
+  return reach.disabled ? `${reach.label} · ${how} · disabled` : `${reach.label} · ${how}`;
 }
 
 /** One line per reached harness: `<glyph> <label> · <how>[ · <state>]` - the
  * words the 11px badge cannot carry on its own. The how-word (linked /
  * source / own copy) always shows; a broken link replaces it in the error
- * tone, and disabled or parked follows it in the warning tone. */
-function harnessMarkTooltip(reach: HarnessReach, parked: boolean) {
+ * tone, and disabled follows it in the warning tone. */
+function harnessMarkTooltip(reach: HarnessReach) {
   const how =
     reach.how === "broken"
       ? { text: "link broken", tone: "text-error" }
@@ -41,58 +38,30 @@ function harnessMarkTooltip(reach: HarnessReach, parked: boolean) {
         : reach.how === "universal"
           ? { text: "source in Universal folder", tone: "text-text-tertiary" }
           : { text: "own copy", tone: "text-text-tertiary" };
-  const state = parked ? "parked" : reach.disabled ? "disabled" : null;
   return (
     <span className="flex items-center gap-1.5 text-small">
       <HarnessIcon harness={reach.harness} size={14} />
       <span>{reach.label}</span>
       <span className={how.tone}>· {how.text}</span>
-      {state && <span className="text-warning">· {state}</span>}
+      {reach.disabled && <span className="text-warning">· disabled</span>}
     </span>
   );
 }
 
-/** One harness's mark: unreached is the harness's own icon dimmed to
- * `--color-icon-muted` at `opacity-60` - readable as a second state next to a
- * full-tone icon rather than "two shades" - with no tooltip, since there's
- * nothing to say about a harness that isn't there. Reached is the brand icon
- * at full tone, badged with a small link (or broken-link) glyph anchored to
- * the icon itself (not the slot) when the reach is only through the
- * Universal folder, so every harness's badge lands at the same offset from
- * its icon's corner. */
-export function HarnessMark({
-  reach,
-  size: sizeProp,
-  parked: parkedProp,
-}: {
-  reach: HarnessReach;
-  size?: number;
-  /** The whole skill is parked: every disc takes the disabled treatment and says so. */
-  parked?: boolean;
-}) {
+/** One reading harness's mark: the brand icon at full tone, muted when disabled, badged with a
+ * small link (or broken-link) glyph anchored to the icon itself (not the slot) when its copy is a
+ * link, so every harness's badge lands at the same offset from its icon's corner. */
+export function HarnessMark({ reach, size: sizeProp }: { reach: HarnessReach; size?: number }) {
   const size = sizeProp ?? 13;
-  const parked = parkedProp ?? false;
-  if (!reach.reached) {
-    return (
-      <span
-        className="relative inline-flex size-5 items-center justify-center opacity-60"
-        aria-hidden
-      >
-        <HarnessIcon harness={reach.harness} size={size} muted />
-      </span>
-    );
-  }
   const badge = reach.how === "linked" || reach.how === "broken" ? reach.how : null;
-  // A disabled or parked glyph is always muted.
-  const glyphMuted = reach.disabled || parked;
   const mark = (
     <span
       role="img"
       className="group relative inline-flex size-5 items-center justify-center"
-      aria-label={harnessMarkAriaLabel(reach, parked)}
+      aria-label={harnessMarkAriaLabel(reach)}
     >
       <span className="relative inline-flex" style={{ width: size, height: size }}>
-        <HarnessIcon harness={reach.harness} size={size} muted={glyphMuted} />
+        <HarnessIcon harness={reach.harness} size={size} muted={reach.disabled} />
         {badge && (
           <span className="absolute -right-1 -bottom-1 inline-flex size-2.5 items-center justify-center rounded-full bg-bg-primary group-hover:bg-bg-secondary">
             {badge === "linked" ? (
@@ -105,47 +74,5 @@ export function HarnessMark({
       </span>
     </span>
   );
-  return <RichTooltip content={harnessMarkTooltip(reach, parked)}>{mark}</RichTooltip>;
-}
-
-/** The Universal folder's own mark: present is the folder's `Layers` glyph
- * at full tone; absent is the same glyph dimmed to `--color-icon-muted` at
- * `opacity-60`. Present shows a one-line "Universal folder" tooltip so the
- * Layers glyph is named. */
-export function UniversalMark({
-  universal,
-  size: sizeProp,
-}: {
-  universal: Universal;
-  size?: number;
-}) {
-  const size = sizeProp ?? 13;
-  if (!universal.present) {
-    return (
-      <span
-        className="relative inline-flex size-5 items-center justify-center opacity-60"
-        aria-hidden
-      >
-        <Layers size={size} style={{ color: "var(--color-icon-muted)" }} />
-      </span>
-    );
-  }
-  return (
-    <RichTooltip
-      content={
-        <span className="flex items-center gap-1.5 text-small">
-          <Layers size={14} aria-hidden />
-          Universal folder
-        </span>
-      }
-    >
-      <span
-        role="img"
-        className="relative inline-flex size-5 items-center justify-center"
-        aria-label="Universal folder"
-      >
-        <Layers size={size} className="text-text-primary" aria-hidden />
-      </span>
-    </RichTooltip>
-  );
+  return <RichTooltip content={harnessMarkTooltip(reach)}>{mark}</RichTooltip>;
 }

@@ -23,11 +23,16 @@ import type {
   PackExportReport,
   PackExportRequest,
   PackReport,
+  AddSkillResult,
+  PastedSkillCheck,
+  PastedSkillDraft,
 } from "@skill-studio/lib";
 import { BUSY_MESSAGE, UPDATE_ALL_BUSY_MESSAGE } from "../lib/skill-busy-message";
 import { addToast } from "../lib/toast";
 import {
+  checkPastedSkill,
   checkSkillUpdatesNow,
+  createPastedSkill,
   getAddMethodDefaults,
   openListingSetting,
   packAdd,
@@ -73,18 +78,15 @@ import type { SkillCommands } from "./skillCommands";
  * heatmap, per-skill and per-project breakdowns); `skill` is the full-page
  * view of one installed skill, opened from any other view.
  */
-/** One of Learn's explainer sections, deep-linkable from Home and elsewhere. */
-export type LearnSection = "broken" | "invoke" | "cost" | "unused";
-
 export type ActiveView =
   | { kind: "home" }
   | { kind: "skills" }
   | { kind: "plugins" }
   | { kind: "packs" }
   | { kind: "listing"; harness?: string; scope?: string }
-  | { kind: "sessions" }
+  | { kind: "sessions"; harness?: string }
   | { kind: "activity" }
-  | { kind: "learn"; section?: LearnSection }
+  | { kind: "learn" }
   | { kind: "settings" }
   | {
       kind: "skill";
@@ -106,18 +108,26 @@ export interface HarnessDetectionState {
   saving: boolean;
 }
 
+/** The agents the app shows: the saved choice, else every detected agent; `undefined` before either is known. */
+export function shownAgentIds(detection: HarnessDetectionState): string[] | undefined {
+  return (
+    detection.choice?.kept ??
+    detection.report?.harnesses.flatMap((h) => (h.state === "not_found" ? [] : [h.id]))
+  );
+}
+
 export type PackIntent =
   | { kind: "update"; source: string | null }
   | { kind: "remove"; source: string }
   | { kind: "add"; source: string; skills: string[]; refPin: string | null };
 
-/** `kept` is the saved agent choice. Pack add installs for the same agents
+/** `shown` is `shownAgentIds`. Pack add installs for the same agents
  * the Add Skill sheet ticks by default; with no agents, `npx skills` writes
  * only `.agents/skills`, which Claude Code does not read. */
 async function packActionCall(
   intent: PackIntent,
   dryRun: boolean,
-  kept: readonly string[],
+  shown: readonly string[] | undefined,
 ): Promise<PackActionReport> {
   switch (intent.kind) {
     case "update":
@@ -135,7 +145,7 @@ async function packActionCall(
         source: intent.source,
         skills: intent.skills,
         ref_pin: intent.refPin,
-        harnesses: defaultSharedInstallAgents(defaults.installed_harnesses, kept),
+        harnesses: defaultSharedInstallAgents(defaults.installed_harnesses, shown),
         project_path: null,
         dry_run: dryRun,
       });
@@ -158,15 +168,23 @@ interface ReportRead<T> {
 // Listing and Sessions both scan skills. Keep at most one of their reads in flight.
 let reportReadQueue = Promise.resolve();
 let listingGeneration = 0;
+/** Reports asked for while their read ran: the skills may have changed after that read began. */
+const reportsAskedAgain = new Set<string>();
 
+/** `again` asks for the report anew once this read is done, when someone asked while it ran. */
 function refreshReport<T>(
+  id: string,
   previous: ReportRead<T> | undefined,
   read: () => Promise<T>,
   publish: (entry: ReportRead<T>) => void,
+  again: () => void,
 ): void {
-  if (previous?.refreshing) return;
+  if (previous?.refreshing) {
+    reportsAskedAgain.add(id);
+    return;
+  }
   publish({ data: previous?.data, refreshing: true });
-  reportReadQueue = reportReadQueue.then(async () => {
+  const readOnce = async () => {
     // On launch the inventory scan can still hold the shared scope lease.
     for (const retryDelay of [500, 1500, 3000, 0]) {
       try {
@@ -181,6 +199,9 @@ function refreshReport<T>(
         await new Promise((resolve) => setTimeout(resolve, retryDelay));
       }
     }
+  };
+  reportReadQueue = reportReadQueue.then(readOnce).then(() => {
+    if (reportsAskedAgain.delete(id)) again();
   });
 }
 
@@ -264,10 +285,10 @@ interface AppState extends SkillCommands {
   // HomeView.tsx.
   skillListFilter: SkillListFilter;
   setSkillListFilter: (patch: Partial<SkillListFilter>) => void;
-  /** Starts from the default filter, so no earlier `update`/`usage`/`issue` survives. */
+  /** Starts from the default filter, so no earlier `attention`/`usage`/`issue` survives. */
   replaceSkillListFilter: (patch: Partial<SkillListFilter>) => void;
   resetSkillListFilter: () => void;
-  /** Bumped by the sidebar's search icon so the filter bar's search input can focus itself. */
+  /** Bumped by the `/` shortcut and the palette's Filter skills action so the filter bar's search input can focus itself. */
   skillSearchFocusRequest: number;
   requestSkillSearchFocus: () => void;
   /** Whether the Skills view shows the coverage matrix instead of the table. */
@@ -322,6 +343,13 @@ interface AppState extends SkillCommands {
   runPackAction: (intent: PackIntent, dryRun: boolean) => Promise<PackActionReport>;
   /** Plans (`dryRun`) or writes a new pack folder from installed skills. Rejects with the command's message. */
   exportPack: (request: PackExportRequest) => Promise<PackExportReport>;
+
+  // === Paste a new skill ===
+  /** Builds and validates the SKILL.md a pasted draft becomes. Writes nothing. */
+  checkPastedSkill: (draft: PastedSkillDraft) => Promise<PastedSkillCheck>;
+  /** Writes the draft as a new Global skill for the agents the Add Skill sheet ticks by default.
+   * Rejects with the command's message, for example when the skill folder already exists. */
+  createPastedSkill: (draft: PastedSkillDraft) => Promise<AddSkillResult>;
 
   // === Model listing ===
   /** Per-skill listing state for each agent, from the core's `listing`. Reads only. */
@@ -631,12 +659,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     const key = listingReportKey(request);
     const generation = listingGeneration;
     refreshReport(
+      `listing:${key}`,
       get().listingReports[key],
       () => get().readListing(request),
       (entry) => {
         if (generation === listingGeneration)
           set((state) => ({ listingReports: { ...state.listingReports, [key]: entry } }));
       },
+      () => get().refreshListing(request),
     );
   },
   sessionsReports: {},
@@ -645,17 +675,34 @@ export const useAppStore = create<AppState>((set, get) => ({
     const key = sessionsReportKey(request);
     const generation = listingGeneration;
     refreshReport(
+      `sessions:${key}`,
       get().sessionsReports[key],
       () => get().readSkillSessions(request),
       (entry) => {
         if (generation === listingGeneration)
           set((state) => ({ sessionsReports: { ...state.sessionsReports, [key]: entry } }));
       },
+      () => get().refreshSkillSessions(request),
     );
   },
   runPackAction: (intent, dryRun) =>
-    withCommandMessage(packActionCall(intent, dryRun, get().harnessDetection.choice?.kept ?? [])),
+    withCommandMessage(packActionCall(intent, dryRun, shownAgentIds(get().harnessDetection))),
   exportPack: (request) => withCommandMessage(packExport(request)),
+
+  checkPastedSkill: (draft) => withCommandMessage(checkPastedSkill(draft)),
+  createPastedSkill: (draft) =>
+    withCommandMessage(
+      getAddMethodDefaults(null).then((defaults) =>
+        createPastedSkill({
+          draft,
+          agents: defaultSharedInstallAgents(
+            defaults.installed_harnesses,
+            shownAgentIds(get().harnessDetection),
+          ),
+          link_mode: "link",
+        }),
+      ),
+    ),
 
   addSkillSheet: { open: false },
   openAddSkillSheet: (prefill) => set({ addSkillSheet: { open: true, prefill } }),

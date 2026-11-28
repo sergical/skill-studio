@@ -15,12 +15,12 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  Button,
   Input,
 } from "@skill-studio/ui";
 import type { PackExportReport } from "@skill-studio/lib";
 import { useLoad } from "../../hooks/useLoad";
 import { useAppStore } from "../../store/appStore";
+import { CopyTextButton } from "../ui/CopyTextButton";
 import { advancePlanPhase } from "./pack-plan-phase";
 import type { PackPlanEvent, PackPlanState } from "./pack-plan-phase";
 
@@ -49,7 +49,6 @@ export function PackExportDialog({ skills, dir, projectPath, onClose }: PackExpo
   const exportPack = useAppStore((s) => s.exportPack);
   const [state, setState] = useState<ExportState>({ phase: "planning" });
   const [source, setSource] = useState("");
-  const [copied, setCopied] = useState(false);
 
   useLoad(
     JSON.stringify([dir, skills, projectPath]),
@@ -78,10 +77,6 @@ export function PackExportDialog({ skills, dir, projectPath, onClose }: PackExpo
       );
   };
 
-  const copyInstall = (line: string) => {
-    void navigator.clipboard.writeText(line).then(() => setCopied(true));
-  };
-
   const running = state.phase === "running";
   const report =
     state.phase === "planned" || state.phase === "running"
@@ -98,7 +93,7 @@ export function PackExportDialog({ skills, dir, projectPath, onClose }: PackExpo
           <AlertDialogTitle>
             {state.phase === "done"
               ? "Pack written"
-              : `Pack ${skills.length} skill${skills.length === 1 ? "" : "s"}?`}
+              : `Export ${skills.length} skill${skills.length === 1 ? "" : "s"} as a pack?`}
           </AlertDialogTitle>
           <AlertDialogDescription role="status">
             {state.phase === "planning"
@@ -119,7 +114,7 @@ export function PackExportDialog({ skills, dir, projectPath, onClose }: PackExpo
                 className="flex items-baseline gap-2 border-b border-border-subtle py-1.5 last:border-b-0"
               >
                 <span className="min-w-0 truncate text-body text-text-primary">{skill.skill}</span>
-                <span className="ml-auto shrink-0 text-caption text-text-secondary">
+                <span className="ml-auto shrink-0 text-caption text-text-tertiary tabular-nums">
                   {skill.files} file{skill.files === 1 ? "" : "s"}
                 </span>
               </li>
@@ -127,15 +122,21 @@ export function PackExportDialog({ skills, dir, projectPath, onClose }: PackExpo
           </ul>
         )}
         {state.phase === "planned" && (
-          <label className="flex flex-col gap-1 text-small text-text-secondary">
-            Where the pack will live (for the README's install lines)
-            <Input
-              aria-label="Pack repository"
-              placeholder="owner/repo"
-              value={source}
-              onChange={(event) => setSource(event.target.value)}
-            />
-          </label>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              confirm();
+            }}
+          >
+            <label className="flex flex-col gap-1 text-small text-text-secondary">
+              Repository for the install line
+              <Input
+                placeholder="owner/repo"
+                value={source}
+                onChange={(event) => setSource(event.target.value)}
+              />
+            </label>
+          </form>
         )}
         {state.phase === "done" && (
           <div className="flex flex-col gap-1">
@@ -150,14 +151,12 @@ export function PackExportDialog({ skills, dir, projectPath, onClose }: PackExpo
               >
                 {state.result.install_command}
               </code>
-              <Button
-                variant="outline"
-                size="sm"
-                className="min-w-16"
-                onClick={() => copyInstall(state.result.install_command)}
-              >
-                {copied ? "Copied" : "Copy"}
-              </Button>
+              <CopyTextButton
+                text={state.result.install_command}
+                label="Copy"
+                namesText
+                className="rounded-sm px-2 text-text-secondary"
+              />
             </div>
           </div>
         )}

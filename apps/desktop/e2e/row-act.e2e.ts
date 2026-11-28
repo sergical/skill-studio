@@ -142,20 +142,33 @@ test("a row with no fix of its own spins in its fix cell while a selection-bar P
   await expect(target).not.toHaveClass(/text-text-tertiary/);
 });
 
-test("Update all on Home keeps every Updates row in its slot and marks each one Updated", async ({
+test("updating every Updates row from the selection bar keeps each row in its slot and marks it Updated", async ({
   page,
 }) => {
-  const group = page.locator('[data-group="upd"]');
+  await openSkillsPage(page);
+  const group = page.getByRole("grid", { name: "Skills" }).locator('[data-group="update"]');
   const rows = group.locator(SKILL_ROW);
   await expect(rows.first()).toBeVisible();
   const names = await rows.evaluateAll((els) =>
     els.map((el) => el.querySelector('[role="gridcell"]:nth-child(2) span.truncate')!.textContent),
   );
-  const tops = await rows.evaluateAll((els) =>
-    els.map((el) => Math.round(el.getBoundingClientRect().top)),
-  );
+  // Offsets within the group, so a scroll while selecting doesn't count as a move.
+  const offsets = () =>
+    rows.evaluateAll((els) =>
+      els.map((el) =>
+        Math.round(
+          el.getBoundingClientRect().top -
+            el.closest('[data-group="update"]')!.getBoundingClientRect().top,
+        ),
+      ),
+    );
+  const tops = await offsets();
+  for (const index of names.keys()) {
+    await rows.nth(index).focus();
+    await page.keyboard.press("x");
+  }
 
-  await group.getByRole("button", { name: "Update all" }).click();
+  await page.getByRole("button", { name: `Update ${names.length}`, exact: true }).click();
 
   await expect(group.getByText("Updated", { exact: true })).toHaveCount(names.length);
   expect(
@@ -165,9 +178,7 @@ test("Update all on Home keeps every Updates row in its slot and marks each one 
       ),
     ),
   ).toEqual(names);
-  expect(
-    await rows.evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top))),
-  ).toEqual(tops);
+  expect(await offsets()).toEqual(tops);
 });
 
 test("a selection-bar Park leaves a row that is still updating to its Update, and parks the rest", async ({

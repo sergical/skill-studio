@@ -1,90 +1,64 @@
 // ============================================================================
-// HomeView - "What needs doing" for the user's own skills: stat tiles for
-// broken/warnings/updates, a lane card for invocation and prompt cost, and a
-// grouped inbox list (Broken, Warnings, Updates, Not used in 30 days,
-// Recently used). See popover-spec.md for the markup and copy this is built
-// from.
+// HomeView - Your skills at a glance: each set-up agent and what it sees, the
+// week's uses, and what needs the user as counts that open Skills plus one
+// prompt to hand all of it to an agent with the Skill Studio MCP server.
 // ============================================================================
 
-import { useState } from "react";
-import { RefreshCw } from "lucide-react";
-import { Button, RefreshIndicator } from "@skill-studio/ui";
-import { formatTokens, homeInvocationCounts, homePromptCost } from "@skill-studio/lib";
-import type {
-  HealthIssue,
-  InstalledSkill,
-  InvocationPolicy,
-  LifecycleTarget,
-  SkillListFilter,
-  SkillSnapshot,
-} from "@skill-studio/lib";
-import { useHeldLayout } from "../../lib/held-layout";
-import { lifecycleTargetForHarnessRoot } from "../../lib/skill-lifecycle-target";
+import { Plus } from "lucide-react";
+import { HARNESS_CATALOG } from "@skill-studio/lib";
+import type { SkillSnapshot } from "@skill-studio/lib";
+import { Button } from "@skill-studio/ui";
+import { useClientIds } from "../../hooks/useClientRows";
+import { useMcpConnections } from "../../hooks/useMcpConnections";
 import { useAppStore } from "../../store/appStore";
+import { hasReadableHistory } from "../Listing/client-allocation";
 import { PageShell } from "../Shell/PageShell";
-import { SkillListSelectionBar } from "../SkillList/SkillListSelectionBar";
-import { useSkillListAct } from "../SkillList/useSkillListAct";
-import { InfoPopover } from "../ui/InfoPopover";
-import { MaterializeRootDialog } from "../ui/MaterializeRootDialog";
-import { TooltipControl } from "../ui/TooltipControl";
+import { dailyUses, homeAgent } from "./home-agents";
+import { homeAsks, homeCounts } from "./home-asks";
+import { HomeAgents } from "./HomeAgents";
+import { HomeAsk } from "./HomeAsk";
+import { HomeWeek } from "./HomeWeek";
+import { useHomeListing } from "./useHomeListing";
 import { useUpdateCheck } from "./useUpdateCheck";
-import { HomeVisibility } from "./HomeVisibility";
-import { HomeInboxGrid } from "./HomeInboxGroups";
-import { buildHomeRowPlan, computeHomeGroups } from "./home-inbox-data";
-import type { HomeFilter, HomeInboxLists } from "./home-inbox-data";
-import { useHomeGroupVisibility } from "./useHomeGroupVisibility";
-import { useHomeRowCursor } from "./useHomeRowCursor";
+
+const NO_UPDATE_CHECK: SkillSnapshot["update_check"] = {
+  checked_at: null,
+  gh_status: "ok",
+  message: null,
+  updates_available: 0,
+  upstream_ahead: [],
+};
 
 interface HomeViewProps {
   snapshot: SkillSnapshot | undefined;
   isLoading: boolean;
-  usageRefreshing?: boolean;
-  onSelectSkill: (name: string, deploymentPath?: string) => void;
   /** Whether Home is the view on screen right now - `false` while it's kept mounted but hidden
-   * behind an open skill's page, so its window-level keyboard shortcuts stay off. */
+   * behind an open skill's page, so it reads agents' skill lists only while shown. */
   active: boolean;
 }
 
-/**
- * First-scan loading state, mirroring the loaded layout's dimensions (stat
- * tiles, lane card, list rows) so the dashboard fades in without a layout
- * jump - and so "empty" text only ever means the scan really found nothing.
- */
+/** First-scan loading state in the loaded layout's shape, so Home fades in without a jump and
+ * "No skills yet" only ever means the scan found nothing. */
 function HomeSkeleton() {
   const bar = "animate-pulse rounded-xs bg-bg-tertiary motion-reduce:animate-none";
   return (
     <PageShell title="Home">
-      <div className="grid grid-cols-3 gap-3" aria-hidden="true">
-        {["Broken", "Warnings", "Updates"].map((label) => (
-          <div
-            key={label}
-            className="flex flex-1 flex-col gap-1 rounded-md border border-border-subtle bg-bg-elevated px-4 py-3.5"
-          >
-            <span className="text-small text-text-tertiary">{label}</span>
-            <span className="text-display leading-[1.1] font-semibold">
-              <span className={`inline-block h-[1em] w-7 align-middle ${bar}`} />
-            </span>
+      <div className="flex max-w-4xl flex-col gap-6" aria-hidden="true">
+        <div className="flex gap-1">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="flex w-36 flex-col gap-1.5 px-0 py-2">
+              <div className={`h-3 w-20 ${bar}`} />
+              <div className={`h-4 w-24 ${bar}`} />
+            </div>
+          ))}
+        </div>
+        <div className="flex items-end justify-between gap-8">
+          <div className="flex items-end gap-4">
+            <div className={`h-9 w-16 ${bar}`} />
+            <div className={`h-8 w-[5.5rem] ${bar}`} />
           </div>
-        ))}
-      </div>
-      <section
-        className="flex flex-col gap-2 rounded-md border border-border-subtle bg-bg-elevated px-4 py-3.5"
-        aria-hidden="true"
-      >
-        {["Who can invoke", "Prompt cost"].map((label) => (
-          <div key={label} className="grid grid-cols-[210px_minmax(0,1fr)] items-center gap-3">
-            <span className="text-small whitespace-nowrap text-text-secondary">{label}</span>
-            <div className={`h-7 ${bar}`} />
-          </div>
-        ))}
-      </section>
-      <div className="flex flex-col gap-px pt-2" aria-hidden="true">
-        {[0, 1, 2, 3].map((i) => (
-          <div key={i} className="flex h-11 items-center gap-3 px-3">
-            <div className={`size-5 shrink-0 rounded-full ${bar}`} />
-            <div className={`h-3.5 ${bar}`} style={{ width: `${34 - i * 6}%` }} />
-          </div>
-        ))}
+          <div className={`h-8 w-56 ${bar}`} />
+        </div>
       </div>
       <span className="sr-only" role="status">
         Scanning installed skills…
@@ -93,383 +67,20 @@ function HomeSkeleton() {
   );
 }
 
-/** The Broken/Warnings/Updates stat-tile row - each a toggle for `HomeFilter`, the first two with an `InfoPopover`. */
-function HomeStatTiles({
-  broken,
-  warnings,
-  updates,
-  updateCheckSummary,
-  filter,
-  toggleFilter,
-  onLearnMore,
-}: {
-  broken: HealthIssue[];
-  warnings: HealthIssue[];
-  updates: InstalledSkill[];
-  updateCheckSummary: SkillSnapshot["update_check"];
-  filter: HomeFilter | null;
-  toggleFilter: (id: HomeFilter) => void;
-  onLearnMore: () => void;
-}) {
-  const updateCheck = useUpdateCheck(updateCheckSummary);
-  return (
-    <div className="grid grid-cols-3 gap-3">
-      <div className="group/stat relative flex">
-        <Button
-          variant="outline"
-          className={`h-auto flex-1 flex-col items-stretch gap-1 rounded-md border-border-subtle bg-bg-elevated px-4 py-3.5 justify-start text-left active:scale-98 aria-pressed:border-accent aria-pressed:bg-accent-softer ${
-            broken.length > 0 ? "[&_.home-stat-value]:text-error" : ""
-          }`}
-          aria-pressed={filter === "broken"}
-          onClick={() => toggleFilter("broken")}
-        >
-          <span
-            className={`flex items-center gap-2 text-small ${filter === "broken" ? "text-accent" : "text-text-tertiary"}`}
-          >
-            Broken
-          </span>
-          <span className="home-stat-value text-display leading-[1.1] font-semibold tracking-[-0.02em] tabular-nums">
-            {broken.length}
-          </span>
-        </Button>
-        <span className="absolute top-3.5 right-3.5 opacity-0 group-hover/stat:opacity-100 group-focus-within/stat:opacity-100 has-[[aria-expanded=true]]:opacity-100">
-          <InfoPopover label="About broken" title="Broken and warnings" onLearnMore={onLearnMore}>
-            An agent loads nothing, or something you did not intend: a dead link, a SKILL.md the
-            loader rejects, a parked skill that was reinstalled.
-          </InfoPopover>
-        </span>
-      </div>
-
-      <div className="group/stat relative flex">
-        <Button
-          variant="outline"
-          className={`h-auto flex-1 flex-col items-stretch gap-1 rounded-md border-border-subtle bg-bg-elevated px-4 py-3.5 justify-start text-left active:scale-98 aria-pressed:border-accent aria-pressed:bg-accent-softer ${
-            warnings.length > 0 ? "[&_.home-stat-value]:text-warning" : ""
-          }`}
-          aria-pressed={filter === "warn"}
-          onClick={() => toggleFilter("warn")}
-        >
-          <span
-            className={`flex items-center gap-2 text-small ${filter === "warn" ? "text-accent" : "text-text-tertiary"}`}
-          >
-            Warnings
-          </span>
-          <span className="home-stat-value text-display leading-[1.1] font-semibold tracking-[-0.02em] tabular-nums">
-            {warnings.length}
-          </span>
-        </Button>
-        <span className="absolute top-3.5 right-3.5 opacity-0 group-hover/stat:opacity-100 group-focus-within/stat:opacity-100 has-[[aria-expanded=true]]:opacity-100">
-          <InfoPopover label="About warnings" title="Broken and warnings" onLearnMore={onLearnMore}>
-            Everything still loads, but the state drifted: copies that differ between agents,
-            lock-file entries with no folder on disk.
-          </InfoPopover>
-        </span>
-      </div>
-
-      <div className="relative flex">
-        <Button
-          variant="outline"
-          className="h-auto flex-1 flex-col items-stretch gap-1 rounded-md border-border-subtle bg-bg-elevated px-4 py-3.5 justify-start text-left active:scale-98 aria-pressed:border-accent aria-pressed:bg-accent-softer"
-          aria-pressed={filter === "upd"}
-          onClick={() => toggleFilter("upd")}
-        >
-          <span
-            className={`flex items-center gap-2 text-small ${filter === "upd" ? "text-accent" : "text-text-tertiary"}`}
-          >
-            Updates
-          </span>
-          <span className="text-display leading-[1.1] font-semibold tracking-[-0.02em] tabular-nums">
-            {updates.length}
-          </span>
-          <span
-            className={`truncate text-caption font-normal ${updateCheck.failed ? "text-error" : "text-text-tertiary"}`}
-            title={updateCheck.caption}
-          >
-            {updateCheck.caption}
-          </span>
-        </Button>
-        <span className="absolute top-2.5 right-2.5">
-          <TooltipControl content="Check sources for updates">
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="text-text-tertiary hover:text-text-primary"
-              aria-label={updateCheck.pending ? "Checking…" : "Check now"}
-              disabled={updateCheck.pending}
-              onClick={updateCheck.check}
-            >
-              <RefreshCw
-                aria-hidden
-                className={updateCheck.pending ? "motion-safe:animate-spin" : undefined}
-              />
-            </Button>
-          </TooltipControl>
-        </span>
-        {updateCheck.checkError ? (
-          <span role="alert" className="sr-only">
-            {updateCheck.checkError}
-          </span>
-        ) : (
-          <span role="status" className="sr-only">
-            {updateCheck.caption}
-          </span>
-        )}
-      </div>
-    </div>
+export function HomeView({ snapshot, isLoading, active }: HomeViewProps) {
+  const updateCheck = useUpdateCheck(snapshot?.update_check ?? NO_UPDATE_CHECK);
+  const navigate = useAppStore((s) => s.setActiveView);
+  const replaceFilter = useAppStore((s) => s.replaceSkillListFilter);
+  const openAddSkillSheet = useAppStore((s) => s.openAddSkillSheet);
+  const kept = useClientIds();
+  const { load, retry } = useHomeListing(
+    snapshot?.revision ?? 0,
+    active && snapshot !== undefined && Boolean(kept?.length),
   );
-}
-
-/** Home's lane card: "Who can invoke" and "Prompt cost" segmented bars, each segment a filter/nav shortcut. */
-function InvocationCostCard({
-  inv,
-  cost,
-  usageRefreshing,
-  filter,
-  onLearnMoreInvoke,
-  onLearnMoreCost,
-  goToInvocation,
-  goToSkills,
-  toggleFilter,
-}: {
-  inv: ReturnType<typeof homeInvocationCounts>;
-  cost: ReturnType<typeof homePromptCost>;
-  usageRefreshing: boolean;
-  filter: HomeFilter | null;
-  onLearnMoreInvoke: () => void;
-  onLearnMoreCost: () => void;
-  goToInvocation: (invocation: InvocationPolicy) => void;
-  goToSkills: (patch: Partial<SkillListFilter>) => void;
-  toggleFilter: (id: HomeFilter) => void;
-}) {
-  const invokeTotal = inv.both + inv.modelOnly + inv.userOnly;
-  return (
-    <section className="flex flex-col gap-2 rounded-md border border-border-subtle bg-bg-elevated px-4 py-3.5">
-      <div className="grid grid-cols-[210px_minmax(0,1fr)] items-baseline gap-3">
-        <span className="flex items-baseline gap-x-1 whitespace-nowrap text-small text-text-secondary">
-          Who can invoke
-          <b className="ml-1 font-normal text-text-primary tabular-nums">{invokeTotal}</b>
-          <InfoPopover
-            className="self-center"
-            label="About invocation"
-            title="Who can invoke a skill"
-            onLearnMore={onLearnMoreInvoke}
-          >
-            Read from SKILL.md frontmatter. Claude Code honours both limits, pi only the you-only
-            one; Codex and OpenCode use their own config.
-          </InfoPopover>
-        </span>
-        <div className="flex h-7 gap-0.5" role="group" aria-label="Who can invoke">
-          {inv.both > 0 && (
-            <TooltipControl content="Open in Skills">
-              <Button
-                variant="secondary"
-                size="sm"
-                className="gap-1 overflow-hidden rounded-xs bg-accent-soft px-2.5 text-small whitespace-nowrap text-text-primary hover:bg-accent-soft-hover active:bg-accent-soft-hover aria-pressed:shadow-[inset_0_0_0_1px_var(--color-accent)]"
-                style={{ flex: `${inv.both} 0 auto` }}
-                onClick={() => goToInvocation("both")}
-              >
-                <span className="tabular-nums">{inv.both}</span> you or the model
-              </Button>
-            </TooltipControl>
-          )}
-          {inv.modelOnly > 0 && (
-            <TooltipControl content="Open in Skills">
-              <Button
-                variant="secondary"
-                size="sm"
-                className="gap-1 overflow-hidden rounded-xs bg-accent-softer px-2.5 text-small whitespace-nowrap text-text-secondary hover:bg-accent-softer-hover active:bg-accent-softer-hover aria-pressed:shadow-[inset_0_0_0_1px_var(--color-accent)] aria-pressed:text-text-primary"
-                style={{ flex: `${inv.modelOnly} 0 auto` }}
-                onClick={() => goToInvocation("model-only")}
-              >
-                <span className="tabular-nums">{inv.modelOnly}</span> model only
-              </Button>
-            </TooltipControl>
-          )}
-          {inv.userOnly > 0 && (
-            <TooltipControl content="Open in Skills">
-              <Button
-                variant="secondary"
-                size="sm"
-                className="gap-1 overflow-hidden rounded-xs bg-bg-tertiary px-2.5 text-small whitespace-nowrap text-text-secondary hover:bg-bg-tertiary-hover active:bg-bg-tertiary-hover aria-pressed:shadow-[inset_0_0_0_1px_var(--color-accent)] aria-pressed:text-text-primary"
-                style={{ flex: `${inv.userOnly} 0 auto` }}
-                onClick={() => goToInvocation("user-only")}
-              >
-                <span className="tabular-nums">{inv.userOnly}</span> you only
-              </Button>
-            </TooltipControl>
-          )}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-[210px_minmax(0,1fr)] items-baseline gap-3">
-        <span className="flex items-baseline gap-x-1 whitespace-nowrap text-small text-text-secondary">
-          Prompt cost
-          <b className="ml-1 font-normal text-text-primary tabular-nums">
-            {formatTokens(cost.totalTokens)}
-          </b>
-          <InfoPopover
-            className="self-center"
-            label="About prompt cost"
-            title="Prompt cost"
-            onLearnMore={onLearnMoreCost}
-          >
-            Tokens of name and description the model reads every turn. Only skills the model may
-            invoke count; user-only skills cost nothing until you run them.
-          </InfoPopover>
-          <RefreshIndicator active={usageRefreshing} label="Refreshing usage" />
-        </span>
-        <div
-          className={`flex h-7 gap-0.5 ${usageRefreshing ? "opacity-50" : ""}`}
-          role="group"
-          aria-label="Prompt cost"
-          aria-busy={usageRefreshing}
-        >
-          {cost.totalTokens === 0 ? (
-            <span
-              className="inline-flex items-center gap-1 overflow-hidden rounded-xs bg-bg-tertiary px-2.5 text-small whitespace-nowrap text-text-secondary"
-              style={{ width: "100%" }}
-            >
-              No model-invocable skills
-            </span>
-          ) : (
-            <>
-              <TooltipControl content="Open in Skills">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  className="gap-1 overflow-hidden rounded-xs bg-accent-soft px-2.5 text-small whitespace-nowrap text-text-primary hover:bg-accent-soft-hover active:bg-accent-soft-hover"
-                  style={{ flex: `${cost.usedTokens} 0 auto` }}
-                  onClick={() => goToSkills({ usage: "used-30d" })}
-                >
-                  <span className="tabular-nums">{formatTokens(cost.usedTokens)}</span> ·{" "}
-                  <span className="tabular-nums">{cost.usedCount}</span> skills used in 30 days
-                </Button>
-              </TooltipControl>
-              <TooltipControl content="Show the skills not used in 30 days">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  className="gap-1 overflow-hidden rounded-xs bg-bg-tertiary px-2.5 text-small whitespace-nowrap text-text-secondary hover:bg-bg-tertiary-hover active:bg-bg-tertiary-hover aria-pressed:text-text-primary aria-pressed:shadow-[inset_0_0_0_1px_var(--color-accent)]"
-                  style={{ flex: `${cost.idleTokens} 0 auto` }}
-                  aria-pressed={filter === "unused"}
-                  onClick={() => toggleFilter("unused")}
-                >
-                  <span className="tabular-nums">{formatTokens(cost.idleTokens)}</span> ·{" "}
-                  <span className="tabular-nums">{cost.idleCount}</span> skills not used in 30 days
-                </Button>
-              </TooltipControl>
-            </>
-          )}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/**
- * Home: stat tiles, a lane card for invocation and prompt cost, and a
- * grouped inbox list - the columns any of these three surfaces would
- * otherwise leave the user to reconstruct by hand.
- */
-export function HomeView({
-  snapshot,
-  isLoading,
-  usageRefreshing = false,
-  onSelectSkill,
-  active,
-}: HomeViewProps) {
-  const setActiveView = useAppStore((state) => state.setActiveView);
-  const replaceSkillListFilter = useAppStore((state) => state.replaceSkillListFilter);
-
-  const [linkedRootDialog, setLinkedRootDialog] = useState<{
-    target: LifecycleTarget;
-    harness: string;
-    harnessLabel: string;
-    root: string;
-  } | null>(null);
-
-  // Every Hook below must run on every render (Home's skeleton/empty states return early, further
-  // down, only after they've all been called), so the derived data they depend on falls back to
-  // empty rather than gating on `snapshot` here.
-  const groups = computeHomeGroups(snapshot);
-  const { broken, warnings, updates, inv, cost } = groups;
-
-  const {
-    filter,
-    setFilter,
-    toggleFilter,
-    setCollapsedGroups,
-    isGroupVisible,
-    isGroupExpanded,
-    toggleGroup,
-  } = useHomeGroupVisibility();
-
-  // An acted-on row keeps its place until the user changes what the list shows; see `rowActs`.
-  const resetKey = String(filter);
-  // A row parked here leaves `groups.unused`; its held row takes the parked skill's data from
-  // `groups.own`, so the row selects the copy at its new path.
-  const heldSkills = useHeldLayout(
-    { updates, unused: groups.unused },
-    (skill) => skill.name,
-    (skill) => skill.name,
-    resetKey,
-    (name) => groups.own.find((skill) => skill.parked && skill.name === name),
-  );
-  const heldIssues = useHeldLayout(
-    { broken, warnings },
-    (issue) => `${issue.kind}:${issue.skill.name}:${issue.detail}`,
-    (issue) => issue.skill.name,
-    resetKey,
-  );
-  const shown: HomeInboxLists = { ...heldSkills, ...heldIssues, recent: groups.recent };
-
-  const goToSkills = (patch: Parameters<typeof replaceSkillListFilter>[0]) => {
-    replaceSkillListFilter(patch);
-    setActiveView({ kind: "skills" });
-  };
-  const goToInvocation = (invocation: InvocationPolicy) => goToSkills({ invocation });
-
-  // Row semantics match Skills: one continuous `aria-rowindex` across every visible group, and
-  // `tabIndex={0}` on only the very first rendered row.
-  const { starts, visibleKeys, openByKey, skillByKey } = buildHomeRowPlan({
-    groups: shown,
-    isGroupVisible,
-    isGroupExpanded,
-    onSelectSkill,
-  });
-
-  // Selection is per skill, as on Skills: a skill in two groups shows checked in both.
-  const selectedPaths = useAppStore((state) => state.selectedSkillPaths);
-  const toggleSkillSelection = useAppStore((state) => state.toggleSkillSelection);
-  const clearSkillSelection = useAppStore((state) => state.clearSkillSelection);
-  const rowPath = (skill: InstalledSkill) => skill.deployments[0]?.path;
-  const toggleSkill = (skill: InstalledSkill) => {
-    const path = rowPath(skill);
-    if (path) toggleSkillSelection(path);
-  };
-  const isChecked = (skill: InstalledSkill) => selectedPaths.has(rowPath(skill) ?? "");
-  const selectedSkills = groups.own.filter(isChecked);
-  const { handleAct, dialog: updateDialog } = useSkillListAct(onSelectSkill, undefined);
-
-  const { rowRef, containerRef, tabIndexFor, onGridKeyDown, followRow, statusText } =
-    useHomeRowCursor({
-      visibleKeys,
-      openByKey,
-      onToggle: (key) => {
-        const skill = skillByKey.get(key);
-        if (skill) toggleSkill(skill);
-      },
-      onEscape: () => {
-        if (selectedPaths.size > 0) clearSkillSelection();
-      },
-      active,
-      setCollapsedGroups,
-    });
+  const { connected } = useMcpConnections();
 
   if (!snapshot) {
-    if (isLoading) {
-      return <HomeSkeleton />;
-    }
+    if (isLoading) return <HomeSkeleton />;
     return (
       <PageShell title="Home">
         <p className="flex h-full items-center justify-center text-wrap-pretty text-text-tertiary">
@@ -479,96 +90,83 @@ export function HomeView({
     );
   }
 
+  // Plugin skills and history count too: a user with only plugins still has a week to report.
+  if (snapshot.skills.length === 0 && snapshot.invocations.length === 0)
+    return (
+      <PageShell title="Home">
+        <section aria-labelledby="home-empty-title">
+          <h2 id="home-empty-title" className="text-heading font-semibold">
+            No skills yet
+          </h2>
+          <p className="mt-1 text-small text-text-secondary">
+            Add a skill and Skill Studio shows here whether your agents can see it and use it.
+          </p>
+          <Button className="mt-3" onClick={() => openAddSkillSheet()}>
+            <Plus size={14} aria-hidden /> Add a skill
+          </Button>
+        </section>
+      </PageShell>
+    );
+
+  const keptSet = kept && new Set(kept);
+  const listings = (load?.data?.listings ?? []).filter(
+    (row) => row.scope.scope === "global" && (!keptSet || keptSet.has(row.harness)),
+  );
+  const shown = new Set(kept ?? listings.map((row) => row.harness));
+  const setUp = HARNESS_CATALOG.filter((row) => shown.has(row.id));
+  const missing = HARNESS_CATALOG.filter((row) => !shown.has(row.id));
+  const agentIds = setUp.map((row) => row.id);
+  const days = dailyUses(snapshot, agentIds);
+  const agents = setUp.map((row) =>
+    homeAgent(
+      row,
+      listings.find((r) => r.harness === row.id),
+      snapshot.invocations,
+      days.byAgent.get(row.id),
+    ),
+  );
+  // Only the kept agents' history counts: an agent turned off adds no use and no "unused".
+  const hasHistory = agentIds.some((id) => hasReadableHistory(snapshot.invocations, id));
+  const { tasks, chips } = homeAsks(homeCounts(snapshot, agentIds), agents);
+  // Only a read that came back can say no agent has the server; until then, say nothing.
+  const noServer = connected !== null && !setUp.some((row) => connected.has(row.id));
+
   return (
     <PageShell title="Home">
-      <HomeVisibility />
-      <h2 className="text-heading font-semibold -mb-2">Library maintenance</h2>
-      <HomeStatTiles
-        broken={broken}
-        warnings={warnings}
-        updates={updates}
-        updateCheckSummary={snapshot.update_check}
-        filter={filter}
-        toggleFilter={toggleFilter}
-        onLearnMore={() => setActiveView({ kind: "learn", section: "broken" })}
-      />
-
-      <InvocationCostCard
-        inv={inv}
-        cost={cost}
-        usageRefreshing={usageRefreshing}
-        filter={filter}
-        onLearnMoreInvoke={() => setActiveView({ kind: "learn", section: "invoke" })}
-        onLearnMoreCost={() => setActiveView({ kind: "learn", section: "cost" })}
-        goToInvocation={goToInvocation}
-        goToSkills={goToSkills}
-        toggleFilter={toggleFilter}
-      />
-
-      <HomeInboxGrid
-        groups={shown}
-        live={groups}
-        starts={starts}
-        filter={filter}
-        onClearFilter={() => setFilter(null)}
-        isGroupVisible={isGroupVisible}
-        isGroupExpanded={isGroupExpanded}
-        toggleGroup={toggleGroup}
-        onSelectSkill={onSelectSkill}
-        onShowAllIssues={() => goToSkills({ issue: "any" })}
-        onShowAllUpdates={() => goToSkills({ update: "available" })}
-        onShowAllUnused={() => goToSkills({ usage: "unused-30d" })}
-        onShowAllRecent={() => setActiveView({ kind: "activity" })}
-        onConvertLinkedRoot={(skill, harness, harnessLabel, root) =>
-          setLinkedRootDialog({
-            target: lifecycleTargetForHarnessRoot(skill, harness, root),
-            harness,
-            harnessLabel,
-            root,
-          })
-        }
-        containerRef={containerRef}
-        onGridKeyDown={onGridKeyDown}
-        followRow={followRow}
-        wiring={{
-          rowRef,
-          tabIndexFor,
-          isChecked,
-          hasSelection: selectedSkills.length > 0,
-          onToggle: toggleSkill,
-          act: (label, skill) => void handleAct(label, skill),
-        }}
-      />
-      {/* Visually-hidden live region: announces the cursor's position, debounced to the last move. */}
-      <div role="status" aria-live="polite" className="sr-only">
-        {statusText}
-      </div>
-
-      {selectedSkills.length > 0 && (
-        <SkillListSelectionBar
-          selectedSkills={selectedSkills}
-          packProjectPath={null}
-          onCancel={clearSkillSelection}
-          onAct={(label, skill) => void handleAct(label, skill)}
-          onOpen={(skill) => onSelectSkill(skill.name)}
-          onActionFinished={(hadFailures) => {
-            // A failure keeps the selection so the user can retry.
-            if (!hadFailures) clearSkillSelection();
-          }}
+      <section aria-label="Your skills at a glance" className="flex max-w-4xl flex-col gap-6">
+        <HomeAgents
+          agents={agents}
+          missing={missing}
+          showUses={agents.length > 1 && hasHistory}
+          open={(harness) => navigate({ kind: "listing", scope: "global", harness })}
         />
-      )}
-      {updateDialog}
-
-      {linkedRootDialog && (
-        <MaterializeRootDialog
-          target={linkedRootDialog.target}
-          harness={linkedRootDialog.harness}
-          harnessLabel={linkedRootDialog.harnessLabel}
-          root={linkedRootDialog.root}
-          intent={{ kind: "convert-only" }}
-          onClose={() => setLinkedRootDialog(null)}
-        />
-      )}
+        {load?.error && (
+          <p role="alert" className="-mt-3 flex items-center gap-2 text-small text-error">
+            Couldn’t read your agents’ skill lists: {load.error}
+            <Button variant="ghost" size="xs" onClick={retry}>
+              Try again
+            </Button>
+          </p>
+        )}
+        <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-5">
+          <HomeWeek
+            days={hasHistory ? days : null}
+            agentLabels={setUp.map((row) => row.label)}
+            openActivity={() => navigate({ kind: "activity" })}
+          />
+          <HomeAsk
+            tasks={tasks}
+            chips={chips}
+            noServer={noServer}
+            updateCheck={updateCheck}
+            openCount={(chip) => {
+              replaceFilter(chip.filter);
+              navigate({ kind: "skills" });
+            }}
+            openSettings={() => navigate({ kind: "settings" })}
+          />
+        </div>
+      </section>
     </PageShell>
   );
 }

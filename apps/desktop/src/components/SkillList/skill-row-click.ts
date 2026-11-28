@@ -1,6 +1,6 @@
 // ============================================================================
 // Skill Studio - Skill row click
-// Decides whether a click on a skill row (Home or Skills) opens the skill
+// Decides whether a click on a Skills row opens the skill
 // ============================================================================
 
 /**

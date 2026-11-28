@@ -2087,7 +2087,7 @@ fn read_skill_md_from_disk(
         &timings.frontmatter_parse,
         clock.monotonic().saturating_sub(parse_start),
     );
-    let violations = frontmatter::validate_skill(name, &parsed, content.lines().count());
+    let violations = crate::frontmatter_repair::validate_skill_md(name, &content, &parsed);
     let description = parsed.as_frontmatter().and_then(|f| f.description.clone());
     let facts = match mode {
         SkillRead::Metadata => ContentFacts {

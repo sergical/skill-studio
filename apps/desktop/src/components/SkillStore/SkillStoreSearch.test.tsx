@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -130,11 +130,18 @@ it("a late initial failure cannot replace an active search or stop its spinner",
   expect(screen.getByText("current-result")).toBeTruthy();
 });
 
-it("tracking a project refreshes Installed and keeps the current search until the query is cleared", async () => {
+it("tracking a project marks its skills installed and keeps the current search until the query is cleared", async () => {
   mockIPC((command) => {
     if (command === "get_installed_skills") {
       return useAppStore.getState().userAddedProjects.length
-        ? [skill({ name: "project-skill", deployments: [] })]
+        ? [
+            skill({
+              name: "git-guide",
+              source: "owner/repo",
+              source_url: "https://github.com/owner/repo",
+              deployments: [],
+            }),
+          ]
         : [];
     }
     if (command === "get_popular_skills")
@@ -151,14 +158,15 @@ it("tracking a project refreshes Installed and keeps the current search until th
   await act(async () =>
     useAppStore.getState().setTrackedProjects({ added: ["/project"], excluded: [] }),
   );
-  expect(await screen.findByText("git-guide")).toBeTruthy();
-  expect(await screen.findByRole("tab", { name: "Installed (1)" })).toBeTruthy();
-  await user.clear(box);
+  const card = await screen.findByRole("button", { name: /git-guide/ });
+  expect(await within(card).findByTitle("Installed")).toBeTruthy();
+  expect(screen.getByRole("textbox", { name: "Search skills.sh" })).toHaveProperty("value", "git");
+  await user.clear(screen.getByRole("textbox", { name: "Search skills.sh" }));
   await act(() => vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS));
   expect(await screen.findByText("popular-skill")).toBeTruthy();
 });
 
-it("Load More adds the next page, and a search made while a page is on its way leaves Load More ready for the fresh list", async () => {
+it("Load more adds the next page, and a search made while a page is on its way leaves Load more ready for the fresh list", async () => {
   let releaseSlowPage: (response: PaginatedSkillsResponse) => void = () => {};
   mockIPC((command, args) => {
     if (command === "get_installed_skills") return [];
@@ -177,12 +185,12 @@ it("Load More adds the next page, and a search made while a page is on its way l
   render(<SkillStore />);
   expect(await screen.findByText("popular-one")).toBeTruthy();
 
-  await user.click(screen.getByRole("button", { name: "Load More" }));
+  await user.click(screen.getByRole("button", { name: "Load more" }));
   expect(await screen.findByText("popular-two")).toBeTruthy();
   expect(screen.getByText("popular-one")).toBeTruthy();
 
   // The third page is still on its way when the user searches, then clears the search.
-  await user.click(screen.getByRole("button", { name: "Load More" }));
+  await user.click(screen.getByRole("button", { name: "Load more" }));
   const box = screen.getByRole("textbox", { name: "Search skills.sh" });
   await user.type(box, "git");
   await act(() => vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS));
@@ -192,10 +200,10 @@ it("Load More adds the next page, and a search made while a page is on its way l
   await act(() => vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS));
   expect(await screen.findByText("popular-one")).toBeTruthy();
   expect(screen.queryByText("popular-two")).toBeNull();
-  expect(await screen.findByRole("button", { name: "Load More" })).toBeTruthy();
+  expect(await screen.findByRole("button", { name: "Load more" })).toBeTruthy();
 
   await act(async () => releaseSlowPage({ skills: [result("popular-three")], has_more: false }));
   await flushTimers();
   expect(screen.queryByText("popular-three")).toBeNull();
-  expect(screen.getByRole("button", { name: "Load More" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Load more" })).toBeTruthy();
 });

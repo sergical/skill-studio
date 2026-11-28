@@ -20,6 +20,9 @@ use skill_studio_lib::skills::add_method_defaults::AddMethodDefaults;
 use skill_studio_lib::skills::agents::AgentTarget;
 use skill_studio_lib::skills::github_skill_listing::GithubSkillListing;
 use skill_studio_lib::skills::harness_first_run::HarnessesChoice;
+use skill_studio_lib::skills::skill_create::{
+    CreatePastedSkillRequest, PastedSkillCheck, PastedSkillDraft,
+};
 use skill_studio_lib::skills::skill_dto::{
     AddSkillOutcome, AddSkillRequest, AddSkillResult, AddSkillsRequest, BulkTargetResult,
     InstallCount, InstallCountKey, InstallResult, LifecycleTarget, LocalEditsDto,
@@ -60,6 +63,9 @@ struct WireTypes {
     add_skills_request: AddSkillsRequest,
     add_skill_outcome: AddSkillOutcome,
     add_skill_result: AddSkillResult,
+    pasted_skill_draft: PastedSkillDraft,
+    pasted_skill_check: PastedSkillCheck,
+    create_pasted_skill_request: CreatePastedSkillRequest,
     github_skill_listing: GithubSkillListing,
     fork_record: ForkRecord,
     pull_result: PullResult,

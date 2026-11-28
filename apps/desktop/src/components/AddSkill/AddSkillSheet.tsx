@@ -6,11 +6,11 @@
 // Global/Project Scope. Submits to
 // a background Add Skill operation (`start_add_skill_operation` /
 // `start_add_skills_operation`) so `npx` never runs on the UI thread.
+// The Paste tab (PasteSkillTab.tsx) makes a new skill from pasted text.
 // ============================================================================
 
 import { useEffect, useReducer, useRef, useState } from "react";
 import type { Dispatch, RefObject } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
 import { Folder, FolderPlus } from "lucide-react";
 import {
   Button,
@@ -30,14 +30,15 @@ import { ScopeToggleGroup } from "../SkillStore/ScopeToggleGroup";
 import { SkillStore } from "../SkillStore/SkillStore";
 import { CheckboxControl } from "../ui/CheckboxControl";
 import { availableAddSkillMethods, isAddSkillFormValid } from "./add-skill-form";
+import { PasteSkillTab } from "./PasteSkillTab";
+import { useAddMethodDefaults, useBrowseProjectFolder } from "./useAddSkillMachine";
 import { TrustConfirmFooter } from "./TrustConfirmFooter";
-import { invokeErrorMessage } from "../../lib/skill-command-error";
 import {
   applyAddSkillOperationEvent,
   listenForAddSkillOperation,
   useAddSkillListenerRef,
 } from "../../hooks/useAddSkillOperation";
-import { useKeptHarnesses } from "../../hooks/useKeptHarnesses";
+import { useClientIds } from "../../hooks/useClientRows";
 import { singleSelectToggleValue } from "../../lib/single-select-toggle-group";
 import {
   addSkillFinishAction,
@@ -89,9 +90,9 @@ const METHOD_LABELS = {
 } satisfies Record<AddMethod, string>;
 
 const METHOD_TOOLTIPS = {
-  dotagents: "Tracked in agents.toml. Installs to Universal and updates with dotagents.",
-  "skills-sh": "Tracked in .skill-lock.json. Installs to Universal.",
-  copy: "Untracked. Installs to Universal.",
+  dotagents: "Tracked in agents.toml. Updates with dotagents.",
+  "skills-sh": "Tracked in .skill-lock.json. Updates with skills.sh.",
+  copy: "Not tracked, so it gets no updates.",
 } satisfies Record<AddMethod, string>;
 
 /** One-line parse feedback shown beneath the Source field. */
@@ -110,7 +111,7 @@ function parseSummary(parsed: ParsedSkillSource | { error: string }): string {
  * to be nine separate `useState` calls all cleared by the same effect.
  */
 interface FormState {
-  sheetTab: "manual" | "browse";
+  sheetTab: "manual" | "paste" | "browse";
   source: string;
   /** The name a plain git URL installs under - it has no repo listing to
    * infer one from, so the sheet asks for it directly (see `derive_name`
@@ -245,9 +246,9 @@ function SourceField({
       />
       <p
         id="add-skill-source-summary"
-        className={`m-0 text-small ${showError ? "text-error" : "text-text-tertiary"}`}
+        className={`m-0 min-h-lh truncate text-small ${showError ? "text-error" : "text-text-tertiary"}`}
       >
-        {source.trim() ? parseSummary(parsed) : "Paste a repo, URL, or path to get started."}
+        {source.trim() ? parseSummary(parsed) : null}
       </p>
     </div>
   );
@@ -423,12 +424,11 @@ function useGithubSkillListing(
 
 /** One picker row: name, then its repo-relative path as a caption. */
 function SkillRow({ entry, trailing }: { entry: GithubSkillEntry; trailing?: string }) {
+  const caption = trailing ?? (entry.path === entry.name ? null : entry.path || "repo root");
   return (
     <span className="flex min-w-0 flex-1 items-baseline gap-2">
       <span className="truncate text-body text-text-primary">{entry.name}</span>
-      <span className="truncate text-caption text-text-tertiary">
-        {trailing ?? (entry.path || "repo root")}
-      </span>
+      {caption && <span className="truncate text-caption text-text-tertiary">{caption}</span>}
     </span>
   );
 }
@@ -928,6 +928,7 @@ function ManualTabFields({
         claudeReadsShared={claudeReadsShared}
         scope={scope}
         lockedReason={method === "dotagents" ? DOTAGENTS_HARNESS_REASON : undefined}
+        copyNote={false}
       />
 
       {submitError && (
@@ -1045,7 +1046,7 @@ function deriveMethodAndVisibility(
   methodChoice: AddMethod,
   pickedHarnesses: AgentId[] | null,
   universalChoice: boolean,
-  keptHarnesses: string[],
+  shownHarnesses: string[] | undefined,
   defaults: AddMethodDefaults | null,
 ) {
   const parsed = parseSkillSource(source);
@@ -1064,11 +1065,12 @@ function deriveMethodAndVisibility(
       ? "Git URLs need dotagents (not installed)"
       : METHOD_TOOLTIPS[method];
 
-  const detected = defaults?.installed_harnesses ?? [];
   const universalLockedReason = universalLockReason(methods);
   const universal = universalChoice || universalLockedReason !== null;
   const claudeReadsShared = defaults?.claude_reads_shared_folder ?? false;
-  const offeredHarnesses = offeredInstallHarnesses(detected, keptHarnesses);
+  const offeredHarnesses = offeredInstallHarnesses(
+    shownHarnesses ?? defaults?.installed_harnesses ?? [],
+  );
   // dotagents keeps its own default: the user's pick does not reach it.
   const dotagentsOnShared = method === "dotagents" && universal;
   const chosenHarnesses = chosenInstallHarnesses(
@@ -1146,9 +1148,6 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
   const openSkill = useAppStore((state) => state.openSkill);
   const addToast = useAppStore((state) => state.addToast);
   const userAddedProjects = useAppStore((state) => state.userAddedProjects);
-  const setTrackedProjects = useAppStore((state) => state.setTrackedProjects);
-  const getAddMethodDefaults = useAppStore((state) => state.getAddMethodDefaults);
-  const registerSkillProjects = useAppStore((state) => state.registerSkillProjects);
 
   const [form, dispatch] = useReducer(formReducer, undefined, initialFormState);
   const {
@@ -1166,12 +1165,7 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
 
   const sourceInputRef = useRef<HTMLInputElement>(null);
 
-  // What dotagents/skills.sh/the Universal folder look like on this machine -
-  // fetched when the sheet opens and again when the install scope changes, so
-  // the Method and Harnesses defaults below reflect this machine instead of a
-  // generic guess.
-  const [defaults, setDefaults] = useState<AddMethodDefaults | null>(null);
-  const keptHarnesses = useKeptHarnesses();
+  const shownHarnesses = useClientIds();
 
   // Only `isOpen`/`prefill` should re-run the reset below - a project added
   // while the sheet is already open shouldn't reset the form out from under
@@ -1193,21 +1187,7 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
     });
   }, [isOpen, prefill]);
 
-  const defaultsProject = scope === "project" ? projectPath : null;
-  useEffect(() => {
-    if (!isOpen) return;
-    let cancelled = false;
-    getAddMethodDefaults(defaultsProject)
-      .then((next) => {
-        if (!cancelled) setDefaults(next);
-      })
-      .catch(() => {
-        if (!cancelled) setDefaults(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [isOpen, defaultsProject, getAddMethodDefaults]);
+  const defaults = useAddMethodDefaults(isOpen, scope === "project" ? projectPath : null);
 
   const closeSheet = () => {
     closeAddSkillSheet();
@@ -1231,7 +1211,7 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
     methodChoice,
     pickedHarnesses,
     universalChoice,
-    keptHarnesses,
+    shownHarnesses,
     defaults,
   );
 
@@ -1293,22 +1273,9 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
     void handleSubmit();
   };
 
-  const handleBrowseProject = async () => {
-    const selected = await open({ directory: true, multiple: false, title: "Select Project" });
-    if (!selected) return;
-    // Installing into the folder does not depend on tracking it, so the pick
-    // stands even when the saved list cannot be written.
-    dispatch({ type: "set_project_path", path: selected });
-    try {
-      setTrackedProjects(await registerSkillProjects([selected]));
-    } catch (err) {
-      addToast({
-        type: "error",
-        title: "Couldn't save project folder",
-        message: invokeErrorMessage(err),
-      });
-    }
-  };
+  const handleBrowseProject = useBrowseProjectFolder((path) =>
+    dispatch({ type: "set_project_path", path }),
+  );
 
   return (
     <Drawer
@@ -1343,13 +1310,29 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
             <TabsTrigger value="manual" className={SHEET_TAB_CLASS}>
               Add by source
             </TabsTrigger>
+            <TabsTrigger value="paste" className={SHEET_TAB_CLASS}>
+              Paste
+            </TabsTrigger>
             <TabsTrigger value="browse" className={SHEET_TAB_CLASS}>
               Browse skills.sh
             </TabsTrigger>
           </TabsList>
 
           <TabsContent value="browse" className="flex flex-1 overflow-hidden">
-            <SkillStore compact />
+            <SkillStore />
+          </TabsContent>
+
+          <TabsContent value="paste" keepMounted className="flex flex-1 overflow-hidden">
+            {/* A fresh draft each time the sheet opens, kept across tab switches. */}
+            <PasteSkillTab
+              key={isOpen ? "open" : "closed"}
+              skills={skills}
+              onCancel={closeSheet}
+              onAdded={(name) => {
+                closeSheet();
+                openSkill(name);
+              }}
+            />
           </TabsContent>
 
           <TabsContent

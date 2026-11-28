@@ -5,7 +5,7 @@
 // SkillRowCells.tsx so that file exports components only (react-refresh).
 // ============================================================================
 
-import type { InstalledSkill, SkillInvocationStats } from "@skill-studio/lib";
+import type { InstalledSkill } from "@skill-studio/lib";
 import { buttonVariants, cn } from "@skill-studio/ui";
 import type { SortMode } from "../../lib/skill-list-sort";
 
@@ -14,9 +14,12 @@ import type { SortMode } from "../../lib/skill-list-sort";
 export const ROW_CLASS =
   "group/row grid h-8 w-full min-w-0 items-center rounded-none border-0 border-b border-border-subtle text-left last:border-b-0";
 
-/** The one column grid every skill row uses: slot, name, location, harness stack, note, fix. */
+/** The one column grid every skill row uses: slot, name, location, harness stack, note, fix.
+ * Name and note share the free width, so a long name gets the room an empty note leaves. Below
+ * 1024px (the 900px minimum window) the location and harness cells (children 3 and 4) drop out,
+ * so the name keeps its column instead of shrinking to nothing. */
 export const SKILL_ROW_GRID =
-  "[grid-template-columns:14px_minmax(0,1fr)_160px_148px_240px_88px] gap-x-3 px-3";
+  "[grid-template-columns:14px_minmax(0,3fr)_136px_108px_minmax(0,2fr)_88px] max-lg:[grid-template-columns:14px_minmax(0,3fr)_minmax(0,2fr)_88px] max-lg:[&>:nth-child(3)]:hidden max-lg:[&>:nth-child(4)]:hidden gap-x-3 px-3";
 
 /** The row's fix button: quiet text at rest, a full button while the row is hovered or focused. */
 export const FIX_CLASS = cn(
@@ -36,17 +39,13 @@ export function selectedRowClass(selected: boolean): string {
 export function sortRows(
   skills: InstalledSkill[],
   sort: SortMode,
-  statsBySkill: Map<string, SkillInvocationStats>,
+  usesBySkill: ReadonlyMap<string, number>,
 ): InstalledSkill[] {
   const rows = [...skills];
   if (sort === "name") {
     rows.sort((a, b) => a.name.localeCompare(b.name));
   } else if (sort === "used") {
-    rows.sort(
-      (a, b) =>
-        (statsBySkill.get(b.name)?.last_30_days ?? 0) -
-        (statsBySkill.get(a.name)?.last_30_days ?? 0),
-    );
+    rows.sort((a, b) => (usesBySkill.get(b.name) ?? 0) - (usesBySkill.get(a.name) ?? 0));
   } else {
     rows.sort((a, b) => b.skill_md_tokens - a.skill_md_tokens || a.name.localeCompare(b.name));
   }

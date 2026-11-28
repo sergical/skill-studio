@@ -4,13 +4,12 @@
 // separate from HomeView.tsx so they're unit-testable without React.
 // ============================================================================
 
-import {
-  FIRST_CLASS_AGENTS,
-  HEALTH_ISSUE_SEVERITY,
-  agentsCoveredByDeployment,
-} from "./skill-health";
+import { issueAttentionCategory } from "./skill-attention";
+import { skillVisibleToAgent } from "./skill-coverage";
+import { FIRST_CLASS_AGENTS, agentsCoveredByDeployment } from "./skill-health";
 import type { HealthIssue } from "./skill-health";
 import { ownSkillsView } from "./skill-plugin-partition";
+import { HARNESS_CATALOG } from "./skill-types.generated";
 import type { InstalledSkill, SkillInvocationStats, SkillSnapshot } from "./skill-types";
 
 /**
@@ -144,19 +143,69 @@ export function homePromptCost(
 }
 
 /**
- * Own skills with no invocation in the last 30 days, model-invocable
- * (`"both"` or `"model-only"`) first, then `"user-only"`, alphabetical
- * within each group - the order Home's "Unused" section and Learn's
+ * Each skill's uses in the last 30 days, by `agents` only when given: the agents the user keeps.
+ * The Skills row count, its "Most used" sort and the unused rule all read these numbers, so a
+ * skill listed as unused never shows a use.
+ */
+export function usesIn30DaysBySkill(
+  invocations: SkillInvocationStats[],
+  agents?: readonly string[],
+): Map<string, number> {
+  return new Map(
+    invocations.map((stat) => [
+      stat.skill,
+      agents
+        ? Object.entries(stat.by_harness_30_days).reduce(
+            (sum, [agent, count]) => (agents.includes(agent) ? sum + count : sum),
+            0,
+          )
+        : stat.last_30_days,
+    ]),
+  );
+}
+
+/** What the 30-day history can say about one skill. */
+export type SkillUsageIn30Days = "used" | "unused" | "no-readable-history";
+
+/**
+ * The one rule for "unused": a skill is unused only when at least one agent that reads a copy of
+ * it has readable history (any record) and the skill has no use in 30 days. With history from
+ * Claude Code only, a skill only Cursor reads has no readable history, not no use. `agents`, when
+ * given, are the agents the user keeps: an agent they turned off adds no use and no history, even
+ * while its records are still in the snapshot. Returns a classifier so a caller checking many
+ * skills reads `invocations` once.
+ */
+export function skillUsageIn30Days(
+  invocations: SkillInvocationStats[],
+  agents?: readonly string[],
+): (skill: InstalledSkill) => SkillUsageIn30Days {
+  const counted = (agent: string) => !agents || agents.includes(agent);
+  const usesBySkill = usesIn30DaysBySkill(invocations, agents);
+  const withHistory = HARNESS_CATALOG.filter(
+    (row) =>
+      counted(row.id) && invocations.some((stat) => (stat.by_harness_30_days[row.id] ?? 0) > 0),
+  ).map((row) => row.id);
+  return (skill) => {
+    if ((usesBySkill.get(skill.name) ?? 0) > 0) return "used";
+    return withHistory.some((agent) => skillVisibleToAgent(skill, agent) !== "none")
+      ? "unused"
+      : "no-readable-history";
+  };
+}
+
+/**
+ * Own skills with no use in the last 30 days by `skillUsageIn30Days` (from the history of
+ * `agents` only, when given), model-invocable (`"both"` or `"model-only"`) first, then
+ * `"user-only"`, alphabetical within each group - the order Home's park prompt and Learn's
  * "unused" section list them in.
  */
 export function unusedSkills(
   skills: InstalledSkill[],
   invocations: SkillInvocationStats[],
+  agents?: readonly string[],
 ): InstalledSkill[] {
-  const last30DaysBySkill = new Map(invocations.map((stat) => [stat.skill, stat.last_30_days]));
-  const own = ownSkillsView(skills).filter(
-    (skill) => (last30DaysBySkill.get(skill.name) ?? 0) === 0,
-  );
+  const usage = skillUsageIn30Days(invocations, agents);
+  const own = ownSkillsView(skills).filter((skill) => usage(skill) === "unused");
 
   return own.sort((a, b) => {
     const aModelInvocable = a.invocation !== "user-only";
@@ -166,17 +215,17 @@ export function unusedSkills(
   });
 }
 
-/** Home's "Needs attention" issues, split by severity - errors ("broken") vs. warnings. */
+/** Home's Broken and Warnings issues, split by `issueAttentionCategory`. */
 export interface HomeAttentionGroups {
   broken: HealthIssue[];
   warnings: HealthIssue[];
 }
 
-/** Splits `issues` into `broken` (severity `"error"`) and `warnings` (severity `"warning"`). */
+/** Splits `issues` into Broken and Warnings, by the category the Skills page groups them under. */
 export function attentionGroups(issues: HealthIssue[]): HomeAttentionGroups {
   const groups: HomeAttentionGroups = { broken: [], warnings: [] };
   for (const issue of issues) {
-    if (HEALTH_ISSUE_SEVERITY[issue.kind] === "error") groups.broken.push(issue);
+    if (issueAttentionCategory(issue) === "broken") groups.broken.push(issue);
     else groups.warnings.push(issue);
   }
   return groups;

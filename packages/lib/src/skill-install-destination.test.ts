@@ -23,13 +23,16 @@ describe("Destination rows", () => {
     expect(universalDestinationPath("project")).toBe(".agents/skills");
   });
 
-  it("add skill: offers Claude Code plus detected and kept harnesses in declaration order, else unknown ids leak in", () => {
-    expect(offeredInstallHarnesses(["grok-build", "codex"], ["pi", "not-a-harness"])).toEqual([
-      "claude-code",
+  it("add skill: offers only the shown agents in declaration order, else unknown ids leak in", () => {
+    expect(offeredInstallHarnesses(["grok-build", "pi", "codex", "not-a-harness"])).toEqual([
       "codex",
       "pi",
       "grok-build",
     ]);
+  });
+
+  it("add skill: a Grok Build-only setup is not offered Claude Code, else an install writes for an agent the user does not have", () => {
+    expect(offeredInstallHarnesses(["grok-build"])).toEqual(["grok-build"]);
   });
 
   it("add skill: a toggle keeps the offered order, else the request order depends on click order", () => {
@@ -120,7 +123,7 @@ describe("Universal unticked: ticks", () => {
   });
 
   it("add skill: requires one ticked harness, else the install writes nothing", () => {
-    expect(installDestinationError(false, [])).toBe("Select at least one harness.");
+    expect(installDestinationError(false, [])).toBe("Pick at least one agent.");
     expect(installDestinationError(false, ["codex"])).toBeNull();
     expect(installDestinationError(true, [])).toBeNull();
   });
@@ -159,22 +162,22 @@ describe("Install request", () => {
     });
   });
 
-  it("pack add: sends the agents the Add Skill sheet ticks by default, Claude Code included, else a pack lands only in .agents/skills", () => {
-    const detected: AgentId[] = ["codex", "cursor"];
+  it("pack add: sends the agents the Add Skill sheet ticks by default, else a pack reaches other agents than one skill", () => {
+    const detected: AgentId[] = ["claude-code", "codex", "cursor"];
     const kept = ["opencode", "pi"];
     const sheet = installDestinationFields({
-      chosen: chosenInstallHarnesses(offeredInstallHarnesses(detected, kept), null, false, true),
+      chosen: chosenInstallHarnesses(offeredInstallHarnesses(kept), null, false, true),
       method: "skills-sh",
       universal: true,
     }).agents;
     expect(defaultSharedInstallAgents(detected, kept)).toEqual(sheet);
-    expect(defaultSharedInstallAgents(detected, kept)).toEqual([
+    expect(defaultSharedInstallAgents(detected, kept)).toEqual(["opencode"]);
+    expect(defaultSharedInstallAgents(detected, undefined)).toEqual([
       "claude-code",
       "codex",
-      "opencode",
       "cursor",
     ]);
-    expect(defaultSharedInstallAgents([], [])).toEqual(["claude-code"]);
+    expect(defaultSharedInstallAgents(["grok-build"], undefined)).toEqual([]);
   });
 });
 

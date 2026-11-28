@@ -63,7 +63,7 @@ fn core_method(method: AddMethod) -> InstallMethod {
 /// `AgentId` (the desktop's catalog id) -> `skill_studio_core::identity::AgentId`
 /// (the op's harness newtype), by the catalog's own CLI name string - the
 /// same conversion the desktop's other core adapters use.
-fn core_harness(agent: AgentId) -> Result<skill_studio_core::identity::AgentId, String> {
+pub(crate) fn core_harness(agent: AgentId) -> Result<skill_studio_core::identity::AgentId, String> {
     skill_studio_core::identity::AgentId::parse_harness(agent.cli_name()).map_err(|e| e.message)
 }
 
@@ -448,10 +448,7 @@ pub(crate) fn needs_trust_message(identity: &str) -> String {
 /// already succeeded and the skill is on disk and usable.
 ///
 /// `pub(crate)`: shared with `skill_add_operation.rs`'s batch worker.
-pub(crate) fn finish_install(
-    request: &AddSkillRequest,
-    outcome: InstallOutcome,
-) -> InstallAdapterOutcome {
+pub(crate) fn finish_install(method: AddMethod, outcome: InstallOutcome) -> InstallAdapterOutcome {
     let (skill, deployment_path, harness_results) = match outcome {
         InstallOutcome::Installed {
             skill,
@@ -494,7 +491,7 @@ pub(crate) fn finish_install(
         }
     }
 
-    let tool = match request.method {
+    let tool = match method {
         AddMethod::Copy => "copy",
         AddMethod::Dotagents => "dotagents",
         AddMethod::SkillsSh => "skills-sh",
@@ -604,7 +601,7 @@ pub(crate) fn install_many(
                 .ok_or("install_batch returned too few results")?;
             let outcome =
                 super::core_runtime::finish_core_command(Operation::Install, rt, &ctx, result)?;
-            Ok(finish_install(request, outcome))
+            Ok(finish_install(request.method, outcome))
         })
         .collect()
 }

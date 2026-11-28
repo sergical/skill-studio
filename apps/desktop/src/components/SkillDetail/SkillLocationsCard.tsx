@@ -10,6 +10,7 @@
 import { useLayoutEffect, useRef } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@skill-studio/ui";
+import { PageSection } from "../Shell/PageSection";
 import { MaterializeRootDialog } from "../ui/MaterializeRootDialog";
 import { LeftBehindDialog } from "./LeftBehindDialog";
 import { MakeIndependentCopyDialog } from "./MakeIndependentCopyDialog";
@@ -85,155 +86,154 @@ export function SkillLocationsCard({ skill, onCompareCopies }: SkillLocationsCar
   const showEyebrows = groups.some((g) => !g.isGlobal);
   const presence = scopePresence(skill.deployments);
 
-  return (
-    <div
-      ref={root}
-      onFocusCapture={(event) => {
-        const slot = event.target.closest<HTMLElement>("[data-location-switch]");
-        focused.current = slot?.dataset.locationSwitch
-          ? { element: event.target, key: slot.dataset.locationSwitch }
-          : null;
-      }}
-      className="flex flex-col gap-1 rounded-lg border border-border-subtle p-4"
-    >
-      <div
-        id="skill-locations-heading"
-        tabIndex={-1}
-        className="flex items-baseline justify-between gap-3 text-body font-semibold text-text-primary outline-none"
-      >
-        Locations
-        {link && (
+  const meta = (link || promote) && (
+    <>
+      {link && (
+        <Button
+          variant="link"
+          className="h-auto p-0 text-small font-normal"
+          onClick={() => void actions.run(TITLE_LINK_ACTIONS[link])}
+        >
+          {link}
+          {actions.busyKinds.includes(TITLE_LINK_ACTIONS[link].kind) && <PendingSpinner />}
+        </Button>
+      )}
+      {promote && (
+        <TooltipControl content="Copies it to ~/.agents/skills, where every project reads it.">
           <Button
             variant="link"
             className="h-auto p-0 text-small font-normal"
-            onClick={() => void actions.run(TITLE_LINK_ACTIONS[link])}
+            onClick={() =>
+              void actions.run({
+                kind: "promote-global",
+                source: promote.path,
+                agents: promote.agents,
+              })
+            }
           >
-            {link}
-            {actions.busyKinds.includes(TITLE_LINK_ACTIONS[link].kind) && <PendingSpinner />}
+            Promote to global
+            {actions.busyKinds.includes("promote-global") && <PendingSpinner />}
           </Button>
+        </TooltipControl>
+      )}
+    </>
+  );
+
+  return (
+    <PageSection title="Locations" meta={meta}>
+      <div
+        ref={root}
+        onFocusCapture={(event) => {
+          const slot = event.target.closest<HTMLElement>("[data-location-switch]");
+          focused.current = slot?.dataset.locationSwitch
+            ? { element: event.target, key: slot.dataset.locationSwitch }
+            : null;
+        }}
+        className="flex flex-col gap-1"
+      >
+        {skill.deployments.length === 0 ? (
+          <p className="m-0 text-small text-text-tertiary">
+            Known only from the lock file — no folder on disk.
+          </p>
+        ) : (
+          <div className="-mx-2 flex flex-col">
+            {groups.map((group) => {
+              const marker = scopeMarker(presence, group);
+              return (
+                <div key={group.label} className="flex flex-col not-first:mt-3">
+                  {showEyebrows && (
+                    <span className="flex items-baseline justify-between gap-3 px-2 pb-1.5 text-small font-medium text-text-secondary">
+                      {group.label}
+                      {marker && (
+                        <span className="font-normal tracking-normal normal-case">{marker}</span>
+                      )}
+                    </span>
+                  )}
+                  <SkillLocationScope
+                    group={group}
+                    showEyebrow={showEyebrows}
+                    onAction={actions.run}
+                  />
+                </div>
+              );
+            })}
+          </div>
         )}
-        {promote && (
-          <TooltipControl content="Copies it to ~/.agents/skills, where every project reads it.">
-            <Button
-              variant="link"
-              className="h-auto p-0 text-small font-normal"
-              onClick={() =>
-                void actions.run({
-                  kind: "promote-global",
-                  source: promote.path,
-                  agents: promote.agents,
-                })
-              }
-            >
-              Promote to global
-              {actions.busyKinds.includes("promote-global") && <PendingSpinner />}
-            </Button>
-          </TooltipControl>
+
+        {files.length > 0 && <SkillInvocationFooter skill={skill} files={files} />}
+
+        {actions.materializeRequest && (
+          <MaterializeRootDialog
+            target={actions.materializeRequest.target}
+            harness={actions.materializeRequest.harness}
+            harnessLabel={actions.materializeRequest.harnessLabel}
+            root={actions.materializeRequest.root}
+            intent={{ kind: "convert-only" }}
+            onClose={actions.closeMaterializeRequest}
+          />
+        )}
+        {actions.independentCopyRequest && (
+          <MakeIndependentCopyDialog
+            skillName={skill.name}
+            deployment={actions.independentCopyRequest.deployment}
+            scopeLabel={actions.independentCopyRequest.scopeLabel}
+            onClose={actions.closeIndependentCopyRequest}
+          />
+        )}
+        {actions.removeRequest && (
+          <RemoveDeploymentsDialog
+            skill={skill}
+            scopeLabel={actions.removeRequest.scopeLabel}
+            projectPath={actions.removeRequest.projectPath}
+            deployment={actions.removeRequest.deployment}
+            onClose={actions.closeRemoveRequest}
+          />
+        )}
+        {actions.splitRequest && (
+          <SplitSkillDialog
+            skillName={skill.name}
+            target={actions.splitRequest.target}
+            projectPath={actions.splitRequest.projectPath}
+            readers={actions.splitRequest.readers}
+            onClose={actions.closeSplitRequest}
+          />
+        )}
+        {actions.turnOffRequest && (
+          <TurnOffForAgentDialog
+            skillName={skill.name}
+            request={actions.turnOffRequest}
+            onClose={() => actions.closeTurnOffRequest()}
+            onTurnedOff={() => actions.closeTurnOffRequest(true)}
+            onOffEverywhere={({ shared, scopeLabel, projectPath }) => {
+              actions.closeTurnOffRequest();
+              void actions.run({ kind: "park", deployment: shared, scopeLabel, projectPath });
+            }}
+          />
+        )}
+        {actions.parkRequest && (
+          <ParkCopyDialog
+            skillName={skill.name}
+            deployment={actions.parkRequest.deployment}
+            scopeLabel={actions.parkRequest.scopeLabel}
+            onClose={() => actions.closeParkRequest()}
+            onParked={() => actions.closeParkRequest(true)}
+          />
+        )}
+        {actions.leftBehindRequest && (
+          <LeftBehindDialog
+            skillName={skill.name}
+            choice={actions.leftBehindRequest.choice}
+            pair={actions.leftBehindRequest.pair}
+            onClose={actions.closeLeftBehindRequest}
+          />
+        )}
+        {actions.pluginUninstallRequest && (
+          <UninstallPluginDialog
+            deployment={actions.pluginUninstallRequest}
+            onClose={actions.closePluginUninstallRequest}
+          />
         )}
       </div>
-
-      {skill.deployments.length === 0 ? (
-        <p className="m-0 px-3 py-6 text-small text-text-tertiary">
-          Known only from the lock file — no folder on disk.
-        </p>
-      ) : (
-        <div className="-mx-2 flex flex-col">
-          {groups.map((group) => {
-            const marker = scopeMarker(presence, group);
-            return (
-              <div key={group.label} className="flex flex-col not-first:mt-3">
-                {showEyebrows && (
-                  <span className="flex items-baseline justify-between gap-3 px-2 pb-1.5 text-small font-medium text-text-secondary">
-                    {group.label}
-                    {marker && (
-                      <span className="font-normal tracking-normal normal-case">{marker}</span>
-                    )}
-                  </span>
-                )}
-                <SkillLocationScope
-                  group={group}
-                  showEyebrow={showEyebrows}
-                  onAction={actions.run}
-                />
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {files.length > 0 && <SkillInvocationFooter skill={skill} files={files} />}
-
-      {actions.materializeRequest && (
-        <MaterializeRootDialog
-          target={actions.materializeRequest.target}
-          harness={actions.materializeRequest.harness}
-          harnessLabel={actions.materializeRequest.harnessLabel}
-          root={actions.materializeRequest.root}
-          intent={{ kind: "convert-only" }}
-          onClose={actions.closeMaterializeRequest}
-        />
-      )}
-      {actions.independentCopyRequest && (
-        <MakeIndependentCopyDialog
-          skillName={skill.name}
-          deployment={actions.independentCopyRequest.deployment}
-          scopeLabel={actions.independentCopyRequest.scopeLabel}
-          onClose={actions.closeIndependentCopyRequest}
-        />
-      )}
-      {actions.removeRequest && (
-        <RemoveDeploymentsDialog
-          skill={skill}
-          scopeLabel={actions.removeRequest.scopeLabel}
-          projectPath={actions.removeRequest.projectPath}
-          deployment={actions.removeRequest.deployment}
-          onClose={actions.closeRemoveRequest}
-        />
-      )}
-      {actions.splitRequest && (
-        <SplitSkillDialog
-          skillName={skill.name}
-          target={actions.splitRequest.target}
-          projectPath={actions.splitRequest.projectPath}
-          readers={actions.splitRequest.readers}
-          onClose={actions.closeSplitRequest}
-        />
-      )}
-      {actions.turnOffRequest && (
-        <TurnOffForAgentDialog
-          skillName={skill.name}
-          request={actions.turnOffRequest}
-          onClose={() => actions.closeTurnOffRequest()}
-          onTurnedOff={() => actions.closeTurnOffRequest(true)}
-          onOffEverywhere={({ shared, scopeLabel, projectPath }) => {
-            actions.closeTurnOffRequest();
-            void actions.run({ kind: "park", deployment: shared, scopeLabel, projectPath });
-          }}
-        />
-      )}
-      {actions.parkRequest && (
-        <ParkCopyDialog
-          skillName={skill.name}
-          deployment={actions.parkRequest.deployment}
-          scopeLabel={actions.parkRequest.scopeLabel}
-          onClose={() => actions.closeParkRequest()}
-          onParked={() => actions.closeParkRequest(true)}
-        />
-      )}
-      {actions.leftBehindRequest && (
-        <LeftBehindDialog
-          skillName={skill.name}
-          choice={actions.leftBehindRequest.choice}
-          pair={actions.leftBehindRequest.pair}
-          onClose={actions.closeLeftBehindRequest}
-        />
-      )}
-      {actions.pluginUninstallRequest && (
-        <UninstallPluginDialog
-          deployment={actions.pluginUninstallRequest}
-          onClose={actions.closePluginUninstallRequest}
-        />
-      )}
-    </div>
+    </PageSection>
   );
 }

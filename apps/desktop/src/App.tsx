@@ -148,6 +148,7 @@ function App() {
       <SkillPage
         skill={skill}
         upstreamAhead={snapshot?.update_check.upstream_ahead}
+        invocations={snapshot?.invocations}
         deploymentPath={view.deploymentPath}
         onBack={closeSkill}
         onRemoveComplete={closeSkill}
@@ -171,15 +172,7 @@ function App() {
     const isShown = skillView === null;
     let list: React.ReactNode;
     if (kind === "home") {
-      list = (
-        <HomeView
-          snapshot={snapshot}
-          usageRefreshing={usageRefreshing}
-          isLoading={isLoading}
-          onSelectSkill={onSelectSkill}
-          active={isShown}
-        />
-      );
+      list = <HomeView snapshot={snapshot} isLoading={isLoading} active={isShown} />;
     } else if (kind === "skills") {
       list = (
         <SkillsView
@@ -236,7 +229,7 @@ function App() {
       main = renderListLayer(activeView.kind, null);
       break;
     case "learn":
-      main = <LearnView section={activeView.section} />;
+      main = <LearnView />;
       break;
     case "settings":
       main = <SettingsView snapshot={snapshot} />;
@@ -255,7 +248,14 @@ function App() {
       );
       break;
     case "sessions":
-      main = <SessionsView />;
+      main = (
+        <SessionsView
+          key={activeView.harness}
+          initialHarness={activeView.harness}
+          snapshot={snapshot}
+          usageRefreshing={usageRefreshing}
+        />
+      );
       break;
     case "skill": {
       // Opened from Learn or Settings: neither keeps a list worth reviving, so the

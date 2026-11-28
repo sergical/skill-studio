@@ -15,6 +15,8 @@ interface SkillListGroupProps {
   group: RowGroup;
   label: string;
   count: number;
+  /** A trailing action in the group header, such as the Updates group's Update all. */
+  extra?: ReactNode;
   open: boolean;
   /** This group's offset and total size in the flat `ListItem[]` coordinate space. */
   start: number;
@@ -33,6 +35,7 @@ export function SkillListGroup({
   group,
   label,
   count,
+  extra,
   open,
   start,
   height,
@@ -61,7 +64,7 @@ export function SkillListGroup({
           next header's parent, so that header pushes this one up. */}
       <div role="row" className="sticky top-0 z-2">
         <div role="gridcell">
-          <GroupHead label={label} count={count} groupId={group} />
+          <GroupHead label={label} count={count} extra={extra} groupId={group} />
         </div>
       </div>
       {groupRowItems.map((virtualItem) => {
