@@ -22,10 +22,12 @@ for (const [id, persona] of Object.entries(PERSONAS)) {
     // Home claims only what the setup measured: no "unused" without history, no "fit" without an
     // estimate. These are the claims the persona review caught.
     const home = page.getByRole("region", { name: /need|Nothing needs you|No skills yet/ });
-    if (id === "no-history" || id === "first-week")
+    if (id === "no-history" || id === "first-week") {
       await expect(page.locator("body")).not.toContainText(
         /no use in 30 days|Not used in the last/,
       );
+      await expect(home).not.toContainText(/\buses? in 30 days/);
+    }
     if (id === "cursor-only")
       await expect(page.locator("body")).not.toContainText(/descriptions fit/);
     await expect(home).not.toContainText(/All clear/);

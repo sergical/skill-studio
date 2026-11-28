@@ -84,3 +84,15 @@ test("pressing an agent's row filters the page to that agent, and pressing it ag
   await expect(codex).toHaveAttribute("aria-pressed", "false");
   await expect(total).toHaveText(before);
 });
+
+test("Activity names only the agents kept at first run", async ({ page }) => {
+  await page.goto("/?persona=two-agents");
+  await page.getByRole("checkbox", { name: "Codex", exact: true }).press("Space");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByRole("button", { name: "Activity", exact: true }).click();
+  await page.getByRole("button", { name: "Filter by agent" }).click();
+  await expect(page.getByRole("menuitemradio", { name: /^Claude Code/ })).toBeVisible();
+  await expect(page.getByRole("menuitemradio", { name: /^Codex/ })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(page.getByText(/No readable history from/)).toHaveCount(0);
+});

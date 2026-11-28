@@ -124,6 +124,14 @@ const plugin = (skill: InstalledSkill): InstalledSkill => ({
   deployments: skill.deployments.map((d) => ({ ...d, scope: "plugin", agent: "Claude Code" })),
 });
 
+// A Claude Code user's own copies sit in Claude Code's folder, which its history covers.
+const inClaudeCode = (skill: InstalledSkill): InstalledSkill => ({
+  ...skill,
+  deployments: skill.deployments.map((d) =>
+    d.agent === "shared" ? { ...d, agent: "Claude Code" } : d,
+  ),
+});
+
 function updates(snapshot: SkillSnapshot): SkillSnapshot {
   const count = snapshot.skills.filter((skill) => skill.has_update).length;
   return { ...snapshot, update_check: { ...snapshot.update_check, updates_available: count } };
@@ -202,7 +210,7 @@ export const PERSONAS = {
     expectTop: "no use",
     build: () =>
       withUses(
-        estate(30, (s, i) => (i < 24 ? plugin(s) : s)),
+        estate(30, (s, i) => (i < 24 ? plugin(s) : inClaudeCode(s))),
         6,
       ),
   },
@@ -227,7 +235,7 @@ export const PERSONAS = {
     expectTop: "no use",
     build: () =>
       withUses(
-        estate(40, (s, i) => (i < 32 ? youOnly(s) : s)),
+        estate(40, (s, i) => (i < 32 ? youOnly(s) : inClaudeCode(s))),
         20,
       ),
   },

@@ -105,6 +105,7 @@ test("a row parked on Home stays selectable at its parked path, and Show all cou
     ([skillName, parkedPath]) =>
       window.__harness?.updateSkill(skillName, (skill: InstalledSkill) => ({
         ...skill,
+        parked: true,
         deployments: skill.deployments.map((copy) => ({
           ...copy,
           agent: "parked",

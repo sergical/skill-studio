@@ -239,7 +239,9 @@ describe("applySkillListFilter", () => {
 
   it("filters by 30-day usage", () => {
     const skills = [fixtureSkill({ name: "used" }), fixtureSkill({ name: "unused" })];
-    const invocations = [fixtureStats({ skill: "used", last_30_days: 3 })];
+    const invocations = [
+      fixtureStats({ skill: "used", last_30_days: 3, by_harness_30_days: { "claude-code": 3 } }),
+    ];
 
     const usedResult = applySkillListFilter(
       skills,
@@ -256,6 +258,24 @@ describe("applySkillListFilter", () => {
       invocations,
     );
     expect(unusedResult.map((s) => s.name)).toEqual(["unused"]);
+  });
+
+  it("lists no skill as unused when no agent that reads it has history", () => {
+    const unused = { scope: "all", usage: "unused-30d", query: "" } as const;
+    const skills = [
+      fixtureSkill({ name: "claude" }),
+      fixtureSkill({
+        name: "cursor-only",
+        deployments: [fixtureDeployment({ agent: "Cursor", path: "/home/.cursor/skills/x" })],
+      }),
+    ];
+    expect(applySkillListFilter(skills, unused, undefined, [])).toEqual([]);
+    const claudeHistory = [
+      fixtureStats({ skill: "other", last_30_days: 1, by_harness_30_days: { "claude-code": 1 } }),
+    ];
+    expect(
+      applySkillListFilter(skills, unused, undefined, claudeHistory).map((s) => s.name),
+    ).toEqual(["claude"]);
   });
 });
 

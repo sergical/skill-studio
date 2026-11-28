@@ -5,9 +5,11 @@
 // ============================================================================
 
 import { issueAttentionCategory } from "./skill-attention";
+import { skillVisibleToAgent } from "./skill-coverage";
 import { FIRST_CLASS_AGENTS, agentsCoveredByDeployment } from "./skill-health";
 import type { HealthIssue } from "./skill-health";
 import { ownSkillsView } from "./skill-plugin-partition";
+import { HARNESS_CATALOG } from "./skill-types.generated";
 import type { InstalledSkill, SkillInvocationStats, SkillSnapshot } from "./skill-types";
 
 /**
@@ -140,8 +142,32 @@ export function homePromptCost(
   return cost;
 }
 
+/** What the 30-day history can say about one skill. */
+export type SkillUsageIn30Days = "used" | "unused" | "no-readable-history";
+
 /**
- * Own skills with no invocation in the last 30 days, model-invocable
+ * The one rule for "unused": a skill is unused only when at least one agent that reads a copy of
+ * it has readable history (any record) and the skill has no use in 30 days. With history from
+ * Claude Code only, a skill only Cursor reads has no readable history, not no use. Returns a
+ * classifier so a caller checking many skills reads `invocations` once.
+ */
+export function skillUsageIn30Days(
+  invocations: SkillInvocationStats[],
+): (skill: InstalledSkill) => SkillUsageIn30Days {
+  const usesBySkill = new Map(invocations.map((stat) => [stat.skill, stat.last_30_days]));
+  const withHistory = HARNESS_CATALOG.filter((row) =>
+    invocations.some((stat) => (stat.by_harness_30_days[row.id] ?? 0) > 0),
+  ).map((row) => row.id);
+  return (skill) => {
+    if ((usesBySkill.get(skill.name) ?? 0) > 0) return "used";
+    return withHistory.some((agent) => skillVisibleToAgent(skill, agent) !== "none")
+      ? "unused"
+      : "no-readable-history";
+  };
+}
+
+/**
+ * Own skills with no use in the last 30 days by `skillUsageIn30Days`, model-invocable
  * (`"both"` or `"model-only"`) first, then `"user-only"`, alphabetical
  * within each group - the order Home's "Unused" section and Learn's
  * "unused" section list them in.
@@ -150,12 +176,8 @@ export function unusedSkills(
   skills: InstalledSkill[],
   invocations: SkillInvocationStats[],
 ): InstalledSkill[] {
-  // With no readable history at all, a zero is the absence of evidence, not of use.
-  if (invocations.length === 0) return [];
-  const last30DaysBySkill = new Map(invocations.map((stat) => [stat.skill, stat.last_30_days]));
-  const own = ownSkillsView(skills).filter(
-    (skill) => (last30DaysBySkill.get(skill.name) ?? 0) === 0,
-  );
+  const usage = skillUsageIn30Days(invocations);
+  const own = ownSkillsView(skills).filter((skill) => usage(skill) === "unused");
 
   return own.sort((a, b) => {
     const aModelInvocable = a.invocation !== "user-only";

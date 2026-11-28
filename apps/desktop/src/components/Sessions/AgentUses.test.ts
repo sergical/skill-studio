@@ -13,3 +13,9 @@ it("counts an agent's own uses from history, and says nothing about uses without
   expect(total("opencode")).toBeGreaterThan(0);
   expect(agentUses(PERSONAS["no-history"].build(), "claude-code")).toBeNull();
 });
+
+it("says no readable history for an agent with no records while another agent has some", () => {
+  const claudeOnly = PERSONAS["two-agents"].build();
+  expect(agentUses(claudeOnly, "claude-code")?.length).toBeGreaterThan(0);
+  expect(agentUses(claudeOnly, "codex")).toBeNull();
+});

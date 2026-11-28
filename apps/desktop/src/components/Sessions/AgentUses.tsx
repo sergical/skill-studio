@@ -12,13 +12,14 @@ import { useAppStore } from "../../store/appStore";
 
 const SHOWN = 8;
 
-/** Uses per skill by `harness` in the last 30 days, most first; null when no history is readable. */
+/** Uses per skill by `harness` in the last 30 days, most first; null when the history holds no
+ * record from `harness`, which is no readable history for it, not zero uses. */
 export function agentUses(snapshot: SkillSnapshot, harness: string) {
-  if (!snapshot.invocations.length) return null;
-  return snapshot.invocations
+  const rows = snapshot.invocations
     .map((stats) => ({ skill: stats.skill, uses: stats.by_harness_30_days[harness] ?? 0 }))
     .filter((row) => row.uses > 0)
     .sort((a, b) => b.uses - a.uses || a.skill.localeCompare(b.skill));
+  return rows.length ? rows : null;
 }
 
 export function AgentUses({ snapshot, harness }: { snapshot: SkillSnapshot; harness: string }) {
@@ -32,12 +33,10 @@ export function AgentUses({ snapshot, harness }: { snapshot: SkillSnapshot; harn
   return (
     <PageSection
       title="Uses in 30 days"
-      meta={rows?.length ? `${total.toLocaleString()} across ${rows.length} skills` : undefined}
+      meta={rows ? `${total.toLocaleString()} across ${rows.length} skills` : undefined}
     >
       {!rows ? (
         <p className="m-0 text-small text-text-secondary">No readable history.</p>
-      ) : !rows.length ? (
-        <p className="m-0 text-small text-text-secondary">No recorded uses in 30 days.</p>
       ) : (
         <>
           <ul aria-label="Uses by skill" className="m-0 flex list-none flex-col p-0">

@@ -1,9 +1,10 @@
 // ============================================================================
 // ActivityFilters - The Activity page's harness and trigger filter menus, and
 // the `useActivityLens` hook that owns their state plus the data every
-// section derives from it. Only harnesses with a usage reader in core AND
-// turned on in Settings' discovery switches are offered; if the selected
-// harness gets turned off underneath the filter, it resets to "all".
+// section derives from it. Only harnesses with a usage reader in core, kept
+// as the user's agents, AND turned on in Settings' discovery switches are
+// offered; if the selected harness gets turned off underneath the filter, it
+// resets to "all".
 // ============================================================================
 
 import { useEffect, useState } from "react";
@@ -27,6 +28,7 @@ import type {
   TriggerFilter,
 } from "@skill-studio/lib";
 import { Button } from "@skill-studio/ui";
+import { useClientIds } from "../../hooks/useClientRows";
 import { getDiscoverySources } from "../../lib/skill-api";
 import { HarnessIcon } from "../ui/HarnessIcon";
 import { MenuControl, MenuRadioGroup, MenuRadioItem, MenuSeparator } from "../ui/MenuControl";
@@ -50,6 +52,9 @@ export function useActivityLens(stats: SkillInvocationStats[], now: Date) {
   const setTrigger = (next: TriggerFilter) => setFilter({ harness, trigger: next });
   const clearFilter = () => setFilter(ALL_ACTIVITY);
   const [enabledHarnesses, setEnabledHarnesses] = useState<Set<string> | null>(null);
+  const kept = useClientIds();
+  const offered = (id: string) =>
+    Boolean(enabledHarnesses?.has(id)) && (!kept || kept.includes(id));
 
   useEffect(() => {
     let cancelled = false;
@@ -73,18 +78,17 @@ export function useActivityLens(stats: SkillInvocationStats[], now: Date) {
   // keep pointing at it. Goes through `setFilter` (stable, from the store) rather than
   // `setHarness` (a plain function, recreated every render) so this effect doesn't refire on
   // every unrelated render.
+  const harnessOff = harness !== "all" && enabledHarnesses !== null && !offered(harness);
   useEffect(() => {
-    if (harness !== "all" && enabledHarnesses && !enabledHarnesses.has(harness)) {
+    if (harnessOff) {
       setFilter({ harness: "all", trigger });
     }
-  }, [harness, trigger, enabledHarnesses, setFilter]);
+  }, [harnessOff, trigger, setFilter]);
 
   const dates = heatmapDateRangeLocal(now).dates;
   const days = dayTotals(stats, filter);
   const historyTotal = Object.values(days).reduce((a, b) => a + b, 0);
-  const agents = enabledHarnesses
-    ? USAGE_READER_HARNESSES.filter((id) => enabledHarnesses.has(id))
-    : [];
+  const agents = USAGE_READER_HARNESSES.filter(offered);
 
   return {
     harness,

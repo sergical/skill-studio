@@ -6,6 +6,7 @@
 // bar's controls and the list they drive never drift apart.
 // ============================================================================
 
+import { skillUsageIn30Days } from "./home-summary";
 import { attentionBySkill, attentionCategoryOf } from "./skill-attention";
 import type { AttentionFilter } from "./skill-attention";
 import type { HealthIssueKind } from "./skill-health";
@@ -33,7 +34,7 @@ export interface SkillListFilter {
   issue?: HealthIssueKind;
   /** Matches `skill.invocation` exactly. */
   invocation?: InstalledSkill["invocation"];
-  /** Whether the skill had any invocations in the last 30 days. */
+  /** Used in the last 30 days, or unused by `skillUsageIn30Days` (an agent that reads it has history). */
   usage?: "used-30d" | "unused-30d";
   query: string;
 }
@@ -134,9 +135,7 @@ export function applySkillListFilter(
     ? new Set(issues.filter((i) => i.kind === filter.issue).map((i) => i.skill.name))
     : null;
   const attention = filter.attention ? attentionBySkill(skills, issues) : null;
-  const usesIn30DaysBySkill = filter.usage
-    ? new Map(invocations?.map((stat) => [stat.skill, stat.last_30_days]))
-    : null;
+  const usage = filter.usage ? skillUsageIn30Days(invocations ?? []) : null;
 
   return skills.filter((skill) => {
     if (!matchesScope(skill, filter.scope)) return false;
@@ -162,10 +161,9 @@ export function applySkillListFilter(
     if (attention && attentionCategoryOf(attention.get(skill.name), filter.attention) === null)
       return false;
     if (filter.invocation && skill.invocation !== filter.invocation) return false;
-    if (usesIn30DaysBySkill) {
-      const usedIn30Days = (usesIn30DaysBySkill.get(skill.name) ?? 0) > 0;
-      if (filter.usage === "used-30d" && !usedIn30Days) return false;
-      if (filter.usage === "unused-30d" && usedIn30Days) return false;
+    if (usage) {
+      const want = filter.usage === "used-30d" ? "used" : "unused";
+      if (usage(skill) !== want) return false;
     }
     if (!matchesQuery(skill, filter.query)) return false;
     return true;

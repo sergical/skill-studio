@@ -141,9 +141,9 @@ export function HomeOverview({
         <p className="mt-1 text-small text-text-secondary">
           {live === 0
             ? "Add a skill and Skill Studio shows here whether your agents can see it and use it."
-            : `${formatCount(live)} ${live === 1 ? "skill" : "skills"} you installed · ${formatCount(totalUses)} ${totalUses === 1 ? "use" : "uses"} in 30 days · ${
+            : `${formatCount(live)} ${live === 1 ? "skill" : "skills"} you installed · ${
                 historyAgents.length
-                  ? `uses from ${joinNames(historyAgents.map(deploymentLabelFromAgentId))} history`
+                  ? `${formatCount(totalUses)} ${totalUses === 1 ? "use" : "uses"} in 30 days · uses from ${joinNames(historyAgents.map(deploymentLabelFromAgentId))} history`
                   : "no readable skill history yet"
               }`}
         </p>
