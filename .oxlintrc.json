@@ -55,19 +55,8 @@
     },
     {
       // Layering rule: components go through the store, not straight to the
-      // IPC layer. The excludeFiles list is the components still to move.
-      // It only shrinks: do not add a file to it.
+      // IPC layer.
       "files": ["apps/desktop/src/components/**"],
-      "excludeFiles": [
-        "apps/desktop/src/components/AddSkill/AddSkillSheet.tsx",
-        "apps/desktop/src/components/SkillList/skill-bulk-run.ts",
-        "apps/desktop/src/components/SkillList/useSkillBulkActions.ts",
-        "apps/desktop/src/components/SkillList/useSkillListAct.ts",
-        "apps/desktop/src/components/SkillStore/InstalledSkillLifecycleActions.tsx",
-        "apps/desktop/src/components/SkillStore/SkillDetailPanel.tsx",
-        "apps/desktop/src/components/SkillStore/SkillStore.tsx",
-        "apps/desktop/src/components/SkillStore/SkillStoreInstallFlow.tsx"
-      ],
       "rules": {
         "no-restricted-imports": [
           "error",

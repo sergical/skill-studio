@@ -6,25 +6,24 @@
 // ============================================================================
 
 import type { BulkTargetResult, InstalledSkill, InvocationTarget } from "@skill-studio/lib";
-import { parkSkills, setSkillsInvocation, unparkSkills } from "../../lib/skill-api";
 import { lifecycleTargetForPark } from "../../lib/skill-lifecycle-target";
+import { useAppStore } from "../../store/appStore";
+import type { SkillCommands } from "../../store/skillCommands";
 import { forkBeforeInvocationEdit } from "../SkillDetail/skill-location-actions";
 import { invocationFilesForSkill } from "../SkillDetail/skill-location-status";
 import type { BulkAction, BulkRunResult } from "./skill-bulk-actions";
 
 export interface BatchApi {
-  parkSkills: typeof parkSkills;
-  unparkSkills: typeof unparkSkills;
-  setSkillsInvocation: typeof setSkillsInvocation;
+  parkSkills: SkillCommands["parkSkills"];
+  unparkSkills: SkillCommands["unparkSkills"];
+  setSkillsInvocation: SkillCommands["setSkillsInvocation"];
   forkBeforeInvocationEdit: typeof forkBeforeInvocationEdit;
 }
 
-const realBatchApi: BatchApi = {
-  parkSkills,
-  unparkSkills,
-  setSkillsInvocation,
-  forkBeforeInvocationEdit,
-};
+function storeBatchApi(): BatchApi {
+  const { parkSkills, unparkSkills, setSkillsInvocation } = useAppStore.getState();
+  return { parkSkills, unparkSkills, setSkillsInvocation, forkBeforeInvocationEdit };
+}
 
 /**
  * Folds per-target results into a run result. `owners[i]` is the selected
@@ -84,7 +83,7 @@ async function runInvocationBatch(
 export async function runBatchAction(
   action: Extract<BulkAction, { kind: "park" | "unpark" | "invocation" }>,
   skills: InstalledSkill[],
-  api: BatchApi = realBatchApi,
+  api: BatchApi = storeBatchApi(),
 ): Promise<BulkRunResult> {
   if (action.kind === "invocation") return runInvocationBatch(skills, action.policy, api);
   const targets = skills.map((skill) => lifecycleTargetForPark(skill));

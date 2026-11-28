@@ -7,7 +7,6 @@ import { Button, DrawerContent } from "@skill-studio/ui";
 import { SkillDetailHeader } from "./SkillDetailHeader";
 import { SkillContent } from "./SkillContent";
 import { InstallControls } from "./InstallControls";
-import { getSkillDetails } from "../../lib/skill-api";
 import { useAppStore } from "../../store/appStore";
 import type { SkillDetails, SkillWithStatus } from "@skill-studio/lib";
 
@@ -57,6 +56,7 @@ function SkillDetailsContent({
   const details = load.kind === "loaded" ? load.details : null;
   const resolvedTopSource = details?.source ?? skill.top_source ?? null;
   const openAddSkillSheet = useAppStore((state) => state.openAddSkillSheet);
+  const getSkillDetails = useAppStore((state) => state.getSkillDetails);
   useEffect(() => {
     if (load.kind !== "loading") return;
     let cancelled = false;
@@ -75,7 +75,7 @@ function SkillDetailsContent({
     return () => {
       cancelled = true;
     };
-  }, [load]);
+  }, [load, getSkillDetails]);
 
   return (
     <DrawerContent

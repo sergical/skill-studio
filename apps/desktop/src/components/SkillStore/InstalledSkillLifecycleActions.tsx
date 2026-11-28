@@ -17,7 +17,6 @@ import {
 } from "@skill-studio/ui";
 import { ProjectDirectorySelect } from "./ProjectDirectorySelect";
 import { ScopeToggleGroup } from "./ScopeToggleGroup";
-import { removeSkill, updatePlugin } from "../../lib/skill-api";
 import { useAppStore } from "../../store/appStore";
 import {
   pluginUpdatedToast,
@@ -102,6 +101,8 @@ function useSkillLifecycleMutations(
   onRemoveComplete: () => void,
 ) {
   const addToast = useAppStore((state) => state.addToast);
+  const removeSkill = useAppStore((state) => state.removeSkill);
+  const updatePlugin = useAppStore((state) => state.updatePlugin);
   const [isRemoving, setIsRemoving] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const guard = useGuardedSkillUpdate();
