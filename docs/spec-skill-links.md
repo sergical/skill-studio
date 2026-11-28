@@ -260,13 +260,40 @@ skills is not a user action. Users do not create links; authors write them.
 - The layout code lives in a shared package, not in the desktop app, so the
   marketing site draws the same map from a fixture (section 8).
 
-## 7. Simulated setups, not anyone's machine
+## 7. Real packs, built setups, no one's machine
 
-Every test, demo and video uses built setups. None reads a real home, a
-real project, or real session history.
+The product, the harness, the demo and the video use real open-source
+packs, the ones people already install and recognize. Installs and session
+history around them are built for the purpose. Nothing reads a real home, a
+real project, or a real person's session history.
 
-**Core fixtures** (`crates/skill-studio-core/src/testing_shapes.rs`, generic
-names as that file requires). One builder per shape found in the evidence:
+**Real packs.** Pinned snapshots of four open-source packs, each kept with
+its own `LICENSE` file, in one shared folder (`fixtures/real-packs/`) that
+the core tests, the desktop harness, the CLI checks and the marketing site
+all read:
+
+| Pack                     | Commit    | License, holder                                          | Markdown | Why it is in                                  |
+| ------------------------ | --------- | -------------------------------------------------------- | -------: | --------------------------------------------- |
+| `mattpocock/skills`      | `bbadaa6` | MIT, Matt Pocock                                         |  0.29 MB | Wrapper (`grill-me`), base skills, an index   |
+| `sergical/pstack-skills` | `dd839d3` | MIT, Lauren Tan (generated from `cursor/plugins` pstack) |  0.32 MB | One base skill read by 23 others, two indexes |
+| `obra/superpowers`       | `22f0b46` | MIT, Jesse Vincent                                       |  0.35 MB | `pack:name` hand-offs                         |
+| `emilkowalski/skills`    | `64eb3de` | MIT, Emil Kowalski                                       |  0.36 MB | Path reads, siblings, an index that lists all |
+
+- Only the skill folders' text files are kept. A README in the folder names
+  each pack's source, commit and license, and one script refreshes a pack to
+  a new commit. A refresh reruns the corpus test below, so a pack that
+  changes its links changes the test on purpose, not by surprise.
+- Packs without a license file (`remotion-dev/skills`, `anthropics/skills`,
+  `vercel-labs/agent-skills` on 2026-11-27) are never copied in. They can
+  appear by name and by the numbers in the evidence file.
+- Every surface that shows a pack's text names its pack and license (the
+  map's details panel: "MIT, Matt Pocock"), and the marketing site has a
+  credits line linking each pack.
+
+**Core fixtures for what real packs do not show**
+(`crates/skill-studio-core/src/testing_shapes.rs`, generic names as that
+file requires). These cover machine layouts and install states, which come
+from the user's setup, not from a pack:
 
 | Shape          | Built from                                                                | The test checks                                                                 |
 | -------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
@@ -281,63 +308,70 @@ names as that file requires). One builder per shape found in the evidence:
 | Agent layouts  | The same pack as a whole-folder link, per-skill links, per-agent copies   | Path links resolve per layout; turning off for one agent breaks only that agent |
 | Project scope  | The base skill in the project, its users global                           | Elsewhere                                                                       |
 
-**Desktop harness** (`apps/desktop/src/dev/harness`): two fictional packs
-added to the fixture estate, so screenshots, e2e specs and the video show a
-realistic map with no real author's pack:
+**Desktop harness** (`apps/desktop/src/dev/harness`): the fixture estate
+installs the real packs, set up the way real people install them:
 
-- `acme/agent-kit`, modeled on the wrapper-and-chain shape: an index
-  (`ask-kit`), a base interview skill and a one-line wrapper of it, a
-  spec-to-tickets chain, a setup skill that five skills need, and one skill
-  left out of the install.
-- `studio/house-style`, modeled on the base-skill shape: a harness skill
-  that every other skill reads, and 8 rule skills under one mode skill that
-  fold into a stack.
+- `mattpocock/skills` without `pr`, `teach` and
+  `improve-codebase-architecture`, the way a dotagents `exclude` leaves them
+  out. `ask-matt` and `setup-matt-pocock-skills` still name them, so the map
+  shows real dead entries and one real Missing hand-off.
+- `sergical/pstack-skills` with `pstack-harness` turned off for Codex, so
+  Show for Codex lights the 23 skills that read it.
+- Simulated session history in `mock-sessions.ts`: `grill-me` run 14 times
+  in 30 days, `grilling` never started directly. This is what makes Home's
+  "not used" row and its guard real on screen.
 
 **Real CLI runs**: the `verify-skill-studio` skill's local git pack server
-gains a linked pack shape, so `skill-studio links` and `remove --dry-run`
-are proven against the real `npx skills` and real files in a disposable home.
+serves the `mattpocock/skills` snapshot. The real `npx skills add` installs
+`grill-me` alone into a disposable home, and `skill-studio links grill-me`
+must report `grilling` as Missing, with Add from the pack.
 
 ## 8. Launch and homepage
 
-The case study shows one moment: the user tidies up, and Skill Studio stops
-them from breaking a pack they did not know was connected.
+The case study shows one moment with skills the viewer already has: they
+tidy up, and Skill Studio stops them from breaking a pack they did not know
+was connected.
 
-**Video, three beats, on the harness with `acme/agent-kit`:**
+**Video, three beats, on the harness with the real packs:**
 
-1. Home offers to park the base interview skill: not used in 30 days. The
-   row now says "Used through `quick-interview`, 14 times" and offers no
-   park.
-2. The user removes it from the skill page anyway. The dialog lists the 6
-   skills that run it, and says the wrapper does nothing without it.
-3. Packs → Map. Selecting the skill lights its users; switching the agent
-   to Codex shows the one link that is already broken there.
+1. Home lists `grilling` as not started in 30 days. The row says "Used
+   through `grill-me`, 14 times" and offers no park.
+2. The user removes `grilling` from the skill page anyway. The dialog lists
+   the 6 skills that run it, and says `grill-me` does nothing without it.
+3. Packs → `mattpocock/skills` → Map. `grilling` lights its 6 users;
+   `ask-matt` wears a badge for the 3 skills it lists that are not
+   installed. Then `sergical/pstack-skills` → Show for Codex: the 23 skills
+   that read `pstack-harness` turn red in Codex only.
 
 **CLI and MCP beat:** an agent asked to "clean up my skills" calls
-`skill_links` first and tells the user what would break, in the same words
-as the dialog.
+`skill_links` first and answers: "`grilling` looks unused, but `grill-me`
+runs it. Keep it." The same words as the dialog.
 
 **Homepage:** a sixth scenario in `packages/marketing/src/home/jobs-scenarios.ts`,
-"What breaks if I delete this?", with the manual steps it replaces (grep
-every skills folder for the name, follow each `../` path by hand, repeat per
-agent) and `npx skill-studio@latest links <skill>` as the command. The
-"Skill links" section of the walkthrough draws the map with the shared
-layout code from the same fixture.
+"What breaks if I delete this?". The pain side is the real manual work
+(grep every skills folder for `grilling`, follow each `../pstack-harness`
+path by hand, repeat per agent). The fix side is
+`npx skill-studio@latest links grilling`. The stat line, "10 of 12 popular
+packs link their skills", links to the evidence file. The "Skill links"
+section of the walkthrough draws the `mattpocock/skills` map with the shared
+layout code from the same snapshot.
 
 ## 9. Slices
 
 Each slice is one vertical change, under about 500 lines.
 
-1. Core `skill_links` with the fixtures of section 7, `skill-studio links`,
-   the `skill_links` MCP tool, a `flow_parity.rs` row, and a `docs/flows.md`
-   row.
+1. The real-pack snapshots, core `skill_links` with the fixtures of
+   section 7, `skill-studio links`, the `skill_links` MCP tool, a
+   `flow_parity.rs` row, and a `docs/flows.md` row.
 2. `breaks` in the remove, park, turn-off and pack remove plans; the dialogs
-   show it; the CLI dry runs print it. One e2e spec: removing the harness
-   base skill lists its users, and Keep changes nothing.
+   show it; the CLI dry runs print it. One e2e spec: removing `grilling`
+   lists its 6 users, and Keep changes nothing.
 3. The skill page Links card; Home's Missing links group; the
    Not used in 30 days guard; `MissingLink` in `doctor`.
 4. Pack add and the Add Skill sheet offer what picked skills need.
-5. The pack map, with the four layout tests and one e2e spec (select a base
-   skill, its users light up; switch agent, the broken link shows).
+5. The pack map, with the four layout tests and one e2e spec (select
+   `grilling`, its users light up; Show for Codex on pstack, the users of
+   `pstack-harness` show broken).
 6. The homepage scenario and the walkthrough section.
 
 ## 10. Tests, per the testing skill
@@ -347,6 +381,10 @@ One test per user flow at the level the user sees it, and one rule test:
 - **Rule**: links are the same whatever order the scan reads folders in.
 - **Flows**: the e2e specs in slices 2 and 5; the CLI/MCP parity row in
   slice 1.
+- **Real packs**: one corpus test over the four snapshots, checking the
+  links a person checked by hand: `grill-me` hands off to `grilling`, 6
+  skills run `grilling`, 23 pstack skills need `pstack-harness`, `ask-matt`
+  and `ask-emil` are indexes and raise no alerts.
 - **Shapes**: one table test over the core fixtures of section 7, each row
   checking what the user would see (the `breaks` list or its absence).
 
@@ -368,6 +406,3 @@ Rare cases not tested, per the testing skill:
    rejected the false ones. A pack author could also mark an index in
    `metadata` (the Agent Skills spec has no dependency or index field).
    Propose it upstream after slice 1 shows the heuristic's misses.
-3. **Real pack names in the video.** The harness uses fictional packs. The
-   evidence names real ones. Whether the launch video or homepage names a
-   real author's pack is the owner's call.
