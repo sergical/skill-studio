@@ -17,7 +17,6 @@ import {
   AlertDialogTitle,
 } from "@skill-studio/ui";
 import { useGitWarning } from "../../hooks/useGitWarning";
-import { removeSkill } from "../../lib/skill-api";
 import {
   skillDeploymentRemovalAvailability,
   skillRemovalAvailability,
@@ -44,6 +43,7 @@ export function RemoveDeploymentsDialog({
 }) {
   const [isRemoving, setIsRemoving] = useState(false);
   const addToast = useAppStore((state) => state.addToast);
+  const removeSkill = useAppStore((state) => state.removeSkill);
   const skillName = skill.name;
   const removalAvailability = deployment
     ? skillDeploymentRemovalAvailability(skill, deployment)

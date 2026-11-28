@@ -7,7 +7,6 @@
 import { useEffect, useState } from "react";
 import { PatchDiff } from "@pierre/diffs/react";
 import { Dialog, DialogContent, DialogTitle } from "@skill-studio/ui";
-import { readInstalledSkillMd } from "../../lib/skill-api";
 import { deploymentLabel } from "@skill-studio/lib";
 import { unifiedSkillMdDiff } from "@skill-studio/lib";
 import { ownDeployments, skillMdPathForDeployment } from "@skill-studio/lib";
@@ -36,6 +35,7 @@ type SideState =
   | { status: "missing" };
 
 function useSideContent(deployment: Deployment | undefined): SideState {
+  const readInstalledSkillMd = useAppStore((state) => state.readInstalledSkillMd);
   // Keyed on the path string, not `deployment` itself: deployments are
   // rebuilt on every snapshot, so keying on the object would re-read the file
   // on every background rescan even when the selected copy hasn't changed.
@@ -68,7 +68,7 @@ function useSideContent(deployment: Deployment | undefined): SideState {
     return () => {
       ignore = true;
     };
-  }, [path]);
+  }, [path, readInstalledSkillMd]);
 
   return state;
 }

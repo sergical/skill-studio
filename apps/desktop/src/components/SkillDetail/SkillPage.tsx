@@ -5,11 +5,6 @@
 // ============================================================================
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  forkSkill,
-  readInstalledSkillMd,
-  writeInstalledSkillMdIfUnchanged,
-} from "../../lib/skill-api";
 import { lifecycleTargetForDeployment } from "../../lib/skill-lifecycle-target";
 import { editableDeployments, parseYamlFrontmatterError } from "@skill-studio/lib";
 import type {
@@ -68,6 +63,11 @@ interface UseSkillMdContentParams {
  * over the same `currentSkillMdPathRef` staleness check.
  */
 function useSkillMdContent({ skill, skillMdPath, deployment, addToast }: UseSkillMdContentParams) {
+  const forkSkill = useAppStore((state) => state.forkSkill);
+  const readInstalledSkillMd = useAppStore((state) => state.readInstalledSkillMd);
+  const writeInstalledSkillMdIfUnchanged = useAppStore(
+    (state) => state.writeInstalledSkillMdIfUnchanged,
+  );
   const [rawContent, setRawContent] = useState<string | null>(null);
   const [isLoadingContent, setIsLoadingContent] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -77,21 +77,24 @@ function useSkillMdContent({ skill, skillMdPath, deployment, addToast }: UseSkil
   const currentSkillMdPathRef = useRef<string | undefined>(undefined);
 
   /** Reads SKILL.md at `path`; `showSkeleton` swaps the card for the loading skeleton (initial load and retry), a silent reload keeps the current content up until the read lands. */
-  const loadContent = useCallback((path: string, showSkeleton: boolean) => {
-    setLoadError(null);
-    if (showSkeleton) setIsLoadingContent(true);
-    const isCurrent = () => currentSkillMdPathRef.current === path;
-    readInstalledSkillMd(path)
-      .then((content) => {
-        if (isCurrent()) setRawContent(content);
-      })
-      .catch((err) => {
-        if (isCurrent()) setLoadError(err instanceof Error ? err.message : "Unknown error");
-      })
-      .finally(() => {
-        if (isCurrent()) setIsLoadingContent(false);
-      });
-  }, []);
+  const loadContent = useCallback(
+    (path: string, showSkeleton: boolean) => {
+      setLoadError(null);
+      if (showSkeleton) setIsLoadingContent(true);
+      const isCurrent = () => currentSkillMdPathRef.current === path;
+      readInstalledSkillMd(path)
+        .then((content) => {
+          if (isCurrent()) setRawContent(content);
+        })
+        .catch((err) => {
+          if (isCurrent()) setLoadError(err instanceof Error ? err.message : "Unknown error");
+        })
+        .finally(() => {
+          if (isCurrent()) setIsLoadingContent(false);
+        });
+    },
+    [readInstalledSkillMd],
+  );
 
   /** Set when the path change is a copy switch on the same skill - the old copy's content stays up (no skeleton), so the card keeps its height and the page doesn't jump. */
   const lastLoadedSkillRef = useRef<string | undefined>(undefined);
@@ -199,6 +202,9 @@ export function SkillPage({
   from,
 }: SkillPageProps) {
   const addToast = useAppStore((state) => state.addToast);
+  const writeInstalledSkillMdIfUnchanged = useAppStore(
+    (state) => state.writeInstalledSkillMdIfUnchanged,
+  );
   const openSkill = useAppStore((state) => state.openSkill);
   const activeView = useAppStore((state) => state.activeView);
   const clearSkillIntent = useAppStore((state) => state.clearSkillIntent);

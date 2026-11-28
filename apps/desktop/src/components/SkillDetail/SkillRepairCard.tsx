@@ -19,7 +19,6 @@ import {
   toWireParsedSkillSource,
 } from "@skill-studio/lib";
 import type { AgentId, Deployment, InstalledSkill, InstallScope } from "@skill-studio/lib";
-import { addSkill, repairSkillLink } from "../../lib/skill-api";
 import { useAppStore } from "../../store/appStore";
 
 interface SkillRepairCardProps {
@@ -46,6 +45,8 @@ function reinstallSource(skill: InstalledSkill): string | null {
 
 export function SkillRepairCard({ skill, deployment }: SkillRepairCardProps) {
   const addToast = useAppStore((state) => state.addToast);
+  const addSkill = useAppStore((state) => state.addSkill);
+  const repairSkillLink = useAppStore((state) => state.repairSkillLink);
 
   const healthyDeployments = skill.deployments.filter(
     (d) => d.path !== deployment.path && !isUnresolvedDeployment(d),

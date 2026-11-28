@@ -6,8 +6,8 @@
 // ============================================================================
 
 import { useEffect, useState } from "react";
-import { previewSkillFrontmatterRepair } from "../../lib/skill-api";
 import { lifecycleTargetForDeployment } from "../../lib/skill-lifecycle-target";
+import { useAppStore } from "../../store/appStore";
 import type { Deployment, FrontmatterRepairPreview } from "@skill-studio/lib";
 import {
   frontmatterPreviewKey,
@@ -31,6 +31,7 @@ export function useSkillFrontmatterRepair(
   deployment: Deployment | undefined,
 ): UseSkillFrontmatterRepair {
   const [answer, setAnswer] = useState<PreviewAnswer | null>(null);
+  const previewSkillFrontmatterRepair = useAppStore((state) => state.previewSkillFrontmatterRepair);
 
   const key = frontmatterPreviewKey(deployment);
   const kinds = frontmatterRepairKindsFor(deployment);
