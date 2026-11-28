@@ -148,15 +148,30 @@ export type SkillUsageIn30Days = "used" | "unused" | "no-readable-history";
 /**
  * The one rule for "unused": a skill is unused only when at least one agent that reads a copy of
  * it has readable history (any record) and the skill has no use in 30 days. With history from
- * Claude Code only, a skill only Cursor reads has no readable history, not no use. Returns a
- * classifier so a caller checking many skills reads `invocations` once.
+ * Claude Code only, a skill only Cursor reads has no readable history, not no use. `agents`, when
+ * given, are the agents the user keeps: an agent they turned off adds no use and no history, even
+ * while its records are still in the snapshot. Returns a classifier so a caller checking many
+ * skills reads `invocations` once.
  */
 export function skillUsageIn30Days(
   invocations: SkillInvocationStats[],
+  agents?: readonly string[],
 ): (skill: InstalledSkill) => SkillUsageIn30Days {
-  const usesBySkill = new Map(invocations.map((stat) => [stat.skill, stat.last_30_days]));
-  const withHistory = HARNESS_CATALOG.filter((row) =>
-    invocations.some((stat) => (stat.by_harness_30_days[row.id] ?? 0) > 0),
+  const counted = (agent: string) => !agents || agents.includes(agent);
+  const usesBySkill = new Map(
+    invocations.map((stat) => [
+      stat.skill,
+      agents
+        ? Object.entries(stat.by_harness_30_days).reduce(
+            (sum, [agent, count]) => (counted(agent) ? sum + count : sum),
+            0,
+          )
+        : stat.last_30_days,
+    ]),
+  );
+  const withHistory = HARNESS_CATALOG.filter(
+    (row) =>
+      counted(row.id) && invocations.some((stat) => (stat.by_harness_30_days[row.id] ?? 0) > 0),
   ).map((row) => row.id);
   return (skill) => {
     if ((usesBySkill.get(skill.name) ?? 0) > 0) return "used";
@@ -167,16 +182,17 @@ export function skillUsageIn30Days(
 }
 
 /**
- * Own skills with no use in the last 30 days by `skillUsageIn30Days`, model-invocable
- * (`"both"` or `"model-only"`) first, then `"user-only"`, alphabetical
- * within each group - the order Home's "Unused" section and Learn's
+ * Own skills with no use in the last 30 days by `skillUsageIn30Days` (from the history of
+ * `agents` only, when given), model-invocable (`"both"` or `"model-only"`) first, then
+ * `"user-only"`, alphabetical within each group - the order Home's park prompt and Learn's
  * "unused" section list them in.
  */
 export function unusedSkills(
   skills: InstalledSkill[],
   invocations: SkillInvocationStats[],
+  agents?: readonly string[],
 ): InstalledSkill[] {
-  const usage = skillUsageIn30Days(invocations);
+  const usage = skillUsageIn30Days(invocations, agents);
   const own = ownSkillsView(skills).filter((skill) => usage(skill) === "unused");
 
   return own.sort((a, b) => {

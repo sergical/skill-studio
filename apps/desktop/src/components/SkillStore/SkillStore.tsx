@@ -3,7 +3,7 @@
 // ============================================================================
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Button, Drawer, Tabs, TabsContent, TabsList, TabsTrigger } from "@skill-studio/ui";
+import { Button, Drawer } from "@skill-studio/ui";
 import { SkillSearchBar } from "./SkillSearchBar";
 import { SkillBrowser } from "./SkillBrowser";
 import { SkillDetailPanel } from "./SkillDetailPanel";
@@ -70,23 +70,6 @@ function mergeWithInstalledStatus(
 function searchResultCount(count: number): string {
   if (count >= LIMIT) return `First ${LIMIT} results`;
   return `${count} result${count === 1 ? "" : "s"}`;
-}
-
-const TAB_TRIGGER_CLASS =
-  "text-body font-medium text-text-tertiary after:bg-accent data-active:text-accent hover:text-text-secondary";
-
-/** Tab strip (Browse/Installed): a bare `TabsList` - each tab's toolbar row and results live in that tab's own `TabsContent`, below. */
-function SkillStoreTabList() {
-  return (
-    <TabsList variant="line" className="bg-bg-secondary px-5">
-      <TabsTrigger value="browse" className={TAB_TRIGGER_CLASS}>
-        Browse
-      </TabsTrigger>
-      <TabsTrigger value="installed" className={TAB_TRIGGER_CLASS}>
-        Installed
-      </TabsTrigger>
-    </TabsList>
-  );
 }
 
 function LoadError({
@@ -256,9 +239,8 @@ function useSkillStoreData(
   };
 }
 
-/** The Add skill sheet's skills.sh tab: browse or search the catalog, and the skills installed here. */
+/** The Add skill sheet's skills.sh tab: browse or search the catalog, each result marked when it is installed here. */
 export function SkillStore() {
-  const [activeTab, setActiveTab] = useState<"browse" | "installed">("browse");
   const [selection, setSelection] = useState<string | null>(null);
   const [installProgress, setInstallProgress] = useState<InstallProgressState | null>(null);
 
@@ -334,108 +316,49 @@ export function SkillStore() {
 
   const handleRemoveComplete = () => {
     addToast({ type: "success", title: `Removed ${selectedSkill?.name ?? "the skill"}` });
-    // Refresh installed skills - `installedSkillsWithStatus`/`searchResultsWithStatus` re-derive from it.
+    // Refresh installed skills - `searchResultsWithStatus` re-derives from it.
     void loadInstalledSkills();
     setSelection(null);
   };
 
-  const catalogMatches = new Map(
-    searchResultsWithStatus.flatMap((skill) =>
-      skill.is_installed ? [[skill.name, skill] as const] : [],
-    ),
-  );
-  const installedSkillsWithStatus: SkillWithStatus[] = installedSkills.map((skill) => {
-    const found = catalogMatches.get(skill.name);
-    if (found) return found;
-
-    // Extract GitHub owner/repo from source_url (more reliable) or source
-    const topSource = extractGitHubRepo(skill.source, skill.source_url);
-
-    return {
-      id: topSource ? `${topSource}/${skill.name}` : skill.name,
-      name: skill.name,
-      author: null,
-      description: null,
-      tags: null,
-      // skills.sh has no install count for a skill it did not list.
-      installs: Number.NaN,
-      is_installed: true,
-      installed_info: skill,
-      top_source: topSource ?? null,
-    };
-  });
-
-  const selectedSkill =
-    (activeTab === "installed"
-      ? installedSkillsWithStatus.find((skill) => skill.name === selection)
-      : searchResultsWithStatus.find((skill) => skill.id === selection)) ?? null;
+  const selectedSkill = searchResultsWithStatus.find((skill) => skill.id === selection) ?? null;
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden bg-bg-primary">
-      <Tabs
-        value={activeTab}
-        onValueChange={(tab) => {
-          setActiveTab(tab);
-          setSelection(null);
-        }}
-        className="flex flex-1 flex-col gap-0 overflow-hidden"
-      >
-        <SkillStoreTabList />
+      <div className="flex items-center gap-4 border-b border-border px-5 py-3">
+        <SkillSearchBar
+          value={searchQuery}
+          onChange={setSearchQuery}
+          onSearch={handleSearch}
+          isLoading={isLoading}
+        />
+        {!browseError && !isLoading && isSearchQuery(searchQuery) && (
+          <span className="ml-auto shrink-0 text-small tabular-nums text-text-tertiary">
+            {searchResultCount(searchResultsWithStatus.length)}
+          </span>
+        )}
+      </div>
 
-        <TabsContent value="browse" className="flex flex-1 flex-col overflow-hidden">
-          <div className="flex items-center gap-4 border-b border-border px-5 py-3">
-            <SkillSearchBar
-              value={searchQuery}
-              onChange={setSearchQuery}
-              onSearch={handleSearch}
-              isLoading={isLoading}
-            />
-            {!browseError && !isLoading && isSearchQuery(searchQuery) && (
-              <span className="ml-auto shrink-0 text-small tabular-nums text-text-tertiary">
-                {searchResultCount(searchResultsWithStatus.length)}
-              </span>
-            )}
-          </div>
-
-          {browseError ? (
-            <LoadError
-              title="Browsing isn't available right now"
-              error={browseError}
-              onRetry={retry}
-            />
-          ) : (
-            <div className="flex flex-1 flex-col overflow-hidden">
-              <SkillBrowser
-                skills={searchResultsWithStatus}
-                selectedSkill={selectedSkill}
-                onSelectSkill={(skill) => setSelection(skill.id)}
-                mode={{ kind: "browse", isLoading, isLoadingMore, hasMore, onLoadMore: loadMore }}
-                emptyMessage={
-                  isSearchQuery(searchQuery)
-                    ? `No skills.sh skill matches “${searchQuery.trim()}”`
-                    : "skills.sh listed no skills"
-                }
-              />
-            </div>
-          )}
-        </TabsContent>
-
-        <TabsContent value="installed" className="flex flex-1 flex-col overflow-hidden">
-          {inventoryNotice ?? (
-            <>
-              <div className="flex flex-1 flex-col overflow-hidden">
-                <SkillBrowser
-                  skills={installedSkillsWithStatus}
-                  selectedSkill={selectedSkill}
-                  onSelectSkill={(skill) => setSelection(skill.name)}
-                  mode={{ kind: "installed" }}
-                  emptyMessage="No skills installed yet"
-                />
-              </div>
-            </>
-          )}
-        </TabsContent>
-      </Tabs>
+      {browseError ? (
+        <LoadError title="Browsing isn't available right now" error={browseError} onRetry={retry} />
+      ) : (
+        <div className="flex flex-1 flex-col overflow-hidden">
+          <SkillBrowser
+            skills={searchResultsWithStatus}
+            selectedSkill={selectedSkill}
+            onSelectSkill={(skill) => setSelection(skill.id)}
+            isLoading={isLoading}
+            isLoadingMore={isLoadingMore}
+            hasMore={hasMore}
+            onLoadMore={loadMore}
+            emptyMessage={
+              isSearchQuery(searchQuery)
+                ? `No skills.sh skill matches “${searchQuery.trim()}”`
+                : "skills.sh listed no skills"
+            }
+          />
+        </div>
+      )}
 
       <Drawer open={selectedSkill !== null} onOpenChange={(open) => !open && setSelection(null)}>
         {selectedSkill && (

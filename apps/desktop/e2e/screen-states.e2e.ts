@@ -6,7 +6,6 @@ import { PERSONAS } from "../src/dev/harness/personas";
 // person or a reviewer can look at all of them side by side. Runs only when SCREEN_STATES names
 // an output folder; see .agents/skills/verify-screen-states/SKILL.md.
 const out = process.env.SCREEN_STATES;
-const query = process.env.SCREEN_STATES_QUERY ?? "v=1";
 // Comma-separated accessible names, clicked in order after Home loads, to reach another screen:
 // SCREEN_STATES_NAV="Skills" or "Agents,What it used".
 const nav = (process.env.SCREEN_STATES_NAV ?? "").split(",").filter(Boolean);
@@ -26,10 +25,9 @@ for (const [id, persona] of Object.entries(PERSONAS))
       page.on("pageerror", (error) => errors.push(error.message));
       await page.emulateMedia({ colorScheme: "dark" });
       await page.setViewportSize({ width: size.width, height: size.height });
-      await page.goto(`/?persona=${id}&${query}`);
+      await page.goto(`/?persona=${id}`);
       await page.getByRole("button", { name: "Continue" }).click();
       await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible();
-      // The variant picker is comparison chrome, not part of the screen under review.
       // A sidebar item's name includes its count ("Skills 34"), so match the leading words.
       for (const label of nav) {
         const name = new RegExp(`^${label}(\\s\\d|$)`);
@@ -40,7 +38,6 @@ for (const [id, persona] of Object.entries(PERSONAS))
           .first()
           .click();
       }
-      await page.addStyleTag({ content: ".proto-picker { display: none !important; }" });
       await page.waitForTimeout(500);
       mkdirSync(`${out}/shots`, { recursive: true });
       await page.screenshot({ path: `${out}/shots/${id}-${size.name}.png` });
@@ -64,6 +61,6 @@ test.afterAll(() => {
     .join("");
   writeFileSync(
     `${out}/index.html`,
-    `<!doctype html><meta charset="utf-8"><title>Screen states</title><style>body{background:#111;color:#ddd;font:13px -apple-system,sans-serif;margin:24px}h2{font-size:15px;margin:28px 0 8px}small{color:#888;font-weight:400}div{display:flex;gap:12px;align-items:flex-start}figure{margin:0}img{display:block;width:420px;border:1px solid #333;border-radius:6px}figcaption{color:#888;margin-top:4px}</style><h1>${query}</h1>${rows}`,
+    `<!doctype html><meta charset="utf-8"><title>Screen states</title><style>body{background:#111;color:#ddd;font:13px -apple-system,sans-serif;margin:24px}h2{font-size:15px;margin:28px 0 8px}small{color:#888;font-weight:400}div{display:flex;gap:12px;align-items:flex-start}figure{margin:0}img{display:block;width:420px;border:1px solid #333;border-radius:6px}figcaption{color:#888;margin-top:4px}</style><h1>${nav.join(" › ") || "Home"}</h1>${rows}`,
   );
 });

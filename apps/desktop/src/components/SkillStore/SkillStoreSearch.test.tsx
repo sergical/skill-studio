@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -130,11 +130,18 @@ it("a late initial failure cannot replace an active search or stop its spinner",
   expect(screen.getByText("current-result")).toBeTruthy();
 });
 
-it("tracking a project refreshes Installed and keeps the current search until the query is cleared", async () => {
+it("tracking a project marks its skills installed and keeps the current search until the query is cleared", async () => {
   mockIPC((command) => {
     if (command === "get_installed_skills") {
       return useAppStore.getState().userAddedProjects.length
-        ? [skill({ name: "project-skill", deployments: [] })]
+        ? [
+            skill({
+              name: "git-guide",
+              source: "owner/repo",
+              source_url: "https://github.com/owner/repo",
+              deployments: [],
+            }),
+          ]
         : [];
     }
     if (command === "get_popular_skills")
@@ -151,10 +158,8 @@ it("tracking a project refreshes Installed and keeps the current search until th
   await act(async () =>
     useAppStore.getState().setTrackedProjects({ added: ["/project"], excluded: [] }),
   );
-  expect(await screen.findByText("git-guide")).toBeTruthy();
-  await user.click(screen.getByRole("tab", { name: "Installed" }));
-  expect(await screen.findByText("project-skill")).toBeTruthy();
-  await user.click(screen.getByRole("tab", { name: "Browse" }));
+  const card = await screen.findByRole("button", { name: /git-guide/ });
+  expect(await within(card).findByTitle("Installed")).toBeTruthy();
   expect(screen.getByRole("textbox", { name: "Search skills.sh" })).toHaveProperty("value", "git");
   await user.clear(screen.getByRole("textbox", { name: "Search skills.sh" }));
   await act(() => vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS));

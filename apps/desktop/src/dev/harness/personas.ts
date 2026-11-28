@@ -3,7 +3,7 @@
 // `?persona=<id>` swaps the harness estate for one of twenty very different
 // setups, from an empty first run to 250 skills on six agents, so every
 // screen can be checked against states a real user can be in. Each persona
-// also names the one thing Home should put first for it (`expectTop`).
+// also names the one thing Home's prompt should put first for it (`expectTop`).
 // ============================================================================
 
 import { collectDashboardIssues } from "@skill-studio/lib";
@@ -17,7 +17,7 @@ export interface Persona {
   agents: string[];
   /** Claude Code's skill-space fraction in the listing mock; smaller fits fewer descriptions. */
   claudeFraction?: number;
-  /** Words the first Home to-do should contain, or null when nothing needs the user. */
+  /** Words the first line of Home's prompt should contain, or null when nothing needs the user. */
   expectTop: string | null;
   build: () => SkillSnapshot;
 }
@@ -177,7 +177,7 @@ export const PERSONAS = {
     label: "250 skills, ten used",
     agents: ["claude-code"],
     claudeFraction: 0.0002,
-    expectTop: "names of",
+    expectTop: "by name only",
     build: () => withUses(estate(250, same), 10),
   },
   "broken-heavy": {
@@ -220,7 +220,7 @@ export const PERSONAS = {
     label: "Most skills come from plugins",
     agents: ["claude-code"],
     claudeFraction: 0.01,
-    expectTop: "no use",
+    expectTop: "not used in 30 days",
     build: () =>
       withUses(
         estate(30, (s, i) => (i < 24 ? plugin(s) : inClaudeCode(s))),
@@ -245,7 +245,7 @@ export const PERSONAS = {
     label: "Most skills set to You run it",
     agents: ["claude-code"],
     claudeFraction: 0.01,
-    expectTop: "no use",
+    expectTop: "not used in 30 days",
     build: () =>
       withUses(
         estate(40, (s, i) => (i < 32 ? youOnly(s) : inClaudeCode(s))),
@@ -256,21 +256,21 @@ export const PERSONAS = {
     label: "Claude Code fits almost nothing",
     agents: ["claude-code"],
     claudeFraction: 0.00005,
-    expectTop: "names of",
+    expectTop: "by name only",
     build: () => withUses(estate(40, same), 25),
   },
   "unused-pile": {
     label: "Sixty skills, five used, all fit",
     agents: ["claude-code"],
     claudeFraction: 0.05,
-    expectTop: "no use",
+    expectTop: "not used in 30 days",
     build: () => withUses(estate(60, same), 5),
   },
   "claude-history-cursor-skill": {
     label: "Claude Code history, one skill only Cursor reads",
     agents: ["claude-code", "cursor"],
     claudeFraction: 0.01,
-    expectTop: "no use",
+    expectTop: "not used in 30 days",
     build: () => {
       const base = estate(60, same);
       // Described skills whose one copy is in the shared folder, so each moves whole into one
@@ -345,7 +345,7 @@ export const PERSONAS = {
     label: "Used last week, nothing this week",
     agents: ["claude-code"],
     claudeFraction: 0.01,
-    expectTop: "no use",
+    expectTop: "not used in 30 days",
     build: () => withUses(estate(30, same), 12, 6, { from: 8, span: 6 }),
   },
   "two-weeks-steady": {
@@ -360,7 +360,7 @@ export const PERSONAS = {
     label: "All six agents, use spread over them",
     agents: ALL,
     claudeFraction: 0.002,
-    expectTop: "names of",
+    expectTop: "by name only",
     build: () => withUses(estate(90, same), 48, 6, { agents: ALL, span: 14 }),
   },
   "grok-only": {
@@ -372,7 +372,7 @@ export const PERSONAS = {
   "opencode-active": {
     label: "OpenCode alone, used every day",
     agents: ["opencode"],
-    expectTop: "no use",
+    expectTop: "not used in 30 days",
     build: () => withUses(estate(30, same), 12, 7, { agents: ["opencode"], span: 14 }),
   },
   "mixed-history": {

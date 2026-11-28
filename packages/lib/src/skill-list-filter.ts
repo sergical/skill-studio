@@ -123,19 +123,21 @@ function matchesQuery(skill: InstalledSkill, query: string): boolean {
  * from the caller, computed once and shared - passed in rather than
  * recomputed here so a caller filtering a large list repeatedly doesn't pay
  * for it more than once per render. `invocations` is `SkillSnapshot.invocations`
- * (or equivalent), needed only when `filter.usage` is set.
+ * (or equivalent), needed only when `filter.usage` is set; `agents` are the agents the user keeps,
+ * so the unused list matches Home's count (see `skillUsageIn30Days`).
  */
 export function applySkillListFilter(
   skills: InstalledSkill[],
   filter: SkillListFilter,
   issues = collectDashboardIssues(skills),
   invocations?: SkillInvocationStats[],
+  agents?: readonly string[],
 ): InstalledSkill[] {
   const skillsWithIssue = filter.issue
     ? new Set(issues.filter((i) => i.kind === filter.issue).map((i) => i.skill.name))
     : null;
   const attention = filter.attention ? attentionBySkill(skills, issues) : null;
-  const usage = filter.usage ? skillUsageIn30Days(invocations ?? []) : null;
+  const usage = filter.usage ? skillUsageIn30Days(invocations ?? [], agents) : null;
 
   return skills.filter((skill) => {
     if (!matchesScope(skill, filter.scope)) return false;

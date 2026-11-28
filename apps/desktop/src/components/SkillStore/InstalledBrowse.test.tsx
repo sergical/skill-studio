@@ -1,13 +1,14 @@
 // @vitest-environment happy-dom
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { Toaster, toast } from "sonner";
 import { afterEach, expect, it } from "vitest";
 import { deployment, skill } from "../../dev/harness/skill-fixture";
 import { SkillStore } from "./SkillStore";
-import { HomeView } from "../Home/HomeView";
-import { buildHarnessSnapshot } from "../../dev/harness/skill-fixture";
+import { Button } from "@skill-studio/ui";
+import type { InstalledSkill } from "@skill-studio/lib";
+import { useSkillListAct } from "../SkillList/useSkillListAct";
 import { useAppStore } from "../../store/appStore";
 
 const owner = "owner:v1/global/sample";
@@ -37,22 +38,25 @@ afterEach(() => {
   cleanup();
   clearMocks();
   toast.dismiss();
-  // Each test renders a fresh Home; the store outlives it, so drop the last test's "Updated".
+  // Each test renders a fresh Skills list; the store outlives it, so drop the last test's "Updated".
   useAppStore.getState().clearRowActs();
 });
-function ipc(
-  afterHash: string,
-  popularSkills: unknown[] | Promise<unknown[]> = [],
-  readmeReady = Promise.resolve(),
-) {
+/** The catalog lists the installed `sample` from its own repository. */
+const LISTED_SAMPLE = {
+  id: "owner/repo/sample",
+  name: "sample",
+  top_source: "owner/repo",
+  installs: 4,
+};
+
+function ipc(afterHash: string, popularSkills: unknown[] = [LISTED_SAMPLE]) {
   const ids: unknown[] = [];
   const commands: string[] = [];
   mockIPC(
     (command, args) => {
       commands.push(command);
       if (command === "get_installed_skills") return [fixture];
-      if (command === "get_popular_skills")
-        return Promise.resolve(popularSkills).then((skills) => ({ skills, has_more: false }));
+      if (command === "get_popular_skills") return { skills: popularSkills, has_more: false };
       if (command === "get_skill_details") {
         ids.push(args);
         if (args && "skillId" in args && args.skillId === "other/repo/sample") {
@@ -60,14 +64,14 @@ function ipc(
         }
         if (!args || !("skillId" in args) || args.skillId !== "owner/repo/sample")
           throw new Error("Details need owner/repo/slug");
-        return readmeReady.then(() => ({
+        return {
           id: "owner/repo/sample",
           slug: "sample",
           source: "owner/repo",
           hash: "same",
           installs: 0,
           skill_md: "Installed sample content",
-        }));
+        };
       }
       if (command === "skill_local_edits") return [{ edited: false, checked: true }];
       if (command === "update_plugin") return { outcome: "up_to_date", message: null };
@@ -85,6 +89,17 @@ function ipc(
   );
   return { ids, commands };
 }
+/** A Skills row's Update button: the list itself draws no rows without a layout. */
+function SkillRowUpdate({ skill: target }: { skill: InstalledSkill }) {
+  const { handleAct, dialog } = useSkillListAct(() => {}, undefined);
+  return (
+    <>
+      <Button onClick={() => void handleAct("Update", target)}>Update</Button>
+      {dialog}
+    </>
+  );
+}
+
 async function openInstalled() {
   const user = userEvent.setup();
   render(
@@ -93,32 +108,10 @@ async function openInstalled() {
       <Toaster />
     </>,
   );
-  await user.click(await screen.findByRole("tab", { name: /Installed/ }));
   await user.click(await screen.findByText("sample"));
   return user;
 }
-it("Installed shows local skills while the catalog is slow and after it goes offline", async () => {
-  let failCatalog: (error: Error) => void = () => {};
-  mockIPC((command) => {
-    if (command === "get_installed_skills") return [fixture];
-    if (command === "get_popular_skills")
-      return new Promise((_, reject) => {
-        failCatalog = reject;
-      });
-    return null;
-  });
-  const user = userEvent.setup();
-  render(<SkillStore />);
-  await user.click(screen.getByRole("tab", { name: /Installed/ }));
-  expect(await screen.findByText("sample")).toBeTruthy();
-  await act(async () => failCatalog(new Error("Offline")));
-  await user.click(screen.getByRole("tab", { name: "Browse" }));
-  expect(await screen.findByText("Offline")).toBeTruthy();
-  await user.click(screen.getByRole("tab", { name: /Installed/ }));
-  expect(screen.getByText("sample")).toBeTruthy();
-});
-
-it("Installed reports a pending or failed scan and retries locally while Browse stays available", async () => {
+it("an open result reports a pending or failed scan of installed skills and retries it without reloading the catalog", async () => {
   let failInventory: (error: Error) => void = () => {};
   let retried = false;
   let catalogRequests = 0;
@@ -140,25 +133,19 @@ it("Installed reports a pending or failed scan and retries locally while Browse 
   });
   const user = userEvent.setup();
   render(<SkillStore />);
-  await user.click(screen.getByRole("tab", { name: "Installed" }));
-  expect(screen.getByRole("status").textContent).toContain("Loading installed skills");
-  await user.click(screen.getByRole("tab", { name: "Browse" }));
   await user.click(await screen.findByText("popular"));
   const drawer = within(screen.getByRole("dialog"));
   expect(drawer.getByRole("status").textContent).toContain("Loading installed skills");
   await act(async () => failInventory(new Error("Cannot read installed skills")));
-  expect(await drawer.findByRole("button", { name: "Try again" })).toBeTruthy();
-  await user.keyboard("{Escape}");
-  await user.click(screen.getByRole("tab", { name: "Installed" }));
-  expect(screen.queryByText("No skills installed yet")).toBeNull();
-  expect(await screen.findByText("Cannot read installed skills")).toBeTruthy();
+  expect(await drawer.findByText("Cannot read installed skills")).toBeTruthy();
   retried = true;
-  await user.click(screen.getByRole("button", { name: "Try again" }));
-  expect(await screen.findByText("sample")).toBeTruthy();
+  await user.click(drawer.getByRole("button", { name: "Try again" }));
+  await waitFor(() => expect(drawer.queryByText("Cannot read installed skills")).toBeNull());
+  expect(drawer.queryByRole("status")).toBeNull();
   expect(catalogRequests).toBe(1);
 });
 
-it("Browse distinguishes same-named repositories and Installed opens the local source", async () => {
+it("Browse distinguishes same-named repositories and opens each one's own source", async () => {
   const { ids } = ipc("new", [
     { id: "other/repo/sample", name: "sample", top_source: "other/repo", installs: 10 },
     { id: "owner/repo/sample", name: "sample", top_source: "owner/repo", installs: 4 },
@@ -172,35 +159,12 @@ it("Browse distinguishes same-named repositories and Installed opens the local s
   await user.click(other);
   expect(await screen.findByText("Other repository content")).toBeTruthy();
   await user.keyboard("{Escape}");
-  await user.click(screen.getByRole("tab", { name: /Installed/ }));
-  await user.click(await screen.findByText("sample"));
+  await user.click(local);
   expect(await screen.findByText("Installed sample content")).toBeTruthy();
   expect(ids).toEqual([{ skillId: "other/repo/sample" }, { skillId: "owner/repo/sample" }]);
   await user.keyboard("{Escape}");
   expect(screen.queryByRole("dialog")).toBeNull();
 });
-it("keeps the open installed skill when the catalog returns its canonical id", async () => {
-  let showCatalog!: (skills: unknown[]) => void;
-  const catalog = new Promise<unknown[]>((resolve) => {
-    showCatalog = resolve;
-  });
-  let finishReadme!: () => void;
-  const readme = new Promise<void>((resolve) => {
-    finishReadme = resolve;
-  });
-  const { ids } = ipc("new", catalog, readme);
-  await openInstalled();
-  expect(ids).toEqual([{ skillId: "owner/repo/sample" }]);
-  await act(async () =>
-    showCatalog([
-      { id: "Owner/Repo/sample", name: "sample", top_source: "Owner/Repo", installs: 10 },
-    ]),
-  );
-  await act(async () => finishReadme());
-  expect(ids).toEqual([{ skillId: "owner/repo/sample" }]);
-  expect(await screen.findByText("Installed sample content")).toBeTruthy();
-});
-
 it("an unchanged installed update says already up to date or reports a new installation", async () => {
   ipc("same");
   const user = await openInstalled();
@@ -216,17 +180,12 @@ it("a changed installed update says updated or reuses the installation result", 
   expect(screen.queryByText("Skill Installed")).toBeNull();
 });
 
-it("Home single-skill Update reports an unchanged owner as current or discards the returned hashes", async () => {
+it("a Skills row's Update reports an unchanged owner as current or discards the returned hashes", async () => {
   ipc("same");
   const user = userEvent.setup();
   render(
     <>
-      <HomeView
-        snapshot={{ ...buildHarnessSnapshot(), skills: [fixture], invocations: [] }}
-        isLoading={false}
-        active
-        onSelectSkill={() => {}}
-      />
+      <SkillRowUpdate skill={fixture} />
       <Toaster />
     </>,
   );
@@ -235,7 +194,7 @@ it("Home single-skill Update reports an unchanged owner as current or discards t
   expect(screen.queryByText("Updated sample")).toBeNull();
 });
 
-it("Home reports a managed owner and plugin already current together or loses one no-op count", async () => {
+it("a Skills row reports a managed owner and plugin already current together or loses one no-op count", async () => {
   const { commands } = ipc("same");
   const plugin = deployment({
     agent: "Claude Code",
@@ -267,12 +226,7 @@ it("Home reports a managed owner and plugin already current together or loses on
   const user = userEvent.setup();
   render(
     <>
-      <HomeView
-        snapshot={{ ...buildHarnessSnapshot(), skills: [mixed], invocations: [] }}
-        isLoading={false}
-        active
-        onSelectSkill={() => {}}
-      />
+      <SkillRowUpdate skill={mixed} />
       <Toaster />
     </>,
   );

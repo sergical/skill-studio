@@ -34,7 +34,7 @@ a local map. Three local maps had drifted to three names for one state.
 
 Broken means an agent does not load the skill. Which category a skill is in
 comes from [`skill-attention.ts`](../../packages/lib/src/skill-attention.ts),
-so Home's groups, the Skills groups and filter, and the command palette list
+so Home's counts, the Skills groups and filter, and the command palette list
 the same skills in the same order.
 
 Known gap: notes the core writes (`crates/skill-studio-core/src/skill_sessions.rs`,
@@ -83,8 +83,10 @@ in the line under it ("Budget 300 characters · 0.01% of context").
 Home, Skills, Plugins, Packs, Agents, Activity, then Parked. Agents has two
 tabs: What it sees (`kind: "listing"`) and What it used
 (`kind: "sessions"`); both keep the `harness` in the view, so a tab switch
-keeps the chosen agent. Home rows link to the page that answers in full: a day
-opens Activity, an agent opens its What it sees tab, an issue opens the skill.
+keeps the chosen agent. Home links to the page that answers in full: the week
+opens Activity, an agent opens its What it sees tab, a count opens Skills
+filtered to exactly those skills. Home's counts and its prompt come from the
+history of the agents the user keeps, so they agree with that filter.
 The command palette opens on Needs attention, in the Skills table's order; its
 Go to list shows the same places as the sidebar.
 

@@ -171,15 +171,7 @@ function App() {
     const isShown = skillView === null;
     let list: React.ReactNode;
     if (kind === "home") {
-      list = (
-        <HomeView
-          snapshot={snapshot}
-          usageRefreshing={usageRefreshing}
-          isLoading={isLoading}
-          onSelectSkill={onSelectSkill}
-          active={isShown}
-        />
-      );
+      list = <HomeView snapshot={snapshot} isLoading={isLoading} active={isShown} />;
     } else if (kind === "skills") {
       list = (
         <SkillsView

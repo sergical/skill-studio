@@ -203,6 +203,23 @@ describe("unusedSkills", () => {
       "shared",
     ]);
   });
+
+  it("counts only the kept agents' history, so a turned-off agent's records add no unused skill", () => {
+    const cursorOnly = fixtureSkill({
+      name: "cursor-only",
+      deployments: [fixtureDeployment({ agent: "Cursor", path: "/home/.cursor/skills/x" })],
+    });
+    const claude = fixtureSkill({ name: "claude" });
+    const history = [
+      fixtureStats({ skill: "other", last_30_days: 2, by_harness_30_days: { "claude-code": 2 } }),
+      fixtureStats({ skill: "claude", last_30_days: 1, by_harness_30_days: { cursor: 1 } }),
+    ];
+    expect(unusedSkills([cursorOnly, claude], history).map((s) => s.name)).toEqual(["cursor-only"]);
+    // With Cursor off, its use of "claude" no longer counts and its history reads nothing.
+    expect(unusedSkills([cursorOnly, claude], history, ["claude-code"]).map((s) => s.name)).toEqual(
+      ["claude"],
+    );
+  });
 });
 
 describe("attentionGroups", () => {

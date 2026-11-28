@@ -88,3 +88,20 @@ test("clicking the Universal row switches to a Copy for each agent's own folder"
   ).toHaveAttribute("aria-pressed", "true");
   await expect(sheet.getByRole("checkbox", { name: "Install for Codex" })).not.toBeChecked();
 });
+
+test("Add skill on a Grok Build-only machine offers Grok Build and never Claude Code", async ({
+  page,
+}) => {
+  await page.goto("/?persona=grok-only");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByRole("navigation").getByRole("button", { name: "Add skill" }).click();
+  const sheet = page.getByRole("dialog", { name: "Add skill" });
+  await sheet.getByRole("textbox", { name: "Source" }).fill(`${REPO}/${SKILL}`);
+  await expect(sheet.getByRole("checkbox", { name: "Install for Universal" })).toBeChecked();
+  await expect(sheet.getByRole("checkbox", { name: "Install for Claude Code" })).toHaveCount(0);
+
+  await sheet.getByText("Universal", { exact: true }).click();
+
+  await expect(sheet.getByRole("checkbox", { name: "Install for Grok Build" })).toBeVisible();
+  await expect(sheet.getByRole("checkbox", { name: "Install for Claude Code" })).toHaveCount(0);
+});

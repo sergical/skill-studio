@@ -194,11 +194,9 @@ export function SkillDetailHeader({ skill, resolvedTopSource, onClose }: SkillDe
           return null;
         })()}
         <div className="ml-auto flex items-center gap-2">
-          {Number.isFinite(skill.installs) && (
-            <span className="text-small tabular-nums text-text-tertiary">
-              {skill.installs.toLocaleString()} installs
-            </span>
-          )}
+          <span className="text-small tabular-nums text-text-tertiary">
+            {skill.installs.toLocaleString()} installs
+          </span>
           {skill.installed_info && (
             <div className="flex items-center gap-1 rounded-sm bg-bg-tertiary px-2 py-1 text-small text-text-tertiary">
               <Clock size={14} />

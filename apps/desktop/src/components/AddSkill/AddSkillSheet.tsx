@@ -49,7 +49,7 @@ import {
   applyAddSkillOperationEvent,
   listenForAddSkillOperation,
 } from "../../hooks/useAddSkillOperation";
-import { useKeptHarnesses } from "../../hooks/useKeptHarnesses";
+import { useClientIds } from "../../hooks/useClientRows";
 import { singleSelectToggleValue } from "../../lib/single-select-toggle-group";
 import {
   addSkillFinishAction,
@@ -1053,7 +1053,7 @@ function deriveMethodAndVisibility(
   methodChoice: AddMethod,
   pickedHarnesses: AgentId[] | null,
   universalChoice: boolean,
-  keptHarnesses: string[],
+  shownHarnesses: string[] | undefined,
   defaults: AddMethodDefaults | null,
 ) {
   const parsed = parseSkillSource(source);
@@ -1072,11 +1072,12 @@ function deriveMethodAndVisibility(
       ? "Git URLs need dotagents (not installed)"
       : METHOD_TOOLTIPS[method];
 
-  const detected = defaults?.installed_harnesses ?? [];
   const universalLockedReason = universalLockReason(methods);
   const universal = universalChoice || universalLockedReason !== null;
   const claudeReadsShared = defaults?.claude_reads_shared_folder ?? false;
-  const offeredHarnesses = offeredInstallHarnesses(detected, keptHarnesses);
+  const offeredHarnesses = offeredInstallHarnesses(
+    shownHarnesses ?? defaults?.installed_harnesses ?? [],
+  );
   // dotagents keeps its own default: the user's pick does not reach it.
   const dotagentsOnShared = method === "dotagents" && universal;
   const chosenHarnesses = chosenInstallHarnesses(
@@ -1177,7 +1178,7 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
   // the Method and Harnesses defaults below reflect this machine instead of a
   // generic guess.
   const [defaults, setDefaults] = useState<AddMethodDefaults | null>(null);
-  const keptHarnesses = useKeptHarnesses();
+  const shownHarnesses = useClientIds();
 
   // Only `isOpen`/`prefill` should re-run the reset below - a project added
   // while the sheet is already open shouldn't reset the form out from under
@@ -1237,7 +1238,7 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
     methodChoice,
     pickedHarnesses,
     universalChoice,
-    keptHarnesses,
+    shownHarnesses,
     defaults,
   );
 

@@ -15,7 +15,6 @@ import {
   isBlockingSpecViolation,
   isUnquotedColonYaml,
   locationSummary,
-  parentDirectory,
 } from "@skill-studio/lib";
 import type {
   AgentId,
@@ -244,16 +243,8 @@ export interface HarnessReach {
   entries: LocationEntry[];
 }
 
-/** The Universal folder (`~/.agents/skills`) itself: whether the skill has a
- * copy there. */
-export interface Universal {
-  present: boolean;
-  path: string | null;
-}
-
 interface WhereFacts {
   locations: DiskLocation[];
-  universal: Universal;
   harnesses: HarnessReach[];
 }
 
@@ -326,7 +317,7 @@ function locationEntry(d: Deployment, harness: AgentId | "shared"): LocationEntr
 const HOW_SEVERITY = { broken: 3, linked: 2, own: 1, universal: 0 } satisfies Record<How, number>;
 
 /** Splits a skill's deployments into the disk locations they sit in and the
- * harnesses that reach them, plus the Universal folder's own facts.
+ * harnesses that reach them.
  * `harnessList` defaults to `DEFAULT_HARNESS_LIST`'s six. */
 export function whereFacts(
   skill: InstalledSkill,
@@ -351,17 +342,10 @@ export function whereFacts(
     }
   }
 
-  let universalPresent = false;
-  let universalPath: string | null = null;
-
   for (const d of skill.deployments) {
     const harness = resolveHarness(d.agent, harnessList);
     if (!harness) continue;
     const entry = locationEntry(d, harness);
-    if (harness === "shared") {
-      universalPresent = true;
-      universalPath = parentDirectory(d.path);
-    }
     const key = d.scope === "project" && d.project_path ? `project:${d.project_path}` : "global";
     locationsByKey.get(key)?.entries.push(entry);
   }
@@ -399,14 +383,7 @@ export function whereFacts(
     };
   });
 
-  return {
-    locations,
-    universal: {
-      present: universalPresent,
-      path: universalPath,
-    },
-    harnesses,
-  };
+  return { locations, harnesses };
 }
 
 /** The list's state groups: what needs the user, most serious first, then healthy, then parked. */

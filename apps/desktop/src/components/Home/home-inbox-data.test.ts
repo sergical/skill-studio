@@ -5,119 +5,14 @@
 // ============================================================================
 
 import { describe, expect, it } from "vitest";
-import { ownSkillsView } from "@skill-studio/lib";
 import type {
   Deployment,
   ForkRecord,
-  HealthIssue,
-  InstalledSkill,
   UpdateAllItem,
   UpdateAllOutcome,
   UpdateOutcome,
 } from "@skill-studio/lib";
-import { buildHarnessSnapshot } from "../../dev/harness/skill-fixture";
-import {
-  computeHomeGroups,
-  homeRowState,
-  issueDeploymentPath,
-  updateAllFailureMessage,
-  updateAllOutdatedSkills,
-} from "./home-inbox-data";
-
-function fixtureDeployment(overrides: Partial<Deployment> = {}): Deployment {
-  return {
-    id: "dep:v1/global/universal/find-bugs",
-    destination: "universal",
-    owner_kind: "manual",
-    mutability: "read-only",
-    backing: { kind: "canonical" },
-    agent: "shared",
-    scope: "global",
-    path: "/home/.agents/skills/find-bugs",
-    is_symlink: false,
-    symlink_is_broken: false,
-    content_hash: "abc",
-    disabled: false,
-    codex_implicit_invocation: null,
-    disabled_by: null,
-    invocation: "both",
-    spec_violations: [],
-    shared_via_whole_dir_link: false,
-    ...overrides,
-  };
-}
-
-function fixtureSkill(overrides: Partial<InstalledSkill> = {}): InstalledSkill {
-  return {
-    name: "find-bugs",
-    source: "getsentry/find-bugs",
-    source_type: "github",
-    installed_at: "2026-01-01T00:00:00Z",
-    has_update: false,
-    source_kind: "dotagents",
-    deployments: [fixtureDeployment()],
-    has_spec: true,
-    spec_violations: [],
-    skill_md_tokens: 0,
-    description_tokens: 0,
-    folder_bytes: 0,
-    file_count: 0,
-    content_hash: "",
-    content_hashes: [],
-    frontmatter_fields: {},
-    folder_truncated: false,
-    parked: false,
-    invocation: "both",
-    update_owners: [],
-    update_owner_ids: [],
-    description: null,
-    fork: null,
-    parked_at: null,
-    skill_path: null,
-    source_url: null,
-    update_commit: null,
-    update_commit_at: null,
-    updated_at: null,
-    ...overrides,
-  };
-}
-
-describe("homeRowState", () => {
-  it("a_warnings_group_row_for_a_skill_with_an_update_shows_the_warning_glyph_or_names_the_update_that_outranked_it", () => {
-    const skill = fixtureSkill({ update_owner_ids: ["x"] });
-    const issue: HealthIssue = {
-      kind: "linked-root",
-      skill,
-      detail: "Claude Code reads the Universal folder through a root link",
-      harness: "claude-code",
-      harnessLabel: "Claude Code",
-      root: "/home/.agents/skills",
-    };
-    const state = homeRowState("warn", skill, issue);
-    expect(state?.kind).toBe("issue");
-    expect(state?.level).toBe("warning");
-  });
-
-  it("an_updates_group_row_for_a_skill_with_an_update_and_a_blocking_violation_shows_the_update_glyph_or_names_the_violation_that_would_outrank_it", () => {
-    // `rowState`'s ladder puts a blocking spec violation ahead of "update available"; the
-    // Updates group still shows "update" for this skill, since `updateRowState` only reads
-    // `update_owner_ids` - unlike `rowState`, it never runs the violation rung.
-    const skill = fixtureSkill({
-      update_owner_ids: ["x"],
-      spec_violations: ["invalid YAML frontmatter at line 3, column 1: mapping values not allowed"],
-    });
-    const state = homeRowState("upd", skill, null);
-    expect(state?.kind).toBe("update");
-  });
-
-  it("an_unused_group_row_for_a_skill_with_a_spec_violation_shows_the_ladder_glyph_or_names_the_missing_state", () => {
-    const skill = fixtureSkill({
-      spec_violations: ["invalid YAML frontmatter at line 3, column 1: mapping values not allowed"],
-    });
-    const state = homeRowState("unused", skill, null);
-    expect(state?.kind).toBe("violation");
-  });
-});
+import { updateAllFailureMessage, updateAllOutdatedSkills } from "./home-inbox-data";
 
 const noDeployments: Deployment[] = [];
 
@@ -187,74 +82,6 @@ function failAll(items: UpdateAllItem["skill"][]): UpdateAllOutcome {
     not_run: [],
   };
 }
-
-describe("computeHomeGroups", () => {
-  it("parked_skills_leave_who_can_invoke_prompt_cost_and_the_unused_group_or_home_counts_skills_no_agent_reads", () => {
-    // The scan keeps a parked skill in the snapshot, with `parked` set and every copy in the parked scope.
-    const parkedSkill = (name: string, overrides: Partial<InstalledSkill>) =>
-      fixtureSkill({
-        name,
-        parked: true,
-        parked_at: "2026-11-01T00:00:00Z",
-        deployments: [
-          fixtureDeployment({
-            agent: "parked",
-            scope: "parked",
-            path: `/home/.agents/skills-parked/universal/${name}`,
-          }),
-        ],
-        ...overrides,
-      });
-    const base = buildHarnessSnapshot();
-    const usedIn30Days = (skill: string) => ({ ...base.invocations[0], skill, last_30_days: 3 });
-    const groups = computeHomeGroups({
-      ...base,
-      skills: [
-        fixtureSkill({ name: "live-used", invocation: "both", description_tokens: 10 }),
-        fixtureSkill({ name: "live-idle", invocation: "model-only", description_tokens: 20 }),
-        fixtureSkill({ name: "live-manual", invocation: "user-only", description_tokens: 40 }),
-        parkedSkill("parked-used", { invocation: "both", description_tokens: 100 }),
-        parkedSkill("parked-idle", { invocation: "model-only", description_tokens: 200 }),
-        parkedSkill("parked-manual", { invocation: "user-only", description_tokens: 400 }),
-      ],
-      invocations: [usedIn30Days("live-used"), usedIn30Days("parked-used")],
-    });
-
-    expect(groups.inv).toEqual({ both: 1, modelOnly: 1, userOnly: 1 });
-    expect(groups.cost).toEqual({
-      totalTokens: 30,
-      usedTokens: 10,
-      usedCount: 1,
-      idleTokens: 20,
-      idleCount: 1,
-    });
-    expect(groups.unused.map((skill) => skill.name)).toEqual(["live-idle", "live-manual"]);
-  });
-
-  it("an_unquoted_colon_in_a_description_puts_the_skill_under_warnings_not_broken_since_most_agents_still_load_it", () => {
-    // The message Rust gives for `.agents/skills/verify-skill-studio/SKILL.md`, whose description
-    // says `"not checked: real npx skills runs"` without quoting the value. Claude Code lists it.
-    const colon =
-      "invalid YAML frontmatter at line 3, column 296: mapping values are not allowed in this context (unquoted colon in a value)";
-    const noDescription = "missing required frontmatter field: description";
-    const withViolation = (name: string, violation: string) =>
-      fixtureSkill({
-        name,
-        spec_violations: [violation],
-        deployments: [fixtureDeployment({ spec_violations: [violation] })],
-      });
-    const groups = computeHomeGroups({
-      ...buildHarnessSnapshot(),
-      skills: [
-        withViolation("verify-skill-studio", colon),
-        withViolation("no-description", noDescription),
-      ],
-    });
-
-    expect(groups.broken.map((issue) => issue.skill.name)).toEqual(["no-description"]);
-    expect(groups.warnings.map((issue) => issue.skill.name)).toEqual(["verify-skill-studio"]);
-  });
-});
 
 describe("updateAllOutdatedSkills", () => {
   it("update_all_sends_one_request_for_every_outdated_owner_or_names_the_extra_call", async () => {
@@ -586,61 +413,6 @@ describe("updateAllFailureMessage", () => {
         skillsSucceeded: 1,
       }),
     ).toBe("1 failed: read-only");
-  });
-});
-
-describe("issueDeploymentPath", () => {
-  const ERROR = 'name "Find Bugs" is not a valid skill name';
-
-  it("a_spec_violation_issue_opens_the_warned_copy_instead_of_the_clean_first_copy_or_the_warning_stays_hidden", () => {
-    const skill = fixtureSkill({
-      deployments: [
-        fixtureDeployment({ path: "/a/clean" }),
-        fixtureDeployment({ path: "/b/warned", spec_violations: [ERROR] }),
-      ],
-    });
-    const issue: HealthIssue = { kind: "spec-violation", skill, detail: ERROR };
-    expect(issueDeploymentPath(issue)).toBe("/b/warned");
-  });
-
-  it("a_spec_warning_issue_opens_the_copy_with_the_warning_not_an_earlier_copy_with_an_error_or_the_page_shows_a_different_problem_than_the_row", () => {
-    const mismatch = 'name "other" does not match its directory name "find-bugs"';
-    const skill = fixtureSkill({
-      deployments: [
-        fixtureDeployment({
-          path: "/a/errored",
-          spec_violations: ["missing required frontmatter field: description"],
-        }),
-        fixtureDeployment({ path: "/b/mismatch", spec_violations: [mismatch] }),
-      ],
-    });
-    const issue: HealthIssue = { kind: "spec-warning", skill, detail: mismatch };
-    expect(issueDeploymentPath(issue)).toBe("/b/mismatch");
-  });
-
-  it("a_non_spec_issue_names_no_copy_so_the_page_opens_its_default", () => {
-    const skill = fixtureSkill({
-      deployments: [fixtureDeployment({ path: "/b/warned", spec_violations: [ERROR] })],
-    });
-    const issue: HealthIssue = { kind: "broken-symlink", skill, detail: "broken" };
-    expect(issueDeploymentPath(issue)).toBeUndefined();
-  });
-
-  it("a_skill_also_shipped_by_a_plugin_opens_the_warned_own_copy_not_the_plugin_copy_in_the_own_view", () => {
-    const skill = fixtureSkill({
-      deployments: [
-        fixtureDeployment({ path: "/own/warned", spec_violations: [ERROR] }),
-        fixtureDeployment({
-          path: "/plugin/errored",
-          spec_violations: [ERROR],
-          plugin: { name: "p", version: null, harness: "Claude Code", marketplace: "m", id: "p@m" },
-        }),
-      ],
-      spec_violations: [ERROR],
-    });
-    const [own] = ownSkillsView([skill]);
-    const issue: HealthIssue = { kind: "spec-violation", skill: own, detail: ERROR };
-    expect(issueDeploymentPath(issue)).toBe("/own/warned");
   });
 });
 

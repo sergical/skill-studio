@@ -277,6 +277,28 @@ describe("applySkillListFilter", () => {
       applySkillListFilter(skills, unused, undefined, claudeHistory).map((s) => s.name),
     ).toEqual(["claude"]);
   });
+
+  it("lists as unused only what the kept agents' history says, as Home counts it", () => {
+    const unused = { scope: "all", usage: "unused-30d", query: "" } as const;
+    const skills = [
+      fixtureSkill({ name: "claude" }),
+      fixtureSkill({
+        name: "cursor-only",
+        deployments: [fixtureDeployment({ agent: "Cursor", path: "/home/.cursor/skills/x" })],
+      }),
+    ];
+    const history = [
+      fixtureStats({ skill: "other", last_30_days: 1, by_harness_30_days: { "claude-code": 1 } }),
+      fixtureStats({ skill: "elsewhere", last_30_days: 1, by_harness_30_days: { cursor: 1 } }),
+    ];
+    expect(applySkillListFilter(skills, unused, undefined, history).map((s) => s.name)).toEqual([
+      "claude",
+      "cursor-only",
+    ]);
+    expect(
+      applySkillListFilter(skills, unused, undefined, history, ["claude-code"]).map((s) => s.name),
+    ).toEqual(["claude"]);
+  });
 });
 
 describe("applySkillListFilter query properties", () => {

@@ -17,12 +17,12 @@ screenshots are.
 From `apps/desktop`, with a port no other worktree uses:
 
 ```bash
-E2E_PORT=1452 SCREEN_STATES=/tmp/screen-states SCREEN_STATES_QUERY="v=1" \
-  pnpm exec playwright test e2e/screen-states.e2e.ts --project=webkit --reporter=line
+E2E_PORT=1452 SCREEN_STATES=/tmp/screen-states \
+  pnpm exec playwright test e2e/screen-states.e2e.ts --project=webkit --reporter=line \
+  --output=/tmp/screen-states/test-results
 ```
 
-- `SCREEN_STATES_QUERY` is the URL query that picks the screen. `v=N` picks a
-  prototype variant on Home; leave it empty for the shipped Home.
+- With no other setting it renders Home.
 - `SCREEN_STATES_NAV` reaches another screen: comma-separated names of links,
   buttons or tabs clicked in order after Home loads, matched from the start of
   the name, so `Skills` matches the sidebar's "Skills 34". Examples:
@@ -66,7 +66,6 @@ Open each PNG. Do not sample. For every shot, check:
 - Left edges line up between sections; spacing matches between rows.
 - At `min`, nothing needs horizontal scroll, and the first screen still shows
   the main answer. At `wide`, nothing stretches into a line too long to read.
-- The variant picker never covers content you need to read.
 
 **Meaning**
 
