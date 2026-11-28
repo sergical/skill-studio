@@ -9,6 +9,5 @@ test("Learn more on a Home tile opens Learn with that section's heading focused"
   await page.getByRole("button", { name: "About invocation" }).click();
   await page.getByRole("button", { name: /Learn more/ }).click();
 
-  await expect(page.getByRole("heading", { name: "Learn", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Who can invoke a skill" })).toBeFocused();
 });

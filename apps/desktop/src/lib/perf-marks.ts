@@ -55,9 +55,11 @@ export function recordIpcCall(command: string, ipcMs: number, resolved = true): 
   performance.mark(resolveMark);
   requestAnimationFrame(() => {
     const measure = performance.measure(measureName, resolveMark);
-    entry.paintMs = measure.duration;
-    // A new array, so a subscriber that compares by identity sees the paint time arrive.
-    entries = [...entries];
+    // A new array with a new entry, so a subscriber that compares by identity sees the paint time
+    // arrive and an array handed out earlier never changes.
+    entries = entries.map((recorded) =>
+      recorded.id === entry.id ? { ...recorded, paintMs: measure.duration } : recorded,
+    );
     performance.clearMarks(resolveMark);
     performance.clearMeasures(measureName);
     notify();
