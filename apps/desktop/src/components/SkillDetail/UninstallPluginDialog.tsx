@@ -15,7 +15,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@skill-studio/ui";
-import { uninstallPlugin } from "../../lib/skill-api";
 import { useAppStore } from "../../store/appStore";
 import type { Deployment } from "@skill-studio/lib";
 
@@ -29,6 +28,7 @@ export function UninstallPluginDialog({
 }) {
   const [isRemoving, setIsRemoving] = useState(false);
   const addToast = useAppStore((state) => state.addToast);
+  const uninstallPlugin = useAppStore((state) => state.uninstallPlugin);
   const pluginName = deployment.plugin?.name ?? "plugin";
 
   const handleUninstall = () => {

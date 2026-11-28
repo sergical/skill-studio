@@ -18,7 +18,6 @@ import {
 import { homeRelativePath } from "@skill-studio/lib";
 import type { LeftBehindPair } from "@skill-studio/lib";
 import { useGitWarning } from "../../hooks/useGitWarning";
-import { discardSkillCopy } from "../../lib/skill-api";
 import { useAppStore } from "../../store/appStore";
 import { leftBehindFix } from "./skill-location-helpers";
 
@@ -37,6 +36,7 @@ export function LeftBehindDialog({
 }) {
   const [isWorking, setIsWorking] = useState(false);
   const addToast = useAppStore((state) => state.addToast);
+  const discardSkillCopy = useAppStore((state) => state.discardSkillCopy);
   const keepLive = choice === "keep-live";
   const {
     discard: doomed,

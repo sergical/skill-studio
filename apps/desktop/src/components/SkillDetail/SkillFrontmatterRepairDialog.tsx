@@ -20,7 +20,6 @@ import type {
   FrontmatterRepairPreview,
   LifecycleTarget,
 } from "@skill-studio/lib";
-import { applySkillFrontmatterRepair, previewSkillFrontmatterRepair } from "../../lib/skill-api";
 import { diffTheme } from "../../lib/theme";
 import { useAppStore } from "../../store/appStore";
 import {
@@ -50,6 +49,8 @@ export function SkillFrontmatterRepairDialog({
   const [applying, setApplying] = useState<FrontmatterRepairApplyMode | null>(null);
   const [choiceError, setChoiceError] = useState<string | null>(null);
   const addToast = useAppStore((state) => state.addToast);
+  const applySkillFrontmatterRepair = useAppStore((state) => state.applySkillFrontmatterRepair);
+  const previewSkillFrontmatterRepair = useAppStore((state) => state.previewSkillFrontmatterRepair);
   // One controller per open dialog: its request generation must outlive re-renders.
   // oxlint-disable-next-line react/hook-use-state -- created once per mount and never replaced
   const [choices] = useState(() =>

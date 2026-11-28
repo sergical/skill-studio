@@ -14,7 +14,6 @@ import {
 } from "@skill-studio/ui";
 import { homeRelativePath } from "@skill-studio/lib";
 import type { Deployment } from "@skill-studio/lib";
-import { makeSkillIndependentCopy } from "../../lib/skill-api";
 import { useAppStore } from "../../store/appStore";
 
 interface MakeIndependentCopyDialogProps {
@@ -33,6 +32,7 @@ export function MakeIndependentCopyDialog({
 }: MakeIndependentCopyDialogProps) {
   const [isCopying, setIsCopying] = useState(false);
   const addToast = useAppStore((state) => state.addToast);
+  const makeSkillIndependentCopy = useAppStore((state) => state.makeSkillIndependentCopy);
 
   const handleCopy = () => {
     setIsCopying(true);

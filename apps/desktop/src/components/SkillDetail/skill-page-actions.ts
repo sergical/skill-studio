@@ -9,18 +9,6 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { ask } from "@tauri-apps/plugin-dialog";
-import {
-  forkSkill,
-  openSkillPath,
-  parkCheck,
-  parkSkills,
-  pullForkUpstream,
-  removeSkill,
-  rescanSkillsNow,
-  unforkSkill,
-  unparkSkills,
-  updatePlugin,
-} from "../../lib/skill-api";
 import { invokeErrorMessage } from "../../lib/skill-command-error";
 import {
   isLiveCopy,
@@ -46,6 +34,7 @@ import type {
   Toast,
 } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
+import type { SkillCommands } from "../../store/skillCommands";
 import { useGuardedSkillUpdate } from "../../hooks/useGuardedSkillUpdate";
 import { gitWarningText } from "./skill-location-helpers";
 import type { UpdateFinish } from "../../hooks/useGuardedSkillUpdate";
@@ -120,8 +109,8 @@ function removeSuccessToast(skillName: string): Omit<Toast, "id"> {
 type GitCheck = (target: LifecycleTarget) => Promise<Pick<ParkCheck, "git_tracked">>;
 
 interface ParkForEveryAgentApi {
-  parkSkills: typeof parkSkills;
-  unparkSkills: typeof unparkSkills;
+  parkSkills: SkillCommands["parkSkills"];
+  unparkSkills: SkillCommands["unparkSkills"];
   parkCheck: GitCheck;
   ask: (
     message: string,
@@ -140,10 +129,13 @@ async function rescanAfterWrite(): Promise<RescanResult | null> {
   const timeout = new Promise<null>((resolve) => {
     timer = setTimeout(() => resolve(null), RESCAN_TIMEOUT_MS);
   });
-  const rescan = rescanSkillsNow().then(
-    (snapshot): RescanResult | null => snapshot,
-    () => null,
-  );
+  const rescan = useAppStore
+    .getState()
+    .rescanSkillsNow()
+    .then(
+      (snapshot): RescanResult | null => snapshot,
+      () => null,
+    );
   try {
     return await Promise.race([rescan, timeout]);
   } finally {
@@ -151,13 +143,10 @@ async function rescanAfterWrite(): Promise<RescanResult | null> {
   }
 }
 
-const PARK_FOR_EVERY_AGENT_API: ParkForEveryAgentApi = {
-  parkSkills,
-  unparkSkills,
-  parkCheck,
-  ask,
-  rescan: rescanAfterWrite,
-};
+function parkForEveryAgentApi(): ParkForEveryAgentApi {
+  const { parkSkills, unparkSkills, parkCheck } = useAppStore.getState();
+  return { parkSkills, unparkSkills, parkCheck, ask, rescan: rescanAfterWrite };
+}
 
 /** The confirm text for parking project folders, with the git warning for each tracked one. */
 async function projectParkMessage(folders: Deployment[], check: GitCheck): Promise<string> {
@@ -261,7 +250,7 @@ async function leftoverCheck(
  */
 export async function parkForEveryAgent(
   skill: InstalledSkill,
-  api: ParkForEveryAgentApi = PARK_FOR_EVERY_AGENT_API,
+  api: ParkForEveryAgentApi = parkForEveryAgentApi(),
 ): Promise<Omit<Toast, "id"> | null> {
   const plan = parkEveryAgentPlan(skill);
   if (!skill.parked && plan.projectFolders.length > 0) {
@@ -368,6 +357,12 @@ export function useSkillPageActions(
   onRemoveComplete: () => void,
 ): SkillPageActions {
   const addToast = useAppStore((state) => state.addToast);
+  const forkSkill = useAppStore((state) => state.forkSkill);
+  const openSkillPath = useAppStore((state) => state.openSkillPath);
+  const pullForkUpstream = useAppStore((state) => state.pullForkUpstream);
+  const removeSkill = useAppStore((state) => state.removeSkill);
+  const unforkSkill = useAppStore((state) => state.unforkSkill);
+  const updatePlugin = useAppStore((state) => state.updatePlugin);
   const [copied, setCopied] = useState(false);
   const [isParking, setIsParking] = useState(false);
   const [isForking, setIsForking] = useState(false);
