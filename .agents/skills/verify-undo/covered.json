@@ -87,14 +87,29 @@
     {
       "file": "crates/skill-studio-core/src/journal.rs",
       "function": "reconcile_scope_journal",
-      "mirrors": ["RecoveryPutsSwappedFolderBack", "RecoveryClosesPlan", "RecoveryEnds"],
+      "mirrors": [
+        "RecoveryStartsPuttingFolderBack",
+        "RecoveryPutsSwappedFolderBack",
+        "RecoveryClosesPlan",
+        "RecoveryEnds"
+      ],
       "sha256": "3a278c4c522f045c2d5013106cfa752c03ec4457344f85edde5feb1d67ac0670"
     },
     {
       "file": "crates/skill-studio-core/src/journal.rs",
       "function": "reconcile",
-      "mirrors": ["RecoveryPutsSwappedFolderBack", "RecoveryClosesPlan"],
+      "mirrors": [
+        "RecoveryStartsPuttingFolderBack",
+        "RecoveryPutsSwappedFolderBack",
+        "RecoveryClosesPlan"
+      ],
       "sha256": "d3b922e07694e1d98d72db0603ff842f302112d87ccc2ee1076f2dcf8cb98ec7"
+    },
+    {
+      "file": "crates/skill-studio-core/src/journal.rs",
+      "function": "reverse_steps",
+      "mirrors": ["RecoveryStartsPuttingFolderBack", "RecoveryPutsSwappedFolderBack"],
+      "sha256": "627cdfa07a0d0455252703de448e0493489fde41332526a40a81822f0fca7744"
     },
     {
       "file": "crates/skill-studio-host/src/history.rs",
@@ -206,7 +221,12 @@
     {
       "file": "apps/desktop/src-tauri/src/lib.rs",
       "function": "reconcile_core_journal_at_startup",
-      "mirrors": ["DesktopAppStarts", "RecoveryPutsSwappedFolderBack", "RecoveryClosesPlan"],
+      "mirrors": [
+        "DesktopAppStarts",
+        "RecoveryStartsPuttingFolderBack",
+        "RecoveryPutsSwappedFolderBack",
+        "RecoveryClosesPlan"
+      ],
       "sha256": "5038187aa6ce88c27a5d5322ca76ded9b8e2ffed142e4510023efbe16df1fdac"
     }
   ]

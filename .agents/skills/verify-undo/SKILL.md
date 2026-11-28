@@ -20,7 +20,7 @@ finished.
 as undone and offers no Undo, the CLI answers `this event was already
 reverted` (also with `--force`), and the files were never put back.
 
-Two more rules ride along. An undo is recorded as finished only after its
+Two more rules ride along. An undo is recorded as finished only after its own
 write of the files ran to the end, and nothing moves the files afterwards
 (`UndoneMeansFilesBack`). A finished undo keeps its claim, so a change cannot
 be undone twice (`FinishedUndoKeepsClaim`).
@@ -87,26 +87,26 @@ than a chart can show.
 Run the check. A `CHANGED` line names each covered function your change
 touched. The covered functions, and the model actions that mirror each:
 
-| File                                                  | Function                                                                | Model actions                                                        |
-| ----------------------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `crates/skill-studio-core/src/ops.rs`                 | `restore_event_body`                                                    | every `Core…` action: checks, record, claim, write, finish           |
-| `crates/skill-studio-core/src/ops.rs`                 | `apply_backup_content`, `restore_write_dir`                             | `CoreOpensSwapPlan`, `CoreWritesAtOnce`, `CoreClosesPlan`            |
-| `crates/skill-studio-core/src/fsops.rs`               | `swap`                                                                  | `CoreOpensSwapPlan`, `CoreWritesAtOnce`, `CoreWriteFails`            |
-| `crates/skill-studio-core/src/ops_remove.rs`          | `remove_tree_best_effort`                                               | `CoreStartsWrite`, `CoreEndsWrite`                                   |
-| `crates/skill-studio-core/src/events.rs`              | `recover_interrupted`, `release_restore_claim`                          | `RecoveryReleasesClaim`, `RecoveryMarksRowInterrupted`               |
-| `crates/skill-studio-core/src/events.rs`              | `settle`                                                                | every action that sets a row's status                                |
-| `crates/skill-studio-core/src/ports.rs`               | `begin_for`                                                             | recovery runs first, in this order: rows, then the journal           |
-| `crates/skill-studio-core/src/ports.rs`               | `take`, `acquire_exclusive`                                             | one writer at a time (the home lease)                                |
-| `crates/skill-studio-core/src/journal.rs`             | `reconcile_scope_journal`, `reconcile`                                  | `RecoveryPutsSwappedFolderBack`, `RecoveryClosesPlan`                |
-| `crates/skill-studio-host/src/history.rs`             | `record`, `claim_revert`, `release_revert`                              | `CoreRecordsRestoreRow`, `CoreClaims`, the two release actions       |
-| `crates/skill-studio-host/src/history.rs`             | `held_restore_claims`, `pending`, `finish`                              | which claims recovery releases, which rows it marks                  |
-| `apps/desktop/src-tauri/src/skills/event_store.rs`    | `restore_with_skill_md_transaction_observer`                            | `DesktopChecksClaim`, `DesktopClaims`, `DesktopReleasesAfterFailure` |
-| `apps/desktop/src-tauri/src/skills/event_store.rs`    | `apply_restore`, `record_with_bound_paths`                              | drift check, `DesktopRecordsRestoreRow`, the two finish actions      |
-| `apps/desktop/src-tauri/src/skills/event_store.rs`    | `apply_inverse_op`                                                      | `DesktopWritesAtOnce`, `DesktopWriteFails`                           |
-| `apps/desktop/src-tauri/src/skills/undo_files.rs`     | `restore_from`, `symlink`                                               | `DesktopRemovesLiveFiles`, `DesktopPutsOldFilesIn`                   |
-| `apps/desktop/src-tauri/src/skills/event_store.rs`    | `reconcile_at_startup`                                                  | `DesktopAppStarts`, then `RecoveryMarksRowInterrupted`               |
-| `apps/desktop/src-tauri/src/skills/event_commands.rs` | `restore_desktop_event`, `restore_event_with_state`                     | which code undoes a change, and that it holds the lease              |
-| `apps/desktop/src-tauri/src/lib.rs`                   | `reconcile_event_store_at_startup`, `reconcile_core_journal_at_startup` | `DesktopAppStarts` and the recovery steps it runs                    |
+| File                                                  | Function                                                                | Model actions                                                                   |
+| ----------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `crates/skill-studio-core/src/ops.rs`                 | `restore_event_body`                                                    | every `Core…` action: checks, record, claim, write, finish                      |
+| `crates/skill-studio-core/src/ops.rs`                 | `apply_backup_content`, `restore_write_dir`                             | `CoreOpensSwapPlan`, `CoreWritesAtOnce`, `CoreClosesPlan`                       |
+| `crates/skill-studio-core/src/fsops.rs`               | `swap`                                                                  | `CoreOpensSwapPlan`, `CoreWritesAtOnce`, `CoreWriteFails`                       |
+| `crates/skill-studio-core/src/ops_remove.rs`          | `remove_tree_best_effort`                                               | `CoreStartsWrite`, `CoreEndsWrite`                                              |
+| `crates/skill-studio-core/src/events.rs`              | `recover_interrupted`, `release_restore_claim`                          | `RecoveryReleasesClaim`, `RecoveryMarksRowInterrupted`                          |
+| `crates/skill-studio-core/src/events.rs`              | `settle`                                                                | every action that sets a row's status                                           |
+| `crates/skill-studio-core/src/ports.rs`               | `begin_for`                                                             | recovery runs first, in this order: rows, then the journal                      |
+| `crates/skill-studio-core/src/ports.rs`               | `take`, `acquire_exclusive`                                             | one writer at a time (the home lease)                                           |
+| `crates/skill-studio-core/src/journal.rs`             | `reconcile_scope_journal`, `reconcile`, `reverse_steps`                 | the three `Recovery…` actions that put a swapped folder back and close the plan |
+| `crates/skill-studio-host/src/history.rs`             | `record`, `claim_revert`, `release_revert`                              | `CoreRecordsRestoreRow`, `CoreClaims`, the two release actions                  |
+| `crates/skill-studio-host/src/history.rs`             | `held_restore_claims`, `pending`, `finish`                              | which claims recovery releases, which rows it marks                             |
+| `apps/desktop/src-tauri/src/skills/event_store.rs`    | `restore_with_skill_md_transaction_observer`                            | `DesktopChecksClaim`, `DesktopClaims`, `DesktopReleasesAfterFailure`            |
+| `apps/desktop/src-tauri/src/skills/event_store.rs`    | `apply_restore`, `record_with_bound_paths`                              | drift check, `DesktopRecordsRestoreRow`, the two finish actions                 |
+| `apps/desktop/src-tauri/src/skills/event_store.rs`    | `apply_inverse_op`                                                      | `DesktopWritesAtOnce`, `DesktopWriteFails`                                      |
+| `apps/desktop/src-tauri/src/skills/undo_files.rs`     | `restore_from`, `symlink`                                               | `DesktopRemovesLiveFiles`, `DesktopPutsOldFilesIn`                              |
+| `apps/desktop/src-tauri/src/skills/event_store.rs`    | `reconcile_at_startup`                                                  | `DesktopAppStarts`, then `RecoveryMarksRowInterrupted`                          |
+| `apps/desktop/src-tauri/src/skills/event_commands.rs` | `restore_desktop_event`, `restore_event_with_state`                     | which code undoes a change, and that it holds the lease                         |
+| `apps/desktop/src-tauri/src/lib.rs`                   | `reconcile_event_store_at_startup`, `reconcile_core_journal_at_startup` | `DesktopAppStarts` and the recovery steps it runs                               |
 
 One piece of covered code has no hash: the recovery closure in `run`
 (`apps/desktop/src-tauri/src/lib.rs`), which calls
@@ -157,7 +157,7 @@ stopped being able to fail: the model lost the step that rule depends on.
 ## Bounds and assumptions
 
 - One change, 3 Undo requests, 2 crashes, and each way of writing the files
-  below. 12,330 states for the core, and all of them are checked. A pass
+  below. 28,595 states for the core, and all of them are checked. A pass
   covers these bounds, not every history.
 - A crash is the only fault: the process dies between two durable steps and
   what it wrote stays. A single SQL statement that fails while the process
@@ -173,8 +173,8 @@ stopped being able to fail: the model lost the step that rule depends on.
   for that code. `partial` stands for every half-written state; the model
   does not tell them apart.
 - The core's folder swap runs under a journal plan (`WriteShapes`). Recovery,
-  and desktop startup, put back what an unfinished swap replaced, and close
-  the plan in a second write.
+  and desktop startup, put back what an unfinished swap replaced, which can
+  also be caught half way, and close the plan in a second write.
 
 ## Not covered
 

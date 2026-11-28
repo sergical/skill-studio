@@ -47,8 +47,8 @@ stateDiagram-v2
   s3 --> s1: you press Undo or you press Undo with Force
   s2 --> s1: a file write failed: the mark is cleared
   s2 --> s4: the files are put back
-  s3 --> s0: the next write clears the mark (files not back)
   s4 --> s3: the app dies
+  s3 --> s0: the next write clears the mark (files not back)
   s4 --> s1: a file write failed: the mark is cleared
   s4 --> s5: the undo is recorded as finished
   s3 --> s6: the next write clears the mark (files back)
@@ -75,11 +75,12 @@ What to notice:
 
 - An undo that was cut off leaves the change shown as undone until the next
   write starts. That write clears the mark, and Undo is offered again.
-- If the app dies after the files are back but before the undo is recorded as
-  finished, the files stay back and Undo is still offered. Pressing it asks
-  for Force, because the files no longer match the change.
-- A folder swap that was not sealed is reversed by the next write, or when
-  the desktop app starts again.
+- If the app dies after the swap is sealed but before the undo is recorded as
+  finished, the files stay back and the change is still shown as undone. The
+  next write clears the mark. Undo is then offered again and asks for Force,
+  because the files no longer match the change.
+- If the app dies before the swap is sealed, the next write, or the desktop
+  app starting again, puts the swapped-out folder back.
 
 ## A change the desktop wrote
 
@@ -125,9 +126,9 @@ stateDiagram-v2
   s1 --> s3: Undo is refused: already undone
   s4 --> s3: the app dies
   s4 --> s5: the undo is recorded as finished
+  s5 --> s1: you press Undo or you press Undo with Force
   s3 --> s0: the next write clears the mark (files not back)
   s2 --> s0: a file write failed: the mark is cleared
-  s5 --> s1: you press Undo or you press Undo with Force
   s3 --> s6: the next write finds no undo record, so the mark stays
   s3 --> s7: the next write clears the mark (files back)
   s1 --> s5: the app dies or Undo is refused: already undone

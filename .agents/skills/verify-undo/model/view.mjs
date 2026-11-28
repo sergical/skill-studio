@@ -50,6 +50,8 @@ const labels = {
       : `the next write clears the mark (${filesAre(to)})`,
   RecoveryMarksRowInterrupted: (from) => `${who(from)} notes the cut-off undo`,
   RecoveryDoneWithRows: (from) => `${who(from)} goes on`,
+  RecoveryStartsPuttingFolderBack: (from) =>
+    `${who(from)} starts to reverse the unsealed folder swap`,
   RecoveryPutsSwappedFolderBack: (from) => `${who(from)} reverses the unsealed folder swap`,
   RecoveryClosesPlan: (from) => `${who(from)} seals the reversal`,
   RecoveryEnds: (from, to) =>
