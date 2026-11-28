@@ -96,7 +96,21 @@
       // replaces a rule's options, so this block repeats the layering
       // pattern from the components block above: without it these
       // directories would lose that rule.
-      "files": ["apps/desktop/src/components/Settings/**", "apps/desktop/src/components/Packs/**"],
+      "files": [
+        "apps/desktop/src/components/Activity/**",
+        "apps/desktop/src/components/Coverage/**",
+        "apps/desktop/src/components/FirstRun/**",
+        "apps/desktop/src/components/Home/**",
+        "apps/desktop/src/components/Learn/**",
+        "apps/desktop/src/components/Listing/**",
+        "apps/desktop/src/components/Packs/**",
+        "apps/desktop/src/components/Sessions/**",
+        "apps/desktop/src/components/Settings/**",
+        "apps/desktop/src/components/Shell/**",
+        "apps/desktop/src/components/Sidebar/**",
+        "apps/desktop/src/components/dev/**",
+        "apps/desktop/src/components/ui/**"
+      ],
       "excludeFiles": ["**/*.test.ts", "**/*.test.tsx"],
       "rules": {
         "no-restricted-imports": [
@@ -112,7 +126,7 @@
               {
                 "name": "react",
                 "importNames": ["useEffect", "useLayoutEffect"],
-                "message": "Effects live in apps/desktop/src/hooks. Load data with useLoad, listen to a backend event with useBackendEvent, or derive the value during render and do the work in the event handler."
+                "message": "Effects live in apps/desktop/src/hooks. Load data with useLoad, read a cached report with useListingReport or useSessionsReport, listen with useBackendEvent or useWindowEvent, or derive the value during render and do the work in the event handler."
               }
             ]
           }
@@ -121,27 +135,27 @@
           "error",
           {
             "property": "useEffect",
-            "message": "Effects live in apps/desktop/src/hooks. Load data with useLoad, listen to a backend event with useBackendEvent, or derive the value during render and do the work in the event handler."
+            "message": "Effects live in apps/desktop/src/hooks. Load data with useLoad, read a cached report with useListingReport or useSessionsReport, listen with useBackendEvent or useWindowEvent, or derive the value during render and do the work in the event handler."
           },
           {
             "property": "useLayoutEffect",
-            "message": "Effects live in apps/desktop/src/hooks. Load data with useLoad, listen to a backend event with useBackendEvent, or derive the value during render and do the work in the event handler."
+            "message": "Effects live in apps/desktop/src/hooks. Load data with useLoad, read a cached report with useListingReport or useSessionsReport, listen with useBackendEvent or useWindowEvent, or derive the value during render and do the work in the event handler."
           },
           {
             "property": "setTimeout",
-            "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce."
+            "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce, and useNow for text that ages."
           },
           {
             "property": "setInterval",
-            "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce."
+            "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce, and useNow for text that ages."
           },
           {
             "property": "requestAnimationFrame",
-            "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce."
+            "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce, and useNow for text that ages."
           },
           {
             "property": "requestIdleCallback",
-            "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce."
+            "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce, and useNow for text that ages."
           }
         ],
         "no-restricted-globals": [
@@ -151,19 +165,19 @@
             "globals": [
               {
                 "name": "setTimeout",
-                "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce."
+                "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce, and useNow for text that ages."
               },
               {
                 "name": "setInterval",
-                "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce."
+                "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce, and useNow for text that ages."
               },
               {
                 "name": "requestAnimationFrame",
-                "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce."
+                "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce, and useNow for text that ages."
               },
               {
                 "name": "requestIdleCallback",
-                "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce."
+                "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce, and useNow for text that ages."
               }
             ]
           }

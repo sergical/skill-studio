@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useState } from "react";
+import { useReducer, useState } from "react";
 import { Copy } from "lucide-react";
 import { Button, Input } from "@skill-studio/ui";
 import { HARNESS_CATALOG, deploymentLabelFromAgentId, homeRelativePath } from "@skill-studio/lib";
@@ -16,7 +16,7 @@ import { PageShell } from "../Shell/PageShell";
 import { SelectControl } from "../ui/SelectControl";
 import { ClientConfiguration } from "./ClientConfiguration";
 import { entrySource, hasAssumedClaudeWindow } from "./client-allocation";
-import { currentListingRequest } from "./useSkillVisibility";
+import { currentListingRequest, useListingReport } from "../../hooks/useStoreReports";
 import { listingReportKey, useAppStore } from "../../store/appStore";
 
 const STATE_LABEL = {
@@ -452,12 +452,10 @@ export function ListingView({ snapshot, initialHarness, initialScope }: ListingV
   const refreshListing = useAppStore((s) => s.refreshListing);
   const base = listingRequest(scope);
   const comparison = tryRequest && { ...base, ...tryRequest };
-  const current = useAppStore((s) => s.listingReports[listingReportKey(base)]);
+  const current = useListingReport(scope === GLOBAL ? null : scope);
   const compared = useAppStore((s) =>
     comparison ? s.listingReports[listingReportKey(comparison)] : undefined,
   );
-
-  useEffect(() => refreshListing(listingRequest(scope)), [scope, refreshListing]);
 
   const clients = useClientRows(current?.data?.listings.filter((r) => scopeKey(r) === scope) ?? []);
   const harness = clients.find((r) => r.harness === selected)?.harness ?? clients[0]?.harness ?? "";

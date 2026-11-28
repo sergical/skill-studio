@@ -10,7 +10,7 @@
 // keep/remove choice.
 // ============================================================================
 
-import { useEffect, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import { Dithering } from "@paper-design/shaders-react";
 import { Button, Checkbox, Switch } from "@skill-studio/ui";
 import type { HarnessDetection } from "@skill-studio/lib";
@@ -41,11 +41,7 @@ function secondaryText(state: HarnessDetection["state"]): string | null {
  * to `onComplete` when a choice already exists, so a returning user never
  * sees this screen flash on launch. */
 export function FirstRunGate({ onComplete }: FirstRunScreenProps) {
-  const { showScreen } = useFirstRunGate();
-
-  useEffect(() => {
-    if (showScreen === false) onComplete();
-  }, [showScreen, onComplete]);
+  const { showScreen } = useFirstRunGate(onComplete);
 
   if (showScreen !== true) return null;
   return <FirstRunScreenBody onComplete={onComplete} />;
