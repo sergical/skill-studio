@@ -80,9 +80,11 @@ interface AgentState {
   note: string;
 }
 
-/** The skill-list cell: the state word, and where it comes from. */
-function stateOf({ row, entry }: AgentRow): AgentState {
-  if (!row || !entry) return { label: "Not in its list", cut: false, note: "" };
+/** The skill-list cell: the state word, and where it comes from. Without a listing read, an
+ * agent's absence from it says nothing. */
+function stateOf({ row, entry }: AgentRow, hasListing: boolean): AgentState {
+  if (!row || !entry)
+    return { label: hasListing ? "Not in its list" : "List not read", cut: false, note: "" };
   if (row.evidence !== "preview") {
     if (entry.hidden_reason) return { label: LISTING_STATE_LABEL.hidden, cut: false, note: "" };
     if (row.observed_session && entry.observed)
@@ -235,15 +237,19 @@ export function SkillVisibility({
 }: SkillVisibilityProps) {
   const project =
     listingScope === "global" ? null : (listingScope ?? deployment.project_path ?? null);
-  const { listings, error } = useSkillVisibility(project, deployment.content_hash);
+  const { listings, hasListing, error } = useSkillVisibility(project, deployment.content_hash);
   const clients = useClientRows(listings);
   const [open, setOpen] = useState<string | null>(initialClient ?? null);
-  // Any copy of the skill counts: an agent that reads its own copy still sees this skill.
-  const paths = new Set(
-    skill.deployments.flatMap((d) => [d.path, d.resolved_path ?? d.symlink_target ?? d.path]),
-  );
+  // The opened copy's entry leads. Any other copy counts: an agent that reads its own copy
+  // still sees this skill.
+  const pathsOf = (copies: Deployment[]) =>
+    new Set(copies.flatMap((d) => [d.path, d.resolved_path ?? d.symlink_target ?? d.path]));
+  const openedPaths = pathsOf([deployment]);
+  const paths = pathsOf(skill.deployments);
   const listed: AgentRow[] = clients.flatMap((row) => {
-    const entry = row.entries.find((e) => e.path && paths.has(e.path));
+    const entry =
+      row.entries.find((e) => e.path && openedPaths.has(e.path)) ??
+      row.entries.find((e) => e.path && paths.has(e.path));
     return entry ? [{ harness: row.harness, row, entry }] : [];
   });
   const stats = invocations?.find((s) => s.skill === skill.name);
@@ -272,7 +278,7 @@ export function SkillVisibility({
       </div>
       <ul aria-label="Agents" className="m-0 flex list-none flex-col p-0">
         {agents.map((agent) => {
-          const state = stateOf(agent);
+          const state = stateOf(agent, hasListing);
           const expandable = hasDetail(agent);
           const isOpen = expandable && open === agent.harness;
           // SAFETY: listing rows and the use history key agents by their catalog id.

@@ -128,7 +128,7 @@ test.afterAll(() => {
     )
     .join("");
   writeFileSync(
-    `${out}/index.html`,
+    `${out}/index-skill-detail.html`,
     `<!doctype html><meta charset="utf-8"><title>Skill page states</title><style>body{background:#111;color:#ddd;font:13px -apple-system,sans-serif;margin:24px}h2{font-size:15px;margin:28px 0 8px}small{color:#888;font-weight:400}div{display:flex;gap:12px;align-items:flex-start}figure{margin:0}img{display:block;border:1px solid #333;border-radius:6px}figcaption{color:#888;margin-top:4px}</style><h1>Skill page: states</h1>${cases}<h1>Skill page: each persona's first skill</h1>${personas}`,
   );
 });

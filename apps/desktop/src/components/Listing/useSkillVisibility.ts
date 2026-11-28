@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { ListingRequest } from "@skill-studio/lib";
-import { listingReportKey, sessionsReportKey, useAppStore } from "../../store/appStore";
+import { listingReportKey, useAppStore } from "../../store/appStore";
 
 export function currentListingRequest(projectPath: string | null): ListingRequest {
   return {
@@ -15,9 +15,7 @@ export function currentListingRequest(projectPath: string | null): ListingReques
 
 export function useSkillVisibility(projectPath: string | null, contentHash: string) {
   const listingKey = listingReportKey(currentListingRequest(projectPath));
-  const historyKey = sessionsReportKey({ project_path: projectPath, sessions: 50 });
   const listing = useAppStore((s) => s.listingReports[listingKey]);
-  const history = useAppStore((s) => s.sessionsReports[historyKey]);
   const lastRead = useRef<{ projectPath: string | null; contentHash: string } | null>(null);
   useEffect(() => {
     if (
@@ -26,9 +24,7 @@ export function useSkillVisibility(projectPath: string | null, contentHash: stri
     )
       return;
     lastRead.current = { projectPath, contentHash };
-    const store = useAppStore.getState();
-    store.refreshListing(currentListingRequest(projectPath));
-    store.refreshSkillSessions({ project_path: projectPath, sessions: 50 });
+    useAppStore.getState().refreshListing(currentListingRequest(projectPath));
   }, [projectPath, contentHash]);
   const listings =
     listing?.data?.listings.filter((r) =>
@@ -38,7 +34,7 @@ export function useSkillVisibility(projectPath: string | null, contentHash: stri
     ) ?? [];
   return {
     listings,
-    history: history?.data,
+    hasListing: Boolean(listing?.data),
     error: listing?.error,
   };
 }

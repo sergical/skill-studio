@@ -33,7 +33,6 @@ it("refreshes a cached listing and shows where the current description was cut",
       [listingReportKey(currentListingRequest(null))]: { data: cached, refreshing: false },
     },
     readListing: async () => report,
-    readSkillSessions: async () => ({ skills: [], sessions: [], agents: [], history_days: 30 }),
   });
   render(
     <SkillVisibility
@@ -62,7 +61,6 @@ async function codexRow() {
 function showListing(report: ListingReport) {
   useAppStore.setState({
     readListing: async () => report,
-    readSkillSessions: async () => ({ skills: [], sessions: [], agents: [], history_days: 30 }),
   });
 }
 
@@ -165,6 +163,68 @@ it("explains a Codex cut when the whole list fits but one description is over it
   expect(screen.queryByText("skillListingMaxDescChars")).toBeNull();
 });
 
+it("describes the opened copy when two Codex copies of the skill are listed", async () => {
+  const snapshot = buildHarnessSnapshot();
+  const report = mockListingReport(snapshot, {});
+  const codex = report.listings.find((row) => row.harness === "codex")!;
+  const first = codex.entries.find((item) => item.path && item.scanned)!;
+  const skill = snapshot.skills.find((item) =>
+    item.deployments.some((copy) => copy.path === first.path),
+  )!;
+  const second = deployment({
+    agent: "Codex",
+    scope: "global",
+    path: `${HARNESS_HOME}/.agents/skills-second/${skill.name}`,
+  });
+  skill.deployments.push(second);
+  Object.assign(first, { state: "name_only" });
+  codex.entries.push({ ...structuredClone(first), path: second.path, state: "described" });
+  showListing(report);
+  render(<SkillVisibility skill={skill} deployment={second} listingScope="global" />);
+  const row = await codexRow();
+  expect(row.textContent).toContain("Full description");
+  expect(row.textContent).not.toContain("Name only");
+});
+
+it("does not claim an agent with recent uses is missing from a list that failed to load", async () => {
+  const snapshot = buildHarnessSnapshot();
+  const skill = snapshot.skills[0]!;
+  let read = false;
+  useAppStore.setState({
+    readListing: async () => {
+      read = true;
+      throw new Error("Skill list read failed");
+    },
+  });
+  render(
+    <SkillVisibility
+      skill={skill}
+      deployment={skill.deployments[0]!}
+      invocations={[
+        {
+          skill: skill.name,
+          last_24_hours: 0,
+          last_7_days: 3,
+          last_14_days: 3,
+          last_30_days: 3,
+          last_used: null,
+          by_project_30_days: {},
+          by_day: {},
+          by_harness_30_days: { codex: 3 },
+          by_trigger_30_days: { user: 0, agent: 3, file_read: 0 },
+          by_hour: [],
+        },
+      ]}
+      listingScope="global"
+    />,
+  );
+  await vi.waitFor(() => expect(read).toBe(true));
+  await screen.findByText("Skill list read failed");
+  const row = await codexRow();
+  expect(row.textContent).toContain("3 uses");
+  expect(row.textContent).not.toContain("Not in its list");
+});
+
 function onlyCopy(name: string, copy: InstalledSkill["deployments"][number]) {
   const snapshot = buildHarnessSnapshot();
   const skill = snapshot.skills.find((item) => item.name === name)!;
@@ -188,7 +248,6 @@ it("shows nothing when no agent lists this skill", async () => {
       read = true;
       return report;
     },
-    readSkillSessions: async () => ({ skills: [], sessions: [], agents: [], history_days: 30 }),
   });
   render(<SkillVisibility skill={skill} deployment={copy} listingScope="global" />);
   await vi.waitFor(() => expect(read).toBe(true));
