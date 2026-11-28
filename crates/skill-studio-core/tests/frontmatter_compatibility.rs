@@ -3,12 +3,17 @@
 
 use skill_studio_core::frontmatter::{parse_frontmatter, FrontmatterParseResult};
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 fn corpus() -> BTreeMap<String, String> {
     let mut cases = BTreeMap::new();
     fn visit(path: &std::path::Path, cases: &mut BTreeMap<String, String>) {
         for entry in std::fs::read_dir(path).unwrap() {
             let path = entry.unwrap().path();
+            // The parser migration baseline predates the separately pinned upstream packs.
+            if path == PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/real-packs") {
+                continue;
+            }
             if path.is_dir() {
                 visit(&path, cases);
             } else if path.file_name().unwrap() == "SKILL.md" {

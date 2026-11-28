@@ -71,6 +71,8 @@ pub struct SkillText {
 pub struct DetectedLinks {
     /// One entry per `(from, to)`, sorted.
     pub links: Vec<SkillLink>,
+    /// Marked names in the text that no installation record identifies.
+    pub unverified: Vec<SkillLink>,
     /// Skills that list most of their pack, sorted.
     pub indexes: Vec<String>,
 }
@@ -88,7 +90,6 @@ const NEGATIONS: [&str; 8] = [
     "不要",
 ];
 const OPTIONAL: [&str; 4] = ["if available", "when available", "if installed", "optional"];
-const LOAD_WORDS: [&str; 5] = ["load", "loads", "read", "reads", "first"];
 
 struct Found {
     to: String,
@@ -98,21 +99,60 @@ struct Found {
     line: u32,
     text: String,
     list_line: bool,
+    unverified: bool,
 }
 
 /// Finds every link between the skills in `skills`, and to `other_names`
 /// (installed skills or pack listings outside the set), following the rules
 /// of `docs/spec-skill-links.md` section 2.
 pub fn detect_links(skills: &[SkillText], other_names: &BTreeSet<String>) -> DetectedLinks {
-    let mut names: BTreeSet<&str> = skills.iter().map(|s| s.name.as_str()).collect();
-    names.extend(other_names.iter().map(String::as_str));
-    let by_folder: BTreeMap<&str, &str> = skills
-        .iter()
-        .map(|s| (s.folder.as_str(), s.name.as_str()))
-        .collect();
-
-    let mut found: BTreeMap<&str, Vec<Found>> = BTreeMap::new();
+    let vocabulary = LinkVocabulary::new(skills.iter(), other_names);
+    let mut result = DetectedLinks::default();
     for skill in skills {
+        let mut one = vocabulary.detect(skill);
+        result.links.append(&mut one.links);
+        result.unverified.append(&mut one.unverified);
+        result.indexes.append(&mut one.indexes);
+    }
+    result
+        .links
+        .sort_by(|a, b| (&a.from, &a.to).cmp(&(&b.from, &b.to)));
+    result
+        .unverified
+        .sort_by(|a, b| (&a.from, &a.to).cmp(&(&b.from, &b.to)));
+    result.indexes.sort();
+    result
+}
+
+pub(crate) struct LinkVocabulary<'a> {
+    names: BTreeSet<&'a str>,
+    by_folder: BTreeMap<&'a str, &'a str>,
+    packs: BTreeMap<&'a str, BTreeSet<&'a str>>,
+}
+
+impl<'a> LinkVocabulary<'a> {
+    pub fn new(
+        skills: impl Iterator<Item = &'a SkillText>,
+        other_names: &'a BTreeSet<String>,
+    ) -> Self {
+        let mut names: BTreeSet<_> = other_names.iter().map(String::as_str).collect();
+        let mut by_folder = BTreeMap::new();
+        let mut packs = BTreeMap::<_, BTreeSet<_>>::new();
+        for skill in skills {
+            names.insert(skill.name.as_str());
+            by_folder.insert(skill.folder.as_str(), skill.name.as_str());
+            if let Some(pack) = skill.pack.as_deref() {
+                packs.entry(pack).or_default().insert(skill.name.as_str());
+            }
+        }
+        Self {
+            names,
+            by_folder,
+            packs,
+        }
+    }
+
+    pub fn detect(&self, skill: &SkillText) -> DetectedLinks {
         let mut rows = Vec::new();
         for (file, text) in &skill.files {
             let mut in_list = false;
@@ -135,64 +175,61 @@ pub fn detect_links(skills: &[SkillText], other_names: &BTreeSet<String>) -> Det
                     index,
                     list_line: in_list,
                 };
-                scan_line(skill, at, line, &names, &by_folder, &mut rows);
+                scan_line(skill, at, line, &self.names, &self.by_folder, &mut rows);
             }
         }
-        found.insert(skill.name.as_str(), rows);
-    }
-
-    let indexes: BTreeSet<&str> = skills
-        .iter()
-        .filter(|skill| is_index(skill, skills, &found[skill.name.as_str()]))
-        .map(|skill| skill.name.as_str())
-        .collect();
-
-    // In an index, a list item or table row is an entry in the menu, whatever
-    // words it uses; its prose lines keep their own strength.
-    let mut best: BTreeMap<(&str, &str), (LinkStrength, &Found)> = BTreeMap::new();
-    for (from, rows) in &found {
-        for row in rows {
-            let strength = if indexes.contains(from) && row.list_line {
+        let index = skill
+            .pack
+            .as_deref()
+            .and_then(|p| self.packs.get(p))
+            .is_some_and(|members| is_index(members, &rows));
+        let mut best = BTreeMap::new();
+        for row in &rows {
+            let strength = if !row.unverified
+                && index
+                && row.list_line
+                && row.strength == LinkStrength::Mentions
+            {
                 LinkStrength::Lists
             } else {
                 row.strength
             };
-            let entry = best
-                .entry((from, row.to.as_str()))
-                .or_insert((strength, row));
-            if strength < entry.0 {
+            let entry = best.entry(row.to.as_str()).or_insert((strength, row));
+            if (row.unverified, strength) < (entry.1.unverified, entry.0) {
                 *entry = (strength, row);
             }
         }
-    }
-    let links = best
-        .into_iter()
-        .map(|((from, _), (strength, row))| SkillLink {
-            from: from.to_string(),
-            to: row.to.clone(),
-            strength,
-            path: row.path.clone(),
-            evidence: LinkEvidence {
-                file: row.file.clone(),
-                line: row.line,
-                text: row.text.clone(),
-            },
-        })
-        .collect();
-    DetectedLinks {
-        links,
-        indexes: indexes.into_iter().map(str::to_string).collect(),
+        let (mut links, mut unverified) = (Vec::new(), Vec::new());
+        for (strength, row) in best.into_values() {
+            let dest = if row.unverified {
+                &mut unverified
+            } else {
+                &mut links
+            };
+            dest.push(SkillLink {
+                from: skill.name.clone(),
+                to: row.to.clone(),
+                strength,
+                path: row.path.clone(),
+                evidence: LinkEvidence {
+                    file: row.file.clone(),
+                    line: row.line,
+                    text: row.text.clone(),
+                },
+            });
+        }
+        DetectedLinks {
+            links,
+            unverified,
+            indexes: index.then(|| skill.name.clone()).into_iter().collect(),
+        }
     }
 }
-
 /// An index names at least 5 skills and at least half of its pack, and at
 /// least half of the lines that name them are list items or table rows.
-fn is_index(skill: &SkillText, skills: &[SkillText], rows: &[Found]) -> bool {
+fn is_index(members: &BTreeSet<&str>, rows: &[Found]) -> bool {
+    let rows: Vec<_> = rows.iter().filter(|r| !r.unverified).collect();
     let targets: BTreeSet<&str> = rows.iter().map(|row| row.to.as_str()).collect();
-    let pack_size = skills
-        .iter()
-        .filter(|other| other.pack == skill.pack && other.name != skill.name)
-        .count();
     let lines: BTreeSet<(&str, u32)> = rows
         .iter()
         .map(|row| (row.file.as_str(), row.line))
@@ -204,9 +241,8 @@ fn is_index(skill: &SkillText, skills: &[SkillText], rows: &[Found]) -> bool {
         .collect();
     // A skill with no known pack has nothing to be an index of: counting all
     // such skills together would make the answer depend on unrelated installs.
-    skill.pack.is_some()
-        && targets.len() >= INDEX_MIN_TARGETS
-        && targets.len() * 2 >= pack_size
+    targets.intersection(members).count() >= INDEX_MIN_TARGETS
+        && targets.intersection(members).count() * 2 >= members.len().saturating_sub(1)
         && list_lines.len() * 2 >= lines.len()
 }
 
@@ -233,8 +269,7 @@ fn scan_line(
         index,
         list_line,
     } = at;
-    let lower = line.to_lowercase();
-    let optional = OPTIONAL.iter().any(|word| lower.contains(word));
+
     let row = |to: &str, strength: LinkStrength, path: Option<String>| Found {
         to: to.to_string(),
         strength,
@@ -243,10 +278,11 @@ fn scan_line(
         line: u32::try_from(index + 1).unwrap_or(u32::MAX),
         text: cut(line, EVIDENCE_CHARS),
         list_line,
+        unverified: false,
     };
     let depth = file.matches('/').count();
     for token in path_tokens(line) {
-        let ups = token.matches("../").count();
+        let ups = token.split('/').take_while(|part| *part == "..").count();
         let rest = &token[ups * 3..];
         let Some(folder) = rest.split('/').next().filter(|first| !first.is_empty()) else {
             continue;
@@ -254,18 +290,16 @@ fn scan_line(
         // A path that stays inside this folder is internal, including a
         // bundled copy of a sibling (`remotion-best-practices/remotion-studio/`).
         let known = by_folder.contains_key(folder) || names.contains(folder);
-        if ups != depth + 1
+        if rest.split('/').any(|part| matches!(part, "" | "." | ".."))
+            || ups != depth + 1
             || folder == skill.folder
-            || !(known
-                || std::path::Path::new(rest)
-                    .extension()
-                    .is_some_and(|e| e.eq_ignore_ascii_case("md")))
+            || !(known || rest.ends_with("/SKILL.md"))
         {
             continue;
         }
         let to = by_folder.get(folder).copied().unwrap_or(folder);
         if to != skill.name && !negated(line, line.find(token).unwrap_or(0)) {
-            let strength = if optional {
+            let strength = if optional_use(line, line.find(token).unwrap_or(0)) {
                 LinkStrength::Mentions
             } else {
                 LinkStrength::Needs
@@ -275,60 +309,83 @@ fn scan_line(
     }
     let first_dir = file.split('/').next().unwrap_or("");
     let cleaned = strip_paths(line);
-    // A Skill tool call names its target outright, so it counts even when
-    // that skill is not installed: the case the user most needs to see.
-    if lower.contains("skill tool") {
-        for quoted in cleaned.split('"').skip(1).step_by(2) {
-            let at = cleaned.find(&format!("\"{quoted}\"")).unwrap_or(0);
-            if !names.contains(quoted)
-                && quoted != skill.name
-                && is_skill_name(quoted)
-                && !negated(&cleaned, at)
-            {
-                let strength = if optional {
+    let lower = cleaned.to_ascii_lowercase();
+    for (pos, _) in lower.match_indices("the skill tool ") {
+        let before = lower[..pos].trim_end();
+        if !matches!(
+            before.split_whitespace().next_back(),
+            Some("call" | "calls" | "calling")
+        ) || negated(&cleaned, pos)
+        {
+            continue;
+        }
+        let args = &cleaned[pos + "the skill tool ".len()..];
+        let Some(mut args) = args
+            .strip_prefix("with ")
+            .or_else(|| args.strip_prefix("twice, for "))
+        else {
+            continue;
+        };
+        while let Some(quote) = args
+            .chars()
+            .next()
+            .filter(|q| matches!(q, '"' | '`' | '\''))
+        {
+            let Some((name, rest)) = args[1..].split_once(quote) else {
+                break;
+            };
+            if name != skill.name && is_skill_name(name) {
+                let strength = if optional_use(&cleaned, pos) || rest.starts_with(" where possible")
+                {
                     LinkStrength::Mentions
                 } else {
                     LinkStrength::HandsOff
                 };
-                rows.push(row(quoted, strength, None));
+                rows.push(row(name, strength, None));
+            }
+            let Some(more) = rest
+                .strip_prefix(" and ")
+                .or_else(|| rest.strip_prefix(", "))
+            else {
+                break;
+            };
+            args = more;
+        }
+    }
+    // A cross-plugin instruction supplies its own source even on a machine
+    // where the other plugin has never been installed.
+    for (pos, _) in cleaned.match_indices("`/") {
+        let Some((name, after)) = cleaned[pos + 2..].split_once('`') else {
+            continue;
+        };
+        if let Some(source) = after
+            .strip_prefix(" from the `")
+            .and_then(|s| s.split_once("` plugin"))
+        {
+            if is_skill_name(source.0)
+                && is_skill_name(name)
+                && name != skill.name
+                && !negated(&cleaned, pos)
+            {
+                rows.push(row(name, LinkStrength::Mentions, None));
             }
         }
     }
-    // A slash command for a skill or plugin that is not installed, such as
-    // "`/deslop` from the `cursor-team-kit` plugin".
-    for (at, _) in cleaned.match_indices('/') {
-        // Only a command on its own: not a URL (`https://github`), a path
-        // segment, or a word joined to the slash.
-        let prior = cleaned[..at].chars().next_back();
-        if prior.is_some_and(|c| !(c.is_whitespace() || "`(*[".contains(c))) {
-            continue;
-        }
-        let rest = &cleaned[at + 1..];
-        let end = rest
-            .find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'))
-            .unwrap_or(rest.len());
-        let candidate = &rest[..end];
-        if rest[end..].starts_with(['/', '.'])
-            && !rest[end..].starts_with(". ")
-            && rest[end..] != *"."
-        {
-            continue;
-        }
-        let after = tail(&rest[end..].chars().take(40).collect::<String>(), 40).to_lowercase();
-        if is_skill_name(candidate)
-            && !names.contains(candidate)
-            && candidate != skill.name
-            && (after.contains("skill")
-                || after.contains("plugin")
-                || tail(&cleaned[..at].to_lowercase(), 12).contains("run "))
-            && !negated(&cleaned, at)
-        {
-            let strength = if optional {
-                LinkStrength::Mentions
-            } else {
-                LinkStrength::HandsOff
+    // Preserve an author's literal reference when the last record disappears.
+    // The UI can show its line without claiming the token is an installed skill.
+    for mark in ["`", "\"", "**"] {
+        for literal in cleaned.split(mark).skip(1).step_by(2) {
+            let name = match literal.strip_prefix('/') {
+                Some(command) => command,
+                None if mark == "**" && literal.contains('-') => literal,
+                None => continue,
             };
-            rows.push(row(candidate, strength, None));
+            if !names.contains(name) && is_skill_name(name) && name != skill.name {
+                rows.push(Found {
+                    unverified: true,
+                    ..row(name, LinkStrength::Mentions, None)
+                });
+            }
         }
     }
     for name in names {
@@ -340,62 +397,37 @@ fn scan_line(
             if !is_boundary(&cleaned, start, end) {
                 continue;
             }
-            if let Some(strength) = classify(&cleaned, &cleaned.to_lowercase(), start, end) {
-                let strength = if optional {
-                    strength.max(LinkStrength::Mentions)
-                } else {
-                    strength
-                };
-                rows.push(row(name, strength, None));
+            if mentions(&cleaned, start, end) {
+                rows.push(row(name, LinkStrength::Mentions, None));
                 break;
             }
         }
     }
 }
 
-/// The strength of one occurrence of a name, or `None` when it is not a link.
-fn classify(line: &str, lower: &str, start: usize, end: usize) -> Option<LinkStrength> {
+fn mentions(line: &str, start: usize, end: usize) -> bool {
     let before = &line[..start];
     let after = &line[end..];
-    let before_lower = tail(&lower[..start], 60);
-    if negated(line, start) || before_lower.contains("called by") {
-        return None;
+    if negated(line, start) || clause(before).contains("called by") || before.ends_with("npx ") {
+        return false;
     }
-    let ticked = before.ends_with('`') && after.starts_with('`');
-    let bold = before.ends_with("**") && after.starts_with("**");
-    let quoted = before.ends_with('"') && after.starts_with('"');
-    let after_mark = after.trim_start_matches(['`', '*', '"']).to_lowercase();
-    if before.ends_with("npx ")
-        || after_mark.starts_with(" cli")
-        || after_mark.starts_with(" command")
-    {
-        return None;
+    let after_mark = after.trim_start_matches(['`', '*', '"']);
+    if after_mark.starts_with(" cli") || after_mark.starts_with(" command") {
+        return false;
     }
-    let slash = before.ends_with('/') && !before.ends_with("./") && {
-        let prior = before[..before.len() - 1].chars().next_back();
-        prior.is_none_or(|c| !c.is_alphanumeric() && c != '.' && c != '_')
-    };
-    let namespaced = before
-        .strip_suffix(':')
-        .and_then(|rest| rest.chars().next_back())
-        .is_some_and(|c| c.is_ascii_alphanumeric() || c == '-');
-    let skill_tool = lower.contains("skill tool");
-    let names_skill = after_mark.starts_with(" skill") || after_mark.starts_with(" sub-skill");
-    let verb = ["invoke", "run the", "use the"]
-        .iter()
-        .any(|v| before_lower.contains(v));
-    if slash || namespaced || (skill_tool && (quoted || ticked)) || (verb && names_skill) {
-        return Some(LinkStrength::HandsOff);
-    }
-    let marked = ticked || bold || before.ends_with('[') && after.starts_with(']');
-    let words: BTreeSet<&str> = before_lower.split(|c: char| !c.is_alphanumeric()).collect();
-    if marked && LOAD_WORDS.iter().any(|word| words.contains(word)) {
-        return Some(LinkStrength::Needs);
-    }
-    if marked || names_skill {
-        return Some(LinkStrength::Mentions);
-    }
-    None
+    let slash = before.strip_suffix('/').is_some_and(|prefix| {
+        prefix
+            .chars()
+            .next_back()
+            .is_none_or(|c| c.is_whitespace() || "`*[(\"'".contains(c))
+    }) && !after.starts_with('/');
+    slash
+        || (before.ends_with('`') && after.starts_with('`'))
+        || (before.ends_with("**") && after.starts_with("**"))
+        || (before.ends_with('[') && after.starts_with(']'))
+        || after_mark.starts_with(" skill")
+        || before.ends_with(':')
+            && before[..before.len() - 1].ends_with(|c: char| c.is_ascii_alphanumeric())
 }
 
 /// The Agent Skills name rule: lowercase letters, digits and single
@@ -409,10 +441,22 @@ fn is_skill_name(s: &str) -> bool {
         && !s.contains("--")
 }
 
+fn clause(before: &str) -> &str {
+    before.rsplit(['.', ';', '!', '?']).next().unwrap_or(before)
+}
+
+fn optional_use(line: &str, start: usize) -> bool {
+    let before = clause(&line[..start]).to_ascii_lowercase();
+    OPTIONAL.iter().any(|word| before.contains(word))
+}
+
 fn negated(line: &str, start: usize) -> bool {
-    let lower = line[..start].to_lowercase();
-    let before = tail(&lower, 60);
-    NEGATIONS.iter().any(|word| before.contains(word))
+    let before = clause(&line[..start]).to_ascii_lowercase();
+    NEGATIONS.iter().any(|word| {
+        before
+            .trim_end_matches([' ', '`', '*', '/', '"'])
+            .ends_with(word)
+    }) || before.contains("不要")
 }
 
 fn is_boundary(line: &str, start: usize, end: usize) -> bool {
@@ -462,11 +506,6 @@ fn strip_paths(line: &str) -> String {
         out = out.replacen(token, &" ".repeat(token.len()), 1);
     }
     out
-}
-
-fn tail(s: &str, chars: usize) -> &str {
-    let skip = s.chars().count().saturating_sub(chars);
-    s.char_indices().nth(skip).map_or(s, |(at, _)| &s[at..])
 }
 
 fn cut(s: &str, chars: usize) -> String {

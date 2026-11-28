@@ -7310,6 +7310,10 @@
             "$ref": "#/$defs/AgentIdentity",
             "description": "The agent with a working copy of the linking skill."
           },
+          "scope": {
+            "$ref": "#/$defs/RootScope",
+            "description": "The working scope in which the agent uses the skill."
+          },
           "state": {
             "$ref": "#/$defs/LinkState",
             "description": "Whether the link works for it."
@@ -7317,6 +7321,7 @@
         },
         "required": [
           "agent",
+          "scope",
           "state"
         ],
         "type": "object"
@@ -7373,6 +7378,11 @@
             "const": "elsewhere",
             "description": "A copy exists only where this agent does not read it.",
             "type": "string"
+          },
+          {
+            "const": "not_known",
+            "description": "The available evidence cannot establish which file the agent reads.",
+            "type": "string"
           }
         ]
       },
@@ -7400,6 +7410,11 @@
             "type": "string"
           }
         ]
+      },
+      "ProjectRef": {
+        "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
+        "type": "string",
+        "x-untrusted": true
       },
       "ResolvedLink": {
         "description": "A link with its state for each agent that loads the linking skill.",
@@ -7444,6 +7459,41 @@
           "agents"
         ],
         "type": "object"
+      },
+      "RootScope": {
+        "description": "Where a root lives.",
+        "oneOf": [
+          {
+            "description": "Under the scope home.",
+            "properties": {
+              "scope": {
+                "const": "global",
+                "type": "string"
+              }
+            },
+            "required": [
+              "scope"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Under one tracked project.",
+            "properties": {
+              "project": {
+                "$ref": "#/$defs/ProjectRef"
+              },
+              "scope": {
+                "const": "project",
+                "type": "string"
+              }
+            },
+            "required": [
+              "scope",
+              "project"
+            ],
+            "type": "object"
+          }
+        ]
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -7475,10 +7525,26 @@
           "type": "string"
         },
         "type": "array"
+      },
+      "scopes": {
+        "description": "Global and project contexts covered by this lookup.",
+        "items": {
+          "$ref": "#/$defs/RootScope"
+        },
+        "type": "array"
+      },
+      "unverified": {
+        "description": "Literal command or bold name with no target record. Excluded from link and warning counts.",
+        "items": {
+          "$ref": "#/$defs/ResolvedLink"
+        },
+        "type": "array"
       }
     },
     "required": [
+      "scopes",
       "links",
+      "unverified",
       "indexes",
       "broken",
       "not_known"

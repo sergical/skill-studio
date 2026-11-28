@@ -4,8 +4,22 @@
   "description": "Links between installed skills.",
   "type": "object",
   "properties": {
+    "scopes": {
+      "description": "Global and project contexts covered by this lookup.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RootScope"
+      }
+    },
     "links": {
       "description": "Links, sorted by `from` then `to`.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ResolvedLink"
+      }
+    },
+    "unverified": {
+      "description": "Literal command or bold name with no target record. Excluded from link and warning counts.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/ResolvedLink"
@@ -33,12 +47,54 @@
     }
   },
   "required": [
+    "scopes",
     "links",
+    "unverified",
     "indexes",
     "broken",
     "not_known"
   ],
   "$defs": {
+    "RootScope": {
+      "description": "Where a root lives.",
+      "oneOf": [
+        {
+          "description": "Under the scope home.",
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "string",
+              "const": "global"
+            }
+          },
+          "required": [
+            "scope"
+          ]
+        },
+        {
+          "description": "Under one tracked project.",
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "string",
+              "const": "project"
+            },
+            "project": {
+              "$ref": "#/$defs/ProjectRef"
+            }
+          },
+          "required": [
+            "scope",
+            "project"
+          ]
+        }
+      ]
+    },
+    "ProjectRef": {
+      "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
+      "type": "string",
+      "x-untrusted": true
+    },
     "ResolvedLink": {
       "description": "A link with its state for each agent that loads the linking skill.",
       "type": "object",
@@ -141,6 +197,10 @@
           "description": "The agent with a working copy of the linking skill.",
           "$ref": "#/$defs/AgentIdentity"
         },
+        "scope": {
+          "description": "The working scope in which the agent uses the skill.",
+          "$ref": "#/$defs/RootScope"
+        },
         "state": {
           "description": "Whether the link works for it.",
           "$ref": "#/$defs/LinkState"
@@ -148,6 +208,7 @@
       },
       "required": [
         "agent",
+        "scope",
         "state"
       ]
     },
@@ -182,6 +243,11 @@
           "description": "A copy exists only where this agent does not read it.",
           "type": "string",
           "const": "elsewhere"
+        },
+        {
+          "description": "The available evidence cannot establish which file the agent reads.",
+          "type": "string",
+          "const": "not_known"
         }
       ]
     }

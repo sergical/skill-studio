@@ -88,7 +88,7 @@ fn a_prefixed_install_shows_as_renamed_and_an_agent_filter_drops_skills_it_canno
     // A port that prefixes every folder and name without rewriting the text.
     for (bucket, name) in [("productivity", "grill-me"), ("productivity", "grilling")] {
         install(home.path(), bucket, name, false);
-        let prefixed = format!("matt-{name}");
+        let prefixed = format!("cursor-team-kit-{name}");
         std::fs::rename(shared.join(name), shared.join(&prefixed)).unwrap();
         let skill_md = shared.join(&prefixed).join("SKILL.md");
         let text = std::fs::read_to_string(&skill_md).unwrap();
@@ -98,7 +98,22 @@ fn a_prefixed_install_shows_as_renamed_and_an_agent_filter_drops_skills_it_canno
         )
         .unwrap();
     }
-    let cli = headless::cli(home.path(), &["links", "matt-grill-me"]);
+    let query = || headless::cli(home.path(), &["links", "cursor-team-kit-grill-me"]);
+    assert_eq!(state(&query()["data"]["links"][0], "codex"), "missing");
+    let mut records = serde_json::Map::new();
+    for name in ["grill-me", "grilling"] {
+        records.insert(format!("cursor-team-kit-{name}"),json!({
+            "source":"mattpocock/skills","sourceType":"github","sourceUrl":"https://github.com/mattpocock/skills.git",
+            "skillPath":format!("skills/productivity/{name}/SKILL.md"),"skillFolderHash":"","installedAt":"","updatedAt":""
+        }));
+    }
+    let lock = json!({"version":3,"skills":records});
+    std::fs::write(
+        home.path().join(".agents/.skill-lock.json"),
+        serde_json::to_vec(&lock).unwrap(),
+    )
+    .unwrap();
+    let cli = headless::cli(home.path(), &["links", "cursor-team-kit-grill-me"]);
     let links = cli["data"]["links"].as_array().unwrap();
     let link = links
         .iter()
@@ -109,10 +124,42 @@ fn a_prefixed_install_shows_as_renamed_and_an_agent_filter_drops_skills_it_canno
 
     std::fs::create_dir_all(home.path().join(".claude/skills")).unwrap();
     std::fs::rename(
-        shared.join("matt-grill-me"),
-        home.path().join(".claude/skills/matt-grill-me"),
+        shared.join("cursor-team-kit-grill-me"),
+        home.path().join(".claude/skills/cursor-team-kit-grill-me"),
     )
     .unwrap();
-    let claude_only = headless::cli(home.path(), &["links", "matt-grill-me", "--agent", "codex"]);
+    let claude_only = headless::cli(
+        home.path(),
+        &["links", "cursor-team-kit-grill-me", "--agent", "codex"],
+    );
     assert!(claude_only["data"]["links"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn an_uninstalled_pstack_target_keeps_its_line_and_only_a_record_identifies_it() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path().join(".agents");
+    let dir = root.join("skills/poteto-mode");
+    std::fs::create_dir_all(&dir).unwrap();
+    let original = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates/skill-studio-core/tests/fixtures/real-packs/cursor_plugins_pstack/skills/poteto-mode/SKILL.md");
+    std::fs::copy(original, dir.join("SKILL.md")).unwrap();
+    let read = || {
+        headless::cli(home.path(), &["links", "no-comments", "--agent", "codex"])["data"].clone()
+    };
+    let untracked = read();
+    assert!(untracked["links"].as_array().unwrap().is_empty());
+    assert_eq!(untracked["unverified"][0]["evidence"]["line"], 24);
+    std::fs::write(
+        root.join("agents.toml"),
+        "[[skills]]\nname='*'\nsource='cursor/plugins'\nexclude=['no-comments']\n",
+    )
+    .unwrap();
+    let recorded = read();
+    assert_eq!(recorded["links"][0]["strength"], "mentions");
+    assert_eq!(recorded["links"][0]["agents"][0]["state"], "missing");
+    assert_eq!(
+        recorded["links"][0]["evidence"],
+        untracked["unverified"][0]["evidence"]
+    );
+    assert_eq!(recorded["broken"], 0);
 }

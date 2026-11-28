@@ -114,27 +114,13 @@ fn real_packs_give_the_links_a_person_checked_by_hand() {
             "grill-me",
             "grill-with-docs",
             "improve-codebase-architecture",
-            "loop-me",
             "triage",
             "wayfinder"
         ]
         .map(String::from)
         .into(),
     );
-    assert_eq!(
-        strong_users(&matt, "setup-matt-pocock-skills"),
-        [
-            "ask-matt",
-            "code-review",
-            "implement-spec",
-            "to-spec",
-            "to-tickets",
-            "triage",
-            "wayfinder"
-        ]
-        .map(String::from)
-        .into(),
-    );
+    assert!(strong_users(&matt, "setup-matt-pocock-skills").is_empty());
     assert_eq!(
         strength(&matt, "chief-of-staff", "implement-spec"),
         Some(LinkStrength::Needs)
@@ -162,14 +148,14 @@ fn real_packs_give_the_links_a_person_checked_by_hand() {
     let pstack = detect_links(&pack("cursor_plugins_pstack"), &BTreeSet::new());
     assert_eq!(
         strength(&pstack, "poteto-mode", "deslop"),
-        Some(LinkStrength::HandsOff)
+        Some(LinkStrength::Mentions)
     );
     assert_eq!(pstack.indexes, vec!["poteto-help".to_string()]);
 
     let superpowers = detect_links(&pack("obra_superpowers"), &BTreeSet::new());
     assert_eq!(
         strength(&superpowers, "brainstorming", "writing-plans"),
-        Some(LinkStrength::HandsOff)
+        Some(LinkStrength::Mentions)
     );
     assert!(!superpowers.indexes.contains(&"executing-plans".to_string()));
 
@@ -228,6 +214,11 @@ fn optional_names_are_mentions_even_when_they_read_a_path() {
     assert_eq!(
         strength(&found, "skill-a", "skill-b"),
         Some(LinkStrength::Mentions)
+    );
+    let mixed = detect_links(&[synthetic("wrapper",&[("SKILL.md","Do not use the shell. Call the Skill tool with \"format\".\nUse \"/format\" when choosing a command.")])],&BTreeSet::from(["format".into()]));
+    assert_eq!(
+        strength(&mixed, "wrapper", "format"),
+        Some(LinkStrength::HandsOff)
     );
     let read = found.links.iter().find(|l| l.from == "skill-c").unwrap();
     assert_eq!(read.path.as_deref(), Some("../skill-b/SKILL.md"));

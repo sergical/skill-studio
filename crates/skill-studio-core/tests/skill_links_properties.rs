@@ -359,14 +359,25 @@ fn apply(world: &World, catalog: &[(String, PathBuf)], step: &Step) {
 /// Strong links a person checked by hand in the real packs
 /// (`skill_links_corpus.rs`), as `(from, to, path)`. The oracle uses these
 /// and the lines a step appends, never what `skill_links` found.
-const KNOWN: [(&str, &str, Option<&str>); 13] = [
+const KNOWN: &[(&str, &str, Option<&str>)] = &[
     ("grill-me", "grilling", None),
     ("grill-with-docs", "grilling", None),
     ("grill-with-docs", "domain-modeling", None),
     ("triage", "grilling", None),
     ("triage", "domain-modeling", None),
-    ("triage", "setup-matt-pocock-skills", None),
-    ("to-spec", "setup-matt-pocock-skills", None),
+    ("tdd", "codebase-design", None),
+    ("improve-codebase-architecture", "codebase-design", None),
+    ("improve-codebase-architecture", "grilling", None),
+    ("improve-codebase-architecture", "domain-modeling", None),
+    ("implement-spec", "tdd", None),
+    ("implement-spec", "code-review", None),
+    ("implement", "code-review", None),
+    ("retro", "writing-for-agents", None),
+    ("setup-ts-deep-modules", "codebase-design", None),
+    ("wayfinder", "research", None),
+    ("wayfinder", "prototype", None),
+    ("wayfinder", "domain-modeling", None),
+    ("wayfinder", "grilling", None),
     (
         "chief-of-staff",
         "implement-spec",
@@ -396,7 +407,7 @@ const KNOWN: [(&str, &str, Option<&str>); 13] = [
 fn expected_links(name: &str, dir: &Path) -> BTreeMap<String, Option<String>> {
     let base = name.strip_suffix("-fork").unwrap_or(name);
     let mut out = BTreeMap::new();
-    for (from, to, path) in KNOWN {
+    for &(from, to, path) in KNOWN {
         if from == base && to != name {
             out.insert(to.to_string(), path.map(str::to_string));
         }
@@ -426,13 +437,19 @@ fn expected_links(name: &str, dir: &Path) -> BTreeMap<String, Option<String>> {
 /// What the file system says about one link for one agent.
 fn oracle_state(
     world: &World,
+    agent: &str,
     found: &[(String, PathBuf)],
     dir: &Path,
     to: &str,
     path: Option<&str>,
 ) -> LinkState {
     let reachable = match path {
-        Some(path) => dir.join(path).exists(),
+        Some(path) if agent == "claude-code" => dir
+            .parent()
+            .unwrap()
+            .join(path.strip_prefix("../").unwrap())
+            .is_file(),
+        Some(path) => dir.join(path).is_file(),
         None => found.iter().any(|(n, _)| n == to),
     };
     if reachable {
@@ -464,35 +481,65 @@ fn check(world: &World) -> Result<(), TestCaseError> {
     .unwrap();
     for agent in AGENTS {
         let found = listing(world, agent);
+        let mut expected = Vec::new();
         for (name, dir) in &found {
             for (to, path) in expected_links(name, dir) {
-                let expected = oracle_state(world, &found, dir, &to, path.as_deref());
-                let reported = report
-                    .links
-                    .iter()
-                    .filter(|l| l.from == *name && l.to == to && l.path == path)
-                    .filter(|l| matches!(l.strength, LinkStrength::Needs | LinkStrength::HandsOff))
-                    .find(|l| l.agents.iter().any(|a| a.agent.as_str() == agent))
-                    .and_then(|l| l.agents.iter().find(|a| a.agent.as_str() == agent))
-                    .map(|a| a.state);
-                prop_assert_eq!(reported, Some(expected), "{} -> {} for {}", name, to, agent);
+                let state = oracle_state(world, agent, &found, dir, &to, path.as_deref());
+                let strength = if path.is_some() {
+                    LinkStrength::Needs
+                } else {
+                    LinkStrength::HandsOff
+                };
+                expected.push((name.clone(), to, strength, path, state));
             }
         }
-        for link in report
-            .links
-            .iter()
-            .filter(|l| matches!(l.strength, LinkStrength::Needs | LinkStrength::HandsOff))
-        {
-            if link.agents.iter().any(|a| a.agent.as_str() == agent) {
-                prop_assert!(
-                    found.iter().any(|(n, _)| *n == link.from),
-                    "{} does not find {}, but its link to {} is reported",
-                    agent,
-                    link.from,
-                    link.to
-                );
+        // Every displayed target, even a menu item or an unverified command,
+        // has a literal occurrence on the cited line of the agent's own copy.
+        let mut files = BTreeMap::new();
+        for link in report.links.iter().chain(&report.unverified) {
+            if !link
+                .agents
+                .iter()
+                .any(|entry| entry.agent.as_str() == agent)
+            {
+                continue;
+            }
+            let source = found.iter().find(|(name, _)| name == &link.from);
+            prop_assert!(source.is_some(), "{} cannot load {}", agent, link.from);
+            let path = source.unwrap().1.join(&link.evidence.file);
+            let file = files
+                .entry(path.clone())
+                .or_insert_with(|| fs::read_to_string(path).unwrap());
+            let line = file
+                .lines()
+                .nth((link.evidence.line - 1) as usize)
+                .unwrap_or("");
+            prop_assert!(
+                line.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'))
+                    .any(|word| word == link.to),
+                "{} never names {} on the cited line: {}",
+                link.from,
+                link.to,
+                line
+            );
+        }
+        let mut actual = Vec::new();
+        for link in &report.links {
+            if matches!(link.strength, LinkStrength::Needs | LinkStrength::HandsOff) {
+                for entry in link.agents.iter().filter(|s| s.agent.as_str() == agent) {
+                    actual.push((
+                        link.from.clone(),
+                        link.to.clone(),
+                        link.strength,
+                        link.path.clone(),
+                        entry.state,
+                    ));
+                }
             }
         }
+        expected.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+        actual.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+        prop_assert_eq!(actual, expected, "{}", agent);
     }
     Ok(())
 }

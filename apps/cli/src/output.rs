@@ -1013,8 +1013,16 @@ pub fn print_links_table(
                     LinkState::Renamed => "renamed",
                     LinkState::Off => "off",
                     LinkState::Elsewhere => "elsewhere",
+                    LinkState::NotKnown => "not known",
                 };
-                format!("{} {state}", a.agent)
+                match &a.scope {
+                    skill_studio_core::identity::RootScope::Global => {
+                        format!("{} {state}", a.agent)
+                    }
+                    skill_studio_core::identity::RootScope::Project(p) => {
+                        format!("{} in {} {state}", a.agent, p.0.display())
+                    }
+                }
             })
             .collect();
         println!(
@@ -1025,6 +1033,16 @@ pub fn print_links_table(
             link.evidence.file,
             link.evidence.line,
             link.evidence.text
+        );
+    }
+    for reference in &report.unverified {
+        println!(
+            "{} names {} (unverified)  {}:{}  {}",
+            reference.from,
+            reference.to,
+            reference.evidence.file,
+            reference.evidence.line,
+            reference.evidence.text
         );
     }
     if !report.not_known.is_empty() {
