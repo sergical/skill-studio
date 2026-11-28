@@ -29,6 +29,12 @@ E2E_PORT=1452 SCREEN_STATES=/tmp/screen-states SCREEN_STATES_QUERY="v=1" \
   `Skills`, `Agents,What it used`, `Activity`, `Settings`.
 - Output: `shots/<persona>-<size>.png`, one `.json` per shot with its persona,
   agents, size and any page errors, and `index.html`, a contact sheet.
+- Two screens need steps the shared render can't take, so they have their own
+  suites: `e2e/screen-states-skill-detail.e2e.ts` (opens named skills, writes
+  `index-skill-detail.html`) and `e2e/screen-states-packs.e2e.ts` (opens the
+  plan and export dialogs, writes `index-packs.html`).
+- Agents running e2e side by side pass their own `--output` folder, or their
+  runs delete each other's trace files in `test-results/`.
 - Sizes: `min` 900×600 (the window's minimum in `tauri.conf.json`), `default`
   1200×800, `wide` 1600×1000.
 - Any page error fails the run. Fix those first.
