@@ -214,6 +214,13 @@ bounds are written in `check` itself, so a run cannot check fewer of them.
   reading the code, not checked here: `read_backup_files` in `history.rs`
   returns regular files only, so an empty folder inside a backed-up skill
   folder is not put back by an undo.
+- A file read that fails for a reason other than "not found". One place
+  matters. When an undo has to remove the change's path, `restore_event_body`
+  treats any error from `symlink_metadata` as "already gone"
+  (`Err(_) => Ok(())` under `RestorePlan::RemoveIfPresent`). A passing I/O
+  error there would let the core record the undo as finished with the path
+  still present. The model's no-write step runs only when the files are
+  back, so it cannot show this.
 - Redo (an undo of a restore row). It runs the same code with the restore row
   as the change, but the model has one change only.
 - Force retries: `restore_retry`, `displaced_data`, and which snapshot a Redo

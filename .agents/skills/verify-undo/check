@@ -169,6 +169,14 @@ def config(owner: str, mutation: str | None = None) -> str:
     return CONFIG.format(owner=owner, broken=f'"{mutation}"' if mutation else "")
 
 
+def spec_block(start: str, end: str) -> list[str]:
+    """The lines of the spec between two markers, without comments and blank lines."""
+    spec = SPEC.read_text()
+    block = spec[spec.index(start) + len(start) : spec.index(end)]
+    lines = (line.split("\\*")[0].strip() for line in block.splitlines())
+    return [line for line in lines if line]
+
+
 def function_text(source: str, name: str) -> str | None:
     """The text of `fn name`, from its first line to its closing brace."""
     start = re.search(FN_START.format(name=re.escape(name)), source, flags=re.M)
@@ -225,8 +233,7 @@ def check_rules(java: str, jar: Path, owner: str, words: dict) -> bool:
 
 def check_can_fail(java: str, jar: Path) -> bool:
     """Each mutation must break its rule, or a pass of that rule proves nothing."""
-    spec = SPEC.read_text()
-    declared = set(re.findall(r'"(\w+)"', spec[spec.index("Mutations == {") : spec.index("ASSUME Break")]))
+    declared = set(re.findall(r'"(\w+)"', " ".join(spec_block("Mutations == {", "ASSUME Break"))))
     never_run = sorted(declared - {mutation for mutation, _, _ in MUST_FAIL})
     never_failed = [
         f"{rule} for the {owner}"
@@ -250,18 +257,23 @@ def check_can_fail(java: str, jar: Path) -> bool:
 
 def check_mirrors(covered: dict) -> bool:
     """Every model action names watched code, and every `mirrors` entry names a model action."""
-    spec = SPEC.read_text()
-    actions = set(re.findall(r"^    \\/ (\w+)$", spec[spec.index("Next ==") : spec.index("Spec ==")], flags=re.M))
+    lines = spec_block("Next ==", "Spec ==")
+    read = [(line, re.fullmatch(r"\\/\s*(\w+)", line)) for line in lines]
+    unreadable = [line for line, found in read if not found]
+    actions = {found.group(1) for _, found in read if found}
     mirrored = {action for entry in covered["functions"] for action in entry["mirrors"]}
     unwatched = sorted(actions - mirrored - ACTIONS_WITHOUT_CODE)
     unknown = sorted(mirrored - actions)
+    for line in unreadable:
+        print(f"FAIL   cannot read this line of `Next` in the spec as one action: {line}")
     for action in unwatched:
         print(f"FAIL   model action {action} mirrors no function in covered.json, so an edit to its code warns nobody.")
     for action in unknown:
         print(f"FAIL   covered.json mirrors {action}, which is not an action of the model.")
-    if not unwatched and not unknown:
+    tied = not unwatched and not unknown and not unreadable
+    if tied:
         print(f"PASS   each of the {len(actions)} model actions is tied to watched code.")
-    return not unwatched and not unknown
+    return tied
 
 
 def check_covered(root: Path, covered: dict) -> bool:
