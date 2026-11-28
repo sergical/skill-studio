@@ -2,19 +2,20 @@
 // SkillStore - Main skill discovery and management view
 // ============================================================================
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState } from "react";
 import { Button, Drawer, Tabs, TabsContent, TabsList, TabsTrigger } from "@skill-studio/ui";
 import { SkillSearchBar } from "./SkillSearchBar";
 import { SkillBrowser } from "./SkillBrowser";
 import { SkillDetailPanel } from "./SkillDetailPanel";
 import { InstallProgressModal } from "./InstallProgressModal";
-import { invokeErrorMessage } from "../../lib/skill-command-error";
 import type {
+  PaginatedSkillsResponse,
   SkillSearchResult,
   InstalledSkill,
   SkillWithStatus,
   InstallProgressState,
 } from "@skill-studio/lib";
+import { useLoad } from "../../hooks/useLoad";
 import { useAppStore } from "../../store/appStore";
 
 const LIMIT = 50;
@@ -112,31 +113,27 @@ type InstalledInventory =
 function useInstalledInventory() {
   const projects = useAppStore((state) => state.userAddedProjects);
   const getInstalledSkills = useAppStore((state) => state.getInstalledSkills);
-  const [inventory, setInventory] = useState<InstalledInventory>({ kind: "loading" });
-  const latestRequest = useRef(0);
+  // The host reads the tracked project list, so a change to it scans again.
+  const scan = useLoad(`installed:${projects.join("\n")}`, getInstalledSkills, {
+    keepPreviousData: true,
+  });
+  let inventory: InstalledInventory = { kind: "loading" };
+  if (scan.error !== null) {
+    // A retry after a failure shows as loading; a rescan after a good scan keeps the list up.
+    if (!scan.isLoading) inventory = { kind: "failed", message: scan.error };
+  } else if (scan.data) {
+    inventory = { kind: "ready", skills: scan.data };
+  }
 
-  // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- project changes and explicit retries use the same local scan
-  const loadInstalledSkills = useCallback(() => {
-    const request = ++latestRequest.current;
-    setInventory((current) => (current.kind === "failed" ? { kind: "loading" } : current));
-    return getInstalledSkills().then(
-      (skills) => {
-        if (latestRequest.current === request) setInventory({ kind: "ready", skills });
-      },
-      (error) => {
-        if (latestRequest.current === request)
-          setInventory({ kind: "failed", message: invokeErrorMessage(error) });
-      },
-    );
-  }, [getInstalledSkills]);
+  return { inventory, loadInstalledSkills: scan.reload };
+}
 
-  useEffect(() => {
-    // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- the scan reads the tracked projects through the Tauri host
-    void loadInstalledSkills();
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- the host reads the tracked project list; rescan when it changes
-  }, [loadInstalledSkills, projects]);
-
-  return { inventory, loadInstalledSkills };
+/** The pages of popular skills loaded after the first, and the first page they continue. */
+interface MorePages {
+  first: PaginatedSkillsResponse;
+  skills: SkillSearchResult[];
+  page: number;
+  hasMore: boolean;
 }
 
 function useSkillStoreData(
@@ -145,102 +142,63 @@ function useSkillStoreData(
 ) {
   const getPopularSkills = useAppStore((state) => state.getPopularSkills);
   const searchSkills = useAppStore((state) => state.searchSkills);
+  // What the input shows, and the debounced query the results are for.
   const [searchQuery, setSearchQuery] = useState("");
-  // Raw API results, with no installed-status merged in - `searchResultsWithStatus`
-  // below derives that at render time, so an `installedSkills` refresh (after
-  // install/remove) can't leave this stale behind a second effect.
-  const [rawResults, setRawResults] = useState<SkillSearchResult[]>([]);
-  // Starts true: the mount effect below fetches immediately, so the first
-  // render already reflects that instead of flipping it on synchronously
-  // inside the effect (which the compiler flags as an avoidable extra render).
-  const [isLoading, setIsLoading] = useState(true);
+  const [submittedQuery, setSubmittedQuery] = useState("");
+  const searching = isSearchQuery(submittedQuery);
+  // The results stay up while the next query loads. A failure replaces the results area with
+  // `LoadError` (most commonly the Skill Studio server is not running), not a toast, since there
+  // is nothing to show behind it.
+  const firstPage = useLoad(
+    `browse:${submittedQuery}`,
+    () => (searching ? searchSkills(submittedQuery, LIMIT) : getPopularSkills(0, LIMIT)),
+    { keepPreviousData: true },
+  );
+  const [morePages, setMorePages] = useState<MorePages | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(false);
-  // Set when the results area itself couldn't be loaded (most commonly the
-  // Skill Studio server not running) - replaces the results area with
-  // `LoadError` instead of a toast, since there's nothing to show
-  // behind it. Cleared at the start of every new attempt.
-  const [browseError, setBrowseError] = useState<string | null>(null);
-  // Never read during render - only `loadMore`'s paging math needs it, so a
-  // ref avoids a re-render on every page bump.
-  const pageRef = useRef(0);
-  const browseRequest = useRef(0);
-  const searchQueryRef = useRef("");
+  const first = firstPage.data;
+  // Later pages count only while the first page they continue is still the one shown.
+  const more = morePages !== null && morePages.first === first ? morePages : null;
+  const isLoading = firstPage.isLoading;
+  // The search API returns everything up to LIMIT in one page, so only popular skills page.
+  const hasMore = !isLoading && !searching && (more ? more.hasMore : (first?.has_more ?? false));
 
-  // Every result merged with the current installed status - recomputed
-  // whenever either input changes, so an install/remove refreshing
-  // `installedSkills` shows up here with no second effect to keep in sync.
-  const searchResultsWithStatus = mergeWithInstalledStatus(rawResults, installedSkills);
-
-  // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- the mount effect loads the initial page once
-  const handleSearch = useCallback(
-    (query: string) => {
-      const request = ++browseRequest.current;
-      searchQueryRef.current = query;
-      setSearchQuery(query);
-      pageRef.current = 0;
-      setIsLoadingMore(false);
-      setHasMore(false);
-      setBrowseError(null);
-      setIsLoading(true);
-
-      const searching = isSearchQuery(query);
-      const response = searching ? searchSkills(query, LIMIT) : getPopularSkills(0, LIMIT);
-      return response
-        .then((page) => {
-          if (browseRequest.current !== request) return;
-          setRawResults(page.skills);
-          setHasMore(!searching && page.has_more);
-        })
-        .catch((error) => {
-          if (browseRequest.current === request) setBrowseError(invokeErrorMessage(error));
-        })
-        .finally(() => {
-          if (browseRequest.current === request) setIsLoading(false);
-        });
-    },
-    [getPopularSkills, searchSkills],
+  // Every result merged with the current installed status - recomputed whenever either input
+  // changes, so an install or remove that refreshes `installedSkills` shows up here.
+  const searchResultsWithStatus = mergeWithInstalledStatus(
+    [...(first?.skills ?? []), ...(more?.skills ?? [])],
+    installedSkills,
   );
 
-  useEffect(() => {
-    // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- starts the initial skills.sh request
-    void handleSearch("");
-  }, [handleSearch]);
-
-  // Re-runs whichever fetch last populated the results area - the
-  // `LoadError`'s "Try again" button.
-  const retry = () => handleSearch(searchQuery);
+  const handleSearch = (query: string) => {
+    setSearchQuery(query);
+    setSubmittedQuery(query);
+  };
 
   // A Promise chain, not a try/finally statement, so the compiler can still
   // optimize this component (it doesn't support `finally` clauses yet).
   const loadMore = () => {
-    // hasMore is always false while a search is active (the v1 search API
-    // returns everything up to LIMIT in one shot), so this only ever pages
-    // through popular skills.
-    if (isLoadingMore || !hasMore || isSearchQuery(searchQueryRef.current)) return;
-    const request = browseRequest.current;
-
+    if (isLoadingMore || !hasMore || !first) return;
     setIsLoadingMore(true);
-    const nextPage = pageRef.current + 1;
+    const nextPage = (more?.page ?? 0) + 1;
 
     return getPopularSkills(nextPage, LIMIT)
       .then((response) => {
-        if (browseRequest.current !== request) return;
-        setRawResults((prev) => [...prev, ...response.skills]);
-        setHasMore(response.has_more);
-        pageRef.current = nextPage;
+        setMorePages({
+          first,
+          skills: [...(more?.skills ?? []), ...response.skills],
+          page: nextPage,
+          hasMore: response.has_more,
+        });
       })
       .catch((err) => {
-        if (browseRequest.current !== request) return;
         addToast({
           type: "error",
           title: "Load More Failed",
           message: err instanceof Error ? err.message : "Failed to load more skills",
         });
       })
-      .finally(() => {
-        if (browseRequest.current === request) setIsLoadingMore(false);
-      });
+      .finally(() => setIsLoadingMore(false));
   };
 
   return {
@@ -249,8 +207,9 @@ function useSkillStoreData(
     isLoading,
     isLoadingMore,
     hasMore,
-    browseError,
-    retry,
+    // Cleared while a new attempt runs, so "Try again" shows the loading state.
+    browseError: isLoading ? null : firstPage.error,
+    retry: firstPage.reload,
     searchResultsWithStatus,
     handleSearch,
     loadMore,
@@ -333,7 +292,7 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
         });
       }
       // Refresh installed skills - `searchResultsWithStatus` re-derives from it.
-      void loadInstalledSkills();
+      loadInstalledSkills();
     } else {
       addToast({
         type: "error",
@@ -351,7 +310,7 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
       message: "Successfully removed skill",
     });
     // Refresh installed skills - `installedSkillsWithStatus`/`searchResultsWithStatus` re-derive from it.
-    void loadInstalledSkills();
+    loadInstalledSkills();
     setSelection(null);
   };
 

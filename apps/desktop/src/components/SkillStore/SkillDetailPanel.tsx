@@ -2,13 +2,14 @@
 // SkillDetailPanel - Detail view for a selected skill
 // ============================================================================
 
-import { useEffect, useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Button, DrawerContent } from "@skill-studio/ui";
 import { SkillDetailHeader } from "./SkillDetailHeader";
 import { SkillContent } from "./SkillContent";
 import { InstallControls } from "./InstallControls";
+import { useLoad } from "../../hooks/useLoad";
 import { useAppStore } from "../../store/appStore";
-import type { SkillDetails, SkillWithStatus } from "@skill-studio/lib";
+import type { SkillWithStatus } from "@skill-studio/lib";
 
 interface SkillDetailPanelProps {
   skill: SkillWithStatus;
@@ -25,11 +26,6 @@ interface SkillDetailPanelProps {
   onUpdateComplete: () => void;
   onRemoveComplete: () => void;
 }
-
-type DetailsLoad =
-  | { kind: "loading"; skillId: string }
-  | { kind: "loaded"; details: SkillDetails }
-  | { kind: "failed"; message: string };
 
 export function SkillDetailPanel(props: SkillDetailPanelProps) {
   // GitHub owner/repository casing can change when the catalog joins a local record.
@@ -48,34 +44,21 @@ function SkillDetailsContent({
   onRemoveComplete,
 }: SkillDetailPanelProps) {
   const hasRemoteSource = skill.id.split("/").length >= 3;
-  const [load, setLoad] = useState<DetailsLoad>(() =>
-    hasRemoteSource
-      ? { kind: "loading", skillId: skill.id }
-      : { kind: "failed", message: "This skill has no skills.sh source." },
+  const getSkillDetails = useAppStore((state) => state.getSkillDetails);
+  // One load per panel: the panel is keyed by the skill, so a new skill mounts a new one. An id
+  // that only changes its letter case keeps the result it has; Retry reads with the current id.
+  const detailsLoad = useLoad(hasRemoteSource ? "skill-details" : null, () =>
+    getSkillDetails(skill.id),
   );
-  const details = load.kind === "loaded" ? load.details : null;
+  // A retry hides the last failure until its own answer lands.
+  const loadFailure = !hasRemoteSource
+    ? "This skill has no skills.sh source."
+    : detailsLoad.isLoading
+      ? null
+      : detailsLoad.error;
+  const details = detailsLoad.data ?? null;
   const resolvedTopSource = details?.source ?? skill.top_source ?? null;
   const openAddSkillSheet = useAppStore((state) => state.openAddSkillSheet);
-  const getSkillDetails = useAppStore((state) => state.getSkillDetails);
-  useEffect(() => {
-    if (load.kind !== "loading") return;
-    let cancelled = false;
-    getSkillDetails(load.skillId).then(
-      (details) => {
-        if (!cancelled) setLoad({ kind: "loaded", details });
-      },
-      (error) => {
-        if (!cancelled)
-          setLoad({
-            kind: "failed",
-            message: error instanceof Error ? error.message : String(error),
-          });
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [load, getSkillDetails]);
 
   return (
     <DrawerContent
@@ -84,17 +67,13 @@ function SkillDetailsContent({
       showCloseButton={false}
     >
       <SkillDetailHeader skill={skill} resolvedTopSource={resolvedTopSource} onClose={onClose} />
-      {load.kind === "failed" && (
+      {loadFailure !== null && (
         <div className="mx-5 mb-3 flex items-center justify-between gap-3">
           <p role="alert" className="m-0 text-small text-error">
-            {load.message}
+            {loadFailure}
           </p>
           {hasRemoteSource && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setLoad({ kind: "loading", skillId: skill.id })}
-            >
+            <Button variant="outline" size="sm" onClick={detailsLoad.reload}>
               Retry
             </Button>
           )}
@@ -103,7 +82,7 @@ function SkillDetailsContent({
       <SkillContent
         skill={skill}
         skillMd={details?.skill_md ?? null}
-        isLoading={load.kind === "loading"}
+        isLoading={detailsLoad.isLoading}
       />
       <Button
         variant="link"

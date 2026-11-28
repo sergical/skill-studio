@@ -4,7 +4,7 @@
 // Locations card's "Compare copies" button.
 // ============================================================================
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { PatchDiff } from "@pierre/diffs/react";
 import { Dialog, DialogContent, DialogTitle } from "@skill-studio/ui";
 import { deploymentLabel } from "@skill-studio/lib";
@@ -12,6 +12,7 @@ import { unifiedSkillMdDiff } from "@skill-studio/lib";
 import { ownDeployments, skillMdPathForDeployment } from "@skill-studio/lib";
 import { pickCompareDefaults, resolveCompareSelection } from "@skill-studio/lib";
 import type { Deployment, InstalledSkill } from "@skill-studio/lib";
+import { useLoad } from "../../hooks/useLoad";
 import { diffTheme } from "../../lib/theme";
 import { useAppStore } from "../../store/appStore";
 import { SelectControl } from "../ui/SelectControl";
@@ -40,37 +41,14 @@ function useSideContent(deployment: Deployment | undefined): SideState {
   // rebuilt on every snapshot, so keying on the object would re-read the file
   // on every background rescan even when the selected copy hasn't changed.
   const path = deployment ? skillMdPathForDeployment(deployment) : undefined;
-  const [state, setState] = useState<SideState>(
-    path ? { status: "loading" } : { status: "missing" },
+  const file = useLoad(path ?? null, () =>
+    path ? readInstalledSkillMd(path) : Promise.reject(new Error("No copy selected")),
   );
 
-  useEffect(() => {
-    if (!path) {
-      // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- syncs from an external source: this mirrors the async readInstalledSkillMd load below, keyed on the same path identity
-      setState({ status: "missing" });
-      return;
-    }
-    let ignore = false;
-    setState({ status: "loading" });
-    readInstalledSkillMd(path)
-      .then((content) => {
-        if (!ignore) setState({ status: "loaded", content });
-      })
-      .catch((err) => {
-        if (!ignore) {
-          setState({
-            status: "error",
-            message: err instanceof Error ? err.message : "Unknown error",
-            path,
-          });
-        }
-      });
-    return () => {
-      ignore = true;
-    };
-  }, [path, readInstalledSkillMd]);
-
-  return state;
+  if (!path) return { status: "missing" };
+  if (file.isLoading) return { status: "loading" };
+  if (file.error !== null) return { status: "error", message: file.error, path };
+  return file.data === undefined ? { status: "loading" } : { status: "loaded", content: file.data };
 }
 
 /**

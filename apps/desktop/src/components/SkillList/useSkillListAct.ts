@@ -23,11 +23,6 @@ export interface FixSkillDeps {
   openConflictPaths: SkillCommands["openConflictPaths"];
 }
 
-function storeFixSkillDeps(): FixSkillDeps {
-  const { fixSkill, openConflictPaths } = useAppStore.getState();
-  return { fixSkill, openConflictPaths };
-}
-
 /** Reports what `fix_skill` actually did as a toast, and opens the skill's
  * detail page whenever an issue is left unrepaired: a link issue lands on
  * the `SkillRepairCard` that already knows how to fix it, and every other
@@ -40,7 +35,7 @@ export async function reportFixOutcome(
   skill: InstalledSkill,
   addToast: (toast: Omit<Toast, "id">) => string,
   openDetail: () => void,
-  deps: FixSkillDeps = storeFixSkillDeps(),
+  deps: FixSkillDeps = useAppStore.getState(),
 ): Promise<boolean> {
   const outcome = await deps.fixSkill(skill.name);
   if (outcome.conflicts.length > 0) {

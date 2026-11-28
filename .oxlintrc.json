@@ -63,7 +63,12 @@
           {
             "patterns": [
               {
-                "group": ["**/lib/skill-api", "@/lib/skill-api"],
+                "group": [
+                  "**/lib/skill-api",
+                  "**/lib/skill-api.*",
+                  "@/lib/skill-api",
+                  "@/lib/skill-api.*"
+                ],
                 "message": "Components read and write skills through the store, not skill-api.ts directly. Add or use a store action instead."
               }
             ]
@@ -108,6 +113,7 @@
         "apps/desktop/src/components/Settings/**",
         "apps/desktop/src/components/Shell/**",
         "apps/desktop/src/components/Sidebar/**",
+        "apps/desktop/src/components/SkillStore/**",
         "apps/desktop/src/components/dev/**",
         "apps/desktop/src/components/ui/**"
       ],
@@ -118,7 +124,12 @@
           {
             "patterns": [
               {
-                "group": ["**/lib/skill-api", "@/lib/skill-api"],
+                "group": [
+                  "**/lib/skill-api",
+                  "**/lib/skill-api.*",
+                  "@/lib/skill-api",
+                  "@/lib/skill-api.*"
+                ],
                 "message": "Components read and write skills through the store, not skill-api.ts directly. Add or use a store action instead."
               }
             ],

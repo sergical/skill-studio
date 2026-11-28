@@ -35,6 +35,7 @@ import { invokeErrorMessage } from "../../lib/skill-command-error";
 import {
   applyAddSkillOperationEvent,
   listenForAddSkillOperation,
+  useAddSkillListenerRef,
 } from "../../hooks/useAddSkillOperation";
 import { useKeptHarnesses } from "../../hooks/useKeptHarnesses";
 import { singleSelectToggleValue } from "../../lib/single-select-toggle-group";
@@ -724,7 +725,7 @@ function useAddSkillSubmit(input: {
   const [trustBusy, setTrustBusy] = useState(false);
   const operationIdRef = useRef<string | undefined>(undefined);
   const consumedIdRef = useRef<string | undefined>(undefined);
-  const unlistenRef = useRef<(() => void) | undefined>(undefined);
+  const unlistenRef = useAddSkillListenerRef();
   const isValid = isAddSkillFormValid({
     parsed,
     noMethodsAvailable,
@@ -734,8 +735,6 @@ function useAddSkillSubmit(input: {
     projectPath,
     githubEntries,
   });
-
-  useEffect(() => () => unlistenRef.current?.(), []);
 
   useEffect(() => {
     if (!operation || !shouldConsumeAddSkillOperation(operation, consumedIdRef.current)) return;
