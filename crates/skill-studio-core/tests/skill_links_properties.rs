@@ -438,9 +438,6 @@ fn oracle_state(
     if reachable {
         return LinkState::Ok;
     }
-    if path.is_none() && found.iter().any(|(n, _)| n.ends_with(&format!("-{to}"))) {
-        return LinkState::Renamed;
-    }
     let named = |root: &str| {
         let skill_md = world.path(root).join(to).join("SKILL.md");
         fs::read_to_string(skill_md)
@@ -473,7 +470,9 @@ fn check(world: &World) -> Result<(), TestCaseError> {
                 let reported = report
                     .links
                     .iter()
-                    .find(|l| l.from == *name && l.to == to)
+                    .filter(|l| l.from == *name && l.to == to && l.path == path)
+                    .filter(|l| matches!(l.strength, LinkStrength::Needs | LinkStrength::HandsOff))
+                    .find(|l| l.agents.iter().any(|a| a.agent.as_str() == agent))
                     .and_then(|l| l.agents.iter().find(|a| a.agent.as_str() == agent))
                     .map(|a| a.state);
                 prop_assert_eq!(reported, Some(expected), "{} -> {} for {}", name, to, agent);

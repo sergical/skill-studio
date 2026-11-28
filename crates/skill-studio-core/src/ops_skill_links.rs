@@ -180,7 +180,10 @@ pub fn skill_links(
             .iter()
             .filter(|facts| req.agent.as_ref().is_none_or(|agent| agent == &facts.id))
             .collect();
-        let mut grouped: BTreeMap<(String, String), ResolvedLink> = BTreeMap::new();
+        // One row per distinct way a copy names the target, so an agent whose
+        // copy runs it is not hidden behind another copy that only mentions it.
+        let mut grouped: BTreeMap<(String, String, LinkStrength, String, u32), ResolvedLink> =
+            BTreeMap::new();
         for from in &inventory.skills {
             for facts in &agents {
                 let Some(copy) = from.deployments.iter().find(|d| loads(d, facts)) else {
@@ -199,7 +202,13 @@ pub fn skill_links(
                     }
                     let state = resolve(&fs, copy, &link, &inventory.skills, facts);
                     grouped
-                        .entry((link.from.clone(), link.to.clone()))
+                        .entry((
+                            link.from.clone(),
+                            link.to.clone(),
+                            link.strength,
+                            link.evidence.file.clone(),
+                            link.evidence.line,
+                        ))
                         .or_insert_with(|| ResolvedLink {
                             from: link.from.clone(),
                             to: link.to.clone(),
@@ -303,11 +312,13 @@ fn resolve(
         if target.is_some_and(loaded) {
             return LinkState::Ok;
         }
-        let suffix = format!("-{}", link.to);
-        if skills
-            .iter()
-            .any(|s| s.name.0.ends_with(&suffix) && loaded(s))
-        {
+        // A port that prefixes every name (`matt-grill-me`, `matt-grilling`)
+        // without rewriting the text: same prefix on both sides.
+        let renamed = link.from.split_once('-').is_some_and(|(prefix, _)| {
+            let name = format!("{prefix}-{}", link.to);
+            skills.iter().any(|s| s.name.0 == name && loaded(s))
+        });
+        if renamed {
             return LinkState::Renamed;
         }
     }

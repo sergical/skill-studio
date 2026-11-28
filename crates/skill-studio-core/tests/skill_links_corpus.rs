@@ -159,10 +159,7 @@ fn real_packs_give_the_links_a_person_checked_by_hand() {
         "code samples are not links"
     );
 
-    let pstack = detect_links(
-        &pack("cursor_plugins_pstack"),
-        &BTreeSet::from(["deslop".to_string()]),
-    );
+    let pstack = detect_links(&pack("cursor_plugins_pstack"), &BTreeSet::new());
     assert_eq!(
         strength(&pstack, "poteto-mode", "deslop"),
         Some(LinkStrength::HandsOff)
@@ -202,7 +199,7 @@ fn lines_that_only_look_like_links_are_not_links() {
         synthetic(
             "skill-a",
             &[
-                ("SKILL.md", "Do not call `skill-b` for approvals.\nRun `npx skill-b render`.\nThis is called by `skill-c`.\nA teach moment.\n```ts\nimport { x } from \"../skill-b/index\";\n```\nImports `../lib/impl` too."),
+                ("SKILL.md", "Do not call `skill-b` for approvals.\nRun `npx skill-b render`.\nThis is called by `skill-c`.\nA teach moment.\n```ts\nimport { x } from \"../skill-b/index\";\n```\nImports `../lib/impl` too.\nDo not call the Skill tool with \"retired\".\nDocs: https://github.com/x and `/loop` is a built-in."),
                 ("skill-b/REFERENCE.md", "See [skill-b](../skill-b/REFERENCE.md) and `skill-b`."),
             ],
         ),
@@ -221,6 +218,10 @@ fn optional_names_are_mentions_even_when_they_read_a_path() {
             "skill-a",
             &[("SKILL.md", "If available, read ../skill-b/SKILL.md first.")],
         ),
+        synthetic(
+            "skill-c",
+            &[("SKILL.md", "First read ../skill-b/SKILL.md.")],
+        ),
         synthetic("skill-b", &[("SKILL.md", "body")]),
     ];
     let found = detect_links(&skills, &BTreeSet::new());
@@ -228,6 +229,8 @@ fn optional_names_are_mentions_even_when_they_read_a_path() {
         strength(&found, "skill-a", "skill-b"),
         Some(LinkStrength::Mentions)
     );
+    let read = found.links.iter().find(|l| l.from == "skill-c").unwrap();
+    assert_eq!(read.path.as_deref(), Some("../skill-b/SKILL.md"));
 }
 
 proptest! {

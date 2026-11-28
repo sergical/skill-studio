@@ -84,22 +84,35 @@ fn links_show_a_skill_grill_me_cannot_reach_per_agent_the_same_on_cli_and_mcp() 
 #[test]
 fn a_prefixed_install_shows_as_renamed_and_an_agent_filter_drops_skills_it_cannot_load() {
     let home = tempfile::tempdir().unwrap();
-    install(home.path(), "productivity", "grill-me", true);
-    let renamed = home.path().join(".agents/skills/matt-grilling");
-    std::fs::create_dir_all(&renamed).unwrap();
-    let text =
-        std::fs::read_to_string(real_skill("productivity", "grilling").join("SKILL.md")).unwrap();
-    std::fs::write(
-        renamed.join("SKILL.md"),
-        text.replacen("name: grilling", "name: matt-grilling", 1),
-    )
-    .unwrap();
-
-    let (_, link) = grill_me_to_grilling(home.path());
+    let shared = home.path().join(".agents/skills");
+    // A port that prefixes every folder and name without rewriting the text.
+    for (bucket, name) in [("productivity", "grill-me"), ("productivity", "grilling")] {
+        install(home.path(), bucket, name, false);
+        let prefixed = format!("matt-{name}");
+        std::fs::rename(shared.join(name), shared.join(&prefixed)).unwrap();
+        let skill_md = shared.join(&prefixed).join("SKILL.md");
+        let text = std::fs::read_to_string(&skill_md).unwrap();
+        std::fs::write(
+            &skill_md,
+            text.replacen(&format!("name: {name}"), &format!("name: {prefixed}"), 1),
+        )
+        .unwrap();
+    }
+    let cli = headless::cli(home.path(), &["links", "matt-grill-me"]);
+    let links = cli["data"]["links"].as_array().unwrap();
+    let link = links
+        .iter()
+        .find(|l| l["to"] == "grilling")
+        .cloned()
+        .unwrap();
     assert_eq!(state(&link, "codex"), "renamed");
 
-    std::fs::remove_dir_all(home.path().join(".agents/skills/grill-me")).unwrap();
     std::fs::create_dir_all(home.path().join(".claude/skills")).unwrap();
-    let claude_only = headless::cli(home.path(), &["links", "grill-me", "--agent", "codex"]);
+    std::fs::rename(
+        shared.join("matt-grill-me"),
+        home.path().join(".claude/skills/matt-grill-me"),
+    )
+    .unwrap();
+    let claude_only = headless::cli(home.path(), &["links", "matt-grill-me", "--agent", "codex"]);
     assert!(claude_only["data"]["links"].as_array().unwrap().is_empty());
 }

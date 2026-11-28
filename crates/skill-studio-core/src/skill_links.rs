@@ -202,7 +202,10 @@ fn is_index(skill: &SkillText, skills: &[SkillText], rows: &[Found]) -> bool {
         .filter(|row| row.list_line)
         .map(|row| (row.file.as_str(), row.line))
         .collect();
-    targets.len() >= INDEX_MIN_TARGETS
+    // A skill with no known pack has nothing to be an index of: counting all
+    // such skills together would make the answer depend on unrelated installs.
+    skill.pack.is_some()
+        && targets.len() >= INDEX_MIN_TARGETS
         && targets.len() * 2 >= pack_size
         && list_lines.len() * 2 >= lines.len()
 }
@@ -294,8 +297,10 @@ fn scan_line(
     // A slash command for a skill or plugin that is not installed, such as
     // "`/deslop` from the `cursor-team-kit` plugin".
     for (at, _) in cleaned.match_indices('/') {
+        // Only a command on its own: not a URL (`https://github`), a path
+        // segment, or a word joined to the slash.
         let prior = cleaned[..at].chars().next_back();
-        if prior.is_some_and(|c| c.is_alphanumeric() || c == '.' || c == '_') {
+        if prior.is_some_and(|c| !(c.is_whitespace() || "`(*[".contains(c))) {
             continue;
         }
         let rest = &cleaned[at + 1..];
@@ -303,6 +308,12 @@ fn scan_line(
             .find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'))
             .unwrap_or(rest.len());
         let candidate = &rest[..end];
+        if rest[end..].starts_with(['/', '.'])
+            && !rest[end..].starts_with(". ")
+            && rest[end..] != *"."
+        {
+            continue;
+        }
         let after = tail(&rest[end..].chars().take(40).collect::<String>(), 40).to_lowercase();
         if is_skill_name(candidate)
             && !names.contains(candidate)
@@ -400,7 +411,7 @@ fn is_skill_name(s: &str) -> bool {
 
 fn negated(line: &str, start: usize) -> bool {
     let lower = line[..start].to_lowercase();
-    let before = tail(&lower, 30);
+    let before = tail(&lower, 60);
     NEGATIONS.iter().any(|word| before.contains(word))
 }
 
