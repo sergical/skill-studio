@@ -14,6 +14,7 @@ import {
   budgetRule,
   folderCounts,
   hasAssumedClaudeWindow,
+  hasBudgetEstimate,
   listedEntries,
 } from "./client-allocation";
 
@@ -201,7 +202,7 @@ export function ClientConfiguration({
     { state: "name_only" as const, count: namesOnly, mark: "bg-warning/45" },
     { state: "omitted" as const, count: omitted, mark: "bg-warning" },
   ].filter((part) => part.count > 0);
-  const estimate = preview && row.budget !== null && !assumedWindow;
+  const estimate = hasBudgetEstimate(row);
   const folders = folderCounts(entries);
   const footnote = assumedWindow
     ? `${name}’s settings give a percentage, and the model catalog has no window to apply it to.`

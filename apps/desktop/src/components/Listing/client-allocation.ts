@@ -1,4 +1,4 @@
-import type { HarnessListing, ListingEntry } from "@skill-studio/lib";
+import type { HarnessListing, ListingEntry, SkillInvocationStats } from "@skill-studio/lib";
 
 export function listedEntries(row: HarnessListing) {
   return row.entries.filter((e) => e.state !== "hidden" && e.state !== "omitted");
@@ -42,6 +42,31 @@ export function additionalEntries(entries: ListingEntry[], other: ListingEntry[]
 // simulator still works, but its result cannot describe the user's configuration.
 export function hasAssumedClaudeWindow(row: HarnessListing) {
   return row.harness === "claude-code" && row.uses_default_context_window;
+}
+
+/** True when the cuts in this skill list can be stated as facts: a preview with a budget and a
+ * known model window. Name only, Not listed and park advice all need it. */
+export function hasBudgetEstimate(row: HarnessListing) {
+  return row.evidence === "preview" && row.budget !== null && !hasAssumedClaudeWindow(row);
+}
+
+/** True when any history record names the agent; only then can its zero mean "no uses". */
+export function hasReadableHistory(invocations: SkillInvocationStats[], agent: string) {
+  return invocations.some(
+    (stats) =>
+      agent in stats.by_harness_30_days || stats.by_hour.some((hour) => hour.harness === agent),
+  );
+}
+
+/** Each skill's uses by this one agent in 30 days, or null when the agent has no readable history. */
+export function agentUses30Days(
+  invocations: SkillInvocationStats[],
+  agent: string,
+): Map<string, number> | null {
+  if (!hasReadableHistory(invocations, agent)) return null;
+  return new Map(
+    invocations.map((stats) => [stats.skill, stats.by_harness_30_days[agent] ?? 0] as const),
+  );
 }
 
 export function budgetRule(row: HarnessListing) {

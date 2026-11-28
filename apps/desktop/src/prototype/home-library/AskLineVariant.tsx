@@ -13,36 +13,17 @@ import type { UpdateCheck } from "../../components/Home/useUpdateCheck";
 import { useMcpConnections } from "../../hooks/useMcpConnections";
 import { invokeErrorMessage } from "../../lib/skill-api";
 import { useAppStore } from "../../store/appStore";
+import { agentCell, cutLine, names, plural } from "./ask-line-model";
+import type { AgentCell } from "./ask-line-model";
 import { dailyUses } from "./library-model";
 import type { SimpleProps } from "./SimpleVariants";
 
-const plural = (n: number, one: string, many = `${one}s`) =>
-  `${formatCount(n)} ${n === 1 ? one : many}`;
 const sum = (values: number[]) => values.reduce((a, b) => a + b, 0);
 const orList = (items: string[]) =>
   items.length > 1
     ? `${items.slice(0, -1).join(", ")} or ${items[items.length - 1]}`
     : items.join("");
 const lowerFirst = (text: string) => text.charAt(0).toLowerCase() + text.slice(1);
-
-/** Names in a prompt: all of them up to ten, then a count the agent can look up itself. */
-function names(list: string[]): string {
-  const shown = list.slice(0, 10);
-  const rest = list.length - shown.length;
-  return rest > 0 ? `${shown.join(", ")} and ${formatCount(rest)} more` : shown.join(", ");
-}
-
-interface AgentCell {
-  id: string;
-  label: string;
-  /** Skills in this agent's global skill list; null until its listing is read. */
-  sees: number | null;
-  /** Null when this agent has no budget estimate, so nothing can be called cut. */
-  nameOnly: string[] | null;
-  notListed: string[] | null;
-  /** Uses this week; null when its sessions hold no use in 30 days (read or not, we can't tell). */
-  uses: number | null;
-}
 
 interface Task {
   id: "broken" | "warnings" | "updates" | "unused" | `cut:${string}`;
@@ -59,16 +40,6 @@ function promptFor(tasks: Task[]): string {
     ...tasks.map((task) => `- ${task.line}`),
     "Tell me what you changed.",
   ].join("\n");
-}
-
-function cutLine(agent: AgentCell): string | null {
-  const parts = [
-    agent.nameOnly?.length ? `lists ${plural(agent.nameOnly.length, "skill")} by name only` : "",
-    agent.notListed?.length ? `leaves ${plural(agent.notListed.length, "skill")} out` : "",
-  ].filter(Boolean);
-  if (!parts.length) return null;
-  const cut = [...(agent.nameOnly ?? []), ...(agent.notListed ?? [])];
-  return `Make room in ${agent.label}'s skill list. It ${parts.join(" and ")}: ${names(cut)}. Suggest which skills I use least to park.`;
 }
 
 /** Copies text and says so in place for 1.5s; a refused clipboard says so in a toast. */
@@ -144,22 +115,14 @@ export function AskLineVariant(
   const kept = new Set(props.agents ?? props.listings.map((r) => r.harness));
   const setUp = HARNESS_CATALOG.filter((row) => kept.has(row.id));
   const missing = HARNESS_CATALOG.filter((row) => !kept.has(row.id));
-  const agents: AgentCell[] = setUp.map((row) => {
-    const listing = props.listings.find((r) => r.harness === row.id);
-    const entries = (listing?.entries ?? []).filter((e) => e.state !== "hidden");
-    const estimated = listing?.evidence === "preview" && listing.budget !== null;
-    const read = snapshot.invocations.some((s) => s.by_hour.some((h) => h.harness === row.id));
-    return {
-      id: row.id,
-      label: row.label,
-      sees: listing ? entries.length : null,
-      nameOnly: estimated
-        ? entries.filter((e) => e.state === "name_only").map((e) => e.name)
-        : null,
-      notListed: estimated ? entries.filter((e) => e.state === "omitted").map((e) => e.name) : null,
-      uses: read ? sum(days.byAgent.get(row.id) ?? []) : null,
-    };
-  });
+  const agents: AgentCell[] = setUp.map((row) =>
+    agentCell(
+      row,
+      props.listings.find((r) => r.harness === row.id),
+      snapshot.invocations,
+      days.byAgent.get(row.id),
+    ),
+  );
   // One agent's uses would repeat the week's total, so the cells show uses only for two or more.
   const usesPerAgent = agents.length > 1 && hasHistory;
 
@@ -253,12 +216,12 @@ export function AskLineVariant(
                   <span className="text-body font-semibold text-text-primary">
                     {agent.sees === null ? "–" : formatCount(agent.sees)}
                   </span>{" "}
-                  in skill list
+                  {agent.seesUnit}
                 </span>
                 {usesPerAgent && (
                   <span className="truncate text-caption text-text-tertiary tabular-nums">
                     {agent.uses === null
-                      ? "No uses found"
+                      ? "No readable history"
                       : `${plural(agent.uses, "use")} this week`}
                   </span>
                 )}
@@ -363,6 +326,16 @@ export function AskLineVariant(
                 </Button>
               </span>
             )}
+            {prompt && noServer && (
+              <Button
+                size="sm"
+                variant="outline"
+                title="No set-up agent has the Skill Studio MCP server yet, and the prompt needs it."
+                onClick={() => navigate({ kind: "settings" })}
+              >
+                Connect the MCP server
+              </Button>
+            )}
           </div>
           <span className="flex items-center gap-1 text-caption text-text-tertiary">
             <span className={updateCheck.failed ? "text-error" : undefined}>
@@ -427,18 +400,6 @@ export function AskLineVariant(
             ))}
           </ul>
           {tasks.length > 1 && <p>Tell me what you changed.</p>}
-          {noServer && (
-            <p className="mt-1 font-sans text-caption text-text-secondary">
-              No set-up agent has the Skill Studio MCP server yet.{" "}
-              <Button
-                variant="link"
-                className="h-auto p-0 text-caption"
-                onClick={() => navigate({ kind: "settings" })}
-              >
-                Connect one in Settings
-              </Button>
-            </p>
-          )}
         </div>
       )}
     </section>

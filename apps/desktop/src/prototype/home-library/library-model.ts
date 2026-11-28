@@ -4,6 +4,7 @@
 import { ALL_ACTIVITY, skillRows } from "@skill-studio/lib";
 import type { HarnessListing, InstalledSkill, SkillSnapshot } from "@skill-studio/lib";
 import type { HomeGroups } from "../../components/Home/home-inbox-data";
+import { hasBudgetEstimate } from "../../components/Listing/client-allocation";
 
 export type ListState = "described" | "truncated" | "name_only" | "omitted" | "hidden";
 
@@ -50,7 +51,7 @@ export function buildLibrary(
   const warning = new Set(groups.warnings.map((issue) => issue.skill.name));
   const listed = new Map<string, Record<string, ListState>>();
   for (const row of listings) {
-    if (row.evidence !== "preview" || row.budget === null) continue;
+    if (!hasBudgetEstimate(row)) continue;
     for (const entry of row.entries) {
       const map = listed.get(entry.name) ?? {};
       map[row.harness] = entry.state;

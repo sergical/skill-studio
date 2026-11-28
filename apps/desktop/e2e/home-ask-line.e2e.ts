@@ -33,3 +33,16 @@ test("Copy prompt on Home copies a prompt that names the broken skills, and the 
   for (const line of await preview.getByRole("listitem").allInnerTexts())
     expect(copied).toContain(line.trim());
 });
+
+// With no set-up agent on the Skill Studio MCP server, the prompt cannot work yet, so the way to
+// set the server up sits beside Copy prompt instead of inside the closed preview.
+test("Home offers to connect the MCP server beside Copy prompt when no agent has it", async ({
+  page,
+}) => {
+  await page.goto("/?persona=everything-wrong&v=5");
+  await page.getByRole("button", { name: "Continue" }).click();
+  const home = page.getByRole("region", { name: "Your skills at a glance" });
+  await expect(home.getByRole("button", { name: "Copy prompt for your agent" })).toBeVisible();
+  await home.getByRole("button", { name: "Connect the MCP server" }).click();
+  await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
+});

@@ -1,5 +1,4 @@
 import { useEffect, useReducer, useState } from "react";
-import { Check, Copy } from "lucide-react";
 import { Button, Input } from "@skill-studio/ui";
 import {
   HARNESS_CATALOG,
@@ -13,6 +12,7 @@ import type {
   ListingReport,
   ListingRequest,
   ListingState,
+  SkillInvocationStats,
   SkillSnapshot,
 } from "@skill-studio/lib";
 import { useClientRows } from "../../hooks/useClientRows";
@@ -20,12 +20,15 @@ import { AgentTabs } from "./AgentTabs";
 import { CompareClients } from "./CompareClients";
 import { PageSection } from "../Shell/PageSection";
 import { PageShell } from "../Shell/PageShell";
+import { CopyTextButton } from "../ui/CopyTextButton";
 import { SelectControl } from "../ui/SelectControl";
 import { ClientConfiguration } from "./ClientConfiguration";
 import {
+  agentUses30Days,
   entrySource,
   folderCounts,
   hasAssumedClaudeWindow,
+  hasBudgetEstimate,
   listedEntries,
   sourceCounts,
 } from "./client-allocation";
@@ -208,12 +211,8 @@ function Summary({ row, budget }: { row: HarnessListing; budget: number }) {
 
 function SettingCard({ row, tried }: { row: HarnessListing; tried: HarnessListing | null }) {
   const setting = (tried ?? row).setting;
-  const [copied, setCopied] = useState(false);
   if (!setting) return null;
   const file = setting.chezmoi_source ?? setting.file;
-  const copy = () => {
-    void navigator.clipboard.writeText(setting.snippet).then(() => setCopied(true));
-  };
   return (
     <section
       aria-label="Setting to paste"
@@ -233,15 +232,11 @@ function SettingCard({ row, tried }: { row: HarnessListing; tried: HarnessListin
         <pre className="m-0 min-w-0 flex-1 overflow-x-auto rounded-sm bg-bg-secondary px-2 py-1 text-caption">
           {setting.snippet}
         </pre>
-        <Button
-          variant="outline"
-          size="sm"
+        <CopyTextButton
+          text={setting.snippet}
+          label="Copy"
           className="rounded-sm px-2 text-text-secondary"
-          onClick={copy}
-        >
-          <Copy size={12} />
-          {copied ? "Copied" : "Copy"}
-        </Button>
+        />
       </div>
     </section>
   );
@@ -331,56 +326,25 @@ function parkPrompt(agent: string, names: string[]) {
   return `Use the Skill Studio MCP listing tool to check which skills ${agent} lists by name only or not at all. Then help me decide which to park so the rest keep their descriptions. They are: ${names.join(", ")}.`;
 }
 
-function CopyPrompt({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const addToast = useAppStore((s) => s.addToast);
-  useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), 1500);
-    return () => clearTimeout(timer);
-  }, [copied]);
-  return (
-    <Button
-      size="sm"
-      variant="ghost"
-      className="-mr-2.5"
-      title={text}
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(text);
-          setCopied(true);
-        } catch (error) {
-          addToast({
-            type: "error",
-            title: "Couldn’t copy the prompt",
-            message: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }}
-    >
-      {copied ? <Check size={12} /> : <Copy size={12} />}
-      {copied ? "Copied" : "Copy agent prompt"}
-    </Button>
-  );
-}
-
-/** The skills past the line: the ones this agent knows by name only, or not at all. */
-function DontFit({
+/** The skills past the line: the ones this agent knows by name only, or not at all. Without a
+ * budget estimate on a known model window, nothing can be called cut. */
+export function DontFit({
   row,
-  uses,
+  invocations,
   open,
   canOpen,
 }: {
   row: HarnessListing;
-  /** Uses in the last 30 days, or null when no history is readable. */
-  uses: Map<string, number> | null;
+  invocations: SkillInvocationStats[];
   open: (entry: ListingEntry) => void;
   canOpen: (entry: ListingEntry) => boolean;
 }) {
   const [all, setAll] = useState(false);
+  // This agent's own uses: another agent's uses say nothing about what this one needs.
+  const uses = agentUses30Days(invocations, row.harness);
   const out = row.entries.filter((e) => e.state === "name_only" || e.state === "omitted");
   if (uses) out.sort((a, b) => (uses.get(a.name) ?? 0) - (uses.get(b.name) ?? 0));
-  if (!out.length) return null;
+  if (!out.length || !hasBudgetEstimate(row)) return null;
   const shown = all ? out : out.slice(0, 8);
   return (
     <PageSection
@@ -388,7 +352,10 @@ function DontFit({
       meta={
         <>
           <span>{uses ? "Fewest uses in 30 days first" : "No readable history"}</span>
-          <CopyPrompt
+          <CopyTextButton
+            variant="ghost"
+            className="-mr-2.5"
+            label="Copy agent prompt"
             text={parkPrompt(
               deploymentLabelFromAgentId(row.harness),
               out.map((entry) => entry.name),
@@ -770,11 +737,7 @@ export function ListingView({ snapshot, initialHarness, initialScope }: ListingV
           {preview && row.budget !== null && (
             <DontFit
               row={row}
-              uses={
-                snapshot?.invocations.length
-                  ? new Map(snapshot.invocations.map((stats) => [stats.skill, stats.last_30_days]))
-                  : null
-              }
+              invocations={snapshot?.invocations ?? []}
               open={(entry) => {
                 const owner = entry.path && byPath.get(entry.path);
                 if (owner && entry.path)
