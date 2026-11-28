@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { InstalledSkill, ListingReport } from "@skill-studio/lib";
 import { buildHarnessSnapshot, deployment, HARNESS_HOME } from "../../dev/harness/skill-fixture";
@@ -51,6 +51,14 @@ it("refreshes a cached listing and shows where the current description was cut",
   expect(screen.getByText(/Codex keeps about/).textContent).toContain("48 characters");
 });
 
+/** The Agents section's row for Codex. */
+async function codexRow() {
+  const list = await screen.findByRole("list", { name: "Agents" });
+  return within(list)
+    .getAllByRole("listitem")
+    .find((item) => item.textContent?.startsWith("Codex"))!;
+}
+
 function showListing(report: ListingReport) {
   useAppStore.setState({
     readListing: async () => report,
@@ -90,10 +98,11 @@ it("leads with what the last Codex session showed, not the estimate", async () =
       initialClient="codex"
     />,
   );
-  expect(await screen.findByText("Full description")).toBeTruthy();
-  expect(screen.getByText(/Review staged changes first\./)).toBeTruthy();
-  // The session recorded a length, not words, so the text is labelled as today's.
-  expect(screen.getByText("Today’s text")).toBeTruthy();
+  const row = await codexRow();
+  expect(row.textContent).toContain("Full description");
+  expect(row.textContent).toContain("Last session");
+  // The estimate now differs from what the session showed; the opened row says so.
+  expect(screen.getByText(/With the current settings/).textContent).toContain("Shortened");
   expect(screen.queryByText("Beyond the cutoff")).toBeNull();
 });
 
@@ -128,7 +137,7 @@ it("shows no description for a skill the last session listed by name only", asyn
       initialClient="codex"
     />,
   );
-  expect(await screen.findByText("Name only")).toBeTruthy();
+  expect((await codexRow()).textContent).toContain("Name only");
   expect(screen.queryByText(/Review staged changes first\./)).toBeNull();
 });
 
@@ -186,5 +195,46 @@ it("shows nothing when no agent lists this skill", async () => {
   await vi.waitFor(() =>
     expect(useAppStore.getState().listingReports).not.toEqual(initial.listingReports),
   );
-  expect(screen.queryByRole("region", { name: "What agents see of this skill" })).toBeNull();
+  expect(screen.queryByRole("region", { name: "Agents" })).toBeNull();
+});
+
+it("shows each agent's uses from the 30-day history, and no readable history for an agent with none", async () => {
+  const snapshot = buildHarnessSnapshot();
+  const report = mockListingReport(snapshot, {});
+  const codex = report.listings.find((row) => row.harness === "codex")!;
+  const entry = codex.entries.find((item) => item.path && item.scanned)!;
+  const skill = snapshot.skills.find((item) =>
+    item.deployments.some((copy) => copy.path === entry.path),
+  )!;
+  const other = snapshot.skills.find((item) => item.name !== skill.name)!;
+  const stats = (name: string, byHarness: Record<string, number>, harness: string) => ({
+    skill: name,
+    last_24_hours: 0,
+    last_7_days: 0,
+    last_14_days: 0,
+    last_30_days: 0,
+    last_used: null,
+    by_project_30_days: {},
+    by_day: {},
+    by_harness_30_days: byHarness,
+    by_trigger_30_days: { user: 0, agent: 0, file_read: 0 },
+    by_hour: [{ hour: 1, harness, trigger: "agent" as const, project_path: null, count: 1 }],
+  });
+  showListing(report);
+  render(
+    <SkillVisibility
+      skill={skill}
+      deployment={skill.deployments.find((item) => item.path === entry.path)!}
+      invocations={[
+        stats(skill.name, { codex: 4 }, "codex"),
+        stats(other.name, { "claude-code": 2 }, "claude-code"),
+      ]}
+      listingScope="global"
+    />,
+  );
+  expect((await codexRow()).textContent).toContain("4 uses");
+  const list = screen.getByRole("list", { name: "Agents" });
+  const rows = within(list).getAllByRole("listitem");
+  const cursor = rows.find((item) => item.textContent?.startsWith("Cursor"));
+  expect(cursor?.textContent).toContain("No readable history");
 });

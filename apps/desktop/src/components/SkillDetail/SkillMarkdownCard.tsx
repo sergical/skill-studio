@@ -7,6 +7,7 @@
 import { Button } from "@skill-studio/ui";
 import { deploymentLabel } from "@skill-studio/lib";
 import type { Deployment } from "@skill-studio/lib";
+import { PageSection } from "../Shell/PageSection";
 import { SelectControl } from "../ui/SelectControl";
 import { TooltipControl } from "../ui/TooltipControl";
 import { SkillMarkdown } from "./SkillMarkdown";
@@ -79,7 +80,7 @@ interface CardHeaderProps {
   onStartEdit: () => void;
 }
 
-/** SKILL.md's own header: title, the copy picker or label, and Edit. Every control keeps its box
+/** SKILL.md's title-row controls: the copy picker or label, and Edit. Every control keeps its box
  * through loading and editing - Edit waits disabled for the text, stays in place hidden while the
  * editor's own toolbar is up, and the picker locks instead of turning into a label - so the
  * header never changes size and the card below it never moves. */
@@ -94,44 +95,41 @@ function CardHeader({
   onStartEdit,
 }: CardHeaderProps) {
   return (
-    <div className="flex min-h-7 items-center justify-between gap-3 text-body font-semibold text-text-primary">
-      <span>SKILL.md</span>
-      <span className="flex min-w-0 items-center gap-2">
-        {deployment &&
-          !deploymentUnresolved &&
-          (ownDeploymentOptions.length > 1 &&
-          ownDeploymentOptions.some((d) => d.path === deployment.path) ? (
-            <SelectControl
-              ariaLabel="Copy to show and edit"
-              disabled={isEditing}
-              value={deployment.path}
-              onValueChange={onSelectDeployment}
-              items={ownDeploymentOptions.map((d) => ({
-                value: d.path,
-                label: deploymentLabel(d),
-              }))}
-            />
-          ) : (
-            <TooltipControl content={[{ text: deployment.path, mono: true }]}>
-              <span className="truncate text-caption font-normal text-text-tertiary">
-                {deploymentLabel(deployment)}
-              </span>
-            </TooltipControl>
-          ))}
-        {editable && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onStartEdit}
-            disabled={!canEdit}
-            className={isEditing ? "invisible" : undefined}
-            aria-hidden={isEditing || undefined}
-          >
-            Edit
-          </Button>
-        )}
-      </span>
-    </div>
+    <span className="flex min-w-0 items-center gap-2">
+      {deployment &&
+        !deploymentUnresolved &&
+        (ownDeploymentOptions.length > 1 &&
+        ownDeploymentOptions.some((d) => d.path === deployment.path) ? (
+          <SelectControl
+            ariaLabel="Copy to show and edit"
+            disabled={isEditing}
+            value={deployment.path}
+            onValueChange={onSelectDeployment}
+            items={ownDeploymentOptions.map((d) => ({
+              value: d.path,
+              label: deploymentLabel(d),
+            }))}
+          />
+        ) : (
+          <TooltipControl content={[{ text: deployment.path, mono: true }]}>
+            <span className="truncate text-small text-text-tertiary">
+              {deploymentLabel(deployment)}
+            </span>
+          </TooltipControl>
+        ))}
+      {editable && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onStartEdit}
+          disabled={!canEdit}
+          className={isEditing ? "invisible" : undefined}
+          aria-hidden={isEditing || undefined}
+        >
+          Edit
+        </Button>
+      )}
+    </span>
   );
 }
 
@@ -253,33 +251,39 @@ export function SkillMarkdownCard({
     : undefined;
 
   return (
-    <div className="flex flex-col gap-1 rounded-lg border border-border-subtle p-4">
-      <CardHeader
-        deployment={deployment}
-        deploymentUnresolved={deploymentUnresolved}
-        ownDeploymentOptions={ownDeploymentOptions}
-        isEditing={isEditing}
-        editable={editable}
-        canEdit={canEdit}
-        onSelectDeployment={onSelectDeployment}
-        onStartEdit={onStartEdit}
-      />
-      <CardBody
-        deploymentUnresolved={deploymentUnresolved}
-        ownDeploymentOptions={ownDeploymentOptions}
-        onSelectDeployment={onSelectDeployment}
-        pluginManagedText={pluginManagedText}
-        editState={editState}
-        rawContent={rawContent}
-        saveLabel={saveLabel}
-        onSave={onSave}
-        onCancelEdit={onCancelEdit}
-        onDirtyChange={onDirtyChange}
-        highlightLine={highlightLine}
-        isLoadingContent={isLoadingContent}
-        loadError={loadError}
-        onRetry={onRetry}
-      />
-    </div>
+    <PageSection
+      title="SKILL.md"
+      meta={
+        <CardHeader
+          deployment={deployment}
+          deploymentUnresolved={deploymentUnresolved}
+          ownDeploymentOptions={ownDeploymentOptions}
+          isEditing={isEditing}
+          editable={editable}
+          canEdit={canEdit}
+          onSelectDeployment={onSelectDeployment}
+          onStartEdit={onStartEdit}
+        />
+      }
+    >
+      <div className="rounded-lg border border-border-subtle">
+        <CardBody
+          deploymentUnresolved={deploymentUnresolved}
+          ownDeploymentOptions={ownDeploymentOptions}
+          onSelectDeployment={onSelectDeployment}
+          pluginManagedText={pluginManagedText}
+          editState={editState}
+          rawContent={rawContent}
+          saveLabel={saveLabel}
+          onSave={onSave}
+          onCancelEdit={onCancelEdit}
+          onDirtyChange={onDirtyChange}
+          highlightLine={highlightLine}
+          isLoadingContent={isLoadingContent}
+          loadError={loadError}
+          onRetry={onRetry}
+        />
+      </div>
+    </PageSection>
   );
 }

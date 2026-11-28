@@ -53,7 +53,4 @@ test("opening a plugin skill uses the copy from its client group", async ({ page
   await expect(page.getByRole("combobox", { name: "Copy to show and edit" })).toHaveCount(0);
   const source = `Codex plugin · ${name} · v2.0.0`;
   await expect(page.getByRole("paragraph").filter({ hasText: source })).toBeVisible();
-  await expect(
-    page.getByRole("complementary", { name: "Properties" }).getByText(source),
-  ).toBeVisible();
 });

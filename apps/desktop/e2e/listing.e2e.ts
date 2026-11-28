@@ -80,9 +80,10 @@ test("a Cursor-only setup can follow a scanned skill from Home and back", async 
     .getByRole("list", { name: "Skill list", exact: true })
     .getByRole("button", { name: "code-review", exact: true })
     .click();
-  const preview = page.getByRole("region", { name: "What agents see of this skill" });
-  await expect(preview.getByRole("combobox", { name: "Agent for this skill" })).toContainText(
-    "Cursor",
+  const preview = page.getByRole("list", { name: "Agents" });
+  await expect(preview.getByRole("button", { name: /^Cursor/ })).toHaveAttribute(
+    "aria-expanded",
+    "true",
   );
   await expect(preview).toContainText(".agents/skills/code-review");
   await expect(preview).not.toContainText("Full description");

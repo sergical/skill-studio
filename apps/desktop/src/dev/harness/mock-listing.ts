@@ -36,7 +36,7 @@ function entries(snapshot: SkillSnapshot, budget: number, harness: string): List
   return skills.map((skill) => {
     const full = skill.description?.length ?? 0;
     const hidden = skill.parked || skill.invocation === "user-only";
-    const fits = !hidden && full + 2 <= left;
+    const fits = !hidden && full > 0 && full + 2 <= left;
     if (fits) left -= full + 2;
     return {
       name: skill.name,

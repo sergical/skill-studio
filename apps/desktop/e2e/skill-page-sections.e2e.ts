@@ -29,15 +29,19 @@ test("a long description opens and closes with Show more, and a short one shows 
   await expect(page.getByRole("button", { name: /^Show (more|less)$/ })).toHaveCount(0);
 });
 
-test("the agent picker for a skill lists only the agents that have a copy of it", async ({
+test("the Agents section lists only the agents that have a copy of a skill, and opens one to where it found it", async ({
   page,
 }) => {
   // Its one copy is in ~/.agents/skills, which Codex and Cursor read and Claude Code does not.
   await openSkillPage(page, "incident-postmortem");
-  const section = page.getByRole("region", { name: "What agents see of this skill" });
-  await section.getByRole("combobox", { name: "Agent for this skill" }).click();
-  await expect(page.getByRole("option")).toHaveText(["Codex", "Cursor"]);
-  await page.getByRole("option", { name: "Cursor" }).click();
-  await expect(section).toContainText(".agents/skills/incident-postmortem");
-  await expect(section).not.toContainText("No matching copy");
+  const agents = page.getByRole("list", { name: "Agents" });
+  // Agents that used the skill without listing this copy follow, marked as such.
+  const listing = agents.getByRole("listitem").filter({ hasNotText: "Not in its list" });
+  await expect(listing).toHaveCount(2);
+  await expect(listing.first()).toContainText("Codex");
+  await expect(listing.last()).toContainText("Cursor");
+  const cursor = agents.getByRole("button", { name: /^Cursor/ });
+  await cursor.click();
+  await expect(cursor).toHaveAttribute("aria-expanded", "true");
+  await expect(agents).toContainText(".agents/skills/incident-postmortem");
 });

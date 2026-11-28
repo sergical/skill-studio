@@ -8,6 +8,7 @@
 import { AlertTriangle, ExternalLink } from "lucide-react";
 import { Button } from "@skill-studio/ui";
 import {
+  basename,
   describeFrontmatterErrorLine,
   describeSpecViolations,
   describeFrontmatterRepair,
@@ -65,6 +66,17 @@ function parkedChipLabel(parkedAt: string | null | undefined): string {
   return `Parked · ${date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`;
 }
 
+/** "Claude Code does not load it in agent-studio: its link is broken." A Universal folder link
+ * stops every agent that reads that folder. */
+function brokenLinkLine(deployment: Deployment): string {
+  const where = deployment.project_path ? ` in ${basename(deployment.project_path)}` : "";
+  const who =
+    deployment.agent === "shared"
+      ? "Agents that read the Universal folder do"
+      : `${deployment.agent} does`;
+  return `${who} not load it${where}: its link is broken.`;
+}
+
 /**
  * The installed skill header is identity only: title, description, and state
  * chips, followed by any blocking violation for the rendered copy. It shows
@@ -94,6 +106,8 @@ export function InstalledSkillHeader({
     ),
   ];
   const nonBlockingCount = nonBlockingNotes.length;
+  // A broken link is what puts the skill under Broken on Home and Skills; say so at the top.
+  const brokenLinks = own.filter((d) => d.symlink_is_broken);
   // The red violation line names only the deployment whose SKILL.md the page
   // actually renders - other deployments' violations show on their own
   // Locations rows instead (see `SkillLocationsCard`). Home's spec-violation
@@ -237,6 +251,12 @@ export function InstalledSkillHeader({
         </div>
       )}
 
+      {brokenLinks.map((d) => (
+        <p key={d.id} className="m-0 flex items-center gap-2 text-small text-error">
+          <AlertTriangle size={13} aria-hidden="true" />
+          {brokenLinkLine(d)}
+        </p>
+      ))}
       {blockingViolations.length > 0 && (
         <div className="flex items-center gap-2 text-small text-error">
           <AlertTriangle size={13} />
