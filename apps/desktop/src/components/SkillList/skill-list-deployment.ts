@@ -28,17 +28,24 @@ function selectListDeployment(
   return choices.find((d) => d.agent === harness) ?? choices[0];
 }
 
-/** Open the selected copy's physical file, or the broken link itself for repair. */
+/**
+ * Open the selected copy's physical file, or the broken link itself for repair.
+ * `reader` is the skill with its plugin copies, which the list leaves out of
+ * `skill`: with an agent filter, a row that agent reads only through a plugin
+ * opens that plugin copy, not another agent's copy.
+ */
 export function deploymentForScope(
   skill: InstalledSkill,
   scope: SkillListFilter["scope"],
   harness?: string,
+  reader: InstalledSkill = skill,
 ): string | undefined {
-  const selected = selectListDeployment(skill, scope, harness);
+  const own = selectListDeployment(skill, scope, harness);
+  const selected = own ?? (harness ? selectListDeployment(reader, scope, harness) : undefined);
   if (!selected || isUnresolvedDeployment(selected)) return selected?.path;
   const backing = selected.backing;
   if (backing.kind === "linked-to") {
-    return skill.deployments.find((d) => d.id === backing.deployment_id)?.path ?? selected.path;
+    return reader.deployments.find((d) => d.id === backing.deployment_id)?.path ?? selected.path;
   }
   return selected.path;
 }

@@ -27,7 +27,13 @@ import {
   updateSkillOwners,
 } from "./skill-lifecycle-target";
 import type { PluginUpdateFailure } from "./skill-lifecycle-target";
-import type { Deployment, ForkRecord, InstalledSkill, PullResult } from "@skill-studio/lib";
+import type {
+  Deployment,
+  ForkRecord,
+  InstalledSkill,
+  LifecycleTarget,
+  PullResult,
+} from "@skill-studio/lib";
 
 function deployment(id: string, ownerId?: string, projectPath?: string): Deployment {
   return {
@@ -742,6 +748,23 @@ describe("skillsWithLocalEdits", () => {
     });
     expect(asked).toBe(0);
     expect(result).toEqual([]);
+  });
+
+  // Failure caught: a plugin also ships the skill, so it reads as `source_kind: "plugin"` and its
+  // skills.sh copy went unchecked; Update and the selection Update overwrote its edits silently.
+  it("checks_the_skills_sh_copy_of_a_skill_a_plugin_also_ships", async () => {
+    const owner = "owner:v1/global/both";
+    const both = {
+      ...skill("both", "plugin"),
+      deployments: [deployment("global-both", owner)],
+    };
+    const asked: LifecycleTarget[][] = [];
+    const result = await skillsWithLocalEdits([both], async (targets) => {
+      asked.push(targets);
+      return [{ edited: true, checked: true }];
+    });
+    expect(asked).toEqual([[{ owner_id: owner }]]);
+    expect(result.map((s) => s.name)).toEqual(["both"]);
   });
 
   it("a_failed_check_reads_as_no_edits_or_a_backend_error_blocks_every_update", async () => {

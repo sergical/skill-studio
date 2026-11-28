@@ -122,13 +122,8 @@ test("a plugin skill with an update shows Claude Code, which loads the plugin, a
   ).toBeVisible();
 });
 
-// Code review round 4: a skill with a personal Codex copy and a Claude Code plugin copy showed
-// only Codex, because the list drops plugin copies from the user's own skills. Round 5: the row
-// showed both, but the Claude Code filter hid it and the coverage grid said Not deployed.
-test("a skill with a personal Codex copy and a Claude Code plugin copy shows Claude Code reading it in the row, the agent filter and the coverage grid", async ({
-  page,
-}) => {
-  const name = "pdf-processing";
+/** Gives `name` a personal Codex copy and a Claude Code plugin copy, and nothing else. */
+async function withCodexAndPluginCopies(page: Page, name: string) {
   const copies = [
     deployment({ agent: "Codex", scope: "global", path: `${HARNESS_HOME}/.codex/skills/${name}` }),
     deployment({
@@ -154,14 +149,28 @@ test("a skill with a personal Codex copy and a Claude Code plugin copy shows Cla
       })),
     [name, copies] as const,
   );
+}
+
+async function filterToAgent(page: Page, agent: string) {
+  await page.getByRole("button", { name: /^Filter,/ }).click();
+  await page.getByRole("menuitemradio", { name: agent }).click();
+}
+
+// Code review round 4: a skill with a personal Codex copy and a Claude Code plugin copy showed
+// only Codex, because the list drops plugin copies from the user's own skills. Round 5: the row
+// showed both, but the Claude Code filter hid it and the coverage grid said Not deployed.
+test("a skill with a personal Codex copy and a Claude Code plugin copy shows Claude Code reading it in the row, the agent filter and the coverage grid", async ({
+  page,
+}) => {
+  const name = "pdf-processing";
+  await withCodexAndPluginCopies(page, name);
   await openFilteredSkills(page, "Skills", name);
   const row = skillRow(page, name);
 
   await expect(row.getByRole("img", { name: /^Codex · / })).toBeVisible();
   await expect(row.getByRole("img", { name: /^Claude Code · / })).toBeVisible();
 
-  await page.getByRole("button", { name: /^Filter,/ }).click();
-  await page.getByRole("menuitemradio", { name: "Claude Code" }).click();
+  await filterToAgent(page, "Claude Code");
   await expect(row).toHaveCount(1);
 
   await page.getByRole("button", { name: "Coverage matrix view" }).click();
@@ -175,6 +184,24 @@ test("a skill with a personal Codex copy and a Claude Code plugin copy shows Cla
     "title",
     "From a plugin",
   );
+});
+
+// Code review round 6: the Claude Code filter listed the row, but opening it showed the editable
+// Codex copy, because the copy was picked from the list's skill, which has no plugin copies.
+test("opening a skill from Skills filtered to Claude Code shows the plugin copy Claude Code reads, not the personal Codex copy", async ({
+  page,
+}) => {
+  const name = "pdf-processing";
+  await withCodexAndPluginCopies(page, name);
+  await openFilteredSkills(page, "Skills", name);
+  await filterToAgent(page, "Claude Code");
+
+  await skillRow(page, name)
+    .getByRole("gridcell", { name: new RegExp(`^${name}( |$)`) })
+    .click();
+
+  await expect(page.getByRole("heading", { name, level: 1 }).first()).toBeVisible();
+  await expect(page.getByText("Claude Code plugin · docs · v1.0.0")).toBeVisible();
 });
 
 test("a skill installed only globally shows the globe alone in Where, and a project install shows its project", async ({

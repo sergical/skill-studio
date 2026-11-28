@@ -100,7 +100,7 @@ export function SkillsView({
   const listedByName = new Map(listedSkills.map((skill) => [skill.name, skill]));
   const deploymentPathForSkill = ({ name }: InstalledSkill) => {
     const skill = listedByName.get(name);
-    return skill && deploymentForScope(skill, filter.scope, filter.harness);
+    return skill && deploymentForScope(skill, filter.scope, filter.harness, readerOf(skill));
   };
 
   /** Adds a project via the shared hook, then switches the scope to it. */

@@ -106,14 +106,44 @@ const broken = (skill: InstalledSkill): InstalledSkill => ({
 });
 
 const updateTemplate = buildHarnessSnapshot().skills.find((skill) => skill.update_owner_ids.length);
-/** Each skill gets its own owner, so updating one clears that skill and no other. A manual
- * install has no source to update from, so it stays as it is. */
+/** Each skill gets its own owner, so updating one clears that skill and no other. The owner owns
+ * the skill's first managed copy and every copy beside it in that scope, as a ledger owns its
+ * scope's copies, so an update resolves to a real copy. A plugin skill's update is its plugin
+ * install's, as the backend reports it. A manual install has no source to update from, so it
+ * stays as it is. */
 const outdated = (skill: InstalledSkill): InstalledSkill => {
-  if (skill.source_kind === "manual") return skill;
-  const ownerId = `owner:v1/dotagents/${skill.name}`;
+  const managed = skill.deployments.find(
+    (d) =>
+      d.mutability === "mutable" && (d.owner_kind === "dotagents" || d.owner_kind === "skills-sh"),
+  );
   const template = updateTemplate?.update_owners[0];
+  const plugin = skill.deployments.find((d) => d.plugin)?.plugin;
+  if (!managed && plugin) {
+    const pluginOwner = {
+      owner_id: `plugin:${plugin.id}`,
+      latest_commit: null,
+      latest_commit_at: null,
+      plugin_scope: "user",
+      plugin_project_path: null,
+    };
+    return {
+      ...skill,
+      has_update: true,
+      update_owner_ids: [pluginOwner.owner_id],
+      update_owners: [pluginOwner],
+    };
+  }
+  if (!managed) return skill;
+  const ownerId = `owner:v1/${managed.owner_kind}/${skill.name}`;
   return {
     ...skill,
+    deployments: skill.deployments.map((d) =>
+      d.owner_kind === managed.owner_kind &&
+      d.scope === managed.scope &&
+      d.project_path === managed.project_path
+        ? { ...d, owner_id: ownerId }
+        : d,
+    ),
     has_update: true,
     update_owner_ids: [ownerId],
     update_owners: template ? [{ ...template, owner_id: ownerId }] : [],

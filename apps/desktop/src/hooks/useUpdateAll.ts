@@ -10,8 +10,10 @@ import type { InstalledSkill } from "@skill-studio/lib";
 import { skillLocalEdits } from "../lib/skill-api";
 import {
   conflictedSkillsNote,
+  editedUpdateCopies,
   partitionForkableSkills,
-  skillsWithLocalEdits,
+  updateCopyKeys,
+  withUpdateCopies,
 } from "../lib/skill-lifecycle-target";
 import { useAppStore } from "../store/appStore";
 import { startUpdateAll, stopUpdateAll, useActiveUpdateAll } from "./skillBatchUpdates";
@@ -20,9 +22,16 @@ import { updateAllFailureMessage, updateAllTitle } from "./update-all";
 /** `updates` are the skills that still have an update: what Update all runs on. */
 export function useUpdateAll(updates: readonly InstalledSkill[]) {
   const addToast = useAppStore((state) => state.addToast);
-  const [editedSkills, setEditedSkills] = useState<InstalledSkill[]>([]);
-  // The skills whose edits were checked: a confirm runs on these, not on updates that arrived since.
-  const [checkedUpdates, setCheckedUpdates] = useState<readonly InstalledSkill[]>([]);
+  /**
+   * The batch the edits dialog is asking about, fixed when it opened: `copies`
+   * are the update copies checked for edits (by `updateCopyKey`), `edited` the
+   * ones the dialog names. A confirm runs on no copy outside `copies`.
+   */
+  const [prompt, setPrompt] = useState<{
+    copies: ReadonlySet<string>;
+    edited: ReadonlySet<string>;
+    skills: InstalledSkill[];
+  } | null>(null);
   const [isCheckingEdits, setIsCheckingEdits] = useState(false);
   const activeBatch = useActiveUpdateAll();
 
@@ -75,44 +84,46 @@ export function useUpdateAll(updates: readonly InstalledSkill[]) {
     }
   };
 
-  const start = async () => {
+  /** Checks `batch` copy by copy and runs it, or opens the dialog on the copies that have edits. */
+  const checkAndRun = async (
+    batch: InstalledSkill[],
+    approved: ReadonlySet<string>,
+    choice: { fork?: ReadonlySet<string>; skip?: ReadonlySet<string> } = {},
+  ) => {
     setIsCheckingEdits(true);
-    const targets = [...updates];
-    // `skillsWithLocalEdits` treats a failed check as "no edits", so it never rejects.
-    const edited = await skillsWithLocalEdits(targets, skillLocalEdits);
+    // `editedUpdateCopies` treats a failed check as "no edits", so it never rejects.
+    const edited = await editedUpdateCopies(batch, skillLocalEdits);
     setIsCheckingEdits(false);
-    if (edited.length > 0) {
-      setCheckedUpdates(targets);
-      setEditedSkills(edited);
+    if ([...edited].some((key) => !approved.has(key))) {
+      setPrompt({
+        copies: updateCopyKeys(batch),
+        edited,
+        skills: batch.filter((skill) =>
+          [...updateCopyKeys([skill])].some((key) => edited.has(key)),
+        ),
+      });
       return;
     }
-    await runUpdateAll(targets);
+    await runUpdateAll(batch, choice.fork, choice.skip);
   };
 
-  const closeEditsDialog = () => setEditedSkills([]);
+  const start = () => checkAndRun([...updates], new Set());
+
+  const closeEditsDialog = () => setPrompt(null);
+  const editedSkills = prompt?.skills ?? [];
   const editedChoices = partitionForkableSkills(editedSkills);
   const forkNames = editedChoices.forkable.map((skill) => skill.name);
   const unforkableNames = editedChoices.unforkable.map((skill) => skill.name);
 
   /**
-   * Runs the confirmed batch on what is true now: only the checked skills that
-   * still have an update, and only if no other one gained edits while the
-   * dialog was open. A skill with edits the user did not approve asks again.
+   * Runs the confirmed batch on what is true now: only the checked copies that
+   * still have an update, checked for edits again. A copy with edits the user
+   * did not approve keeps the whole batch back and the dialog asks again.
    */
   const confirm = async (choice: { fork?: ReadonlySet<string>; skip?: ReadonlySet<string> }) => {
+    if (!prompt) return;
     closeEditsDialog();
-    const approved = new Set(editedSkills.map((skill) => skill.name));
-    const latest = new Map(updates.map((skill) => [skill.name, skill]));
-    const targets = checkedUpdates.flatMap((skill) => latest.get(skill.name) ?? []);
-    setIsCheckingEdits(true);
-    const edited = await skillsWithLocalEdits(targets, skillLocalEdits);
-    setIsCheckingEdits(false);
-    if (edited.some((skill) => !approved.has(skill.name))) {
-      setCheckedUpdates(targets);
-      setEditedSkills(edited);
-      return;
-    }
-    await runUpdateAll(targets, choice.fork, choice.skip);
+    await checkAndRun(withUpdateCopies(updates, prompt.copies), prompt.edited, choice);
   };
 
   return {

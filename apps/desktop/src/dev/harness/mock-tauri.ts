@@ -804,8 +804,35 @@ export function installMockTauri(
             skills: [{ name: "frontend-design", path: "frontend-design" }],
             truncated: false,
           };
-        case "update_plugin":
+        case "update_plugin": {
+          // Clears this install's update from every skill the plugin ships, as the next scan does.
+          const request = z
+            .object({
+              pluginId: z.string(),
+              scope: z.string(),
+              projectPath: z.string().nullish(),
+            })
+            .parse(payload);
+          const ownerId = `plugin:${request.pluginId}`;
+          const isThisInstall = (owner: InstalledSkill["update_owners"][number]) =>
+            owner.owner_id === ownerId &&
+            (owner.plugin_scope ?? "user") === request.scope &&
+            (owner.plugin_project_path ?? null) === (request.projectPath ?? null);
+          await publish({
+            ...currentSnapshot,
+            skills: currentSnapshot.skills.map((item) => {
+              if (!item.update_owners.some(isThisInstall)) return item;
+              const owners = item.update_owners.filter((owner) => !isThisInstall(owner));
+              return {
+                ...item,
+                has_update: owners.length > 0,
+                update_owner_ids: [...new Set(owners.map((owner) => owner.owner_id))],
+                update_owners: owners,
+              };
+            }),
+          });
           return { outcome: "updated", message: null };
+        }
         case "set_plugin_enabled":
         case "uninstall_plugin":
           return undefined;
@@ -1151,8 +1178,10 @@ export function installMockTauri(
           const batchId = z.string().nullish().parse(payload.batchId);
           const skillsByName = new Map(currentSnapshot.skills.map((s) => [s.name, s]));
           // One run per target owner, as the real updater resolves each target to its owner's
-          // copy. A manual install has no owner to update from, so it is refused before any
-          // command starts (commands.rs `build_update_request`).
+          // copy (`resolve_lifecycle_target`): a target that names no copy is refused, and so is
+          // a copy whose owner kind has no updater, before any command starts (commands.rs
+          // `build_update_request`). The copy's own owner kind picks the package manager, since
+          // one skill can be installed by skills.sh in one scope and dotagents in another.
           interface UpdateRun {
             name: string;
             ownerId: string | null;
@@ -1173,15 +1202,14 @@ export function installMockTauri(
           for (const target of targets) {
             const name = skillNameForTarget(target);
             const skillItem = skillsByName.get(name);
-            const copy =
-              skillItem?.deployments.find((d) =>
-                target.deployment_id
-                  ? d.id === target.deployment_id
-                  : d.owner_id === target.owner_id,
-              ) ?? skillItem?.deployments[0];
-            const method = skillItem?.source_kind;
-            if (method !== "skills-sh" && method !== "dotagents" && method !== "plugin") {
-              errors[name] = "Update is not available for this deployment owner";
+            const copy = skillItem?.deployments.find((d) =>
+              target.deployment_id ? d.id === target.deployment_id : d.owner_id === target.owner_id,
+            );
+            const method = copy?.owner_kind;
+            if (!copy || (method !== "skills-sh" && method !== "dotagents")) {
+              errors[name] = copy
+                ? "Update is not available for this deployment owner"
+                : `Update refused: no copy of ${name} matches ${JSON.stringify(target)}`;
               items.push({ skill: name, outcome: null });
               // react-doctor-disable-next-line react-doctor/async-await-in-loop -- refusals report in target order, as the real op does
               await progress(name);
@@ -1189,10 +1217,10 @@ export function installMockTauri(
             }
             runs.push({
               name,
-              ownerId: target.owner_id ?? copy?.owner_id ?? null,
+              ownerId: target.owner_id ?? copy.owner_id ?? null,
               method,
-              scope: copy?.project_path ?? "global",
-              path: copy?.path ?? `${HARNESS_HOME}/.agents/skills/${name}`,
+              scope: copy.project_path ?? "global",
+              path: copy.path,
             });
           }
           // One command per run, as the real updater sends: consecutive skills.sh owners of one

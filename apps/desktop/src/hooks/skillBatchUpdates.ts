@@ -1,6 +1,6 @@
 // ============================================================================
 // skillBatchUpdates - the batch update commands, wired to the IPC layer. Both
-// callers run `skillsWithLocalEdits` and the edits dialog first.
+// callers run the edit check (`skillsWithLocalEdits`, `editedUpdateCopies`) and the edits dialog first.
 // ============================================================================
 
 import { useSyncExternalStore } from "react";

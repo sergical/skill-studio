@@ -12,6 +12,7 @@ import type {
   LifecycleTarget,
   ForkRecord,
   LocalEditsDto,
+  OwnerUpdateInfo,
   PullResult,
   Toast,
 } from "@skill-studio/lib";
@@ -538,11 +539,48 @@ export function skillUpdateAvailability(
 }
 
 /**
- * The skills among `skills` whose update would replace local edits: a skills.sh
- * skill that is not a fork and whose installed folder no longer matches what
- * the install recorded. A check that cannot run (`checked: false`) or throws
- * counts as not edited, so Update keeps working exactly as before. `targetsOf`
- * narrows the check to the owners an update will actually replace.
+ * True when an update of `target` could replace local edits that the edit
+ * check can see: a skills.sh copy of a skill that is not a fork. Decided per
+ * copy, by the target's own deployments: a skill that a plugin also ships
+ * reads as `source_kind: "plugin"`, yet its skills.sh copy is still replaced.
+ * A target whose deployments are not known is checked; the backend answers
+ * `checked: false` for anything it cannot compare.
+ */
+function updateCanReplaceEdits(
+  skill: Pick<InstalledSkill, "source_kind"> & Partial<Pick<InstalledSkill, "deployments">>,
+  target: LifecycleTarget,
+): boolean {
+  if (skill.source_kind === "fork") return false;
+  const copies = (skill.deployments ?? []).filter(
+    (deployment) =>
+      (target.owner_id && deployment.owner_id === target.owner_id) ||
+      (target.deployment_id && deployment.id === target.deployment_id),
+  );
+  return copies.length === 0 || copies.some((deployment) => deployment.owner_kind === "skills-sh");
+}
+
+/** The entries whose target the backend says has local edits; a failed check reads as none. */
+async function entriesWithLocalEdits<E extends { target: LifecycleTarget }>(
+  entries: E[],
+  checkEdits: (targets: LifecycleTarget[]) => Promise<LocalEditsDto[]>,
+): Promise<E[]> {
+  if (entries.length === 0) return [];
+  let verdicts: LocalEditsDto[];
+  try {
+    verdicts = await checkEdits(entries.map((entry) => entry.target));
+  } catch {
+    return [];
+  }
+  return entries.filter((_, index) => verdicts[index]?.checked && verdicts[index]?.edited);
+}
+
+/**
+ * The skills among `skills` whose update would replace local edits: a
+ * skills.sh copy, of a skill that is not a fork, whose installed folder no
+ * longer matches what the install recorded. A check that cannot run
+ * (`checked: false`) or throws counts as not edited, so Update keeps working
+ * exactly as before. `targetsOf` narrows the check to the owners an update
+ * will actually replace.
  */
 export async function skillsWithLocalEdits<
   T extends Pick<InstalledSkill, "source_kind" | "update_owner_ids" | "update_owners"> &
@@ -553,21 +591,94 @@ export async function skillsWithLocalEdits<
   targetsOf: (skill: T) => LifecycleTarget[] = skillUpdateOwnerTargets,
 ): Promise<T[]> {
   const entries = skills.flatMap((skill) =>
-    skill.source_kind === "skills-sh" ? targetsOf(skill).map((target) => ({ skill, target })) : [],
+    targetsOf(skill).flatMap((target) =>
+      updateCanReplaceEdits(skill, target) ? [{ skill, target }] : [],
+    ),
   );
-  if (entries.length === 0) return [];
-  let verdicts: LocalEditsDto[];
-  try {
-    verdicts = await checkEdits(entries.map((entry) => entry.target));
-  } catch {
-    return [];
-  }
-  const edited = new Set<T>();
-  for (const [index, entry] of entries.entries()) {
-    const verdict = verdicts[index];
-    if (verdict?.checked && verdict.edited) edited.add(entry.skill);
-  }
+  const edited = new Set((await entriesWithLocalEdits(entries, checkEdits)).map((e) => e.skill));
   return skills.filter((skill) => edited.has(skill));
+}
+
+type UpdateCopyView = Pick<InstalledSkill, "name" | "update_owner_ids" | "update_owners">;
+
+/** Names one copy an update replaces: the skill, its owner, and for a plugin the install's scope and project. */
+function updateCopyKey(skillName: string, update: OwnerUpdateInfo): string {
+  return JSON.stringify([
+    skillName,
+    update.owner_id,
+    update.plugin_scope ?? null,
+    update.plugin_project_path ?? null,
+  ]);
+}
+
+function updateCopiesOf(skill: UpdateCopyView): OwnerUpdateInfo[] {
+  return (
+    skill.update_owners ??
+    skill.update_owner_ids.map((owner_id) => ({
+      owner_id,
+      latest_commit: null,
+      latest_commit_at: null,
+    }))
+  );
+}
+
+/** Every copy of every skill in `skills` that has an update, by `updateCopyKey`. */
+export function updateCopyKeys(skills: readonly UpdateCopyView[]): Set<string> {
+  return new Set(
+    skills.flatMap((skill) =>
+      updateCopiesOf(skill).map((update) => updateCopyKey(skill.name, update)),
+    ),
+  );
+}
+
+/**
+ * `skills` cut down to the copies named in `keys`: each skill keeps only
+ * those of its update owners, and a skill left with none is dropped. A batch
+ * runs on this, so it updates the copies that were checked for edits and
+ * still have an update, never a copy that gained an update since.
+ */
+export function withUpdateCopies<T extends UpdateCopyView>(
+  skills: readonly T[],
+  keys: ReadonlySet<string>,
+): T[] {
+  return skills.flatMap((skill) => {
+    const kept = updateCopiesOf(skill).filter((update) =>
+      keys.has(updateCopyKey(skill.name, update)),
+    );
+    if (kept.length === 0) return [];
+    return [
+      {
+        ...skill,
+        update_owners: kept,
+        update_owner_ids: [...new Set(kept.map((update) => update.owner_id))],
+      },
+    ];
+  });
+}
+
+/**
+ * The copies among `skills` whose update would replace local edits, by
+ * `updateCopyKey`: the same check as `skillsWithLocalEdits`, one verdict per
+ * copy, so a batch can tell which copies the user saw in the dialog.
+ */
+export async function editedUpdateCopies<
+  T extends UpdateCopyView &
+    Pick<InstalledSkill, "source_kind"> &
+    Partial<Pick<InstalledSkill, "deployments">>,
+>(
+  skills: readonly T[],
+  checkEdits: (targets: LifecycleTarget[]) => Promise<LocalEditsDto[]>,
+): Promise<Set<string>> {
+  const entries = skills.flatMap((skill) => {
+    const runnable = new Set(skillUpdateOwnerTargets(skill).map((target) => target.owner_id));
+    return updateCopiesOf(skill).flatMap((update) => {
+      const target = { owner_id: update.owner_id };
+      return runnable.has(update.owner_id) && updateCanReplaceEdits(skill, target)
+        ? [{ key: updateCopyKey(skill.name, update), target }]
+        : [];
+    });
+  });
+  return new Set((await entriesWithLocalEdits(entries, checkEdits)).map((entry) => entry.key));
 }
 
 /** The one deployment a skills.sh skill can be forked from: its Global Universal folder. */

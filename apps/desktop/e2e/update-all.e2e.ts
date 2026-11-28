@@ -72,6 +72,9 @@ test("Stop while Update all runs lets the running command finish and starts no o
         .sort();
       // The last by name, so the global command runs first.
       const name = dotagents[dotagents.length - 1];
+      // The project's own dotagents ledger owns the moved copy, and the update names that owner,
+      // so the second command resolves to a real copy as the desktop updater requires.
+      const projectOwner = `owner:v1/dotagents/${encodeURIComponent(projectPath)}/${name}`;
       await window.__harness!.updateSkill(name, (skill) => ({
         ...skill,
         deployments: skill.deployments.slice(0, 1).map((copy) => ({
@@ -80,7 +83,10 @@ test("Stop while Update all runs lets the running command finish and starts no o
           scope: "project" as const,
           project_path: projectPath,
           path: `${projectPath}/.agents/skills/${name}`,
+          owner_id: projectOwner,
         })),
+        update_owner_ids: [projectOwner],
+        update_owners: skill.update_owners.map((owner) => ({ ...owner, owner_id: projectOwner })),
       }));
       return { firstCommand: dotagents.length - 1, inProject: name };
     },
@@ -102,6 +108,9 @@ test("Stop while Update all runs lets the running command finish and starts no o
   await expect(
     page.getByText(`Stopped. Updated ${firstCommand} of ${shown} skills.`, { exact: true }),
   ).toBeVisible();
+  // Nothing was refused: the project copy waited for its command, and Stop kept it from starting.
+  // Counted once, while the toast is still up: a retrying check would pass once it closes.
+  expect(await page.getByText(/\d+ failed/).count()).toBe(0);
   expect(await page.evaluate(() => window.__harness!.updateCommandsStarted())).toBe(1);
   await expect(grid(page).getByRole("button", { name: "Update all" })).toBeVisible();
   await expect(

@@ -87,3 +87,64 @@ it("Update all of a skill installed globally and in a project runs each install 
   const after = harness.snapshot().skills.find((s) => s.name === name)!;
   expect(after.update_owner_ids).toEqual([]);
 });
+
+// The real updater picks the package manager per copy: one `dotagents install` per scope, and
+// `npx skills update` for skills.sh copies. Failure caught: the mock picked it from the whole
+// skill, folded the project skills.sh copy into the project's `dotagents install`, and reported
+// three updates after two commands, so a Stop spec could pass on a command that never ran.
+it("Update all runs one command per package manager and scope, by each copy's own owner", async () => {
+  const copy = (
+    name: string,
+    owner: string,
+    kind: "dotagents" | "skills-sh",
+    project: boolean,
+  ) => ({
+    ...deployment({
+      agent: "shared",
+      scope: project ? "project" : "global",
+      project_path: project ? HARNESS_PROJECT : null,
+      path: `${project ? HARNESS_PROJECT : HARNESS_HOME}/.agents/skills/${name}`,
+      owner_kind: kind,
+    }),
+    owner_id: owner,
+  });
+  const outdatedSkill = (name: string, copies: ReturnType<typeof copy>[]) =>
+    skill({
+      name,
+      source_kind: "dotagents",
+      has_update: true,
+      deployments: copies,
+      update_owner_ids: copies.map((c) => c.owner_id),
+      update_owners: copies.map((c) => ({
+        owner_id: c.owner_id,
+        latest_commit: "new",
+        latest_commit_at: null,
+      })),
+    });
+  const mixedOwners = {
+    global: "owner:v1/dotagents-global/mixed",
+    project: "owner:v1/skills-sh-project/mixed",
+  };
+  const otherOwner = "owner:v1/dotagents-project/other";
+  const base = buildHarnessSnapshot();
+  const harness = installMockTauri({
+    ...base,
+    skills: [
+      ...base.skills,
+      outdatedSkill("mixed", [
+        copy("mixed", mixedOwners.global, "dotagents", false),
+        copy("mixed", mixedOwners.project, "skills-sh", true),
+      ]),
+      outdatedSkill("other", [copy("other", otherOwner, "dotagents", true)]),
+    ],
+  });
+
+  const outcome = await invoke<{ items: { outcome: unknown }[] }>("update_all_skills", {
+    targets: [mixedOwners.global, mixedOwners.project, otherOwner].map((owner_id) => ({
+      owner_id,
+    })),
+  });
+
+  expect(outcome.items.filter((item) => item.outcome !== null)).toHaveLength(3);
+  expect(harness.updateCommandsStarted()).toBe(3);
+});
