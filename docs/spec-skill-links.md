@@ -32,6 +32,35 @@ A link is a line in skill A's folder that names skill B. Each link keeps the
 file, the line number and the line itself, so every surface can show why it
 thinks A needs B.
 
+### Evidence required for the first release
+
+Use the instruction to establish **what A does**. Use the installation and
+pack records to establish **what B is**. A literal Skill tool call or a path
+to a sibling's skill file survives an uninstall because A still names the
+target. These two forms can warn. A slash command or a name in bold can
+appear on the map when an installed folder, local ledger, plugin listing or
+checked pack identifies the skill. Show these as mentions in the first slice.
+A command spelled out with its source plugin can also appear as a mention.
+A menu entry or a formatting choice alone never establishes a broken workflow.
+
+For example, original pstack directs the reader to `**no-comments**` before
+review. Keep that reference when a remaining pack record identifies the removed
+skill. A hand-copied folder has no permanent membership record. When neither
+the source nor the machine supplies that evidence, the map cannot identify
+every target. Preserve a quoted slash command or a bold hyphenated name
+under **Unverified references**, with the line where it occurs. Exclude it
+from graph edges and broken counts. Thus removing the last record for
+`no-comments` still leaves its source line available, while the built-in
+`/loop` cannot create a missing skill. A remove preview uses the same known names before and after the
+proposed action. A scan never contacts the network to fill a gap.
+
+The stronger prose examples and preview copy below describe later slices.
+Promote a command to a warning only once its target and invocation can be
+verified for that agent. A fork with a similar name supplies no rename
+evidence. Report a rename only when the caller's pack and a visible install
+in the relevant scope have a record connecting the upstream skill to its
+installed name.
+
 ### 2.1 Strength
 
 Strength decides where a link is shown. It is decided per line.
@@ -111,11 +140,10 @@ the answer fits the machine it runs on.
   already picks it). A global wrapper whose target one project overrides
   gets one state for that project and another for the rest. The report
   names the scopes it covered.
-- **Renamed installs**: a copy installed under another name than its
-  upstream name still answers to both. If A asks for `grilling` by name and
-  the copy is installed as `matt-grilling`, the link is **Renamed**: the
-  agent will not find it by the name A uses. A port that rewrites the names
-  in its own text (as `sergical/pstack-skills` does) resolves cleanly.
+- **Renamed installs**: resolve the literal name first. If it is absent,
+  show Renamed when the installation record maps this pack's upstream
+  skill to a visible copy under a different name. Otherwise show what the
+  literal lookup found. Shared prefixes and suffixes carry no identity.
 
 Link states, worst first. A skill's card and row show its worst state:
 
@@ -214,14 +242,14 @@ the text of each skill folder through the scope port.
 Every surface reads the same core result. A link never shows without its
 line one click away.
 
-### 5.1 Before a change (first slice)
+### 5.1 Before a change (preview slice)
 
 The remove, park, turn-off-for-agent and pack remove dialogs gain a
 "What stops working" section from the plan's `breaks`:
 
 > **Remove `grilling`?**
-> 6 skills run it: `grill-me` (does nothing without it), `grill-with-docs`,
-> `improve-codebase-architecture`, `triage`, `wayfinder`, `loop-me`.
+> 5 skills call it: `grill-me` (does nothing without it), `grill-with-docs`,
+> `improve-codebase-architecture`, `triage` and `wayfinder`.
 > [Keep] [Remove anyway]
 
 The Add Skill sheet and pack add, when the user picks a subset, show what
@@ -243,7 +271,7 @@ line on hover or focus. Mentions sit under a closed "Related" row.
   pack is known.
 - **Not used in 30 days** never offers to park a skill that a used skill
   needs. The row says why, with the count of the user's runs of the skills
-  that need it: "Used through `grill-me`, 14 times."
+  that need it: "Called by `grill-me`, which ran 14 times."
 
 ### 5.4 Pack map
 
@@ -259,12 +287,12 @@ skill-studio links [<skill>] [--pack <source> | --path <dir>] [--agent <id>]
 ```
 $ skill-studio links grilling
 grilling  (mattpocock/skills)
-Used by 6 skills:
+Called by 5 skills:
   grill-me                        hands off  SKILL.md:7   Call the Skill tool with "grilling".
   grill-with-docs                 hands off  SKILL.md:7   Call the Skill tool twice, for "grilling" and "domain-modeling".
   ...
 Listed by: ask-matt
-Removing it breaks: grill-me (directly), 5 others (a step each)
+Removing it breaks: grill-me (directly), 4 others (a step each)
 ```
 
 `remove`, `park`, `turn-off` and `pack remove` take `--check`, which prints
@@ -334,12 +362,12 @@ others (`grill-me`), or an index or standalone skill (`ask-matt`).
 | Remove                                                                                                    | Lists every skill that stops working, per agent, direct and indirect; Keep or Remove anyway                                                                                                                                                                       | Nothing breaks; silent                                                                                                                                                                                                  | Silent                                            |
 | Park, unpark                                                                                              | As Remove, worded "until you unpark"; unpark lists what it fixes                                                                                                                                                                                                  | Silent                                                                                                                                                                                                                  | Silent                                            |
 | Turn off or on for one agent                                                                              | Lists what stops working in that agent only                                                                                                                                                                                                                       | Silent                                                                                                                                                                                                                  | Silent                                            |
-| Edit SKILL.md in the editor                                                                               | Changing its own `name:` makes every skill that asks for it by name Renamed; the editor says so before save                                                                                                                                                       | A new line naming a missing skill is marked in the editor and goes Missing after save; a typo is "Not found" with the nearest installed name offered; deleting the only line that names a skill drops the link silently | Silent                                            |
+| Edit SKILL.md in the editor                                                                               | Changing its own `name:` makes every skill that asks for it by name unreachable if their agent uses that name; show Renamed only with a recorded mapping                                                                                                          | A new line naming a missing skill is marked in the editor and goes Missing after save; a typo is "Not found" with the nearest installed name offered; deleting the only line that names a skill drops the link silently | Silent                                            |
 | Edit outside Skill Studio                                                                                 | The same outcomes after the next scan, marked "changed outside"                                                                                                                                                                                                   | Same                                                                                                                                                                                                                    | Silent                                            |
-| Make an independent copy or fork                                                                          | Same name: nothing breaks. New name: every skill that asks for the old name goes Renamed, listed in the plan                                                                                                                                                      | Keeps its links                                                                                                                                                                                                         | Silent                                            |
+| Make an independent copy or fork                                                                          | Same name: nothing breaks. New name: resolve the old name again; show Renamed only when its record maps to the new copy                                                                                                                                           | Keeps its links                                                                                                                                                                                                         | Silent                                            |
 | Split                                                                                                     | Split copies the whole skill to the chosen agents and removes the shared copy, so an agent not chosen loses its name-based hand-offs to it unless it reads a chosen agent's folder (Cursor, OpenCode and Grok Build read Claude Code's); listed in the split plan | Each chosen agent's copy keeps all its links                                                                                                                                                                            | Silent                                            |
 | Move between project and global                                                                           | Skills that read it by path go Elsewhere; listed                                                                                                                                                                                                                  | Its path reads into the old scope's skills go Elsewhere; listed                                                                                                                                                         | Silent                                            |
-| Update one skill                                                                                          | If upstream renamed it, skills that ask by the old name go Renamed; listed in the update plan                                                                                                                                                                     | "Now needs X" with Add, if upstream added a link; silent if it dropped one. Edited copies are skipped and keep their old links (existing rule)                                                                          | Silent                                            |
+| Update one skill                                                                                          | If a record maps the old name to the new install, show Renamed; listed in the update plan                                                                                                                                                                         | "Now needs X" with Add, if upstream added a link; silent if it dropped one. Edited copies are skipped and keep their old links (existing rule)                                                                          | Silent                                            |
 | Update the pack                                                                                           | As above for each skill                                                                                                                                                                                                                                           | The skills CLI does not add new upstream skills on update, so a skill that now hands off to a new one goes Missing; the plan says so and offers Add                                                                     | Index lists new names as dead entries until added |
 | Upstream deletes a skill                                                                                  | The local copy stays and nothing breaks. Check upstream says "Removed upstream; N of your skills still need it" so a cleanup does not break them                                                                                                                  | Silent                                                                                                                                                                                                                  | Silent                                            |
 | Switch the pack to a fork                                                                                 | If the fork lacks a skill, the skills that need it go Missing; in the plan                                                                                                                                                                                        | Same                                                                                                                                                                                                                    | Silent                                            |
@@ -401,18 +429,16 @@ the tool description tells the agent to ask the user before it adds more.
 
 **C. A month later, tidying up.** Home's Not used in 30 days would list
 `grilling` if nothing ran it directly. Because `grill-me` ran and needs it,
-the row says "Used through `grill-me`, 14 times" and offers no park.
+the row says "Called by `grill-me`, which ran 14 times" and offers no park.
 
 **D. Remove `grilling` anyway.** The skill page's Remove runs the plan. The
-dialog: "6 skills run it: `grill-me` (does nothing without it),
-`grill-with-docs`, `improve-codebase-architecture`, `triage`, `wayfinder`,
-`loop-me`." Keep changes nothing. Remove anyway removes it, Home then shows
-the 6 as Missing links, and Activity's Undo restores `grilling` and clears
-them.
+dialog lists the five skills with literal calls to it. `loop-me` also
+mentions it. Keep changes nothing. Remove anyway removes it. Undo restores
+the target, and the same five calls resolve again.
 
-**E. Turn off `setup-matt-pocock-skills` for Codex.** `turn_off_check`
-already runs before the dialog. The dialog adds: "6 skills send you to it.
-In Codex they will point at nothing. Claude Code is not affected."
+**E. Turn off `setup-matt-pocock-skills` for Codex.** Six skills direct
+users to the slash command. Their source lines stay available under Related.
+The preview counts confirmed calls and file reads separately.
 
 **F. Update a pack whose links changed.** Check upstream finds an update.
 The update plan lists link changes next to file changes: "`to-spec` now
@@ -527,7 +553,7 @@ from the user's setup, not from a pack:
 | Bundled copies | `skill-router` holding its own `skill-x/REFERENCE.md` copies              | No links to the siblings                                                        |
 | Not links      | "do not call `skill-b`", `npx skill-b`, "called by `skill-c`"             | No links                                                                        |
 | Left out       | A dotagents wildcard pack with one `exclude`, named by an installed skill | Missing, with Add from the pack                                                 |
-| Renamed        | A prefixed copy asked for by its upstream name                            | Renamed                                                                         |
+| Renamed        | A recorded alias asked for by its upstream name                           | Renamed                                                                         |
 | Across packs   | A link from one pack's skill to another pack's skill                      | Target pack named                                                               |
 | Agent layouts  | The same pack as a whole-folder link, per-skill links, per-agent copies   | Path links resolve per layout; turning off for one agent breaks only that agent |
 | Project scope  | The base skill in the project, its users global                           | Elsewhere                                                                       |
@@ -570,13 +596,13 @@ was connected.
 1. Home lists `grilling` as not started in 30 days. The row says "Used
    through `grill-me`, 14 times" and offers no park.
 2. The user removes `grilling` from the skill page anyway. The dialog lists
-   the skills in this install that run it, 5 because
+   the skills in this install that call it, 4 because
    `improve-codebase-architecture` is left out, and says `grill-me` does
    nothing without it. The list and count come from the demo install.
 3. Packs → `mattpocock/skills` → Map. `grilling` lights its users;
    `ask-matt` wears a badge for the 3 skills it lists that are not
-   installed. Show for Codex: the 6 skills that need
-   `setup-matt-pocock-skills` turn red in Codex only. Then pstack's map:
+   installed. Show for Codex: the mentions of
+   `setup-matt-pocock-skills` show its Codex state. Then pstack's map:
    `poteto-mode`'s `/deslop` step points at a plugin that is not installed.
 
 **CLI and MCP beat:** an agent asked to "clean up my skills" calls
@@ -611,7 +637,7 @@ Each slice is one vertical change, under about 500 lines.
    30 days guard, and `MissingLink` in `doctor`.
 5. The pack map, with the four layout tests and one e2e spec (select
    `grilling`, its users light up; Show for Codex, the users of
-   `setup-matt-pocock-skills` show broken).
+   `setup-matt-pocock-skills` show its Codex state).
 6. The homepage scenario and the walkthrough section.
 
 Later, outside the first delivery: editor warnings and typo suggestions,
@@ -721,7 +747,25 @@ tool result for that path or skill name. A refused or failed call is a
 completed result too, and the Claude Code usage reader records requests,
 so neither counts as proof. Its table
 of results, with agent versions, goes in `docs/verification/skill-links.md`.
-Layer 5 also settles open question 1.
+The sibling-path probe below covers the tool path for two clients.
+
+#### Sibling reads through a linked skill folder
+
+Measured on macOS on November 28, 2026. A temporary project linked a skill
+into each client's project skills directory. Different marker files occupied
+the same sibling path next to the link and next to its target. Neither
+client used an account or a remote model.
+
+| Client and entry point                                    | Starting path reported by the client        | Successful read of `../sibling/proof.txt` |
+| --------------------------------------------------------- | ------------------------------------------- | ----------------------------------------- |
+| Claude Code 2.1.332, slash skill and native Read tool     | Project `.claude/skills/link-probe` symlink | Marker beside the link                    |
+| Codex CLI 0.172.0, app-server skill list and command/exec | Physical `pack/link-probe/SKILL.md`         | Marker beside the target                  |
+
+Claude received a scripted local model response requesting Read from the
+base directory in the expanded skill. Codex ran `cat` from the listed
+skill path. These results establish those tool paths. A shell command in
+Claude or a model that chooses another path can behave differently.
+An unmeasured client gets Not known when the two resolutions disagree.
 
 ### 10.4 Done means
 
@@ -746,11 +790,7 @@ Rare cases not tested, per the testing skill:
 
 ## 11. Open questions
 
-1. **`..` through a link.** When `~/.claude/skills/a` is a link to
-   `~/.agents/skills/a`, does the agent resolve `../b` against the link's
-   folder or the target's? The operating system uses the target's; a tool
-   that cleans the path first uses the link's. Layer 5 answers it per agent.
-2. **Index rule.** Two rules on 12 packs found the three index skills and
+1. **Index rule.** Two rules on 12 packs found the three index skills and
    rejected the false ones. A pack author could also mark an index in
    `metadata` (the Agent Skills spec has no dependency or index field).
    Propose it upstream after slice 1 shows the heuristic's misses.
