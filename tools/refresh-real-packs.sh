@@ -1,5 +1,5 @@
 #!/bin/sh
-# Copies the text files of four open-source skill packs, each at a pinned
+# Copies the Markdown of four open-source skill packs, each at a pinned
 # commit and with its own license, into the core crate's test fixtures.
 # The skill links corpus test reads them. To move a pack to a new commit,
 # change its line below, run this script, and rerun
@@ -24,7 +24,7 @@ mkdir -p "$DEST"
 {
   echo "# Real packs"
   echo
-  echo "Text files of open-source skill packs, copied by \`tools/refresh-real-packs.sh\`."
+  echo "Markdown files of open-source skill packs, copied by \`tools/refresh-real-packs.sh\`."
   echo "Each folder keeps the pack's own license. Do not edit by hand."
   echo
   echo "| Folder | Source | Commit | License |"
@@ -44,9 +44,7 @@ echo "$PACKS" | while read -r repo sha skills license; do
   out="$DEST/$name"
   mkdir -p "$out"
   cp "$clone/$license" "$out/LICENSE"
-  (cd "$clone/$skills" && find . -type f \( -name '*.md' -o -name '*.yaml' -o -name '*.yml' \
-    -o -name '*.json' -o -name '*.txt' -o -name '*.toml' -o -name '*.sh' -o -name '*.py' \
-    -o -name '*.js' -o -name '*.mjs' -o -name '*.ts' \) -print) | while read -r f; do
+  (cd "$clone/$skills" && find . -type f -name '*.md' -print) | while read -r f; do
     mkdir -p "$out/skills/$(dirname "$f")"
     cp "$clone/$skills/$f" "$out/skills/$f"
   done

@@ -1,6 +1,6 @@
 # Real packs
 
-Text files of open-source skill packs, copied by `tools/refresh-real-packs.sh`.
+Markdown files of open-source skill packs, copied by `tools/refresh-real-packs.sh`.
 Each folder keeps the pack's own license. Do not edit by hand.
 
 | Folder | Source | Commit | License |
