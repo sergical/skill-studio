@@ -5,7 +5,7 @@
 // is pushed. The core plans and writes; this dialog only shows the reports.
 // ============================================================================
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,6 +18,7 @@ import {
   Input,
 } from "@skill-studio/ui";
 import type { PackExportReport } from "@skill-studio/lib";
+import { useLoad } from "../../hooks/useLoad";
 import { useAppStore } from "../../store/appStore";
 import { CopyTextButton } from "../ui/CopyTextButton";
 import { advancePlanPhase } from "./pack-plan-phase";
@@ -49,21 +50,14 @@ export function PackExportDialog({ skills, dir, projectPath, onClose }: PackExpo
   const [state, setState] = useState<ExportState>({ phase: "planning" });
   const [source, setSource] = useState("");
 
-  useEffect(() => {
-    let live = true;
-    exportPack({ dir, skills, source: null, project_path: projectPath, dry_run: true })
-      .then((plan) => live && setState(after({ type: "planned", plan })))
-      .catch(
-        (err) =>
-          live &&
-          setState(
-            after({ type: "error", message: err instanceof Error ? err.message : String(err) }),
-          ),
-      );
-    return () => {
-      live = false;
-    };
-  }, [exportPack, dir, skills, projectPath]);
+  useLoad(
+    JSON.stringify([dir, skills, projectPath]),
+    () => exportPack({ dir, skills, source: null, project_path: projectPath, dry_run: true }),
+    {
+      onLoaded: (plan) => setState(after({ type: "planned", plan })),
+      onFailed: (message) => setState(after({ type: "error", message })),
+    },
+  );
 
   const confirm = () => {
     setState(after({ type: "confirm" }));

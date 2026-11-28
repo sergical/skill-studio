@@ -32,7 +32,7 @@ import type {
   SkillSnapshot,
   TrackedProjects,
 } from "@skill-studio/lib";
-import type { EditorChoices, EditorOption } from "../../lib/skill-api";
+import type { EditorChoices, EditorOption } from "@skill-studio/lib";
 import {
   deployment,
   fallbackSkillContent,

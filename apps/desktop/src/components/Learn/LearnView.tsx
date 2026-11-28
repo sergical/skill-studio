@@ -5,7 +5,6 @@
 // a new agent or issue kind shows up here without a copy edit.
 // ============================================================================
 
-import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 import {
   ATTENTION_LABEL,
@@ -101,28 +100,25 @@ function SectionLink({ label, onClick }: { label: string; onClick: () => void })
   );
 }
 
+/** A section's ref while it is the one asked for. Declared once, so React calls it when that
+ * section gets it (the page opens at the section, or the section changes) and not on every
+ * render. */
+function scrollToAndFocus(anchor: HTMLDivElement | null) {
+  anchor?.scrollIntoView({ block: "start" });
+  anchor?.focus();
+}
+
 /**
  * Learn's sections. Opened at a `section`, that section scrolls into view and
  * takes focus, so a screen reader lands on the part the user asked for.
  */
 export function LearnView({ section }: LearnViewProps) {
   const setActiveView = useAppStore((state) => state.setActiveView);
-  const anchors = useRef(new Map<LearnSection, HTMLDivElement>());
-
-  useEffect(() => {
-    if (!section) return;
-    const anchor = anchors.current.get(section);
-    anchor?.scrollIntoView({ block: "start" });
-    anchor?.focus();
-  }, [section]);
-
   const anchor = (key: LearnSection) => ({
     id: `learn-${key}`,
     tabIndex: -1,
     className: "scroll-mt-6 outline-none",
-    ref: (el: HTMLDivElement | null) => {
-      if (el) anchors.current.set(key, el);
-    },
+    ref: key === section ? scrollToAndFocus : undefined,
   });
 
   const brokenKinds = HEALTH_ISSUE_KIND_ORDER.filter(

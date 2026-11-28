@@ -165,3 +165,45 @@ it("tracking a project marks its skills installed and keeps the current search u
   await act(() => vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS));
   expect(await screen.findByText("popular-skill")).toBeTruthy();
 });
+
+it("Load more adds the next page, and a search made while a page is on its way leaves Load more ready for the fresh list", async () => {
+  let releaseSlowPage: (response: PaginatedSkillsResponse) => void = () => {};
+  mockIPC((command, args) => {
+    if (command === "get_installed_skills") return [];
+    if (command === "get_popular_skills") {
+      const page = args && "page" in args ? args.page : 0;
+      if (page === 0) return { skills: [result("popular-one")], has_more: true };
+      if (page === 1) return { skills: [result("popular-two")], has_more: true };
+      return new Promise((resolve) => {
+        releaseSlowPage = resolve;
+      });
+    }
+    if (command === "search_skills") return { skills: [result("git-guide")], has_more: false };
+    return null;
+  });
+  const user = typist();
+  render(<SkillStore />);
+  expect(await screen.findByText("popular-one")).toBeTruthy();
+
+  await user.click(screen.getByRole("button", { name: "Load more" }));
+  expect(await screen.findByText("popular-two")).toBeTruthy();
+  expect(screen.getByText("popular-one")).toBeTruthy();
+
+  // The third page is still on its way when the user searches, then clears the search.
+  await user.click(screen.getByRole("button", { name: "Load more" }));
+  const box = screen.getByRole("textbox", { name: "Search skills.sh" });
+  await user.type(box, "git");
+  await act(() => vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS));
+  expect(await screen.findByText("git-guide")).toBeTruthy();
+  expect(screen.queryByText("popular-one")).toBeNull();
+  await user.clear(box);
+  await act(() => vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS));
+  expect(await screen.findByText("popular-one")).toBeTruthy();
+  expect(screen.queryByText("popular-two")).toBeNull();
+  expect(await screen.findByRole("button", { name: "Load more" })).toBeTruthy();
+
+  await act(async () => releaseSlowPage({ skills: [result("popular-three")], has_more: false }));
+  await flushTimers();
+  expect(screen.queryByText("popular-three")).toBeNull();
+  expect(screen.getByRole("button", { name: "Load more" })).toBeTruthy();
+});

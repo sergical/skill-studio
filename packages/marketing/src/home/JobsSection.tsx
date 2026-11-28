@@ -1,293 +1,622 @@
 // ============================================================================
-// Skill Studio - Jobs section
-// Five everyday skill jobs, each shown by hand and then with Skill Studio.
-// Pack names are fictional; every command and app action is real.
+// Skill Studio - Interactive Fixer (JobsSection)
+// Lets visitors experience five everyday multi-agent skill problems in their
+// manual Before state, then click once to transform the stage into Skill
+// Studio's live resolution with fluid auto-height and crisp typographic motion.
 // ============================================================================
-import { useState, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import * as stylex from "@stylexjs/stylex";
-import {
-  Check,
-  FolderSearch,
-  ListTree,
-  PackageOpen,
-  Stethoscope,
-  Users,
-  type LucideIcon,
-} from "lucide-react";
+import { AlertCircle, ArrowRight, CheckCircle2, RotateCcw } from "lucide-react";
 
+import { CLI_DOCS_URL } from "../site-links";
 import { siteTokens } from "../SiteTheme.stylex";
 import { homeSectionStyles } from "./HomeSection.stylex";
+import { SCENARIOS, type Scenario } from "./jobs-scenarios";
+import { CopyCliButton, LiveScenarioPreview } from "./JobsLivePreviews";
 
-type JobId = "ignored" | "unused" | "budget" | "update" | "share";
+const HOVER = "@media (hover: hover) and (pointer: fine)";
+const REDUCED = "@media (prefers-reduced-motion: reduce)";
+const DRAWER_EASE = "cubic-bezier(0.25, 1, 0.5, 1)";
+const TYPE_EASE = "cubic-bezier(0.19, 1, 0.22, 1)";
+const PRESS_EASE = "cubic-bezier(0.25, 0.46, 0.45, 0.94)";
+const CHECK_EASE = "cubic-bezier(0.34, 1.4, 0.64, 1)";
+const DIGITS = [0, 1, 2, 3, 4, 5] as const;
 
-interface Step {
-  text: string;
-  code?: string;
+type TransitionDirection = 1 | -1;
+
+function prefersReducedMotion() {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
-interface Job {
-  id: JobId;
-  icon: LucideIcon;
-  label: string;
-  blurb: string;
-  /** Only real actions count as steps. Facts about the problem go in `byHandCost`. */
-  byHand: Step[];
-  /** What multiplies the steps, for example "for each skill". */
-  byHandRepeat: string;
-  byHandCost: string;
-  /** The one action in the app. The finding work is already done when the user arrives. */
-  studioStep: string;
-  /** What the app already did before the step, and what happens after it. Not steps. */
-  studioNotes: string[];
-  command: string;
+/** Vertical digit reel for the 0 / 5 fixed counter (tabular-nums, zero width jump). */
+function FixedCountDigit({ count }: { count: number }) {
+  return (
+    <span {...stylex.props(styles.digitMask)} aria-hidden="true">
+      <span
+        style={{ transform: `translateY(${-count * (100 / DIGITS.length)}%)` }}
+        {...stylex.props(styles.digitReel)}
+      >
+        {DIGITS.map((d) => (
+          <span key={d} {...stylex.props(styles.digitCell)}>
+            {d}
+          </span>
+        ))}
+      </span>
+    </span>
+  );
 }
 
-const jobs: ReadonlyArray<Job> = [
-  {
-    id: "ignored",
-    icon: Stethoscope,
-    label: "Your agent ignores a skill",
-    blurb: "See what the model saw.",
-    byHand: [
-      {
-        text: "Find the session file and the skill list in it. Claude Code and Codex record the list. The other agents do not.",
-        code: "grep -l skill_listing ~/.claude/projects/*/*.jsonl",
-      },
-      { text: "Read the list. Check if the skill has a description there, or only a name." },
-      {
-        text: "Check that the skill is in a folder this agent reads. Claude Code does not read .agents/skills.",
-      },
-      {
-        text: "Open SKILL.md and check the header. A bad header can stop the agent from loading the skill.",
-      },
-    ],
-    byHandRepeat: "for each session",
-    byHandCost:
-      "Each agent writes its sessions in a different format, and none of them tells you why it skipped a skill.",
-    studioStep: "Open Sessions.",
-    studioNotes: [
-      "Sessions shows what each session listed and used: each skill described, by name only, or not listed. It marks a skill as possibly missed. That mark is a guess from your first prompt.",
-      "Then fix the cause. Raise the budget in Model listing, reword the description, or make the skills you only type manual-only. For a broken skill, click Fix.",
-    ],
-    command: "skill-studio sessions",
-  },
-  {
-    id: "unused",
-    icon: FolderSearch,
-    label: "Your agents load skills you never use",
-    blurb: "Park them. Undo any time.",
-    byHand: [
-      { text: "List the skills in the agent's folders." },
-      {
-        text: "Search the agent's session files to find which skills ran. Each agent uses a different format.",
-      },
-      { text: "Delete the folders you think you do not need, and hope that you are right." },
-    ],
-    byHandRepeat: "for each agent",
-    byHandCost:
-      "Each listed skill takes space in the list, used or not. That space is what other skills need to keep a description.",
-    studioStep: "Click Park on the skills you do not need.",
-    studioNotes: [
-      "Sessions already lists each skill that was listed in nearly every session and never used. On one machine, that was 119 skills.",
-      "A parked skill leaves your agents' lists. Nothing is deleted, and Unpark brings it back.",
-    ],
-    command: "skill-studio usage",
-  },
-  {
-    id: "budget",
-    icon: ListTree,
-    label: "Your skills do not fit the list",
-    blurb: "Try another budget first.",
-    byHand: [
-      {
-        text: "Find the listing budget of each agent. Claude Code and Codex each take a share of the context window, and each has its own setting.",
-      },
-      {
-        text: "Add up the length of each name and description. Compare the total with the budget.",
-      },
-      {
-        text: "Change the setting, start a new session, and ask the agent which skills it sees.",
-      },
-    ],
-    byHandRepeat: "for each agent",
-    byHandCost: "No agent tells you which descriptions it cut, or which it would cut next.",
-    studioStep: "Type a budget in Model listing.",
-    studioNotes: [
-      "Model listing already shows each skill as described, name only or hidden. Compare marks each skill that gains or loses a description at the new budget.",
-      "Skill Studio does not write agent settings. It gives you the line and the file to put it in.",
-    ],
-    command: "skill-studio listing --claude-fraction 0.02",
-  },
-  {
-    id: "update",
-    icon: PackageOpen,
-    label: "A skill pack has a new version",
-    blurb: "Update every copy, not only one.",
-    byHand: [
-      { text: "Update the shared copy.", code: "npx skills update" },
-      {
-        text: "Find the copies you made for your other agents.",
-        code: "ls ~/.codex/skills ~/.cursor/skills ~/.config/opencode/skills",
-      },
-      {
-        text: "Compare each copy with the new version.",
-        code: "diff -r ~/.agents/skills/sql-review ~/.cursor/skills/sql-review",
-      },
-      { text: "Copy the new files into each agent's folder." },
-    ],
-    byHandRepeat: "for each skill",
-    byHandCost: "One folder per agent. Miss one and that agent keeps the old version.",
-    studioStep: "Click Update all on Home.",
-    studioNotes: [
-      "Home already lists each skill that has a new version. With only one, its row has Update. If you edited a skill, Home asks before it replaces your edits.",
-      "Each agent that links the skill gets the new version.",
-    ],
-    command: "skill-studio outdated",
-  },
-  {
-    id: "share",
-    icon: Users,
-    label: "A teammate asks for your setup",
-    blurb: "Share one repo, not a list.",
-    byHand: [
-      {
-        text: "Read the lock file to find the repo of each skill.",
-        code: "cat ~/.agents/.skill-lock.json",
-      },
-      { text: "Look in each agent's folder for skills that are not in the lock file." },
-      { text: "Guess which skills you wrote and which ones you changed." },
-      { text: "Paste a list of repos into chat. Zip the rest." },
-    ],
-    byHandRepeat: "each time someone asks",
-    byHandCost: "The lock file knows only one installer. Your own skills are not in it.",
-    studioStep: "Your teammate adds your repo in Packs.",
-    studioNotes: [
-      "Your skills live in one git repo, such as acme-labs/review-skills. Packs lists the skills it will add, and one more click adds them.",
-      "Check upstream finds new versions and new skills. Update skips each skill your teammate edited, and says why. Each machine needs Node.js and git.",
-    ],
-    command: "skill-studio pack add acme-labs/review-skills",
-  },
-];
+function StageViewContent({
+  scenario,
+  solved,
+  onSolve,
+}: {
+  scenario: Scenario;
+  solved: boolean;
+  onSolve?: () => void;
+}) {
+  if (!solved) {
+    return (
+      <div {...stylex.props(styles.viewBody)}>
+        <div {...stylex.props(styles.copyBlock)}>
+          <h3 data-anim="headline" {...stylex.props(styles.stageTitle)}>
+            {scenario.question}
+          </h3>
+          <p data-anim="copy" {...stylex.props(styles.stageCopy)}>
+            {scenario.painSummary}
+          </p>
+        </div>
 
-// On a phone the tabs sit in two columns. With an odd count the last tab takes the full row.
-const LAST_TAB_ALONE = jobs.length % 2 === 1;
+        <pre data-anim="surface" {...stylex.props(styles.terminal)}>
+          {scenario.painTerminal.map((line, i) => (
+            <span
+              key={i}
+              {...stylex.props(
+                styles.termLine,
+                line.tone === "err" && styles.termErr,
+                line.tone === "warn" && styles.termWarn,
+                line.tone === "dim" && styles.termDim,
+              )}
+            >
+              {line.text}
+            </span>
+          ))}
+        </pre>
 
-const TAB_STEPS = new Map([
-  ["ArrowRight", 1],
-  ["ArrowDown", 1],
-  ["ArrowLeft", -1],
-  ["ArrowUp", -1],
-]);
+        <ul data-anim="detail" {...stylex.props(styles.painList)}>
+          {scenario.painSteps.map((step, i) => (
+            <li key={i} {...stylex.props(styles.painItem)}>
+              <span {...stylex.props(styles.stepDot)} />
+              {step}
+            </li>
+          ))}
+        </ul>
+
+        <div data-anim="foot" {...stylex.props(styles.actionBar)}>
+          <button
+            type="button"
+            onClick={onSolve}
+            {...stylex.props(stylex.defaultMarker(), styles.solveBtn)}
+          >
+            <span>{scenario.fixVerb}</span>
+            <span aria-hidden="true" {...stylex.props(styles.solveArrow)}>
+              <ArrowRight size={15} />
+            </span>
+          </button>
+          <span {...stylex.props(styles.solveHint)}>
+            See how Skill Studio handles this in 1 click
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div {...stylex.props(styles.viewBody)}>
+      <div {...stylex.props(styles.copyBlock)}>
+        <h3 data-anim="headline" {...stylex.props(styles.stageTitle)}>
+          {scenario.solutionHeadline}
+        </h3>
+        <p data-anim="copy" {...stylex.props(styles.stageCopy)}>
+          {scenario.solutionSummary}
+        </p>
+      </div>
+
+      <div data-anim="surface">
+        <LiveScenarioPreview id={scenario.id} resolved />
+      </div>
+
+      <div data-anim="foot" {...stylex.props(styles.solvedFoot)}>
+        <CopyCliButton command={scenario.command} />
+        <div {...stylex.props(styles.footerLinks)}>
+          <a href="#download" {...stylex.props(homeSectionStyles.textLink, styles.ctaLink)}>
+            Get the Mac app <span aria-hidden="true">→</span>
+          </a>
+          <a
+            href={CLI_DOCS_URL}
+            {...stylex.props(homeSectionStyles.textLink, styles.ctaLink, styles.mutedLink)}
+          >
+            All CLI commands
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface TransitionIntent {
+  direction: TransitionDirection;
+  instant: boolean;
+  kind: "state" | "scenario";
+}
+
+/**
+ * Orchestrates crisp typographic entrance via WAAPI:
+ * - Text (`headline`, `copy`, `detail`, `foot`) animates pure opacity + vertical glide
+ *   (no scale, no blur — avoids subpixel font-smoothing shimmer).
+ * - Only the interactive card (`surface`) gets subtle scale(0.988 -> 1).
+ * - Starts at 75ms so the 90ms outgoing fade clears before new letters arrive.
+ */
+function ActiveStageView({
+  scenario,
+  solved,
+  onSolve,
+  intent,
+}: {
+  scenario: Scenario;
+  solved: boolean;
+  onSolve: () => void;
+  intent: TransitionIntent;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const root = ref.current;
+    if (!root || intent.instant || !("animate" in root)) return;
+    const reduced = prefersReducedMotion();
+    const anims: Animation[] = [];
+
+    const baseDelay = reduced ? 65 : intent.kind === "state" ? 75 : 55;
+    const dir = intent.direction;
+
+    const specs: ReadonlyArray<{
+      selector: string;
+      delayOffset: number;
+      duration: number;
+      shift: number;
+      scale?: number;
+      easing: string;
+    }> = [
+      {
+        selector: '[data-anim="headline"]',
+        delayOffset: 0,
+        duration: 260,
+        shift: intent.kind === "state" ? 10 : 7,
+        easing: TYPE_EASE,
+      },
+      {
+        selector: '[data-anim="copy"]',
+        delayOffset: 32,
+        duration: 240,
+        shift: intent.kind === "state" ? 7 : 5,
+        easing: TYPE_EASE,
+      },
+      {
+        selector: '[data-anim="surface"]',
+        delayOffset: 62,
+        duration: 260,
+        shift: intent.kind === "state" ? 9 : 6,
+        scale: 0.988,
+        easing: DRAWER_EASE,
+      },
+      {
+        selector: '[data-anim="detail"]',
+        delayOffset: 85,
+        duration: 220,
+        shift: 5,
+        easing: TYPE_EASE,
+      },
+      {
+        selector: '[data-anim="foot"]',
+        delayOffset: 95,
+        duration: 210,
+        shift: 4,
+        easing: TYPE_EASE,
+      },
+    ];
+
+    for (const spec of specs) {
+      const el = root.querySelector(spec.selector);
+      if (!el || !("animate" in el)) continue;
+      const fromTransform = spec.scale
+        ? `translateY(${dir * spec.shift}px) scale(${spec.scale})`
+        : `translateY(${dir * spec.shift}px)`;
+      const toTransform = spec.scale ? "translateY(0px) scale(1)" : "translateY(0px)";
+
+      anims.push(
+        el.animate(
+          reduced
+            ? [{ opacity: 0 }, { opacity: 1 }]
+            : [
+                { opacity: 0, transform: fromTransform },
+                { opacity: 1, transform: toTransform },
+              ],
+          {
+            duration: reduced ? 150 : spec.duration,
+            delay: reduced ? baseDelay : baseDelay + spec.delayOffset,
+            easing: reduced ? "ease" : spec.easing,
+            fill: "both",
+          },
+        ),
+      );
+    }
+
+    return () => {
+      for (const anim of anims) anim.cancel();
+    };
+  }, [intent]);
+
+  return (
+    <div ref={ref} {...stylex.props(styles.activeLayer)}>
+      <StageViewContent scenario={scenario} solved={solved} onSolve={onSolve} />
+    </div>
+  );
+}
+
+interface ExitingSnapshot {
+  key: string;
+  scenario: Scenario;
+  solved: boolean;
+  direction: TransitionDirection;
+  seq: number;
+}
 
 export function JobsSection() {
-  const [active, setActive] = useState<JobId>("ignored");
-  const job = jobs.find((j) => j.id === active)!;
+  const [activeId, setActiveId] = useState<Scenario["id"]>("ignored");
+  const [solvedIds, setSolvedIds] = useState<ReadonlyArray<Scenario["id"]>>([]);
+  const [railReady, setRailReady] = useState(false);
+  const [exiting, setExiting] = useState<ExitingSnapshot | null>(null);
+  const [intent, setIntent] = useState<TransitionIntent>({
+    direction: 1,
+    instant: true,
+    kind: "state",
+  });
+
+  const outerRef = useRef<HTMLDivElement>(null);
+  const measureRef = useRef<HTMLDivElement>(null);
+  const exitLayerRef = useRef<HTMLDivElement>(null);
+  const prevHeightRef = useRef<number | null>(null);
+  const instantHeightRef = useRef(true);
+  const seqRef = useRef(0);
+
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const railHighlightRef = useRef<HTMLSpanElement>(null);
+  const viaKeyboard = useRef(false);
+
+  const activeIndex = SCENARIOS.findIndex((s) => s.id === activeId);
+  const active = SCENARIOS[activeIndex] ?? SCENARIOS[0];
+  const isSolved = solvedIds.includes(active.id);
+  const viewKey = `${active.id}:${isSolved ? "after" : "before"}`;
+
+  // Fluid adaptive-duration auto-height via ResizeObserver on the padded inner element
+  // (Family Drawer pattern: 190–270ms scaled by delta, 0ms on load / keyboard / reduced motion).
+  useLayoutEffect(() => {
+    const outer = outerRef.current;
+    const inner = measureRef.current;
+    if (!outer || !inner || !("ResizeObserver" in window)) return;
+
+    const applyHeight = () => {
+      const next = Math.ceil(inner.getBoundingClientRect().height);
+      if (next <= 0) return;
+      const prev = prevHeightRef.current;
+      prevHeightRef.current = next;
+
+      if (prev === null || instantHeightRef.current || prefersReducedMotion()) {
+        outer.style.transitionDuration = "0ms";
+        outer.style.height = `${next}px`;
+        return;
+      }
+
+      const delta = Math.abs(next - prev);
+      const adaptive = Math.round(Math.min(Math.max((delta / 500) * 1000, 190), 270));
+      outer.style.transitionDuration = `${adaptive}ms`;
+      outer.style.height = `${next}px`;
+    };
+
+    applyHeight();
+    const observer = new ResizeObserver(applyHeight);
+    observer.observe(inner);
+    return () => observer.disconnect();
+  }, []);
+
+  // Fast 90ms outgoing fade (pure opacity + 4px drift, no blur/scale) so text never collides.
+  useLayoutEffect(() => {
+    const el = exitLayerRef.current;
+    if (!exiting || !el || !("animate" in el)) return;
+    const reduced = prefersReducedMotion();
+    const anim = el.animate(
+      reduced
+        ? [{ opacity: 1 }, { opacity: 0 }]
+        : [
+            { opacity: 1, transform: "translateY(0px)" },
+            { opacity: 0, transform: `translateY(${-exiting.direction * 4}px)` },
+          ],
+      {
+        duration: 90,
+        easing: "cubic-bezier(0.23, 1, 0.32, 1)",
+        fill: "forwards",
+      },
+    );
+    let cancelled = false;
+    void anim.finished
+      .then(() => {
+        if (!cancelled) setExiting((curr) => (curr?.seq === exiting.seq ? null : curr));
+      })
+      .catch(() => {
+        // Cancelled mid-flight by rapid click; next transition takes over cleanly.
+      });
+    return () => {
+      cancelled = true;
+      anim.cancel();
+    };
+  }, [exiting]);
+
+  // Sliding left-rail highlight (smooth on pointer click, instant 0ms on keyboard arrow nav).
+  useLayoutEffect(() => {
+    const syncHighlight = () => {
+      const el = tabRefs.current[activeIndex];
+      const highlight = railHighlightRef.current;
+      if (!el || !highlight) return;
+      if (viaKeyboard.current || prefersReducedMotion()) {
+        highlight.style.transition = "none";
+      } else {
+        highlight.style.transition = `transform 240ms ${DRAWER_EASE}, height 240ms ${DRAWER_EASE}`;
+      }
+      viaKeyboard.current = false;
+      highlight.style.height = `${el.offsetHeight}px`;
+      highlight.style.transform = `translateY(${el.offsetTop}px)`;
+    };
+    syncHighlight();
+    window.addEventListener("resize", syncHighlight);
+    return () => window.removeEventListener("resize", syncHighlight);
+  }, [activeIndex]);
+
+  useEffect(() => {
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => setRailReady(true));
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+    };
+  }, []);
+
+  const snapshotExit = (direction: TransitionDirection) => {
+    seqRef.current += 1;
+    setExiting({
+      key: viewKey,
+      scenario: active,
+      solved: isSolved,
+      direction,
+      seq: seqRef.current,
+    });
+  };
+
+  const solveActive = () => {
+    if (isSolved) return;
+    instantHeightRef.current = false;
+    setIntent({ direction: 1, instant: false, kind: "state" });
+    snapshotExit(1);
+    setSolvedIds((prev) => (prev.includes(active.id) ? prev : [...prev, active.id]));
+  };
+
+  const resetActive = () => {
+    if (!isSolved) return;
+    instantHeightRef.current = false;
+    setIntent({ direction: -1, instant: false, kind: "state" });
+    snapshotExit(-1);
+    setSolvedIds((prev) => prev.filter((item) => item !== active.id));
+  };
+
+  const pickScenario = (nextIndex: number, keyboard: boolean) => {
+    const next = SCENARIOS[nextIndex];
+    if (!next || next.id === active.id) return;
+    const direction: TransitionDirection = nextIndex > activeIndex ? 1 : -1;
+    viaKeyboard.current = keyboard;
+    instantHeightRef.current = keyboard;
+    setIntent({ direction, instant: keyboard, kind: "scenario" });
+    if (keyboard) setExiting(null);
+    else snapshotExit(direction);
+    setActiveId(next.id);
+  };
 
   const onTabKey = (event: KeyboardEvent) => {
-    const step = TAB_STEPS.get(event.key);
-    if (!step) return;
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     event.preventDefault();
-    const index = jobs.findIndex((j) => j.id === active);
-    const next = jobs[(index + step + jobs.length) % jobs.length].id;
-    setActive(next);
-    document.getElementById(`job-tab-${next}`)?.focus();
+    const delta = event.key === "ArrowDown" ? 1 : -1;
+    const nextIndex = (activeIndex + delta + SCENARIOS.length) % SCENARIOS.length;
+    pickScenario(nextIndex, true);
+    document.getElementById(`fixer-tab-${SCENARIOS[nextIndex].id}`)?.focus();
   };
 
   return (
     <>
-      <h2 {...stylex.props(homeSectionStyles.title, styles.title)}>Jobs you do by hand today.</h2>
-      <p {...stylex.props(styles.lede)}>
-        Each agent keeps its own skill folders and its own session files. To learn what a model saw,
-        you open them by hand. Skill Studio reads them for you.
-      </p>
-      <div {...stylex.props(homeSectionStyles.columns)}>
+      <div {...stylex.props(styles.headerRow)}>
+        <div>
+          <h2 {...stylex.props(homeSectionStyles.title, styles.title)}>
+            Stop hunting through skill folders.
+          </h2>
+          <p {...stylex.props(styles.lede)}>
+            Pick a problem you hit today, see what it takes by hand, then click to run Skill Studio
+            on it.
+          </p>
+        </div>
+
+        <span
+          aria-live="polite"
+          {...stylex.props(styles.progressPill, solvedIds.length > 0 && styles.progressPillOn)}
+        >
+          <span
+            {...stylex.props(
+              styles.progressDot,
+              solvedIds.length === SCENARIOS.length && styles.progressDotDone,
+            )}
+          />
+          <span {...stylex.props(styles.visuallyHidden)}>
+            {solvedIds.length} of {SCENARIOS.length} fixed
+          </span>
+          <span aria-hidden="true" {...stylex.props(styles.progressCount)}>
+            <FixedCountDigit count={solvedIds.length} />
+            <span>/ {SCENARIOS.length} fixed</span>
+          </span>
+        </span>
+      </div>
+
+      <div {...stylex.props(styles.split)}>
         <div
           role="tablist"
-          aria-label="Skill jobs"
-          aria-orientation="vertical"
+          aria-label="Skill problems to fix"
           onKeyDown={onTabKey}
-          {...stylex.props(styles.tabs)}
+          {...stylex.props(styles.rail)}
         >
-          {jobs.map(({ id, icon: Icon, label, blurb }, index) => (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              id={`job-tab-${id}`}
-              aria-selected={active === id}
-              aria-controls="job-panel"
-              tabIndex={active === id ? 0 : -1}
-              onClick={() => setActive(id)}
-              {...stylex.props(
-                styles.tab,
-                active === id && styles.tabOn,
-                LAST_TAB_ALONE && index === jobs.length - 1 && styles.tabWide,
-              )}
-            >
-              <span {...stylex.props(styles.tabIcon, active === id && styles.tabIconOn)}>
-                <Icon size={18} aria-hidden="true" />
-              </span>
-              <span {...stylex.props(styles.tabText)}>
-                <span {...stylex.props(styles.tabLabel)}>{label}</span>
-                <span {...stylex.props(styles.tabBlurb)}>{blurb}</span>
-              </span>
-            </button>
-          ))}
+          <span
+            ref={railHighlightRef}
+            aria-hidden="true"
+            {...stylex.props(styles.railHighlight, !railReady && styles.noTransition)}
+          />
+          {SCENARIOS.map((item, i) => {
+            const on = item.id === active.id;
+            const solved = solvedIds.includes(item.id);
+            return (
+              <button
+                key={item.id}
+                ref={(el) => {
+                  tabRefs.current[i] = el;
+                }}
+                id={`fixer-tab-${item.id}`}
+                type="button"
+                role="tab"
+                aria-selected={on}
+                aria-controls="fixer-panel"
+                tabIndex={on ? 0 : -1}
+                onClick={() => pickScenario(i, false)}
+                {...stylex.props(styles.tab, on && styles.tabOn)}
+              >
+                <span aria-hidden="true" {...stylex.props(styles.iconSlot)}>
+                  <span
+                    {...stylex.props(
+                      styles.iconFace,
+                      styles.iconWarn,
+                      !solved && styles.iconFaceOn,
+                    )}
+                  >
+                    <AlertCircle size={15} />
+                  </span>
+                  <span
+                    {...stylex.props(styles.iconFace, styles.iconGood, solved && styles.iconFaceOn)}
+                  >
+                    <CheckCircle2 size={15} />
+                  </span>
+                </span>
+                <span {...stylex.props(styles.tabCopy)}>
+                  <span {...stylex.props(styles.tabTitle)}>{item.question}</span>
+                  <span {...stylex.props(styles.metaMask)}>
+                    <span
+                      {...stylex.props(
+                        styles.metaFace,
+                        !solved ? styles.metaFaceOn : styles.metaFaceOutUp,
+                      )}
+                    >
+                      {item.painCost}
+                    </span>
+                    <span
+                      {...stylex.props(
+                        styles.metaFace,
+                        styles.metaGood,
+                        solved ? styles.metaFaceOn : styles.metaFaceOutDown,
+                      )}
+                    >
+                      Solved · {item.solutionOutcome}
+                    </span>
+                  </span>
+                </span>
+              </button>
+            );
+          })}
         </div>
 
         <div
-          id="job-panel"
+          ref={outerRef}
+          id="fixer-panel"
           role="tabpanel"
-          aria-labelledby={`job-tab-${active}`}
-          {...stylex.props(styles.panel)}
+          aria-labelledby={`fixer-tab-${active.id}`}
+          {...stylex.props(styles.stageOuter)}
         >
-          <div {...stylex.props(styles.card, styles.byHandCard)}>
-            <h3 {...stylex.props(styles.cardTitle)}>
-              By hand
-              <span {...stylex.props(styles.stepCount)}>
-                {job.byHand.length} steps, {job.byHandRepeat}
-              </span>
-            </h3>
-            <ol {...stylex.props(styles.steps)}>
-              {job.byHand.map((step, index) => (
-                <li key={step.text} {...stylex.props(styles.step)}>
-                  <span aria-hidden="true" {...stylex.props(styles.stepNumber)}>
-                    {index + 1}
-                  </span>
-                  <span {...stylex.props(styles.stepBody)}>
-                    {step.text}
-                    {step.code && (
-                      <code {...stylex.props(homeSectionStyles.code, styles.stepCode)}>
-                        {step.code}
-                      </code>
-                    )}
-                  </span>
-                </li>
-              ))}
-            </ol>
-            <p {...stylex.props(styles.byHandCost)}>{job.byHandCost}</p>
-          </div>
+          <span
+            aria-hidden="true"
+            {...stylex.props(styles.solvedRing, isSolved && styles.solvedRingOn)}
+          />
 
-          <div {...stylex.props(styles.card, styles.withCard)}>
-            <h3 {...stylex.props(styles.cardTitle)}>
-              With Skill Studio
-              <span {...stylex.props(styles.stepCount, styles.oneStep)}>1 step</span>
-            </h3>
-            <p {...stylex.props(styles.studioStep)}>
-              <span aria-hidden="true" {...stylex.props(styles.check)}>
-                <Check size={16} strokeWidth={2.5} />
-              </span>
-              {job.studioStep}
-            </p>
-            <ul {...stylex.props(styles.notes)}>
-              {job.studioNotes.map((note) => (
-                <li key={note}>{note}</li>
-              ))}
-            </ul>
-            <p {...stylex.props(styles.commandLine)}>
-              <span {...stylex.props(styles.commandLabel)}>From a terminal</span>
-              <code {...stylex.props(homeSectionStyles.code, styles.command)}>{job.command}</code>
-            </p>
+          <div ref={measureRef} {...stylex.props(styles.stageInner)}>
+            <div {...stylex.props(styles.stageTop)}>
+              <div {...stylex.props(styles.badgeSlot)}>
+                <span
+                  aria-hidden={isSolved}
+                  {...stylex.props(
+                    styles.modeBadge,
+                    styles.modePain,
+                    styles.badgeFace,
+                    !isSolved ? styles.badgeFaceOn : styles.badgeFaceOutUp,
+                  )}
+                >
+                  Today, by hand · {active.painCost}
+                </span>
+                <span
+                  aria-hidden={!isSolved}
+                  {...stylex.props(
+                    styles.modeBadge,
+                    styles.modeGood,
+                    styles.badgeFace,
+                    isSolved ? styles.badgeFaceOn : styles.badgeFaceOutDown,
+                  )}
+                >
+                  With Skill Studio · {active.solutionOutcome}
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={resetActive}
+                aria-hidden={!isSolved}
+                tabIndex={isSolved ? 0 : -1}
+                {...stylex.props(styles.resetBtn, isSolved && styles.resetBtnOn)}
+              >
+                <RotateCcw size={12} aria-hidden="true" />
+                Compare with before
+              </button>
+            </div>
+
+            <div {...stylex.props(styles.viewViewport)}>
+              {exiting && (
+                <div
+                  key={`exit-${exiting.seq}`}
+                  ref={exitLayerRef}
+                  aria-hidden="true"
+                  inert
+                  {...stylex.props(styles.exitLayer)}
+                >
+                  <StageViewContent scenario={exiting.scenario} solved={exiting.solved} />
+                </div>
+              )}
+              <ActiveStageView
+                key={viewKey}
+                scenario={active}
+                solved={isSolved}
+                onSolve={solveActive}
+                intent={intent}
+              />
+            </div>
           </div>
         </div>
       </div>
@@ -296,28 +625,112 @@ export function JobsSection() {
 }
 
 const styles = stylex.create({
+  visuallyHidden: {
+    clip: "rect(0 0 0 0)",
+    clipPath: "inset(50%)",
+    height: 1,
+    overflow: "hidden",
+    position: "absolute",
+    whiteSpace: "nowrap",
+    width: 1,
+  },
+  headerRow: {
+    alignItems: "flex-end",
+    display: "flex",
+    flexWrap: "wrap",
+    gap: "12px 24px",
+    justifyContent: "space-between",
+    marginBottom: 32,
+    "@media (max-width: 760px)": { marginBottom: 24 },
+  },
   title: { marginBottom: 14 },
   lede: {
     color: siteTokens.muted,
     fontSize: 17,
     lineHeight: 1.6,
-    margin: "0 0 40px",
+    margin: 0,
     maxWidth: "58ch",
     textWrap: "pretty",
-    "@media (max-width: 760px)": { fontSize: 16, marginBottom: 28 },
+    "@media (max-width: 760px)": { fontSize: 16 },
   },
-  tabs: {
+  progressPill: {
+    alignItems: "center",
+    backgroundColor: siteTokens.surface,
+    borderColor: siteTokens.border,
+    borderRadius: 999,
+    borderStyle: "solid",
+    borderWidth: 1,
+    color: siteTokens.muted,
+    display: "inline-flex",
+    fontSize: 12.5,
+    fontWeight: 580,
+    gap: 8,
+    height: 32,
+    paddingInline: 12,
+    transition: "border-color 220ms ease, color 220ms ease",
+  },
+  progressPillOn: { color: siteTokens.text },
+  progressDot: {
+    backgroundColor: siteTokens.warning,
+    borderRadius: 999,
+    height: 7,
+    transition: "background-color 220ms ease",
+    width: 7,
+  },
+  progressDotDone: { backgroundColor: siteTokens.success },
+  progressCount: {
+    alignItems: "center",
+    display: "inline-flex",
+    fontVariantNumeric: "tabular-nums",
+    gap: 3,
+  },
+  digitMask: {
+    display: "inline-block",
+    height: "1.2em",
+    lineHeight: 1.2,
+    overflow: "hidden",
+  },
+  digitReel: {
+    display: "flex",
+    flexDirection: "column",
+    transitionDuration: { default: "240ms", [REDUCED]: "0ms" },
+    transitionProperty: "transform",
+    transitionTimingFunction: DRAWER_EASE,
+  },
+  digitCell: {
+    display: "block",
+    height: "1.2em",
+    lineHeight: 1.2,
+    textAlign: "center",
+  },
+  split: {
+    alignItems: "start",
+    display: "grid",
+    gap: 20,
+    gridTemplateColumns: "360px minmax(0, 1fr)",
+    "@media (max-width: 960px)": { gridTemplateColumns: "minmax(0, 1fr)" },
+  },
+  rail: {
     display: "flex",
     flexDirection: "column",
     gap: 6,
-    "@media (max-width: 760px)": {
-      display: "grid",
-      gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-      marginBottom: 20,
-    },
+    position: "relative",
   },
+  railHighlight: {
+    backgroundColor: siteTokens.surface,
+    borderColor: siteTokens.border,
+    borderRadius: 12,
+    borderStyle: "solid",
+    borderWidth: 1,
+    left: 0,
+    pointerEvents: "none",
+    position: "absolute",
+    right: 0,
+    top: 0,
+  },
+  noTransition: { transition: "none" },
   tab: {
-    alignItems: "center",
+    alignItems: "flex-start",
     backgroundColor: "transparent",
     borderColor: "transparent",
     borderRadius: 12,
@@ -327,199 +740,343 @@ const styles = stylex.create({
     cursor: "pointer",
     display: "flex",
     fontFamily: "inherit",
-    gap: 12,
-    minHeight: 64,
-    padding: "10px 12px",
+    gap: 10,
+    minHeight: 62,
+    padding: "12px 14px",
+    position: "relative",
     textAlign: "left",
-    transition:
-      "background-color 150ms ease-out, border-color 150ms ease-out, color 150ms ease-out",
-    ":hover": { backgroundColor: siteTokens.surface, color: siteTokens.text },
-    ":focus-visible": { outline: `2px solid ${siteTokens.text}`, outlineOffset: 2 },
-    "@media (max-width: 760px)": { alignItems: "flex-start", gap: 10, minHeight: 56 },
+    transition: `color 150ms ease, transform 150ms ${PRESS_EASE}`,
+    [HOVER]: { ":hover": { color: siteTokens.text } },
+    ":active": { transform: "scale(.985)" },
+    ":focus-visible": { outline: `2px solid ${siteTokens.muted}`, outlineOffset: 2 },
   },
-  tabOn: {
+  tabOn: { color: siteTokens.text },
+  iconSlot: {
+    display: "inline-grid",
+    flexShrink: 0,
+    height: 16,
+    marginTop: 2,
+    placeItems: "center",
+    width: 16,
+  },
+  iconFace: {
+    display: "inline-flex",
+    gridArea: "1 / 1",
+    opacity: 0,
+    transform: "scale(0.7) rotate(-14deg)",
+    transitionDuration: "240ms",
+    transitionProperty: "opacity, transform",
+    transitionTimingFunction: CHECK_EASE,
+    [REDUCED]: { transform: "none", transitionProperty: "opacity" },
+  },
+  iconFaceOn: {
+    opacity: 1,
+    transform: "scale(1) rotate(0deg)",
+  },
+  iconWarn: { color: siteTokens.warning },
+  iconGood: { color: siteTokens.success },
+  tabCopy: { display: "flex", flexDirection: "column", gap: 3, minWidth: 0 },
+  tabTitle: {
+    color: "inherit",
+    fontSize: 14.5,
+    fontWeight: 620,
+    letterSpacing: "-.01em",
+    lineHeight: 1.3,
+  },
+  metaMask: {
+    display: "inline-grid",
+    lineHeight: 1.35,
+    minWidth: 0,
+    overflow: "hidden",
+  },
+  metaFace: {
+    color: siteTokens.muted,
+    fontSize: 12,
+    fontVariantNumeric: "tabular-nums",
+    gridArea: "1 / 1",
+    transitionProperty: "opacity, transform",
+    transitionTimingFunction: TYPE_EASE,
+    [REDUCED]: { transform: "none", transitionProperty: "opacity" },
+  },
+  metaFaceOn: {
+    opacity: 1,
+    transform: "translateY(0%)",
+    transitionDelay: "65ms",
+    transitionDuration: "220ms",
+  },
+  metaFaceOutUp: {
+    opacity: 0,
+    transform: { default: "translateY(-85%)", [REDUCED]: "none" },
+    transitionDelay: "0ms",
+    transitionDuration: "90ms",
+  },
+  metaFaceOutDown: {
+    opacity: 0,
+    transform: { default: "translateY(85%)", [REDUCED]: "none" },
+    transitionDelay: "0ms",
+    transitionDuration: "90ms",
+  },
+  metaGood: { color: siteTokens.success },
+  stageOuter: {
     backgroundColor: siteTokens.surface,
     borderColor: siteTokens.border,
-    color: siteTokens.text,
-  },
-  tabWide: { "@media (max-width: 760px)": { gridColumn: "1 / -1" } },
-  tabIcon: {
-    alignItems: "center",
-    borderRadius: 9,
-    boxShadow: `inset 0 0 0 1px ${siteTokens.border}`,
-    display: "flex",
-    flexShrink: 0,
-    height: 36,
-    justifyContent: "center",
-    transition: "background-color 150ms ease-out, color 150ms ease-out",
-    width: 36,
-    "@media (max-width: 760px)": { display: "none" },
-  },
-  tabIconOn: {
-    backgroundColor: siteTokens.accent,
-    boxShadow: "none",
-    color: siteTokens.accentText,
-  },
-  tabText: { display: "flex", flexDirection: "column", gap: 2, minWidth: 0 },
-  tabLabel: {
-    fontSize: 15,
-    fontWeight: 640,
-    lineHeight: 1.3,
-    "@media (max-width: 760px)": { fontSize: 14 },
-  },
-  tabBlurb: { fontSize: 13, lineHeight: 1.35, "@media (max-width: 760px)": { display: "none" } },
-  panel: {
-    display: "grid",
-    gap: 16,
-    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+    borderRadius: 16,
+    borderStyle: "dashed",
+    borderWidth: 1,
+    isolation: "isolate",
     minWidth: 0,
-    "@media (max-width: 1000px)": { gridTemplateColumns: "minmax(0, 1fr)" },
+    overflow: "hidden",
+    position: "relative",
+    transitionProperty: "height",
+    transitionTimingFunction: DRAWER_EASE,
+    [REDUCED]: { transitionProperty: "none" },
   },
-  card: {
-    borderRadius: 14,
+  solvedRing: {
+    borderColor: `color-mix(in oklch, ${siteTokens.success} 45%, ${siteTokens.border})`,
+    borderRadius: 16,
     borderStyle: "solid",
     borderWidth: 1,
+    boxShadow: `inset 0 0 0 1px color-mix(in oklch, ${siteTokens.success} 14%, transparent)`,
+    inset: 0,
+    opacity: 0,
+    pointerEvents: "none",
+    position: "absolute",
+    transitionDuration: "240ms",
+    transitionProperty: "opacity",
+    transitionTimingFunction: DRAWER_EASE,
+    zIndex: 2,
+  },
+  solvedRingOn: { opacity: 1 },
+  stageInner: {
     display: "flex",
     flexDirection: "column",
     gap: 18,
-    padding: "22px 22px 20px",
-    "@media (max-width: 600px)": { padding: "18px 16px" },
+    padding: 24,
+    "@media (max-width: 600px)": { padding: 18 },
   },
-  byHandCard: {
-    backgroundColor: "transparent",
-    borderColor: siteTokens.border,
-    borderStyle: "dashed",
-  },
-  withCard: {
-    backgroundColor: siteTokens.surface,
-    borderColor: siteTokens.border,
-    boxShadow: `0 0 0 1px ${siteTokens.accentSoft}, 0 18px 50px oklch(0 0 0 / .12)`,
-  },
-  cardTitle: {
-    alignItems: "baseline",
-    color: siteTokens.text,
-    display: "flex",
-    fontSize: 15,
-    fontWeight: 650,
-    justifyContent: "space-between",
-    letterSpacing: "-.01em",
-    margin: 0,
-  },
-  stepCount: { color: siteTokens.muted, fontSize: 12, fontWeight: 500 },
-  oneStep: { color: siteTokens.text, fontWeight: 650 },
-  studioStep: {
-    alignItems: "flex-start",
-    color: siteTokens.text,
-    display: "flex",
-    fontSize: 22,
-    fontWeight: 650,
-    gap: 12,
-    letterSpacing: "-.015em",
-    lineHeight: 1.3,
-    margin: 0,
-    textWrap: "balance",
-    "@media (max-width: 600px)": { fontSize: 19 },
-  },
-  notes: {
-    color: siteTokens.muted,
-    display: "flex",
-    flexDirection: "column",
-    fontSize: 14,
-    gap: 10,
-    lineHeight: 1.5,
-    listStyle: "none",
-    margin: 0,
-    padding: "0 0 0 40px",
-    textWrap: "pretty",
-    "@media (max-width: 600px)": { paddingLeft: 0 },
-  },
-  steps: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 14,
-    listStyle: "none",
-    margin: 0,
-    padding: 0,
-  },
-  step: { display: "flex", gap: 12 },
-  stepNumber: {
+  stageTop: {
     alignItems: "center",
-    borderColor: siteTokens.border,
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 10,
+    justifyContent: "space-between",
+    minHeight: 32,
+  },
+  badgeSlot: { display: "inline-grid", alignItems: "center" },
+  modeBadge: {
     borderRadius: 999,
+    fontSize: 12,
+    fontWeight: 620,
+    gridArea: "1 / 1",
+    justifySelf: "start",
+    padding: "4px 10px",
+    whiteSpace: "nowrap",
+  },
+  badgeFace: {
+    transitionProperty: "opacity, transform",
+    transitionTimingFunction: TYPE_EASE,
+    [REDUCED]: { transitionProperty: "opacity" },
+  },
+  badgeFaceOn: {
+    opacity: 1,
+    transform: "translateY(0)",
+    transitionDelay: "65ms",
+    transitionDuration: "220ms",
+  },
+  badgeFaceOutUp: {
+    opacity: 0,
+    pointerEvents: "none",
+    transform: { default: "translateY(-5px)", [REDUCED]: "none" },
+    transitionDelay: "0ms",
+    transitionDuration: "90ms",
+  },
+  badgeFaceOutDown: {
+    opacity: 0,
+    pointerEvents: "none",
+    transform: { default: "translateY(5px)", [REDUCED]: "none" },
+    transitionDelay: "0ms",
+    transitionDuration: "90ms",
+  },
+  modePain: {
+    backgroundColor: siteTokens.background,
+    boxShadow: `inset 0 0 0 1px ${siteTokens.border}`,
+    color: siteTokens.warning,
+  },
+  modeGood: {
+    backgroundColor: siteTokens.background,
+    boxShadow: `inset 0 0 0 1px color-mix(in oklch, ${siteTokens.success} 45%, transparent)`,
+    color: siteTokens.success,
+  },
+  resetBtn: {
+    alignItems: "center",
+    backgroundColor: "transparent",
+    borderColor: { default: siteTokens.border, [HOVER]: { ":hover": siteTokens.muted } },
+    borderRadius: 8,
     borderStyle: "solid",
     borderWidth: 1,
     color: siteTokens.muted,
-    display: "flex",
-    flexShrink: 0,
-    fontSize: 11,
-    fontVariantNumeric: "tabular-nums",
-    height: 22,
-    justifyContent: "center",
-    width: 22,
+    cursor: "pointer",
+    display: "inline-flex",
+    fontFamily: "inherit",
+    fontSize: 12,
+    fontWeight: 560,
+    gap: 6,
+    minHeight: 32,
+    opacity: 0,
+    paddingInline: 10,
+    pointerEvents: "none",
+    position: "relative",
+    transform: { default: "translateY(4px)", [REDUCED]: "none" },
+    transitionDelay: "0ms",
+    transitionDuration: "90ms",
+    transitionProperty: "opacity, transform, color, border-color",
+    transitionTimingFunction: TYPE_EASE,
+    "::before": { content: '""', inset: "-6px -4px", position: "absolute" },
+    [HOVER]: { ":hover": { color: siteTokens.text } },
+    ":active": { transform: "scale(.97)" },
+    ":focus-visible": { outline: `2px solid ${siteTokens.muted}`, outlineOffset: 2 },
   },
-  check: {
-    alignItems: "center",
-    backgroundColor: siteTokens.accent,
-    borderRadius: 999,
-    color: siteTokens.accentText,
-    display: "flex",
-    flexShrink: 0,
-    height: 28,
-    justifyContent: "center",
-    marginTop: -1,
-    width: 28,
+  resetBtnOn: {
+    opacity: 1,
+    pointerEvents: "auto",
+    transform: "translateY(0)",
+    transitionDelay: "65ms",
+    transitionDuration: "220ms",
   },
-  stepBody: {
+  viewViewport: {
+    minWidth: 0,
+    position: "relative",
+  },
+  exitLayer: {
+    left: 0,
+    pointerEvents: "none",
+    position: "absolute",
+    right: 0,
+    top: 0,
+  },
+  activeLayer: {
+    minWidth: 0,
+  },
+  viewBody: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 18,
+    minWidth: 0,
+  },
+  copyBlock: { display: "flex", flexDirection: "column", gap: 6 },
+  stageTitle: {
+    color: siteTokens.text,
+    fontSize: 22,
+    fontWeight: 660,
+    letterSpacing: "-.025em",
+    lineHeight: 1.25,
+    margin: 0,
+    textWrap: "balance",
+  },
+  stageCopy: {
+    color: siteTokens.muted,
+    fontSize: 15,
+    lineHeight: 1.55,
+    margin: 0,
+    maxWidth: "56ch",
+    textWrap: "pretty",
+  },
+  terminal: {
+    backgroundColor: siteTokens.background,
+    borderColor: siteTokens.border,
+    borderRadius: 11,
+    borderStyle: "solid",
+    borderWidth: 1,
     color: siteTokens.text,
     display: "flex",
     flexDirection: "column",
-    fontSize: 14.5,
-    gap: 8,
-    lineHeight: 1.5,
-    minWidth: 0,
-    paddingTop: 1,
-    textWrap: "pretty",
-  },
-  stepCode: {
-    backgroundColor: siteTokens.surface,
-    borderRadius: 7,
-    color: siteTokens.muted,
-    display: "block",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontSize: 12,
-    overflowWrap: "anywhere",
-    padding: "7px 10px",
+    gap: 5,
+    lineHeight: 1.55,
+    margin: 0,
+    padding: "13px 14px",
   },
-  byHandCost: {
-    borderTopColor: siteTokens.border,
-    borderTopStyle: "dashed",
-    borderTopWidth: 1,
+  termLine: { overflowWrap: "anywhere", whiteSpace: "pre-wrap" },
+  termErr: { color: siteTokens.danger },
+  termWarn: { color: siteTokens.warning },
+  termDim: { color: siteTokens.muted },
+  painList: {
     color: siteTokens.muted,
-    fontSize: 13,
-    lineHeight: 1.5,
-    margin: "auto 0 0",
-    paddingTop: 14,
-    textWrap: "pretty",
+    display: "grid",
+    fontSize: 13.5,
+    gap: "8px 18px",
+    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+    lineHeight: 1.45,
+    listStyle: "none",
+    margin: 0,
+    padding: 0,
+    "@media (max-width: 680px)": { gridTemplateColumns: "minmax(0, 1fr)" },
   },
-  commandLine: {
+  painItem: { alignItems: "flex-start", display: "flex", gap: 8 },
+  stepDot: {
+    backgroundColor: siteTokens.border,
+    borderRadius: 999,
+    flexShrink: 0,
+    height: 6,
+    marginTop: 7,
+    width: 6,
+  },
+  actionBar: {
+    alignItems: "center",
     borderTopColor: siteTokens.border,
     borderTopStyle: "solid",
     borderTopWidth: 1,
     display: "flex",
-    flexDirection: "column",
+    flexWrap: "wrap",
+    gap: "10px 16px",
+    paddingTop: 16,
+  },
+  solveBtn: {
+    alignItems: "center",
+    backgroundColor: { default: siteTokens.text, [HOVER]: { ":hover": siteTokens.accent } },
+    borderRadius: 10,
+    borderWidth: 0,
+    color: siteTokens.background,
+    cursor: "pointer",
+    display: "inline-flex",
+    fontFamily: "inherit",
+    fontSize: 14,
+    fontWeight: 640,
     gap: 8,
-    margin: "auto 0 0",
-    minWidth: 0,
+    minHeight: 44,
+    // Optical padding: icon side is 2px tighter than text side (emil-ui-polish #9).
+    padding: "0 14px 0 16px",
+    transition: `background-color 150ms ease, transform 150ms ${PRESS_EASE}`,
+    ":active": { transform: "scale(.97)" },
+    ":focus-visible": { outline: `2px solid ${siteTokens.muted}`, outlineOffset: 2 },
+  },
+  solveArrow: {
+    display: "inline-flex",
+    transform: {
+      default: "translateX(0)",
+      [HOVER]: {
+        [stylex.when.ancestor(":hover")]: "translateX(3px)",
+      },
+    },
+    transition: {
+      default: `transform 180ms ${DRAWER_EASE}`,
+      [REDUCED]: "none",
+    },
+  },
+  solveHint: { color: siteTokens.muted, fontSize: 13 },
+  solvedFoot: {
+    alignItems: "center",
+    borderTopColor: siteTokens.border,
+    borderTopStyle: "solid",
+    borderTopWidth: 1,
+    display: "flex",
+    flexWrap: "wrap",
+    gap: "10px 16px",
+    justifyContent: "space-between",
     paddingTop: 14,
   },
-  commandLabel: { color: siteTokens.muted, fontSize: 12 },
-  command: {
-    backgroundColor: siteTokens.background,
-    borderRadius: 7,
-    color: siteTokens.text,
-    display: "block",
-    fontSize: 12,
-    overflowX: "auto",
-    padding: "8px 10px",
-    whiteSpace: "nowrap",
-  },
+  footerLinks: { alignItems: "center", display: "flex", flexWrap: "wrap", gap: "4px 18px" },
+  ctaLink: { minHeight: 40 },
+  mutedLink: { color: siteTokens.muted },
 });

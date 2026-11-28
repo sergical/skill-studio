@@ -34,7 +34,6 @@ import {
   checkSkillUpdatesNow,
   createPastedSkill,
   getAddMethodDefaults,
-  invokeErrorMessage,
   openListingSetting,
   packAdd,
   packExport,
@@ -45,6 +44,7 @@ import {
   packRemove,
   packUpdate,
 } from "../lib/skill-api";
+import { invokeErrorMessage } from "../lib/skill-command-error";
 import { EMPTY_NAV_HISTORY, recordNavigation, stepBack, stepForward } from "../lib/nav-history";
 import type {
   DefaultDeploymentPaths,
@@ -61,6 +61,8 @@ import {
   watchSystemTheme,
 } from "../lib/theme";
 import type { ResolvedTheme, Theme } from "../lib/theme";
+import { skillCommands } from "./skillCommands";
+import type { SkillCommands } from "./skillCommands";
 
 // ============================================================================
 // Route State
@@ -212,7 +214,7 @@ export function sessionsReportKey(request: SkillSessionsRequest): string {
   return JSON.stringify([request.project_path, request.sessions]);
 }
 
-interface AppState {
+interface AppState extends SkillCommands {
   harnessDetection: HarnessDetectionState;
   setHarnessDetection: (update: Partial<HarnessDetectionState>) => void;
   // === Toast Notifications ===
@@ -482,6 +484,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setHarnessDetection: (update) =>
     set((state) => ({ harnessDetection: { ...state.harnessDetection, ...update } })),
   addToast,
+  ...skillCommands,
 
   activeView: { kind: "home" },
   // Leaving the list (a view change or opening a skill) ends selection mode,

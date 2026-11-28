@@ -4,7 +4,7 @@
 // filter bar instead - see the design rule in spec-ux-1.md section B.
 // ============================================================================
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   Activity as ActivityIcon,
   AlertTriangle,
@@ -31,6 +31,7 @@ import {
   rescanTooltip,
   sidebarAnchorView,
 } from "../../lib/sidebar-nav";
+import { useNow } from "../../hooks/useNow";
 import { useAppStore } from "../../store/appStore";
 import { useWindowFullscreen } from "../../hooks/useWindowFullscreen";
 import type { ActiveView } from "../../store/appStore";
@@ -243,6 +244,8 @@ interface SyncButtonProps {
  */
 function SyncButton({ scannedAt, spinning, refreshError, onRefresh }: SyncButtonProps) {
   const showError = refreshError !== null && !spinning;
+  // Read again every half minute, so "Just now" ages into "1m ago" between syncs.
+  const now = useNow(30_000);
   const [isErrorOpen, setIsErrorOpen] = useState(false);
   // An open error closes with the error, so the next failure never opens it without a click.
   if (isErrorOpen && !showError) setIsErrorOpen(false);
@@ -258,7 +261,7 @@ function SyncButton({ scannedAt, spinning, refreshError, onRefresh }: SyncButton
         setIsErrorOpen(open);
       }}
     >
-      <TooltipControl content={showError ? "Show why sync failed" : rescanTooltip(scannedAt)}>
+      <TooltipControl content={showError ? "Show why sync failed" : rescanTooltip(scannedAt, now)}>
         <PopoverTrigger
           render={
             <Button
@@ -395,14 +398,6 @@ export function Sidebar({
   requestRescan,
 }: SidebarProps) {
   const isFullscreen = useWindowFullscreen();
-  // Forces the footer to re-render so "just now" ages into "1m ago" and
-  // beyond without waiting for the next snapshot - relativeScanTime() itself
-  // stays a pure function of scannedAt and the current clock.
-  const [, forceTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => forceTick((n) => n + 1), 30_000);
-    return () => clearInterval(id);
-  }, []);
   const activeView = useAppStore((state) => state.activeView);
   const anchorView = sidebarAnchorView(activeView);
   const setActiveView = useAppStore((state) => state.setActiveView);

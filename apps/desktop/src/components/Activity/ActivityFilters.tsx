@@ -7,7 +7,6 @@
 // resets to "all".
 // ============================================================================
 
-import { useEffect, useState } from "react";
 import { ChevronDown, Layers } from "lucide-react";
 import {
   ALL_ACTIVITY,
@@ -22,6 +21,7 @@ import {
   historyByTrigger,
 } from "@skill-studio/lib";
 import type {
+  ActivityFilter,
   AgentId,
   HarnessFilter,
   SkillInvocationStats,
@@ -29,9 +29,9 @@ import type {
 } from "@skill-studio/lib";
 import { Button } from "@skill-studio/ui";
 import { useClientIds } from "../../hooks/useClientRows";
-import { getDiscoverySources } from "../../lib/skill-api";
 import { HarnessIcon } from "../ui/HarnessIcon";
 import { MenuControl, MenuRadioGroup, MenuRadioItem, MenuSeparator } from "../ui/MenuControl";
+import { useLoad } from "../../hooks/useLoad";
 import { useAppStore } from "../../store/appStore";
 
 /** Harnesses with a usage reader in `crates/skill-studio-core/src/skill_uses/`, in menu order. */
@@ -45,45 +45,32 @@ const ITEM = "pr-8";
 
 /** Filter state, the harnesses turned on in Settings, and the data every section derives from them. */
 export function useActivityLens(stats: SkillInvocationStats[], now: Date) {
-  const filter = useAppStore((state) => state.activityFilter);
+  const stored = useAppStore((state) => state.activityFilter);
   const setFilter = useAppStore((state) => state.setActivityFilter);
-  const { harness, trigger } = filter;
-  const setHarness = (next: HarnessFilter) => setFilter({ harness: next, trigger });
-  const setTrigger = (next: TriggerFilter) => setFilter({ harness, trigger: next });
-  const clearFilter = () => setFilter(ALL_ACTIVITY);
-  const [enabledHarnesses, setEnabledHarnesses] = useState<Set<string> | null>(null);
+  const getDiscoverySources = useAppStore((state) => state.getDiscoverySources);
+  const sources = useLoad("discovery-sources", getDiscoverySources);
+  // Settings couldn't be read: show every harness with a usage reader rather than none.
+  let enabledHarnesses: Set<string> | null = null;
+  if (sources.data) {
+    enabledHarnesses = new Set();
+    for (const source of sources.data) if (source.enabled) enabledHarnesses.add(source.harness);
+  } else if (sources.error !== null) {
+    enabledHarnesses = new Set(USAGE_READER_HARNESSES);
+  }
   const kept = useClientIds();
   const offered = (id: string) =>
     Boolean(enabledHarnesses?.has(id)) && (!kept || kept.includes(id));
-
-  useEffect(() => {
-    let cancelled = false;
-    getDiscoverySources()
-      .then((sources) => {
-        if (cancelled) return;
-        const enabled = new Set<string>();
-        for (const s of sources) if (s.enabled) enabled.add(s.harness);
-        setEnabledHarnesses(enabled);
-      })
-      .catch(() => {
-        // Settings couldn't be read - show every harness with a usage reader rather than none.
-        if (!cancelled) setEnabledHarnesses(new Set(USAGE_READER_HARNESSES));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // If the selected harness gets turned off in Settings underneath this page, the filter can't
-  // keep pointing at it. Goes through `setFilter` (stable, from the store) rather than
-  // `setHarness` (a plain function, recreated every render) so this effect doesn't refire on
-  // every unrelated render.
-  const harnessOff = harness !== "all" && enabledHarnesses !== null && !offered(harness);
-  useEffect(() => {
-    if (harnessOff) {
-      setFilter({ harness: "all", trigger });
-    }
-  }, [harnessOff, trigger, setFilter]);
+  // A harness turned off in Settings or no longer kept can't stay selected: the page shows every
+  // harness instead.
+  const harness =
+    stored.harness !== "all" && enabledHarnesses !== null && !offered(stored.harness)
+      ? "all"
+      : stored.harness;
+  const { trigger } = stored;
+  const filter: ActivityFilter = { harness, trigger };
+  const setHarness = (next: HarnessFilter) => setFilter({ harness: next, trigger });
+  const setTrigger = (next: TriggerFilter) => setFilter({ harness, trigger: next });
+  const clearFilter = () => setFilter(ALL_ACTIVITY);
 
   const dates = heatmapDateRangeLocal(now).dates;
   const days = dayTotals(stats, filter);

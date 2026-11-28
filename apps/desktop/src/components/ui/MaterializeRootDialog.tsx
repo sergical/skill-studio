@@ -17,7 +17,6 @@ import {
 } from "@skill-studio/ui";
 import { homeRelativePath } from "@skill-studio/lib";
 import type { LifecycleTarget } from "@skill-studio/lib";
-import { materializeHarnessRoot, materializeHarnessRootThenDisable } from "../../lib/skill-api";
 import { useAppStore } from "../../store/appStore";
 
 interface MaterializeRootDialogProps {
@@ -45,6 +44,10 @@ export function MaterializeRootDialog({
 }: MaterializeRootDialogProps) {
   const [isConverting, setIsConverting] = useState(false);
   const addToast = useAppStore((state) => state.addToast);
+  const materializeHarnessRoot = useAppStore((state) => state.materializeHarnessRoot);
+  const materializeHarnessRootThenDisable = useAppStore(
+    (state) => state.materializeHarnessRootThenDisable,
+  );
   const rootLabel = homeRelativePath(root);
 
   const handleConvert = () => {

@@ -4,7 +4,7 @@ You'll be able to open Skill Studio or verify that the CLI or MCP server is read
 
 ## Desktop
 
-Use macOS 13 or later. Check the chip or processor in **Apple menu → About This Mac**. Download the [Apple silicon installer](https://github.com/sergical/skill-studio/releases/latest/download/Skill-Studio-arm64.dmg) for an Apple chip or the [Intel installer](https://github.com/sergical/skill-studio/releases/latest/download/Skill-Studio-intel.dmg) for an Intel processor. Open the disk image, move Skill Studio to Applications, then open it. The welcome screen or **Home** confirms it launched. A local scan can run with just the app and readable skill folders.
+Use macOS 13 or later. Check the chip or processor in **Apple menu → About This Mac**. Download the [Apple silicon installer](/download) for an Apple chip or the [Intel installer](/download/intel) for an Intel processor. Open the disk image, move Skill Studio to Applications, then open it. The welcome screen or **Home** confirms it launched. A local scan can run with just the app and readable skill folders.
 
 To remove the app, move Skill Studio from Applications to the Trash. This leaves your skills in their agent folders.
 

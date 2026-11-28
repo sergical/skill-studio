@@ -1,0 +1,580 @@
+{
+  "content": {
+    "title": "Fix your skill issues.",
+    "host": "useskillstudio.com",
+    "pile": [
+      {
+        "name": "swiftui",
+        "folder": "vercel plugin",
+        "status": "warning",
+        "inUse": false
+      },
+      {
+        "name": "motion",
+        "folder": "~/.codex",
+        "status": "broken",
+        "inUse": true
+      },
+      {
+        "name": "react-native",
+        "folder": "acme-web",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "k8s-debug",
+        "folder": "sentry plugin",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "docx",
+        "folder": "opencode",
+        "status": "warning",
+        "inUse": false
+      },
+      {
+        "name": "pdf-tools",
+        "folder": "~/.claude",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "postgres-tuning",
+        "folder": "acme-api",
+        "status": "warning",
+        "inUse": false
+      },
+      {
+        "name": "commit",
+        "folder": "~/.codex",
+        "status": "warning",
+        "inUse": true
+      },
+      {
+        "name": "expo-router",
+        "folder": "sentry plugin",
+        "status": "broken",
+        "inUse": false
+      },
+      {
+        "name": "figma-handoff",
+        "folder": "old-prototype",
+        "status": "warning",
+        "inUse": false
+      },
+      {
+        "name": "swiftui",
+        "folder": "design-system",
+        "status": "warning",
+        "inUse": false
+      },
+      {
+        "name": "canvas-design",
+        "folder": "old-prototype",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "sentry-debug",
+        "folder": "~/.agents",
+        "status": "fine",
+        "inUse": true
+      },
+      {
+        "name": "release-notes",
+        "folder": "~/.codex",
+        "status": "fine",
+        "inUse": true
+      },
+      {
+        "name": "stripe-checkout",
+        "folder": "acme-web",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "terraform",
+        "folder": "vercel plugin",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "api-docs",
+        "folder": "sentry plugin",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "internal-comms",
+        "folder": "vercel plugin",
+        "status": "warning",
+        "inUse": false
+      },
+      {
+        "name": "webapp-testing",
+        "folder": "design-system",
+        "status": "warning",
+        "inUse": false
+      },
+      {
+        "name": "swiftui",
+        "folder": "acme-api",
+        "status": "warning",
+        "inUse": false
+      },
+      {
+        "name": "eslint-config",
+        "folder": "~/.codex",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "cypress",
+        "folder": "~/.cursor",
+        "status": "broken",
+        "inUse": false
+      },
+      {
+        "name": "prepare-videos",
+        "folder": "~/.agents",
+        "status": "warning",
+        "inUse": true
+      },
+      {
+        "name": "cypress",
+        "folder": "vercel plugin",
+        "status": "broken",
+        "inUse": false
+      },
+      {
+        "name": "i18n",
+        "folder": "opencode",
+        "status": "broken",
+        "inUse": false
+      },
+      {
+        "name": "vitest-setup",
+        "folder": "~/.cursor",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "storybook",
+        "folder": "acme-api",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "seo-audit",
+        "folder": "vercel plugin",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "canvas-design",
+        "folder": "acme-web",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "slack-gif",
+        "folder": "acme-web",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "brand-voice",
+        "folder": "~/.agents",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "agent-browser",
+        "folder": "~/.codex",
+        "status": "broken",
+        "inUse": true
+      },
+      {
+        "name": "agent-browser",
+        "folder": "design-system",
+        "status": "broken",
+        "inUse": false
+      },
+      {
+        "name": "seo-audit",
+        "folder": "opencode",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "theme-factory",
+        "folder": "design-system",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "a11y-audit",
+        "folder": "design-system",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "docx",
+        "folder": "~/.agents",
+        "status": "warning",
+        "inUse": false
+      },
+      {
+        "name": "frontend-design",
+        "folder": "~/.agents",
+        "status": "broken",
+        "inUse": true
+      },
+      {
+        "name": "pr-writer",
+        "folder": "opencode",
+        "status": "broken",
+        "inUse": false
+      },
+      {
+        "name": "writing-skills",
+        "folder": "~/.cursor",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "tailwind",
+        "folder": "~/.agents",
+        "status": "broken",
+        "inUse": true
+      },
+      {
+        "name": "figma-handoff",
+        "folder": "~/.cursor",
+        "status": "warning",
+        "inUse": false
+      },
+      {
+        "name": "api-docs",
+        "folder": "opencode",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "stripe-checkout",
+        "folder": "sentry plugin",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "db-migrate",
+        "folder": "~/.codex",
+        "status": "fine",
+        "inUse": true
+      },
+      {
+        "name": "agent-browser",
+        "folder": "old-prototype",
+        "status": "broken",
+        "inUse": false
+      },
+      {
+        "name": "swiftui",
+        "folder": "~/.claude",
+        "status": "warning",
+        "inUse": false
+      },
+      {
+        "name": "eslint-config",
+        "folder": "design-system",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "figma-handoff",
+        "folder": "vercel plugin",
+        "status": "warning",
+        "inUse": false
+      },
+      {
+        "name": "eslint-config",
+        "folder": "~/.cursor",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "postgres-tuning",
+        "folder": "sentry plugin",
+        "status": "warning",
+        "inUse": false
+      },
+      {
+        "name": "terraform",
+        "folder": "~/.codex",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "pptx",
+        "folder": "design-system",
+        "status": "broken",
+        "inUse": false
+      },
+      {
+        "name": "i18n",
+        "folder": "design-system",
+        "status": "broken",
+        "inUse": false
+      },
+      {
+        "name": "sentry-debug",
+        "folder": "opencode",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "playwright",
+        "folder": "~/.agents",
+        "status": "fine",
+        "inUse": true
+      },
+      {
+        "name": "deploy-preview",
+        "folder": "~/.codex",
+        "status": "fine",
+        "inUse": true
+      },
+      {
+        "name": "graphql-schema",
+        "folder": "~/.claude",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "i18n",
+        "folder": "~/.agents",
+        "status": "broken",
+        "inUse": false
+      },
+      {
+        "name": "changelog",
+        "folder": "~/.claude",
+        "status": "fine",
+        "inUse": true
+      },
+      {
+        "name": "playwright",
+        "folder": "sentry plugin",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "a11y-audit",
+        "folder": "acme-api",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "a11y-audit",
+        "folder": "acme-web",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "pptx",
+        "folder": "~/.codex",
+        "status": "broken",
+        "inUse": false
+      },
+      {
+        "name": "mcp-builder",
+        "folder": "acme-api",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "auth-flows",
+        "folder": "~/.cursor",
+        "status": "warning",
+        "inUse": false
+      },
+      {
+        "name": "expo-router",
+        "folder": "acme-api",
+        "status": "broken",
+        "inUse": false
+      },
+      {
+        "name": "pdf-tools",
+        "folder": "old-prototype",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "writing-skills",
+        "folder": "~/.claude",
+        "status": "fine",
+        "inUse": true
+      },
+      {
+        "name": "expo-router",
+        "folder": "vercel plugin",
+        "status": "broken",
+        "inUse": false
+      },
+      {
+        "name": "stripe-checkout",
+        "folder": "old-prototype",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "canvas-design",
+        "folder": "~/.agents",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "playwright",
+        "folder": "old-prototype",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "code-review",
+        "folder": "~/.codex",
+        "status": "fine",
+        "inUse": true
+      },
+      {
+        "name": "deploy-preview",
+        "folder": "acme-web",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "webapp-testing",
+        "folder": "~/.claude",
+        "status": "warning",
+        "inUse": false
+      },
+      {
+        "name": "react-native",
+        "folder": "design-system",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "prisma",
+        "folder": "vercel plugin",
+        "status": "warning",
+        "inUse": false
+      },
+      {
+        "name": "excel-reports",
+        "folder": "~/.claude",
+        "status": "warning",
+        "inUse": false
+      },
+      {
+        "name": "linear-triage",
+        "folder": "~/.claude",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "mcp-builder",
+        "folder": "acme-web",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "internal-comms",
+        "folder": "~/.agents",
+        "status": "warning",
+        "inUse": false
+      },
+      {
+        "name": "mcp-builder",
+        "folder": "~/.claude",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "pdf-tools",
+        "folder": "~/.codex",
+        "status": "fine",
+        "inUse": true
+      },
+      {
+        "name": "graphql-schema",
+        "folder": "old-prototype",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "eslint-config",
+        "folder": "~/.agents",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "frontend-design",
+        "folder": "design-system",
+        "status": "broken",
+        "inUse": false
+      },
+      {
+        "name": "supabase",
+        "folder": "vercel plugin",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "skill-creator",
+        "folder": "~/.agents",
+        "status": "warning",
+        "inUse": true
+      },
+      {
+        "name": "storybook",
+        "folder": "old-prototype",
+        "status": "fine",
+        "inUse": false
+      },
+      {
+        "name": "internal-comms",
+        "folder": "old-prototype",
+        "status": "warning",
+        "inUse": false
+      },
+      {
+        "name": "postgres-tuning",
+        "folder": "acme-web",
+        "status": "warning",
+        "inUse": false
+      }
+    ],
+    "sorted": [
+      "motion",
+      "commit",
+      "sentry-debug",
+      "release-notes",
+      "prepare-videos",
+      "agent-browser"
+    ],
+    "cleanup": {
+      "parked": 76,
+      "fixed": 4,
+      "updated": 3
+    }
+  },
+  "files": {
+    "public/og.jpg": "2926f8942e833bfdaade1c7d76798799dbd6b3c417331ea8f68613561818b97c",
+    "public/og.png": "9eef12c3414da9b8f572ef398d323c08fb1d1e7aba737d812174d7154ab13e47",
+    "public/skill-studio-logo-512.webp": "6bb4425e47b7b147df3898d70958c672460c7cdb241e61a43e25f4dd81a1d64e",
+    "src/remotion/OgCard.tsx": "eb0fb35232c150647a260be894048ab53926357f415b18f100e6a3c39eea3cac",
+    "src/home/dither-colors.ts": "07a36530cfb465a7e8a9fc5928a16614eef35990114d1c9de0fcf0941881765a"
+  }
+}

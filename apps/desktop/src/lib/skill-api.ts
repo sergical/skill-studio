@@ -3,7 +3,6 @@
 // Tauri IPC communication for skills.sh integration
 // ============================================================================
 
-import { z } from "zod";
 import { invoke } from "@tauri-apps/api/core";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -24,6 +23,7 @@ import type {
   AppVersion,
   BulkTargetResult,
   DiscoverySourceSetting,
+  EditorChoices,
   FixSkillOutcome,
   ForkRecord,
   FrontmatterRepairApplyMode,
@@ -112,19 +112,6 @@ function callCommand<T>(command: string, args?: InvokeArgs): Promise<T> {
       throw error;
     },
   );
-}
-
-const PRIMITIVE_REJECTION = z.union([z.string(), z.number(), z.boolean(), z.bigint()]);
-
-/** Kept for call sites that already branch on `cause` themselves; `callCommand` now normalizes
- * every rejection to an `Error` before it reaches a catch block, so this is equivalent to reading
- * `cause.message` directly there. */
-export function invokeErrorMessage(cause: unknown): string {
-  if (cause instanceof Error) return cause.message;
-  // Other callers (a clipboard rejection, say) can pass anything: a primitive reads as itself,
-  // and any other value as "Unknown error", not "[object Object]".
-  const primitive = PRIMITIVE_REJECTION.safeParse(cause);
-  return primitive.success ? String(primitive.data) : "Unknown error";
 }
 
 export async function previewSkillFrontmatterRepair(
@@ -440,21 +427,6 @@ export async function writeInstalledSkillMdIfUnchanged(
  */
 export async function openSkillPath(path: string, mode: "reveal" | "editor"): Promise<void> {
   return callCommand("open_skill_path", { path, mode });
-}
-
-/** One editor offered by the Settings card - see the Rust `skill_editor`. */
-export interface EditorOption {
-  /** The value to save: a macOS application name, an absolute `.app` path, or `"$EDITOR"`. */
-  app_name: string;
-  label: string;
-}
-
-/** Everything the Settings "Open in editor" card shows - see the Rust `skill_editor::EditorChoices`. */
-export interface EditorChoices {
-  automatic_label: string;
-  apps: EditorOption[];
-  terminal: EditorOption | null;
-  selected: string | null;
 }
 
 /** The editor card's state: installed/saved apps, the `$EDITOR` row, and the current choice. */

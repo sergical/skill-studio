@@ -4,8 +4,8 @@
 // keeps the chosen agent, so switching never resets the agent menu.
 // ============================================================================
 
-import { useEffect, useRef } from "react";
 import { Tabs, TabsList, TabsTrigger } from "@skill-studio/ui";
+import { useDelayedCall } from "../../hooks/useDelayedCall";
 import { useAppStore } from "../../store/appStore";
 
 const AGENT_TABS = ["listing", "sessions"] as const;
@@ -24,17 +24,17 @@ let switchedHere = false;
 
 export function AgentTabs({ tab, harness }: { tab: AgentTab; harness: string }) {
   const navigate = useAppStore((s) => s.setActiveView);
-  const list = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!switchedHere) return;
-    // A frame later: Base UI moves its arrow-key highlight to the selected tab only while focus
-    // is outside the list, and it registers the tabs after this effect runs.
-    const frame = requestAnimationFrame(() => {
+  const refocus = useDelayedCall();
+  // The list's ref, called when the next page's tabs mount. A moment later: Base UI moves its
+  // arrow-key highlight to the selected tab only while focus is outside the list, and it
+  // registers the tabs after they mount.
+  const focusSelectedTab = (list: HTMLDivElement | null) => {
+    if (!list || !switchedHere) return;
+    refocus.schedule(() => {
       switchedHere = false;
-      list.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus();
-    });
-    return () => cancelAnimationFrame(frame);
-  }, []);
+      list.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus();
+    }, 0);
+  };
   return (
     // The tabs fill the toolbar row down to its line (`-mb-1` undoes the row's `pb-1`), and the
     // list draws no line of its own: the row's line is the one line under the header, and the
@@ -50,7 +50,7 @@ export function AgentTabs({ tab, harness }: { tab: AgentTab; harness: string }) 
       }}
     >
       <TabsList
-        ref={list}
+        ref={focusSelectedTab}
         variant="line"
         aria-label="Agent report"
         className="-ml-px h-full gap-5 border-b-0 group-data-horizontal/tabs:h-full"

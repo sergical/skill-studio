@@ -6,16 +6,11 @@
 // terminal editor set by `$VISUAL`/`$EDITOR` in their login shell.
 // ============================================================================
 
-import { useEffect, useState } from "react";
 import { Check, Plus } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Button, RadioGroup, RadioGroupItem } from "@skill-studio/ui";
-import {
-  getEditorChoices,
-  setPreferredEditor,
-  type EditorChoices,
-  type EditorOption,
-} from "../../lib/skill-api";
+import type { EditorChoices, EditorOption } from "@skill-studio/lib";
+import { useLoad } from "../../hooks/useLoad";
 import { useAppStore } from "../../store/appStore";
 import { PageSection } from "../Shell/PageSection";
 
@@ -40,41 +35,25 @@ function rowsFor(choices: EditorChoices): EditorRow[] {
 
 export function EditorCard() {
   const addToast = useAppStore((state) => state.addToast);
-  const [choices, setChoices] = useState<EditorChoices | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    getEditorChoices()
-      .then((result) => {
-        if (!cancelled) setChoices(result);
-      })
-      .catch((err) => {
-        addToast({
-          type: "error",
-          title: "Couldn't read your editor setting",
-          message: err instanceof Error ? err.message : "Unknown error",
-        });
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [addToast]);
+  const getEditorChoices = useAppStore((state) => state.getEditorChoices);
+  const setPreferredEditor = useAppStore((state) => state.setPreferredEditor);
+  const editor = useLoad("editor-choices", getEditorChoices, {
+    onFailed: (message) =>
+      addToast({ type: "error", title: "Couldn't read your editor setting", message }),
+  });
+  const choices = editor.data ?? null;
 
   const save = async (value: string | null) => {
     if (!choices) return;
     const previous = choices.selected;
-    setChoices({ ...choices, selected: value });
+    editor.setData({ ...choices, selected: value });
     try {
       await setPreferredEditor(value);
       // The backend may have normalised a saved `.app` path to a known app
       // name, so the row that ends up checked comes from a fresh read.
-      setChoices(await getEditorChoices());
+      editor.setData(await getEditorChoices());
     } catch (err) {
-      setChoices({ ...choices, selected: previous });
+      editor.setData({ ...choices, selected: previous });
       addToast({
         type: "error",
         title: "Couldn't save your editor",
@@ -116,7 +95,7 @@ export function EditorCard() {
         )
       }
     >
-      {isLoading ? (
+      {editor.isLoading ? (
         <p className="m-0 text-small text-text-tertiary">Looking for installed editors…</p>
       ) : !choices ? (
         <p className="m-0 text-small text-text-tertiary">Couldn't read installed editors.</p>

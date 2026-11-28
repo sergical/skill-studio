@@ -4,7 +4,7 @@
 // force-restore, and "Reveal in Finder" for backed-up events.
 // ============================================================================
 
-import { useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   Archive,
@@ -27,7 +27,7 @@ import {
 import { Button } from "@skill-studio/ui";
 import { deploymentLabelFromAgentId, formatRelativeTime } from "@skill-studio/lib";
 import type { SkillEvent } from "@skill-studio/lib";
-import { listSkillEvents, openSkillPath, restoreSkillEvent } from "../../lib/skill-api";
+import { useLoad } from "../../hooks/useLoad";
 import { useAppStore } from "../../store/appStore";
 import {
   canRestoreSkillEvent,
@@ -109,6 +109,7 @@ function restoreDescription(event: SkillEvent): string {
 /** Owns the confirm-restore / force-restore-on-conflict flow for one event row. */
 function useRestoreEvent(event: SkillEvent, onRestored: () => void) {
   const addToast = useAppStore((state) => state.addToast);
+  const restoreSkillEvent = useAppStore((state) => state.restoreSkillEvent);
   const [isRestoring, setIsRestoring] = useState(false);
 
   const runRestore = async (force: boolean) => {
@@ -182,6 +183,7 @@ function EventActions({
   reasonId: string;
 }) {
   const addToast = useAppStore((state) => state.addToast);
+  const openSkillPath = useAppStore((state) => state.openSkillPath);
 
   const handleReveal = () => {
     if (!event.backup_path) return;
@@ -288,36 +290,17 @@ function EventRow({ event, onRestored }: { event: SkillEvent; onRestored: () => 
  * so nothing else needs to be triggered here.
  */
 export function SkillHistorySection() {
-  const [events, setEvents] = useState<SkillEvent[] | null>(null);
   const addToast = useAppStore((state) => state.addToast);
-
-  useEffect(() => {
-    let cancelled = false;
-    listSkillEvents()
-      .then((rows) => {
-        if (!cancelled) setEvents(rows);
-      })
-      .catch((err) => {
-        if (!cancelled) setEvents([]);
-        addToast({
-          type: "error",
-          title: "Couldn't load history",
-          message: err instanceof Error ? err.message : "Unknown error",
-        });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [addToast]);
-
-  const refresh = () => {
-    listSkillEvents()
-      .then(setEvents)
-      .catch(() => {
-        // A refetch failure after a successful restore isn't worth a second
-        // toast - the row stays as it was until the next successful load.
-      });
-  };
+  const listSkillEvents = useAppStore((state) => state.listSkillEvents);
+  const history = useLoad("skill-events", listSkillEvents, {
+    // A refetch that fails after a restore keeps the rows it had, which is not worth a toast.
+    onFailed: (message) => {
+      if (history.data === undefined)
+        addToast({ type: "error", title: "Couldn't load history", message });
+    },
+  });
+  const events = history.data ?? (history.error === null ? null : []);
+  const refresh = history.reload;
 
   return (
     <PageSection title="History">

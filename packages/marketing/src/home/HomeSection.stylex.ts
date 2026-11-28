@@ -41,7 +41,9 @@ export const homeSectionStyles = stylex.create({
     gap: 6,
     minHeight: 44,
     textDecoration: "none",
-    transition: "color 150ms ease-out",
-    ":hover": { color: siteTokens.accent },
+    transition: "color 150ms ease",
+    "@media (hover: hover) and (pointer: fine)": {
+      ":hover": { color: siteTokens.accent },
+    },
   },
 });

@@ -13,7 +13,7 @@ import {
   transitionSiteTheme,
 } from "./site-theme";
 import type { SiteTheme } from "./SiteTheme.stylex";
-import { CommandCenter } from "./variants/CommandCenter";
+import { HomePage } from "./home/listing-calc/HomePage";
 
 interface MarketingSiteProps {
   /** Set only by the prerender, which has no document to read the theme from. */
@@ -46,7 +46,7 @@ export function MarketingSite({ prerenderTheme }: MarketingSiteProps) {
 
   return (
     <div {...stylex.props(getPaletteTheme("violet"))}>
-      <CommandCenter theme={theme} onToggleTheme={toggleTheme} />
+      <HomePage theme={theme} onToggleTheme={toggleTheme} />
     </div>
   );
 }

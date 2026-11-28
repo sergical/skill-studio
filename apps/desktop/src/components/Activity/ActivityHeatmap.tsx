@@ -5,7 +5,7 @@
 // Arrow keys move the active day and show its card.
 // ============================================================================
 
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import type { KeyboardEvent, MouseEvent, PointerEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -16,6 +16,7 @@ import {
   mondayLead,
   uses,
 } from "@skill-studio/lib";
+import { useDelayedCall } from "../../hooks/useDelayedCall";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 // Day numbers keep 4.5:1 contrast on every level in both themes: secondary text on levels 0-1,
@@ -133,9 +134,8 @@ export function ActivityHeatmap({
   const [activeKey, setActiveKey] = useActiveKey(dates, selected);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [openCount, setOpenCount] = useState(0);
-  const timer = useRef<number | undefined>(undefined);
+  const openDelay = useDelayedCall();
   const closedAt = useRef(0);
-  const cardRef = useRef<HTMLDivElement>(null);
 
   const lead = mondayLead(dates[0]);
   const slots: (string | null)[] = Array.from({ length: calendarWeeks(dates) * 7 }, (_, i) =>
@@ -145,10 +145,9 @@ export function ActivityHeatmap({
   const shownKey = hoverKey ?? (keyboardOpen ? activeKey : null);
   const isOpen = shownKey !== null;
 
-  useEffect(() => () => window.clearTimeout(timer.current), []);
-
-  useLayoutEffect(() => {
-    const card = cardRef.current;
+  // The card's ref: React calls it when the card mounts and again when the day it shows changes,
+  // after the card's content is in the page, so its height is the real one.
+  const placeCard = (card: HTMLDivElement | null) => {
     const cell = shownKey ? document.getElementById(`${idPrefix}-${shownKey}`) : null;
     if (!card || !cell) return;
     const r = cell.getBoundingClientRect();
@@ -162,22 +161,21 @@ export function ActivityHeatmap({
     card.style.left = `${left}px`;
     card.style.top = `${below ? r.bottom + gap : r.top - gap - h}px`;
     card.style.transformOrigin = `${r.left + r.width / 2 - left}px ${below ? "0" : "100%"}`;
-  }, [shownKey, idPrefix, cardWidth]);
+  };
 
   function open(key: string) {
     if (isOpen || Date.now() - closedAt.current < REOPEN_GRACE_MS) {
       setHoverKey(key);
       return;
     }
-    window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => {
+    openDelay.schedule(() => {
       setOpenCount((n) => n + 1);
       setHoverKey(key);
     }, OPEN_DELAY_MS);
   }
 
   function close() {
-    window.clearTimeout(timer.current);
+    openDelay.cancel();
     if (isOpen) closedAt.current = Date.now();
     setHoverKey(null);
     setKeyboardOpen(false);
@@ -190,7 +188,7 @@ export function ActivityHeatmap({
     if (key) {
       open(key);
     } else if (target.dataset.blank !== undefined) {
-      window.clearTimeout(timer.current);
+      openDelay.cancel();
       if (hoverKey) closedAt.current = Date.now();
       setHoverKey(null);
     }
@@ -293,7 +291,7 @@ export function ActivityHeatmap({
         createPortal(
           <div
             key={openCount}
-            ref={cardRef}
+            ref={placeCard}
             role="presentation"
             aria-hidden="true"
             className="pointer-events-none fixed top-0 left-0 z-(--z-tooltip) animate-[activityHoverCardIn_150ms_cubic-bezier(0.23,1,0.32,1)] rounded-md border border-border bg-bg-elevated px-3 py-2.5 text-small text-text-secondary shadow-md"

@@ -4,28 +4,39 @@
 // ============================================================================
 
 import * as stylex from "@stylexjs/stylex";
-import { ChevronDown, Search } from "lucide-react";
+import { Check, ChevronDown, Copy, Search } from "lucide-react";
 
 import { getPaletteTheme } from "../PaletteThemes.stylex";
 import { SiteFooter, SiteHeader, siteLayout } from "../SiteChrome";
+import { DocsAgentTriggerContent } from "./DocsAgentTrigger";
 import { docsPageStyles as styles } from "./docs-page-styles";
-import { docsSearchHeadings, renderDocsMarkdown } from "./docs-markdown";
+import { docsSearchHeadings, renderDocsPage } from "./docs-markdown";
+import { docsNavScrollRestoreScript } from "./docs-nav-scroll";
 import { DOCS_GROUPS, type DocsPageEntry } from "./docs-pages";
 
 interface DocsPageProps {
   page: DocsPageEntry;
 }
 
+// Without scripts the search, the copy button and the menu cannot work, so they hide
+// and the page list stays open on small screens.
+const NO_SCRIPT_CSS =
+  ".docs-search,.docs-page-actions,.docs-nav-toggle{display:none!important}.docs-links{display:block!important}";
+
 export function DocsPage({ page }: DocsPageProps) {
   const nav = stylex.props(styles.nav, styles.colors);
+  const { intro, body, outline } = renderDocsPage(page.markdown);
 
   return (
     <div id="top" {...stylex.props(getPaletteTheme("violet"), siteLayout.page)}>
+      <noscript>
+        <style>{NO_SCRIPT_CSS}</style>
+      </noscript>
       <SiteHeader page="docs" showThemeToggle />
       <div {...stylex.props(siteLayout.container, styles.layout)}>
         <nav {...nav} aria-label="Docs">
           <div className="docs-nav-controls">
-            <form className="docs-search" role="search" hidden>
+            <form className="docs-search" role="search">
               <label className="docs-sr-only" htmlFor="docs-search">
                 Search docs
               </label>
@@ -46,13 +57,12 @@ export function DocsPage({ page }: DocsPageProps) {
               No matching pages.
             </p>
             <button
-              className="docs-action docs-nav-toggle"
+              className="docs-button docs-nav-toggle"
               type="button"
               aria-controls="docs-links"
               aria-expanded="false"
-              hidden
             >
-              Browse docs <ChevronDown aria-hidden="true" size={14} />
+              Browse docs <ChevronDown aria-hidden="true" size={14} className="docs-chevron" />
             </button>
           </div>
           <div id="docs-links" className="docs-links">
@@ -77,29 +87,57 @@ export function DocsPage({ page }: DocsPageProps) {
               </section>
             ))}
           </div>
+          <script dangerouslySetInnerHTML={{ __html: docsNavScrollRestoreScript() }} />
         </nav>
-        <main {...stylex.props(styles.article, styles.colors)}>
-          <div className="docs-page-actions">
-            <button
-              type="button"
-              className="docs-action docs-page-copy"
-              data-copy-page={`/${page.markdownPath}`}
-              hidden
-            >
-              <span data-copy-label="" aria-live="polite">
-                Copy page as Markdown
-              </span>
-            </button>
-            <a href={`/${page.markdownPath}`} className="docs-action">
-              View Markdown
-            </a>
-            <div data-docs-agent-menu={`/${page.markdownPath}`} />
-          </div>
-          <article
-            className="docs-prose"
-            dangerouslySetInnerHTML={{ __html: renderDocsMarkdown(page.markdown) }}
-          />
+        <main id="main" {...stylex.props(styles.article, styles.colors)}>
+          <article className="docs-prose">
+            <header className="docs-page-header">
+              <div dangerouslySetInnerHTML={{ __html: intro }} />
+              <div className="docs-page-actions">
+                <button
+                  type="button"
+                  className="docs-button docs-page-copy"
+                  data-copy-page={`/${page.markdownPath}`}
+                >
+                  <Copy aria-hidden="true" size={14} data-copy-icon="idle" />
+                  <Check aria-hidden="true" size={14} data-copy-icon="done" />
+                  <span data-copy-label="" aria-live="polite">
+                    Copy page
+                  </span>
+                </button>
+                {/* The menu mounts here after load; the same trigger is drawn first so nothing moves. */}
+                <div className="docs-agent-slot" data-docs-agent-menu={`/${page.markdownPath}`}>
+                  <button
+                    type="button"
+                    className="docs-button docs-agent-trigger"
+                    aria-haspopup="menu"
+                    aria-expanded="false"
+                    aria-label="Open page in"
+                  >
+                    <DocsAgentTriggerContent />
+                  </button>
+                </div>
+              </div>
+            </header>
+            <div dangerouslySetInnerHTML={{ __html: body }} />
+          </article>
         </main>
+        {outline.length > 1 && (
+          <aside {...stylex.props(styles.outline, styles.colors)}>
+            <nav className="docs-outline" aria-label="On this page">
+              <p className="docs-outline-heading">On this page</p>
+              <ul>
+                {outline.map(({ id, text }) => (
+                  <li key={id}>
+                    <a href={`#${id}`} data-outline-link={id}>
+                      {text}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+          </aside>
+        )}
       </div>
       <SiteFooter page="docs" />
     </div>

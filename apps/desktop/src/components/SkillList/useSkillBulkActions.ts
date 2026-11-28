@@ -9,7 +9,6 @@
 
 import { useState } from "react";
 import type { InstalledSkill } from "@skill-studio/lib";
-import { removeSkill, skillLocalEdits } from "../../lib/skill-api";
 import { runListUpdate } from "../../hooks/skillBatchUpdates";
 import { partitionForkableSkills, skillsWithLocalEdits } from "../../lib/skill-lifecycle-target";
 import { useAppStore } from "../../store/appStore";
@@ -33,7 +32,7 @@ async function runRemoval(skill: InstalledSkill): Promise<void> {
   if (targets.length === 0) throw new Error("No removable copy.");
   for (const target of targets) {
     // react-doctor-disable-next-line react-doctor/async-await-in-loop -- each core op takes an exclusive lease, so the calls must not overlap
-    await removeSkill(target);
+    await useAppStore.getState().removeSkill(target);
   }
 }
 
@@ -59,6 +58,7 @@ export function useSkillBulkActions(
   onFinished: (hadFailures: boolean) => void,
 ): UseSkillBulkActions {
   const addToast = useAppStore((state) => state.addToast);
+  const skillLocalEdits = useAppStore((state) => state.skillLocalEdits);
   const [progress, setProgress] = useState<string | null>(null);
 
   const [pending, setPending] = useState<PendingEditedUpdate | null>(null);

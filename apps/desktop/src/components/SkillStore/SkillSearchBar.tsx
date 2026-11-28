@@ -2,9 +2,10 @@
 // SkillSearchBar - Search input for skills.sh
 // ============================================================================
 
-import { useEffect, useEffectEvent, useRef } from "react";
+import { useRef } from "react";
 import { Search, X, Loader } from "lucide-react";
 import { Button, Input } from "@skill-studio/ui";
+import { useDelayedCall } from "../../hooks/useDelayedCall";
 
 interface SkillSearchBarProps {
   value: string;
@@ -23,36 +24,19 @@ export function SkillSearchBar({
 }: SkillSearchBarProps) {
   const lastSearchedValue = useRef(value);
   const inputRef = useRef<HTMLInputElement>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const debounce = useDelayedCall();
 
-  // Reads the latest `onSearch` without resetting the debounce timer below
-  // when the caller passes a new `onSearch` identity without `value` itself
-  // having changed.
-  const onDebouncedSearch = useEffectEvent((query: string) => {
-    onSearch(query);
-  });
-
-  // Debounced search
-  useEffect(() => {
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
-    }
-
-    debounceRef.current = setTimeout(() => {
-      if (lastSearchedValue.current === value) return;
-      lastSearchedValue.current = value;
-      onDebouncedSearch(value);
+  const change = (next: string) => {
+    onChange(next);
+    debounce.schedule(() => {
+      if (lastSearchedValue.current === next) return;
+      lastSearchedValue.current = next;
+      onSearch(next);
     }, 300);
-
-    return () => {
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
-      }
-    };
-  }, [value]);
+  };
 
   const handleClear = () => {
-    onChange("");
+    change("");
     inputRef.current?.focus();
   };
 
@@ -71,7 +55,7 @@ export function SkillSearchBar({
         ref={inputRef}
         type="text"
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => change(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
         aria-label="Search skills.sh"

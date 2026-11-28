@@ -7,45 +7,28 @@
 // can't carry.
 // ============================================================================
 
-import { useEffect, useState } from "react";
-import { getTelemetryEnabled, setTelemetryEnabled } from "../../lib/skill-api";
+import { useLoad } from "../../hooks/useLoad";
 import { useAppStore } from "../../store/appStore";
 import { SwitchControl } from "../ui/SwitchControl";
 import { PageSection } from "../Shell/PageSection";
 
 export function TelemetryCard() {
   const addToast = useAppStore((state) => state.addToast);
-  const [enabled, setEnabled] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    getTelemetryEnabled()
-      .then((result) => {
-        if (!cancelled) setEnabled(result);
-      })
-      .catch((err) => {
-        addToast({
-          type: "error",
-          title: "Couldn't read your Telemetry setting",
-          message: err instanceof Error ? err.message : "Unknown error",
-        });
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [addToast]);
+  const getTelemetryEnabled = useAppStore((state) => state.getTelemetryEnabled);
+  const setTelemetryEnabled = useAppStore((state) => state.setTelemetryEnabled);
+  const telemetry = useLoad("telemetry", getTelemetryEnabled, {
+    onFailed: (message) =>
+      addToast({ type: "error", title: "Couldn't read your Telemetry setting", message }),
+  });
+  const enabled = telemetry.data ?? false;
 
   const toggle = async (next: boolean) => {
     const previous = enabled;
-    setEnabled(next);
+    telemetry.setData(next);
     try {
       await setTelemetryEnabled(next);
     } catch (err) {
-      setEnabled(previous);
+      telemetry.setData(previous);
       addToast({
         type: "error",
         title: "Couldn't save your Telemetry setting",
@@ -61,7 +44,7 @@ export function TelemetryCard() {
         <SwitchControl
           checked={enabled}
           onCheckedChange={toggle}
-          disabled={isLoading}
+          disabled={telemetry.isLoading}
           ariaLabel="Telemetry"
         />
       }

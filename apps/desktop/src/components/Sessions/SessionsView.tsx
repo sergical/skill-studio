@@ -6,7 +6,7 @@
 // only.
 // ============================================================================
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { Button } from "@skill-studio/ui";
 import { SESSION_LISTED_LABEL, deploymentLabelFromAgentId } from "@skill-studio/lib";
@@ -24,7 +24,8 @@ import { PageSection } from "../Shell/PageSection";
 import { PageShell } from "../Shell/PageShell";
 import { SelectControl } from "../ui/SelectControl";
 import { SummaryCard, SummaryMetric } from "../ui/SummaryCard";
-import { sessionsReportKey, useAppStore } from "../../store/appStore";
+import { useSessionsReport } from "../../hooks/useStoreReports";
+import { useAppStore } from "../../store/appStore";
 
 interface Finding {
   flag: SkillSessionFlag;
@@ -378,14 +379,7 @@ export function SessionsView({ initialHarness, snapshot }: SessionsViewProps) {
   const navigate = useAppStore((s) => s.setActiveView);
   const [count, setCount] = useState("100");
   const [onlyFindings, setOnlyFindings] = useState(false);
-  const refreshSkillSessions = useAppStore((s) => s.refreshSkillSessions);
-
-  const load = useAppStore(
-    (s) => s.sessionsReports[sessionsReportKey({ project_path: null, sessions: Number(count) })],
-  );
-  useEffect(() => {
-    refreshSkillSessions({ project_path: null, sessions: Number(count) });
-  }, [refreshSkillSessions, count]);
+  const load = useSessionsReport(null, Number(count));
 
   const report = load?.data;
   const clients = useClientRows(report?.agents ?? []);

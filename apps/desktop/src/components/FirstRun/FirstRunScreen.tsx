@@ -10,7 +10,7 @@
 // keep/remove choice.
 // ============================================================================
 
-import { useEffect, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import { Dithering } from "@paper-design/shaders-react";
 import { HARNESS_CATALOG } from "@skill-studio/lib";
 import { Button, Checkbox, Switch } from "@skill-studio/ui";
@@ -51,11 +51,7 @@ function AgentMark({ id, muted }: { id: string; muted?: boolean }) {
  * to `onComplete` when a choice already exists, so a returning user never
  * sees this screen flash on launch. */
 export function FirstRunGate({ onComplete }: FirstRunScreenProps) {
-  const { showScreen } = useFirstRunGate();
-
-  useEffect(() => {
-    if (showScreen === false) onComplete();
-  }, [showScreen, onComplete]);
+  const { showScreen } = useFirstRunGate(onComplete);
 
   if (showScreen !== true) return null;
   return <FirstRunScreenBody onComplete={onComplete} />;

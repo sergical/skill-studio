@@ -9,6 +9,7 @@ import * as stylex from "@stylexjs/stylex";
 
 import { siteLayout } from "../SiteChrome";
 import { finaleCtaMarker } from "./ClosingFinale.stylex";
+import { DITHER_COLORS } from "./dither-colors";
 import { WarpDither } from "./WarpDither";
 import type { SiteTheme } from "../SiteTheme.stylex";
 
@@ -17,12 +18,6 @@ const WORDMARK_FONT =
   'system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif';
 // The share of the letters' height that the page edge cuts off.
 const WORDMARK_CROP = 0.28;
-
-// Same colours as the desktop app's welcome screen (apps/desktop FirstRunScreen).
-export const DITHER_COLORS = {
-  dark: { back: "#150b2e", front: "#5a45c4" },
-  light: { back: "#e4dcff", front: "#5a45c4" },
-} as const;
 
 // The faint glow that rises behind the footer. The letters themselves show at full strength.
 const GLOW_MASK =
@@ -120,7 +115,7 @@ export function ClosingFinale({ theme, children }: ClosingFinaleProps) {
   const colors = DITHER_COLORS[theme];
 
   return (
-    <div ref={finaleRef} {...stylex.props(styles.finale)}>
+    <div ref={finaleRef} data-theme-bound {...stylex.props(styles.finale)}>
       {wordmark && (
         <div
           aria-hidden="true"
@@ -165,8 +160,11 @@ const styles = stylex.create({
         [stylex.when.descendant(":hover", finaleCtaMarker)]: "95%",
       },
     },
-    transition:
-      "--finale-glow-alpha 500ms cubic-bezier(0.32, 0.72, 0, 1), --finale-glow-reach 500ms cubic-bezier(0.32, 0.72, 0, 1)",
+    transition: {
+      default:
+        "--finale-glow-alpha 500ms cubic-bezier(0.32, 0.72, 0, 1), --finale-glow-reach 500ms cubic-bezier(0.32, 0.72, 0, 1)",
+      "@media (prefers-reduced-motion: reduce)": "none",
+    },
   },
   dither: {
     inset: 0,

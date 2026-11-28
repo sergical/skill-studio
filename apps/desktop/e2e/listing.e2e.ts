@@ -142,3 +142,26 @@ test("read the skill guidance saved for an OpenCode session", async ({ page }) =
   await expect(skill).toContainText("web-design-guidelines");
   await expect(skill).toContainText("Review UI code for Web Interface Guidelines compliance.");
 });
+
+test("switching agent tabs from the keyboard keeps focus on the tabs and keeps the agent", async ({
+  page,
+}) => {
+  await openApp(page);
+  await page.getByRole("navigation").getByRole("button", { name: "Agents" }).click();
+  const agent = page.getByRole("combobox", { name: "Agent" });
+  await agent.click();
+  await page.getByRole("option", { name: "Cursor", exact: true }).click();
+  await page.getByRole("tab", { name: "What it sees" }).focus();
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Enter");
+  const used = page.getByRole("tab", { name: "What it used" });
+  await expect(used).toHaveAttribute("aria-selected", "true");
+  await expect(used).toBeFocused();
+  await expect(agent).toContainText("Cursor");
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("Enter");
+  const sees = page.getByRole("tab", { name: "What it sees" });
+  await expect(sees).toHaveAttribute("aria-selected", "true");
+  await expect(sees).toBeFocused();
+  await expect(agent).toContainText("Cursor");
+});

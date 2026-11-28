@@ -30,6 +30,9 @@ export function SiteHeader({
 }: SiteHeaderProps) {
   const header = (
     <header {...stylex.props(siteLayout.container, styles.header, sticky && styles.headerSticky)}>
+      <a href="#main" {...stylex.props(styles.skipLink)}>
+        Skip to content
+      </a>
       <LogoLockup href={page === "home" ? "#top" : "/"} compact />
       <div {...stylex.props(styles.headerEnd)}>
         <nav {...stylex.props(styles.nav)} aria-label="Main navigation">
@@ -125,7 +128,7 @@ export const siteLayout = stylex.create({
   page: {
     backgroundColor: siteTokens.background,
     color: siteTokens.text,
-    minHeight: "100vh",
+    minHeight: "100dvh",
     overflow: "clip",
   },
   container: {
@@ -138,7 +141,23 @@ export const siteLayout = stylex.create({
   },
 });
 
+const HOVER = "@media (hover: hover) and (pointer: fine)";
+
 const styles = stylex.create({
+  skipLink: {
+    backgroundColor: siteTokens.text,
+    borderRadius: 8,
+    color: siteTokens.background,
+    fontSize: 13,
+    fontWeight: 620,
+    left: -9999,
+    padding: "8px 14px",
+    position: "fixed",
+    textDecoration: "none",
+    top: 12,
+    zIndex: 100,
+    ":focus-visible": { left: 16 },
+  },
   header: {
     alignItems: "center",
     display: "flex",
@@ -168,8 +187,8 @@ const styles = stylex.create({
     minHeight: 44,
     padding: "0 8px",
     textDecoration: "none",
-    transition: "color 150ms ease-out",
-    ":hover": { color: siteTokens.text },
+    transition: "color 150ms ease",
+    [HOVER]: { ":hover": { color: siteTokens.text } },
   },
   navLinkCurrent: { color: siteTokens.text },
   iconLink: {
@@ -177,12 +196,12 @@ const styles = stylex.create({
     borderRadius: 10,
     color: siteTokens.muted,
     display: "inline-flex",
-    height: 40,
+    height: 44,
     justifyContent: "center",
-    marginInline: -11,
-    transition: "color 150ms ease-out",
-    width: 40,
-    ":hover": { color: siteTokens.text },
+    marginInline: -13,
+    transition: "color 150ms ease",
+    width: 44,
+    [HOVER]: { ":hover": { color: siteTokens.text } },
   },
   themeToggle: {
     alignItems: "center",
@@ -193,13 +212,14 @@ const styles = stylex.create({
     borderWidth: 1,
     color: siteTokens.muted,
     display: "inline-flex",
-    height: 40,
+    height: 44,
     justifyContent: "center",
     padding: 0,
-    transition: "color 150ms ease-out, border-color 150ms ease-out, transform 150ms ease-out",
-    width: 40,
-    ":hover": { borderColor: siteTokens.muted, color: siteTokens.text },
-    ":active": { transform: "scale(.94)" },
+    transition:
+      "color 150ms ease, border-color 150ms ease, transform 150ms cubic-bezier(0.25, 0.46, 0.45, 0.94)",
+    width: 44,
+    [HOVER]: { ":hover": { borderColor: siteTokens.muted, color: siteTokens.text } },
+    ":active": { transform: "scale(.97)" },
   },
   footer: {
     alignItems: "center",
@@ -212,7 +232,7 @@ const styles = stylex.create({
     paddingBottom: "max(28px, env(safe-area-inset-bottom))",
   },
   // On the homepage the footer sits in the closing section, which already separates it.
-  footerHome: { borderTopWidth: 0, paddingBottom: 28 },
+  footerHome: { borderTopWidth: 0 },
   footerLinks: { alignItems: "center", display: "flex", gap: 22 },
   footerLink: {
     color: siteTokens.muted,
@@ -221,7 +241,7 @@ const styles = stylex.create({
     alignItems: "center",
     display: "inline-flex",
     textDecoration: "none",
-    transition: "color 150ms ease-out",
-    ":hover": { color: siteTokens.text },
+    transition: "color 150ms ease",
+    [HOVER]: { ":hover": { color: siteTokens.text } },
   },
 });

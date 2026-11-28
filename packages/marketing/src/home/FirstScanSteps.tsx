@@ -9,6 +9,7 @@ import * as stylex from "@stylexjs/stylex";
 import { Check, FolderOpen, History } from "lucide-react";
 
 import { AgentIcon, type AgentId } from "../AgentIcon";
+import { DOCS_URL } from "../site-links";
 import { siteTokens } from "../SiteTheme.stylex";
 import { homeSectionStyles } from "./HomeSection.stylex";
 import { PILE_COUNTS, STATE_COLOR } from "./skill-pile-data";
@@ -71,12 +72,22 @@ function AgentRows() {
   return (
     <ul {...stylex.props(styles.rows)}>
       {AGENT_ROWS.map((row) => (
-        <li key={row.id} {...stylex.props(styles.row, !row.kept && styles.rowOff)}>
-          <span {...stylex.props(styles.checkbox, row.kept && styles.checkboxOn)}>
+        <li key={row.id} {...stylex.props(styles.row)}>
+          <span
+            {...stylex.props(
+              styles.checkbox,
+              row.kept && styles.checkboxOn,
+              !row.kept && styles.rowOff,
+            )}
+          >
             {row.kept && <Check size={10} strokeWidth={3} />}
           </span>
-          <AgentIcon agent={row.id} size={14} />
-          <span {...stylex.props(styles.rowLabel)}>{row.name}</span>
+          <span {...stylex.props(styles.rowIconSlot, !row.kept && styles.rowOff)}>
+            <AgentIcon agent={row.id} size={14} />
+          </span>
+          <span {...stylex.props(styles.rowLabel, !row.kept && styles.rowLabelOff)}>
+            {row.name}
+          </span>
           {row.note && <span {...stylex.props(styles.rowNote)}>{row.note}</span>}
         </li>
       ))}
@@ -146,6 +157,11 @@ export function FirstScanSteps() {
             <li>Park moves a skill away from every agent. Undo puts it back.</li>
             <li>It runs on your Mac. Free and open source.</li>
           </ul>
+          <div {...stylex.props(styles.introLinks)}>
+            <a href={DOCS_URL} {...stylex.props(homeSectionStyles.textLink)}>
+              First-run guide <span aria-hidden="true">→</span>
+            </a>
+          </div>
         </div>
         <ol {...stylex.props(styles.steps)}>
           <Step
@@ -195,7 +211,17 @@ const styles = stylex.create({
     listStyle: "none",
     margin: 0,
     padding: 0,
-    "@media (max-width: 760px)": { marginBottom: 32 },
+  },
+  introLinks: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-start",
+    "@media (max-width: 760px)": {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: "0 20px",
+      marginBottom: 24,
+    },
   },
   steps: {
     display: "grid",
@@ -226,7 +252,13 @@ const styles = stylex.create({
     fontWeight: 620,
     marginBottom: 6,
   },
-  stepTitle: { fontSize: 17, fontWeight: 640, letterSpacing: "-.01em", margin: "0 0 8px" },
+  stepTitle: {
+    fontSize: 17,
+    fontWeight: 640,
+    letterSpacing: "-.01em",
+    margin: "0 0 8px",
+    textWrap: "balance",
+  },
   stepCopy: {
     color: siteTokens.muted,
     fontSize: 14,
@@ -256,6 +288,8 @@ const styles = stylex.create({
     paddingInline: 10,
   },
   rowOff: { opacity: 0.5 },
+  rowIconSlot: { display: "inline-flex", flexShrink: 0 },
+  rowLabelOff: { color: siteTokens.muted },
   rowIcon: { color: siteTokens.muted, flexShrink: 0 },
   rowLabel: {
     color: siteTokens.text,

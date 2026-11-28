@@ -5,7 +5,7 @@ import type { InstalledSkill, ListingReport } from "@skill-studio/lib";
 import { buildHarnessSnapshot, deployment, HARNESS_HOME } from "../../dev/harness/skill-fixture";
 import { mockListingReport } from "../../dev/harness/mock-listing";
 import { listingReportKey, useAppStore } from "../../store/appStore";
-import { currentListingRequest } from "../Listing/useSkillVisibility";
+import { currentListingRequest } from "../../hooks/useStoreReports";
 import { SkillVisibility } from "./SkillVisibility";
 
 const initial = useAppStore.getState();

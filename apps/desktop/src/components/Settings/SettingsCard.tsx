@@ -25,5 +25,3 @@ export function SettingsError({ message }: SettingsErrorProps) {
     </div>
   );
 }
-
-/** Copies `text` and confirms in place for a moment. */

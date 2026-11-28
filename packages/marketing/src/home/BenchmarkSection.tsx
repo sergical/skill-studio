@@ -4,12 +4,12 @@
 // calls and wrong answers, by hand against Skill Studio, one bar per side.
 // Every run stays in the table below.
 // ============================================================================
-import { useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import * as stylex from "@stylexjs/stylex";
 
 import rawData from "../data/agent-benchmark.json";
 import { siteTokens } from "../SiteTheme.stylex";
-import { GITHUB_REPOSITORY_URL } from "../site-links";
+import { MCP_DOCS_URL } from "../site-links";
 import { chartTokens } from "./BenchmarkChart.stylex";
 import {
   HARNESS_NAMES,
@@ -74,9 +74,6 @@ const MIN_BAR_PX = 3;
 const VALUE_ROOM = 120;
 const VALUE_ROOM_MOBILE = 96;
 const HARNESS_ORDER = [...HARNESS_NAMES.keys()];
-const METHODOLOGY_URL = `${GITHUB_REPOSITORY_URL}/blob/main/tools/agent-bench/METHODOLOGY.md`;
-const HARNESS_URL = `${GITHUB_REPOSITORY_URL}/tree/main/tools/agent-bench`;
-const RESULTS_URL = `${GITHUB_REPOSITORY_URL}/blob/main/packages/marketing/src/data/agent-benchmark.json`;
 
 interface BarValue {
   value: number;
@@ -301,16 +298,70 @@ interface SegmentedProps<T extends string> {
   onChange: (value: T) => void;
 }
 
+const STEP_KEYS = new Map([
+  ["ArrowRight", 1],
+  ["ArrowDown", 1],
+  ["ArrowLeft", -1],
+  ["ArrowUp", -1],
+]);
+
 function Segmented<T extends string>({ label, options, value, onChange }: SegmentedProps<T>) {
+  const refs = useRef<Array<HTMLButtonElement | null>>([]);
+  const highlightRef = useRef<HTMLSpanElement>(null);
+  const hasPositioned = useRef(false);
+  const viaKeyboard = useRef(false);
+  const activeIndex = options.findIndex((option) => option.id === value);
+
+  useLayoutEffect(() => {
+    const sync = (animate: boolean) => {
+      const el = refs.current[activeIndex];
+      const pill = highlightRef.current;
+      if (!el || !pill) return;
+      pill.style.transition = animate ? "" : "none";
+      pill.style.width = `${el.offsetWidth}px`;
+      pill.style.height = `${el.offsetHeight}px`;
+      pill.style.transform = `translate(${el.offsetLeft}px, ${el.offsetTop}px)`;
+      pill.style.opacity = "1";
+    };
+    const animate = hasPositioned.current && !viaKeyboard.current;
+    viaKeyboard.current = false;
+    sync(animate);
+    hasPositioned.current = true;
+    const onResize = () => sync(false);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [activeIndex]);
+
+  const onKeyDown = (event: KeyboardEvent) => {
+    const step = STEP_KEYS.get(event.key);
+    if (!step) return;
+    event.preventDefault();
+    viaKeyboard.current = true;
+    const next = (activeIndex + step + options.length) % options.length;
+    onChange(options[next].id);
+    refs.current[next]?.focus();
+  };
+
   return (
-    <div role="group" aria-label={label} {...stylex.props(styles.segmented)}>
-      {options.map((option) => (
+    <div
+      role="radiogroup"
+      aria-label={label}
+      onKeyDown={onKeyDown}
+      {...stylex.props(styles.segmented)}
+    >
+      <span ref={highlightRef} aria-hidden="true" {...stylex.props(styles.segmentHighlight)} />
+      {options.map((option, i) => (
         <button
           key={option.id}
+          ref={(el) => {
+            refs.current[i] = el;
+          }}
           type="button"
-          aria-pressed={value === option.id}
+          role="radio"
+          aria-checked={i === activeIndex}
+          tabIndex={i === activeIndex ? 0 : -1}
           onClick={() => onChange(option.id)}
-          {...stylex.props(styles.segment, value === option.id && styles.segmentOn)}
+          {...stylex.props(styles.segment, i === activeIndex && styles.segmentOn)}
         >
           {option.label}
         </button>
@@ -415,24 +466,21 @@ export function BenchmarkSection() {
       </p>
 
       <details {...stylex.props(styles.details)}>
-        <summary {...stylex.props(styles.summary)}>Every run</summary>
+        <summary {...stylex.props(styles.summary)}>Every run &amp; methodology</summary>
         <ResultsTable task={task} />
         <p {...stylex.props(styles.methodText)}>
           {data.total_runs} runs on {runDate}: {harnesses} agents, {models} models, three runs each.
-          Every run got a fresh copy of a made-up home folder with known answers. Your numbers will
-          differ.
+          Every run got a fresh copy of a made-up home folder with known answers and identical
+          prompts, scored automatically against the fixture ground truth. Your numbers will differ.
         </p>
       </details>
 
       <div {...stylex.props(styles.links)}>
-        <a href={METHODOLOGY_URL} {...stylex.props(homeSectionStyles.textLink)}>
-          How we tested <span aria-hidden="true">→</span>
+        <a href="#download" {...stylex.props(homeSectionStyles.textLink)}>
+          Get the Mac app <span aria-hidden="true">→</span>
         </a>
-        <a href={HARNESS_URL} {...stylex.props(homeSectionStyles.textLink)}>
-          Run it yourself <span aria-hidden="true">→</span>
-        </a>
-        <a href={RESULTS_URL} {...stylex.props(homeSectionStyles.textLink)}>
-          All results <span aria-hidden="true">→</span>
+        <a href={MCP_DOCS_URL} {...stylex.props(homeSectionStyles.textLink)}>
+          Set up MCP <span aria-hidden="true">→</span>
         </a>
       </div>
     </>
@@ -441,6 +489,7 @@ export function BenchmarkSection() {
 
 const MOBILE = "@media (max-width: 600px)";
 const TABLET = "@media (max-width: 900px)";
+const HOVER = "@media (hover: hover) and (pointer: fine)";
 const REDUCED_MOTION = "@media (prefers-reduced-motion: reduce)";
 
 const swapIn = stylex.keyframes({
@@ -572,6 +621,22 @@ const styles = stylex.create({
     flexWrap: "wrap",
     gap: 2,
     padding: 3,
+    position: "relative",
+  },
+  segmentHighlight: {
+    backgroundColor: siteTokens.background,
+    borderRadius: 7,
+    boxShadow: `inset 0 0 0 1px ${siteTokens.border}`,
+    left: 0,
+    opacity: 0,
+    pointerEvents: "none",
+    position: "absolute",
+    top: 0,
+    transition: {
+      default:
+        "transform 240ms cubic-bezier(0.25, 1, 0.5, 1), width 240ms cubic-bezier(0.25, 1, 0.5, 1), height 240ms cubic-bezier(0.25, 1, 0.5, 1)",
+      [REDUCED_MOTION]: "none",
+    },
   },
   segment: {
     backgroundColor: "transparent",
@@ -584,14 +649,14 @@ const styles = stylex.create({
     fontWeight: 600,
     minHeight: 34,
     paddingInline: 12,
-    transition: "background-color 150ms ease-out, color 150ms ease-out",
-    ":hover": { color: siteTokens.text },
+    position: "relative",
+    transition: "color 150ms ease, transform 150ms cubic-bezier(0.25, 0.46, 0.45, 0.94)",
+    [HOVER]: { ":hover": { color: siteTokens.text } },
+    ":active": { transform: "scale(.97)" },
     ":focus-visible": { outline: `2px solid ${siteTokens.text}`, outlineOffset: 1 },
     [MOBILE]: { minHeight: 40, paddingInline: 10 },
   },
   segmentOn: {
-    backgroundColor: siteTokens.background,
-    boxShadow: `inset 0 0 0 1px ${siteTokens.border}`,
     color: siteTokens.text,
   },
   details: {

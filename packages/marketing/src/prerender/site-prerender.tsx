@@ -12,13 +12,17 @@ import { DocsPage } from "../docs/DocsPage";
 import { DOCS_PAGES, type DocsPageEntry } from "../docs/docs-pages";
 import { NotFoundPage } from "../docs/NotFoundPage";
 import { MarketingSite } from "../MarketingSite";
+import { SHARE_CARD_ALT } from "../share-card";
 import { themeBootScript } from "../site-theme";
 
 import { DOCS_TEMPLATE } from "./site-templates";
 
 const SITE_ORIGIN = "https://useskillstudio.com";
-const OG_IMAGE_ALT =
-  "Skill Studio: Tidy up your agent skills. The app icon in a messy pile of skills.";
+// X documents twitter:image:alt as the alt text for its card image.
+const SHARE_IMAGE_ALT_TAGS = [
+  `<meta property="og:image:alt" content="${escapeAttribute(SHARE_CARD_ALT)}" />`,
+  `<meta name="twitter:image:alt" content="${escapeAttribute(SHARE_CARD_ALT)}" />`,
+].join("\n    ");
 
 interface SiteRoute {
   /** Output path relative to dist. */
@@ -81,14 +85,14 @@ function renderHead({ title, description, path, markdownPath }: PageHead): strin
     `<meta property="og:title" content="${escapeAttribute(title)}" />`,
     `<meta property="og:description" content="${escapeAttribute(description)}" />`,
     `<meta property="og:url" content="${url}" />`,
-    `<meta property="og:image" content="${SITE_ORIGIN}/og.png" />`,
+    `<meta property="og:image" content="${SITE_ORIGIN}/og.jpg" />`,
     `<meta property="og:image:width" content="1200" />`,
     `<meta property="og:image:height" content="630" />`,
-    `<meta property="og:image:alt" content="${OG_IMAGE_ALT}" />`,
+    SHARE_IMAGE_ALT_TAGS,
     `<meta name="twitter:card" content="summary_large_image" />`,
     `<meta name="twitter:title" content="${escapeAttribute(title)}" />`,
     `<meta name="twitter:description" content="${escapeAttribute(description)}" />`,
-    `<meta name="twitter:image" content="${SITE_ORIGIN}/og.png" />`,
+    `<meta name="twitter:image" content="${SITE_ORIGIN}/og.jpg" />`,
   );
   return tags.join("\n    ");
 }
@@ -112,7 +116,7 @@ export function renderSitePage(file: string, template: string): string {
       // marketing-site.css hides it from light visitors until the client render lands.
       return fillTemplate(
         template,
-        "",
+        SHARE_IMAGE_ALT_TAGS,
         <MarketingSite prerenderTheme="dark" />,
         ' data-prerendered="dark"',
       );

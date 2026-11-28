@@ -4,10 +4,11 @@
 // server (its preview copies line by line), and the update check.
 // ============================================================================
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useId, useState } from "react";
 import { Check, ChevronDown, Copy, RefreshCw } from "lucide-react";
 import { formatCount } from "@skill-studio/lib";
 import { Button, cn } from "@skill-studio/ui";
+import { useDelayedCall } from "../../hooks/useDelayedCall";
 import { addToast } from "../../lib/toast";
 import { PROMPT_CLOSING, PROMPT_OPENING, promptFor } from "./home-asks";
 import type { HomeCount, HomeTask } from "./home-asks";
@@ -18,14 +19,12 @@ const TONE = { error: "text-error", warning: "text-warning", neutral: "text-text
 /** Copies text and says so in place for 1.5s; a refused clipboard says so in a toast. */
 function useCopy() {
   const [copied, setCopied] = useState<string | null>(null);
-  const timer = useRef(0);
-  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const reset = useDelayedCall();
   const copy = (key: string, text: string) => {
     navigator.clipboard.writeText(text).then(
       () => {
         setCopied(key);
-        window.clearTimeout(timer.current);
-        timer.current = window.setTimeout(() => setCopied(null), 1500);
+        reset.schedule(() => setCopied(null), 1500);
       },
       () => addToast({ type: "error", title: "Couldn't copy to the clipboard" }),
     );

@@ -7,7 +7,7 @@
 // ============================================================================
 
 import { useState } from "react";
-import { invokeErrorMessage } from "../lib/skill-api";
+import { invokeErrorMessage } from "../lib/skill-command-error";
 import { useAppStore } from "../store/appStore";
 
 interface OptimisticOverride<T> {

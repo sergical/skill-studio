@@ -8,7 +8,7 @@
 // surfaces agree on one set of tracked folders.
 // ============================================================================
 
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type { RefObject } from "react";
 import { AlertTriangle, Asterisk, ChevronDown, FolderOpen, Plus } from "lucide-react";
 import {
@@ -33,14 +33,10 @@ import {
   type ProjectFolder,
   type SkillSnapshot,
 } from "@skill-studio/lib";
-import {
-  getDiscoverySources,
-  invokeErrorMessage,
-  listProjectFolders,
-  setDiscoverySource,
-} from "../../lib/skill-api";
+import { invokeErrorMessage } from "../../lib/skill-command-error";
 import { useAppStore } from "../../store/appStore";
 import { useClientIds } from "../../hooks/useClientRows";
+import { useLoad } from "../../hooks/useLoad";
 import { useProjectFolderActions } from "../../hooks/useProjectFolderActions";
 import { MenuControl, MenuItem } from "../ui/MenuControl";
 import { ProjectFolderAddForm } from "./ProjectFolderAddForm";
@@ -58,35 +54,31 @@ export interface DiscoverySources {
 /** The discovery switches, read once and shared by the Agents table and the folder list. */
 export function useDiscoverySources(): DiscoverySources {
   const addToast = useAppStore((state) => state.addToast);
-  const [sources, setSources] = useState<DiscoverySourceSetting[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const getDiscoverySources = useAppStore((state) => state.getDiscoverySources);
+  const setDiscoverySource = useAppStore((state) => state.setDiscoverySource);
+  const load = useLoad("discovery-sources", getDiscoverySources, {
+    onFailed: (message) =>
+      addToast({ type: "error", title: "Couldn't read discovery settings", message }),
+  });
   const [saved, setSaved] = useState(0);
-
-  useEffect(() => {
-    getDiscoverySources()
-      .then(setSources)
-      .catch((err) => {
-        setError("Couldn't read discovery settings.");
-        addToast({
-          type: "error",
-          title: "Couldn't read discovery settings",
-          message: invokeErrorMessage(err),
-        });
-      });
-  }, [addToast]);
+  const sources = load.data ?? null;
 
   const toggle = (agent: string, enabled: boolean) => {
+    if (!sources) return;
     const previous = sources;
-    setSources((current) =>
-      (current ?? []).map((s) => (s.harness === agent ? { ...s, enabled } : s)),
-    );
+    load.setData(sources.map((s) => (s.harness === agent ? { ...s, enabled } : s)));
     setDiscoverySource(agent, enabled)
       .then((updated) => {
-        setSources(updated);
+        load.setData(updated);
         setSaved((count) => count + 1);
+        // Activity can't keep filtering by an agent that is now off, and must not go back to it
+        // by itself when the agent is turned on again.
+        const { activityFilter, setActivityFilter } = useAppStore.getState();
+        if (!enabled && activityFilter.harness === agent)
+          setActivityFilter({ harness: "all", trigger: activityFilter.trigger });
       })
       .catch((err) => {
-        setSources(previous);
+        load.setData(previous);
         addToast({
           type: "error",
           title: "Couldn't change discovery setting",
@@ -95,7 +87,12 @@ export function useDiscoverySources(): DiscoverySources {
       });
   };
 
-  return { sources, error, saved, toggle };
+  return {
+    sources,
+    error: load.error !== null ? "Couldn't read discovery settings." : null,
+    saved,
+    toggle,
+  };
 }
 
 interface ProjectFoldersCardProps {
@@ -322,12 +319,12 @@ function FolderList({
 
 export function ProjectFoldersCard({ snapshot, discovery }: ProjectFoldersCardProps) {
   const addToast = useAppStore((state) => state.addToast);
+  const listProjectFolders = useAppStore((state) => state.listProjectFolders);
   const { addProject, addTypedPath, stopTracking, removeProject } = useProjectFolderActions();
   const [pendingRemoval, setPendingRemoval] = useState<{
     path: string;
     discovered: boolean;
   } | null>(null);
-  const [folders, setFolders] = useState<ProjectFolder[] | null>(null);
   const { sources } = discovery;
   // History is read only from agents whose skills are shown (see `activity_sources` in
   // skill_refresh.rs), so the empty state names only those.
@@ -336,37 +333,21 @@ export function ProjectFoldersCard({ snapshot, discovery }: ProjectFoldersCardPr
     sources && agents ? sources.filter((s) => agents.includes(s.harness)) : sources;
   const [foldersOpen, setFoldersOpen] = useState(false);
   const [addFormOpen, setAddFormOpen] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const requestId = useRef(0);
   const foldersTriggerRef = useRef<HTMLButtonElement>(null);
 
-  const refetchFolders = () => {
-    const id = ++requestId.current;
-    listProjectFolders()
-      .then((rows) => {
-        if (id === requestId.current) setFolders(rows);
-      })
-      .catch((err) => {
-        if (id !== requestId.current) return;
-        setLoadError("Couldn't list project folders.");
-        addToast({
-          type: "error",
-          title: "Couldn't list project folders",
-          message: invokeErrorMessage(err),
-        });
-      });
-  };
-  // Effect Event: reads the latest `refetchFolders` without becoming an effect dependency
-  // itself, so the effect below reruns only when its retrigger keys change.
-  const refetchFoldersOnProjectsChange = useEffectEvent(refetchFolders);
-
-  const projectsKey = (snapshot?.projects ?? []).join("\n");
-  useEffect(() => {
-    refetchFoldersOnProjectsChange();
-    // `projectsKey` and `discovery.saved` are not read here - they stay dependencies purely to
-    // retrigger the fetch when a scan adds or removes a tracked project, or a search switch saves.
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- retrigger-only dependencies, not read in the body
-  }, [projectsKey, discovery.saved]);
+  // A scan that adds or removes a tracked project, or a saved search switch, changes the key,
+  // which lists the folders again.
+  const folders = useLoad(
+    `folders:${discovery.saved}:${(snapshot?.projects ?? []).join("\n")}`,
+    listProjectFolders,
+    {
+      keepPreviousData: true,
+      onFailed: (message) =>
+        addToast({ type: "error", title: "Couldn't list project folders", message }),
+    },
+  );
+  const refetchFolders = folders.reload;
+  const loadError = folders.error !== null ? "Couldn't list project folders." : null;
 
   const skillCounts = countSkillsByProject(snapshot);
 
@@ -432,7 +413,7 @@ export function ProjectFoldersCard({ snapshot, discovery }: ProjectFoldersCardPr
       }
     >
       <FolderList
-        folders={folders}
+        folders={folders.data ?? null}
         sources={shownSources}
         loadError={loadError ?? discovery.error}
         skillCounts={skillCounts}

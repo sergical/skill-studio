@@ -4,9 +4,10 @@
 // prompts with it.
 // ============================================================================
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { Button } from "@skill-studio/ui";
+import { useDelayedCall } from "../../hooks/useDelayedCall";
 import { addToast } from "../../lib/toast";
 
 interface CopyTextButtonProps {
@@ -29,14 +30,12 @@ export function CopyTextButton({
   title,
 }: CopyTextButtonProps) {
   const [copied, setCopied] = useState(false);
-  const timer = useRef(0);
-  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const reset = useDelayedCall();
   const copy = () => {
     navigator.clipboard.writeText(text).then(
       () => {
         setCopied(true);
-        window.clearTimeout(timer.current);
-        timer.current = window.setTimeout(() => setCopied(false), 1500);
+        reset.schedule(() => setCopied(false), 1500);
       },
       () => addToast({ type: "error", title: "Couldn't copy to the clipboard" }),
     );

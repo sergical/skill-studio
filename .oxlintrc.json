@@ -25,18 +25,10 @@
     "anti-slop/no-unsafe-dictionary-type": "error",
     "anti-slop/no-widen-then-assert": "error",
     "anti-slop/require-safety-comment-for-type-assertion": "error",
-    // React Compiler-family rules not already reached by categories.correctness
-    // (exhaustive-deps, purity, preserve-manual-memoization, etc. are already
-    // "error" via correctness). rules-of-hooks/hooks/no-deriving-state-in-effects
-    // found zero violations in src, so they go straight to "error".
+    // React Compiler-family rules that categories.correctness does not turn on.
     "react/rules-of-hooks": "error",
     "react/hooks": "error",
     "react/no-deriving-state-in-effects": "error",
-    // These fire on real code but the remaining findings need a human call
-    // (e.g. an effect keyed off a value only to retrigger, not to read it,
-    // or a raw useState setter deliberately named apart from a wrapped
-    // callback of the same base name), so they stay "warn" until someone
-    // works through them by hand instead of being silenced.
     "react/exhaustive-effect-dependencies": "error",
     "react/memo-dependencies": "error",
     "react/hook-use-state": "error",
@@ -62,52 +54,21 @@
       "rules": { "anti-slop/no-raw-form-elements": "off" }
     },
     {
-      // Layering rule (plan.md section 7): components go through the store,
-      // not straight to the IPC layer. The excludeFiles list is every
-      // component that already imported skill-api.ts directly on main as
-      // of unit 5.1; they're excluded so the rule doesn't block CI on
-      // pre-existing code. Tracked in the unit 5.1 report for a follow-up
-      // issue to move them onto the store.
+      // Layering rule: components go through the store, not straight to the
+      // IPC layer.
       "files": ["apps/desktop/src/components/**"],
-      "excludeFiles": [
-        "apps/desktop/src/components/Activity/ActivityFilters.tsx",
-        "apps/desktop/src/components/Activity/SkillHistorySection.tsx",
-        "apps/desktop/src/components/AddSkill/AddSkillSheet.tsx",
-        "apps/desktop/src/components/Settings/AppVersionCard.tsx",
-        "apps/desktop/src/components/Settings/CommandHealthCard.tsx",
-        "apps/desktop/src/components/Settings/EditorCard.tsx",
-        "apps/desktop/src/components/Settings/ProjectFoldersCard.tsx",
-        "apps/desktop/src/components/Settings/TelemetryCard.tsx",
-        "apps/desktop/src/components/SkillDetail/LeftBehindDialog.tsx",
-        "apps/desktop/src/components/SkillDetail/MakeIndependentCopyDialog.tsx",
-        "apps/desktop/src/components/SkillDetail/ParkCopyDialog.tsx",
-        "apps/desktop/src/components/SkillDetail/RemoveDeploymentsDialog.tsx",
-        "apps/desktop/src/components/SkillDetail/skill-location-actions.ts",
-        "apps/desktop/src/components/SkillDetail/skill-page-actions.ts",
-        "apps/desktop/src/components/SkillDetail/SkillCompareDialog.tsx",
-        "apps/desktop/src/components/SkillDetail/SkillFrontmatterRepairDialog.tsx",
-        "apps/desktop/src/components/SkillDetail/SkillPage.tsx",
-        "apps/desktop/src/components/SkillDetail/SkillPropertiesRail.tsx",
-        "apps/desktop/src/components/SkillDetail/SkillProposedEdits.tsx",
-        "apps/desktop/src/components/SkillDetail/SkillRepairCard.tsx",
-        "apps/desktop/src/components/SkillDetail/UninstallPluginDialog.tsx",
-        "apps/desktop/src/components/SkillDetail/useSkillFrontmatterRepair.ts",
-        "apps/desktop/src/components/SkillList/skill-bulk-run.ts",
-        "apps/desktop/src/components/SkillList/useSkillBulkActions.ts",
-        "apps/desktop/src/components/SkillList/useSkillListAct.ts",
-        "apps/desktop/src/components/SkillStore/InstalledSkillLifecycleActions.tsx",
-        "apps/desktop/src/components/SkillStore/SkillDetailPanel.tsx",
-        "apps/desktop/src/components/SkillStore/SkillStore.tsx",
-        "apps/desktop/src/components/SkillStore/SkillStoreInstallFlow.tsx",
-        "apps/desktop/src/components/ui/MaterializeRootDialog.tsx"
-      ],
       "rules": {
         "no-restricted-imports": [
-          "warn",
+          "error",
           {
             "patterns": [
               {
-                "group": ["**/lib/skill-api", "@/lib/skill-api"],
+                "group": [
+                  "**/lib/skill-api",
+                  "**/lib/skill-api.*",
+                  "@/lib/skill-api",
+                  "@/lib/skill-api.*"
+                ],
                 "message": "Components read and write skills through the store, not skill-api.ts directly. Add or use a store action instead."
               }
             ]
@@ -116,17 +77,118 @@
       }
     },
     {
-      // Layering rule (plan.md section 7): the store never imports back
-      // into components.
+      // Layering rule: the store never imports back into components.
       "files": ["apps/desktop/src/store/**"],
       "rules": {
         "no-restricted-imports": [
-          "warn",
+          "error",
           {
             "patterns": [
               {
                 "group": ["**/components/**"],
                 "message": "The store must not import from components; components depend on the store, not the other way around."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // Effects and timers need judgment to use well, so interface code gets
+      // them only through the shared hooks in apps/desktop/src/hooks. "files"
+      // lists the directories that are already clean. It only grows: add a
+      // directory when its last effect and timer are gone. An override
+      // replaces a rule's options, so this block repeats the layering
+      // pattern from the components block above: without it these
+      // directories would lose that rule.
+      "files": [
+        "apps/desktop/src/components/Activity/**",
+        "apps/desktop/src/components/Coverage/**",
+        "apps/desktop/src/components/FirstRun/**",
+        "apps/desktop/src/components/Home/**",
+        "apps/desktop/src/components/Learn/**",
+        "apps/desktop/src/components/Listing/**",
+        "apps/desktop/src/components/Packs/**",
+        "apps/desktop/src/components/Sessions/**",
+        "apps/desktop/src/components/Settings/**",
+        "apps/desktop/src/components/Shell/**",
+        "apps/desktop/src/components/Sidebar/**",
+        "apps/desktop/src/components/SkillStore/**",
+        "apps/desktop/src/components/dev/**",
+        "apps/desktop/src/components/ui/**"
+      ],
+      "excludeFiles": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "**/lib/skill-api",
+                  "**/lib/skill-api.*",
+                  "@/lib/skill-api",
+                  "@/lib/skill-api.*"
+                ],
+                "message": "Components read and write skills through the store, not skill-api.ts directly. Add or use a store action instead."
+              }
+            ],
+            "paths": [
+              {
+                "name": "react",
+                "importNames": ["useEffect", "useLayoutEffect"],
+                "message": "Effects live in apps/desktop/src/hooks. Load data with useLoad, read a cached report with useListingReport or useSessionsReport, listen with useBackendEvent or useWindowEvent, or derive the value during render and do the work in the event handler."
+              }
+            ]
+          }
+        ],
+        "no-restricted-properties": [
+          "error",
+          {
+            "property": "useEffect",
+            "message": "Effects live in apps/desktop/src/hooks. Load data with useLoad, read a cached report with useListingReport or useSessionsReport, listen with useBackendEvent or useWindowEvent, or derive the value during render and do the work in the event handler."
+          },
+          {
+            "property": "useLayoutEffect",
+            "message": "Effects live in apps/desktop/src/hooks. Load data with useLoad, read a cached report with useListingReport or useSessionsReport, listen with useBackendEvent or useWindowEvent, or derive the value during render and do the work in the event handler."
+          },
+          {
+            "property": "setTimeout",
+            "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce, and useNow for text that ages."
+          },
+          {
+            "property": "setInterval",
+            "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce, and useNow for text that ages."
+          },
+          {
+            "property": "requestAnimationFrame",
+            "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce, and useNow for text that ages."
+          },
+          {
+            "property": "requestIdleCallback",
+            "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce, and useNow for text that ages."
+          }
+        ],
+        "no-restricted-globals": [
+          "error",
+          {
+            "checkGlobalObject": true,
+            "globals": [
+              {
+                "name": "setTimeout",
+                "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce, and useNow for text that ages."
+              },
+              {
+                "name": "setInterval",
+                "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce, and useNow for text that ages."
+              },
+              {
+                "name": "requestAnimationFrame",
+                "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce, and useNow for text that ages."
+              },
+              {
+                "name": "requestIdleCallback",
+                "message": "Timers live in apps/desktop/src/hooks. Use useDelayedCall for a delay, a reset or a debounce, and useNow for text that ages."
               }
             ]
           }
