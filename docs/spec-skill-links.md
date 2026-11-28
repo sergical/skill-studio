@@ -527,8 +527,8 @@ Each slice is one vertical change, under about 500 lines.
    `flow_parity.rs` row, a `docs/flows.md` row, a "Link state" row in
    `docs/state-machines.md`, and verification layers 1 to 5 of section 10.
    Layer 5 runs before this slice merges, because it decides the per-agent
-   rule. Layer 3 grows with each later slice: a slice that adds a warning
-   adds its action's rows.
+   rule. A later slice that adds an action adds it to layer 2's action
+   generator, not new test cases.
 2. `breaks` in the remove, park, turn-off and pack remove plans; the dialogs
    show it; the CLI dry runs print it. One e2e spec: removing `grilling`
    lists its 6 users, and Keep changes nothing.
@@ -581,31 +581,53 @@ Each dimension below comes from what Skill Studio already supports
 Seven layers, cheapest first. Each has an oracle that is not the code under
 test: the thing that decides whether the answer is right.
 
-| Layer                | Proves                                                                                  | Oracle                                                                                                                                                                                                                         | Runs                                                                                              |
-| -------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
-| 1. Real-pack corpus  | Detection on real text                                                                  | A list of links a person checked line by line, kept next to each snapshot                                                                                                                                                      | CI, Linux and macOS                                                                               |
-| 2. Resolution matrix | Resolution in every combination of agent, layout, owner, scope, state and home          | The file system: for Needs, opening the exact path the agent would open; for Hands off, the agent's list from the listing module, which has its own evidence against real agents (`docs/research/harness-listing-evidence.md`) | Host tests on real temp folders with real links, CI on macOS and Linux                            |
-| 3. Action matrix     | Every action of section 5.7 from every starting point, on every skill of the real packs | Rules 3 and 4 of section 5.7: the plan made before the action against a fresh scan of the real files after it, and the scan after undo against the scan before. Rule 5 and the role columns of the table as named checks       | Core tests on the in-memory file system, and a sample on real temp folders, CI on macOS and Linux |
-| 4. Real installers   | The setups real tools make, read back through CLI and MCP                               | The files the real `npx skills`, `dotagents` and `claude plugin install` write, from the snapshots served by the local git pack server                                                                                         | `verify-skill-studio`, and the `skills-cli-contract` workflow on macOS                            |
-| 5. Real agents       | That OK and Missing match what each agent does                                          | The agent's own transcript, read with Skill Studio's session readers: did it load `grilling` after `grill-me`, did it open `../choreograph/SKILL.md`                                                                           | By hand in a disposable home, before slice 1 merges and on each agent's major version             |
-| 6. UI flows          | Dialogs, Home and the map show the core answer                                          | The page as a user reads it, found by role and name                                                                                                                                                                            | e2e on the harness, WebKit and Chromium                                                           |
-| 7. Upstream drift    | That a pack changing its links is noticed before users hit it                           | Layer 1 rerun on each pack's latest commit                                                                                                                                                                                     | Weekly CI, report only                                                                            |
+| Layer                                  | Proves                                                                                         | Oracle                                                                                                                                                                                                                                                                            | Runs                                                                                  |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| 1. Real-pack corpus                    | Detection on real text                                                                         | A list of links a person checked line by line, kept next to each snapshot                                                                                                                                                                                                         | CI, Linux and macOS                                                                   |
+| 2. Property test over action sequences | Every combination of starting point, actions, agents, layouts and scopes reachable by real use | Three parts that share no logic: a real temp home changed the way real tools change it; an oracle that asks only the operating system whether each agent can open each path and list each name; and Skill Studio's own scan and plan. The rules of section 5.7 are the properties | Core and host tests, CI on macOS and Linux                                            |
+| 3. Planted bugs                        | That layer 2 catches a failure it was never written for                                        | `cargo mutants` on `skill_links.rs` (already run on every PR for the core and host crates), plus a fixed list of named bug classes found while building, each of which layer 2 must catch                                                                                         | CI                                                                                    |
+| 4. Real installers                     | The setups real tools make, read back through CLI and MCP                                      | The files the real `npx skills`, `dotagents` and `claude plugin install` write, from the snapshots served by the local git pack server                                                                                                                                            | `verify-skill-studio`, and the `skills-cli-contract` workflow on macOS                |
+| 5. Real agents                         | That OK and Missing match what each agent does                                                 | The agent's own transcript, read with Skill Studio's session readers: did it load `grilling` after `grill-me`, did it open `../choreograph/SKILL.md`                                                                                                                              | By hand in a disposable home, before slice 1 merges and on each agent's major version |
+| 6. UI flows                            | Dialogs, Home and the map show the core answer                                                 | The page as a user reads it, found by role and name                                                                                                                                                                                                                               | e2e on the harness, WebKit and Chromium                                               |
+| 7. Upstream drift                      | That a pack changing its links is noticed before users hit it                                  | Layer 1 rerun on each pack's latest commit                                                                                                                                                                                                                                        | Weekly CI, report only                                                                |
 
-Layer 2 is one property test: it builds every combination the agent
-catalog allows, and prints any combination that fails.
+Layer 2 does not list cases. It states what must hold after any action
+and lets random real-world sequences look for a counterexample:
 
-Layer 3 is the permutation matrix. It runs every starting point × every
-action × every skill of `mattpocock/skills` as the target, on the in-memory
-file system: 10 × 18 × 39, about 7,000 cases. Agent, folder layout, scope,
-home location and installer are covered pairwise, so every pair of their
-values meets in at least one case, on real temp folders with real links. A
-change outside Skill Studio is simulated by editing the files directly, as
-Finder or another tool would. Each CI run also draws a seeded random sample
-across all four packs and prints its seed; the weekly run takes the full
-product. A failure prints the starting point, action, target, agent and
-layout, which is a reproducible case, and the dev harness opens any case by
-that id, so a failure can be seen in the UI as well as read. Budget: under 60 seconds per CI run,
-measured with the first slice.
+- **Properties, from section 5.7.** P1: for every link and agent, the scan's
+  state equals the oracle's. P2: a plan's breaks and fixes equal the
+  oracle's difference before and after the action. P3: after undo, the
+  oracle sees what it saw before. P4: nothing but a real break raises an
+  alert.
+- **Inputs.** A starting point from section 5.7, a folder layout, and a
+  random sequence of actions drawn from what a user or a tool can do next
+  in that state: install from a real pack, remove, park, unpark, turn off
+  or on for one agent, rename, edit a link in, delete outside Skill Studio,
+  undo. Built with `proptest` strategies (already a core dev dependency), so
+  a failure shrinks on its own to the shortest sequence that still fails.
+- **The oracle stays dumb on purpose.** It knows nothing about parked
+  folders, disabled folders, layouts or installers. It opens paths and
+  lists folders, as an agent does. That is why it can catch a rule Skill
+  Studio got wrong.
+
+A prototype of this layer, run on 2026-11-27 against `mattpocock/skills`,
+`emilkowalski/skills`, and pstack and `cursor-team-kit` from
+`cursor/plugins`, on real temp folders with real links:
+
+- 200 random sequences, 1,600 actions, all properties held for the final
+  model (5 m 36 s).
+- 8 planted bugs, one at a time, none with a check written for it: paths
+  resolved by text instead of by the file system, Claude Code treated as
+  reading the shared folder, parked skills counted as present, the disabled
+  folder counted as visible, a renamed install matched by its old name,
+  plans that forget the second agent, plans that ignore a whole-folder
+  link, alerts on mentions. All 8 were caught, 5 in the first sequence and
+  all within 9, each shrunk to a 1 or 2 step reproduction.
+- It also found a bug in the prototype's own planner that no one had
+  thought to test: on macOS a temp folder's real path starts with
+  `/private/var` while the plan used `/var`, so predicted fixes did not
+  match. The real build must compare real paths everywhere. That bug class
+  joins layer 3's list.
 
 Layer 5 runs each
 agent headless on its cheapest model, with the target skill present and
@@ -617,10 +639,10 @@ Layer 5 also settles open question 1.
 
 - Layer 1: every hand-checked link found and no listed non-link reported,
   with the count per pack in the PR.
-- Layer 2: every generated combination passes on macOS and Linux, with the
-  combination count in the PR.
-- Layer 3: every case passes rules 3, 4 and 5, with the case count and run
-  time in the PR.
+- Layer 2: the properties hold for the CI sample (seeded, seed printed) and
+  for the weekly long run, with sequence counts and run time in the PR.
+- Layer 3: no surviving mutant in `skill_links.rs` that changes a link
+  state, and every named bug class caught by layer 2.
 - Layer 4: one evidence folder per installer, with identical CLI and MCP
   output.
 - Layer 5: a filled table of agent × layout × present or absent, every cell
