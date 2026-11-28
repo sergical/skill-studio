@@ -59,6 +59,18 @@ works today. Make one explicit when you next change it.
 | Update check              | `apps/desktop/src-tauri/src/skills/skill_update_check.rs`       | Check results land in a shared store with no request generation.                                                                     |
 | Write lease               | `apps/desktop/src-tauri/src/skills/write_lease.rs`              | Held or free, tracked by lock files.                                                                                                 |
 
+## Model-checked machines
+
+A table test walks single moves. A model check walks every order of moves,
+with a crash between any two. Each row is a TLA+ model with one command.
+
+| Machine                | Model                                            | Rule                                                                                                                                                                                                                                                                                                                                | Check                              |
+| ---------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| Restore claim and Undo | `.agents/skills/verify-undo/model/UndoClaim.tla` | Once the next write has done its recovery, a change is shown as undone only if an undo of it finished. It holds for the core and for the desktop's own `EventStore::restore`. The Rust test `a_desktop_undo_cut_off_at_any_history_write_can_run_again_or_the_change_stays_marked_undone` checks the same rule on the desktop code. | `.agents/skills/verify-undo/check` |
+
+[The Undo state charts](../.agents/skills/verify-undo/CHART.md) show both
+flows in the user's words.
+
 ## Backup expiry
 
 The constants `BACKUP_RETENTION_COUNT` (20) and `BACKUP_RETENTION_AGE` (30 days)

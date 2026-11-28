@@ -1104,6 +1104,106 @@ mod tests {
             .any(|row| row.kind == "restore" && row.status == "done"));
     }
 
+    /// The app can die before any history write of an Undo. After it starts
+    /// again and the next core write runs its recovery, the change is marked
+    /// undone only if an undo finished, so the user can undo it again.
+    #[test]
+    fn a_desktop_undo_cut_off_at_any_history_write_can_run_again_or_the_change_stays_marked_undone()
+    {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        struct AppDies;
+
+        for write_fails in [false, true] {
+            let mut cut = 1;
+            loop {
+                let directory = tempfile::tempdir().unwrap();
+                let home = directory.path();
+                let (data_root, app_data) = (home.join("data"), home.join("app-data"));
+                let links = home.join(".codex/skills");
+                fs::create_dir_all(&links).unwrap();
+                let removed_link = links.join("broken-link");
+                symlink(home.join("missing"), &removed_link).unwrap();
+                let mut store = crate::open_event_store_at(&app_data, &data_root).unwrap();
+                skill_materialize::repair_remove_link(&store, &removed_link, "fixture", "codex")
+                    .unwrap();
+                let event_id = store.list(1, None).unwrap()[0].id.clone();
+                if write_fails {
+                    fs::set_permissions(&links, fs::Permissions::from_mode(0o555)).unwrap();
+                }
+
+                let writes = AtomicU64::new(0);
+                store.observe_history = Some(Box::new(move |phase| {
+                    if phase != "read" && writes.fetch_add(1, Ordering::SeqCst) + 1 == cut {
+                        std::panic::panic_any(AppDies);
+                    }
+                }));
+                let lease = WriteLease::for_data_root(&data_root)
+                    .try_acquire(home)
+                    .unwrap();
+                let undo = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    store.restore(&lease, home, &event_id, false)
+                })) {
+                    Ok(result) => Some(result),
+                    Err(payload) if payload.is::<AppDies>() => None,
+                    Err(payload) => std::panic::resume_unwind(payload),
+                };
+                drop(lease);
+                drop(store);
+                fs::set_permissions(&links, fs::Permissions::from_mode(0o755)).unwrap();
+
+                let store = crate::open_event_store_at(&app_data, &data_root).unwrap();
+                store.reconcile_at_startup().unwrap();
+                let rt = super::super::core_runtime::build_runtime_write_at_with_search_dirs(
+                    home,
+                    &data_root,
+                    Vec::new(),
+                )
+                .unwrap();
+                let ctx = skill_studio_core::ports::OpContext::uncancellable(
+                    skill_studio_core::identity::CorrelationId("fixture".into()),
+                );
+                drop(skill_studio_core::ports::MutationSession::begin(&rt, &ctx).unwrap());
+
+                let target = store.get(&event_id).unwrap().unwrap();
+                let undo_finished = target.reverted_by.as_deref().is_some_and(|by| {
+                    store
+                        .get(by)
+                        .unwrap()
+                        .is_some_and(|row| row.status == "done")
+                });
+                assert!(
+                    target.reverted_by.is_none() || undo_finished,
+                    "write_fails={write_fails}, cut {cut}: the change is marked undone by {:?}, but no undo finished",
+                    target.reverted_by
+                );
+                let Some(result) = undo else {
+                    cut += 1;
+                    continue;
+                };
+                if write_fails {
+                    let rows = store.list(50, Some("fixture")).unwrap();
+                    let restores: Vec<_> =
+                        rows.iter().filter(|row| row.kind == "restore").collect();
+                    assert!(
+                        result.is_err()
+                            && target.reverted_by.is_none()
+                            && restores.len() == 1
+                            && restores[0].status == "failed",
+                        "an Undo whose write fails must fail and leave the change undoable: {result:?}"
+                    );
+                } else {
+                    assert!(
+                        result.is_ok() && undo_finished,
+                        "an Undo that is not cut off must finish: {result:?}"
+                    );
+                }
+                break;
+            }
+        }
+    }
+
     #[test]
     fn event_dto_keeps_non_restorable_backend_policy() {
         let temp = tempfile::tempdir().unwrap();
