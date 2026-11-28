@@ -80,6 +80,7 @@ pub mod registry;
 pub mod review;
 pub mod scan_memo;
 pub mod scope;
+pub mod skill_links;
 pub mod skill_sessions;
 pub mod skill_update_check;
 pub mod skill_uses;
