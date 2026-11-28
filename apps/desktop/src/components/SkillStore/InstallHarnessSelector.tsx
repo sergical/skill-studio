@@ -122,7 +122,8 @@ export function InstallHarnessSelector({
   const chosenSet = new Set(chosen);
   const rowsLocked = disabled || (universal && !!lockedReason);
   const readers = offered.filter((id) => installHarnessLocked(id, claudeReadsShared, universal));
-  const ownRows = offered.filter((id) => !readers.includes(id));
+  const readerSet = new Set(readers);
+  const ownRows = offered.filter((id) => !readerSet.has(id));
   return (
     <div className="flex flex-col gap-2">
       <span className="text-small font-medium text-text-secondary">Destination</span>

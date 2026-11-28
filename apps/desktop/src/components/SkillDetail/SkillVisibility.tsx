@@ -265,9 +265,11 @@ export function SkillVisibility({
     return entry ? [{ harness: row.harness, row, entry }] : [];
   });
   const stats = invocations?.find((s) => s.skill === skill.name);
-  const usedOnly: AgentRow[] = Object.entries(stats?.by_harness_30_days ?? {})
-    .filter(([harness, uses]) => uses > 0 && !listed.some((a) => a.harness === harness))
-    .map(([harness]) => ({ harness, row: null, entry: null }));
+  const listedHarnesses = new Set(listed.map((a) => a.harness));
+  const usedOnly: AgentRow[] = Object.entries(stats?.by_harness_30_days ?? {}).flatMap(
+    ([harness, uses]) =>
+      uses > 0 && !listedHarnesses.has(harness) ? [{ harness, row: null, entry: null }] : [],
+  );
   const agents = [...listed, ...usedOnly];
   if (agents.length === 0)
     return error ? (

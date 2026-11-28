@@ -86,7 +86,7 @@ function withoutUsedSkillsUnused(
   snapshot: SkillSnapshot | undefined,
 ): SkillSessionRollup[] {
   const used = new Set(
-    snapshot?.invocations.filter((stats) => stats.last_30_days > 0).map((stats) => stats.skill),
+    snapshot?.invocations.flatMap((stats) => (stats.last_30_days > 0 ? [stats.skill] : [])),
   );
   return skills.map((skill) =>
     used.has(skill.name)
@@ -156,6 +156,7 @@ function SkillRow({ skill, findings }: { skill: SkillSessionRollup; findings: Fi
     skill.used > 0 && `used in ${skill.used}`,
     skill.missed > 0 && `possibly missed in ${skill.missed}`,
   ].filter(Boolean);
+  const flags = new Set(skill.flags);
   return (
     <li
       aria-label={skill.name}
@@ -169,8 +170,7 @@ function SkillRow({ skill, findings }: { skill: SkillSessionRollup; findings: Fi
       </span>
       <span className="text-right text-small text-text-secondary">
         {findings
-          .filter((finding) => skill.flags.includes(finding.flag))
-          .map((finding) => finding.label)
+          .flatMap((finding) => (flags.has(finding.flag) ? [finding.label] : []))
           .join(" · ")}
       </span>
       {(counts.length > 0 || skill.reach) && (
@@ -187,9 +187,13 @@ function SkillRow({ skill, findings }: { skill: SkillSessionRollup; findings: Fi
 /** One row per skill with a finding, in the order a person acts on the findings. */
 function Findings({ findings, skills }: { findings: Finding[]; skills: SkillSessionRollup[] }) {
   const [open, setOpen] = useState(false);
-  const rank = (skill: SkillSessionRollup) =>
-    findings.findIndex((finding) => skill.flags.includes(finding.flag));
-  const rows = skills.filter((skill) => rank(skill) >= 0).sort((a, b) => rank(a) - rank(b));
+  // Each skill's first finding in `findings` order, or none.
+  const ranked = skills.flatMap((skill) => {
+    const flags = new Set(skill.flags);
+    const rank = findings.findIndex((finding) => flags.has(finding.flag));
+    return rank >= 0 ? [{ skill, rank }] : [];
+  });
+  const rows = ranked.sort((a, b) => a.rank - b.rank).map((entry) => entry.skill);
   if (rows.length === 0) return null;
   // At most 200 rows in the page; the CLI prints every one.
   const shown = rows.slice(0, open ? 200 : 8);

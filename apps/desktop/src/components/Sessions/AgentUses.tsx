@@ -9,18 +9,9 @@ import { Button } from "@skill-studio/ui";
 import type { SkillSnapshot } from "@skill-studio/lib";
 import { PageSection } from "../Shell/PageSection";
 import { useAppStore } from "../../store/appStore";
+import { agentUses } from "./agent-uses";
 
 const SHOWN = 8;
-
-/** Uses per skill by `harness` in the last 30 days, most first; null when the history holds no
- * record from `harness`, which is no readable history for it, not zero uses. */
-export function agentUses(snapshot: SkillSnapshot, harness: string) {
-  const rows = snapshot.invocations
-    .map((stats) => ({ skill: stats.skill, uses: stats.by_harness_30_days[harness] ?? 0 }))
-    .filter((row) => row.uses > 0)
-    .sort((a, b) => b.uses - a.uses || a.skill.localeCompare(b.skill));
-  return rows.length ? rows : null;
-}
 
 interface AgentUsesProps {
   snapshot: SkillSnapshot;

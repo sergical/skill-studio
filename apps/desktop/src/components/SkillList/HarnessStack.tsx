@@ -64,8 +64,9 @@ function readingHarnesses(
   shown: string[] | undefined,
 ): HarnessReach[] {
   const { harnesses } = whereFacts(skill, harnessList);
+  const shownSet = shown && new Set(shown);
   return harnesses.flatMap((reach): HarnessReach[] => {
-    if (shown && !shown.includes(reach.harness)) return [];
+    if (shownSet && !shownSet.has(reach.harness)) return [];
     switch (skillVisibleToAgent(skill, reach.harness)) {
       case "own":
         return [reach];

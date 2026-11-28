@@ -94,9 +94,9 @@ export function PasteSkillTab({ skills, onCancel, onAdded }: PasteSkillTabProps)
       onAdded(result.name);
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "Could not add this skill");
-    } finally {
-      setSaving(false);
     }
+    // The catch takes every failure, so this runs after each save, as a `finally` would.
+    setSaving(false);
   };
 
   const saveOnModEnter = (event: React.KeyboardEvent<HTMLElement>) => {

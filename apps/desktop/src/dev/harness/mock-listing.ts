@@ -20,16 +20,16 @@ const CONTEXT_TOKENS = 1_000_000;
 
 /** The deployment labels of the global folders each estimated agent reads. */
 const READS = new Map([
-  ["claude-code", ["Claude Code"]],
-  ["codex", ["shared", "Codex"]],
+  ["claude-code", new Set(["Claude Code"])],
+  ["codex", new Set(["shared", "Codex"])],
 ]);
 
 function entries(snapshot: SkillSnapshot, budget: number, harness: string): ListingEntry[] {
-  const reads = READS.get(harness) ?? ["shared"];
+  const reads = READS.get(harness) ?? new Set(["shared"]);
   const copyOf = (skill: InstalledSkill) =>
     // The core skips a copy whose link points nowhere, so a broken copy is not listed.
     skill.deployments.find(
-      (d) => d.scope === "global" && reads.includes(d.agent) && !d.symlink_is_broken,
+      (d) => d.scope === "global" && reads.has(d.agent) && !d.symlink_is_broken,
     );
   const skills = snapshot.skills.filter((skill) => copyOf(skill));
   let left = budget - skills.reduce((sum, s) => sum + s.name.length + 3, 0);
@@ -184,30 +184,30 @@ export function mockListingReport(
   // Cursor's, listing the same global skills, so their counts are not zero.
   if (!agents) return report;
   const cursor = report.listings.find((row) => row.harness === "cursor");
-  const discovered = agents
-    .filter((agent) => !report.listings.some((row) => row.harness === agent))
-    .flatMap((agent) => {
-      if (!cursor) return [];
-      // Each agent reads its own folders and the shared one, not Cursor's.
-      const label = deploymentLabelFromAgentId(agent);
-      const reads = new Set(
-        snapshot.skills
-          .filter((skill) =>
-            skill.deployments.some(
-              (d) =>
-                d.scope === "global" &&
-                !d.symlink_is_broken &&
-                (d.agent === label || d.agent === "shared"),
-            ),
-          )
-          .map((skill) => skill.name),
-      );
-      return [
-        { ...cursor, harness: agent, entries: cursor.entries.filter((e) => reads.has(e.name)) },
-      ];
-    });
+  const estimated = new Set(report.listings.map((row) => row.harness));
+  const kept = new Set(agents);
+  const discovered = agents.flatMap((agent) => {
+    if (!cursor || estimated.has(agent)) return [];
+    // Each agent reads its own folders and the shared one, not Cursor's.
+    const label = deploymentLabelFromAgentId(agent);
+    const reads = new Set(
+      snapshot.skills.flatMap((skill) =>
+        skill.deployments.some(
+          (d) =>
+            d.scope === "global" &&
+            !d.symlink_is_broken &&
+            (d.agent === label || d.agent === "shared"),
+        )
+          ? [skill.name]
+          : [],
+      ),
+    );
+    return [
+      { ...cursor, harness: agent, entries: cursor.entries.filter((e) => reads.has(e.name)) },
+    ];
+  });
   return {
     ...report,
-    listings: [...report.listings, ...discovered].filter((row) => agents.includes(row.harness)),
+    listings: [...report.listings, ...discovered].filter((row) => kept.has(row.harness)),
   };
 }

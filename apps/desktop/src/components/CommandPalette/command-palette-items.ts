@@ -56,12 +56,11 @@ export function rankItems(items: PaletteItem[], query: string): PaletteItem[] {
   const trimmed = query.trim().toLowerCase();
   if (trimmed === "") return items.filter((item) => item.section !== "skills" && !item.typedOnly);
   const ranked = items
-    .filter((item) => item.section !== "attention")
-    .map((item, index) => ({ item, index, tier: matchTier(item.label, trimmed) }))
-    .filter(
-      (entry): entry is { item: PaletteItem; index: number; tier: number } =>
-        entry.tier !== undefined,
-    )
+    .flatMap((item, index) => {
+      if (item.section === "attention") return [];
+      const tier = matchTier(item.label, trimmed);
+      return tier === undefined ? [] : [{ item, index, tier }];
+    })
     .sort(
       (a, b) => a.tier - b.tier || a.item.label.localeCompare(b.item.label) || a.index - b.index,
     )

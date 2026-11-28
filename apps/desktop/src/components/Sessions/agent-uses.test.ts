@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { PERSONAS } from "../../dev/harness/personas";
-import { agentUses } from "./AgentUses";
+import { agentUses } from "./agent-uses";
 
 it("counts an agent's own uses from history, and says nothing about uses without history", () => {
   const spread = PERSONAS["all-six-spread"].build();

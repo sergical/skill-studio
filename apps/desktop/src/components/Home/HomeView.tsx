@@ -108,8 +108,9 @@ export function HomeView({ snapshot, isLoading, active }: HomeViewProps) {
       </PageShell>
     );
 
+  const keptSet = kept && new Set(kept);
   const listings = (load?.data?.listings ?? []).filter(
-    (row) => row.scope.scope === "global" && (!kept || kept.includes(row.harness)),
+    (row) => row.scope.scope === "global" && (!keptSet || keptSet.has(row.harness)),
   );
   const shown = new Set(kept ?? listings.map((row) => row.harness));
   const setUp = HARNESS_CATALOG.filter((row) => shown.has(row.id));

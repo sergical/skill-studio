@@ -22,6 +22,14 @@ export interface HomeAgent {
   uses: number | null;
 }
 
+/** The names of the entries in `state`. */
+function namesIn(
+  entries: HarnessListing["entries"],
+  state: HarnessListing["entries"][number]["state"],
+) {
+  return entries.flatMap((e) => (e.state === state ? [e.name] : []));
+}
+
 export function homeAgent(
   agent: { id: string; label: string },
   listing: HarnessListing | undefined,
@@ -38,8 +46,8 @@ export function homeAgent(
     sees,
     seesUnit: estimated ? "in skill list" : "found",
     noEstimate: listing !== undefined && !estimated,
-    nameOnly: estimated ? offered.filter((e) => e.state === "name_only").map((e) => e.name) : null,
-    notListed: estimated ? offered.filter((e) => e.state === "omitted").map((e) => e.name) : null,
+    nameOnly: estimated ? namesIn(offered, "name_only") : null,
+    notListed: estimated ? namesIn(offered, "omitted") : null,
     uses: hasReadableHistory(invocations, agent.id)
       ? (weekUses ?? []).reduce((a, b) => a + b, 0)
       : null,
@@ -60,9 +68,10 @@ export function dailyUses(
   const start = localDay(Date.parse(snapshot.scanned_at)) - days + 1;
   const total = Array.from({ length: days }, () => 0);
   const byAgent = new Map<string, number[]>();
+  const kept = agents && new Set(agents);
   for (const stats of snapshot.invocations) {
     for (const hour of stats.by_hour) {
-      if (agents && !agents.includes(hour.harness)) continue;
+      if (kept && !kept.has(hour.harness)) continue;
       const day = localDay(hour.hour * 3_600_000) - start;
       if (day < 0 || day >= days) continue;
       total[day] += hour.count;

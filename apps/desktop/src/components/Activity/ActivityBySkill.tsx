@@ -19,16 +19,8 @@ import { PageSection } from "../Shell/PageSection";
 import { HarnessIcon } from "../ui/HarnessIcon";
 import { TooltipControl } from "../ui/TooltipControl";
 import { CappedList } from "./ActivityParts";
-
-export interface SkillUse {
-  skill: string;
-  count: number;
-  /** Agents behind the uses, busiest first. */
-  harnesses: string[];
-  /** Absent on a day's list, where the day already says when. */
-  lastUsed?: string | null;
-  tooltip: string[];
-}
+import { manyAgents } from "./skill-use";
+import type { SkillUse } from "./skill-use";
 
 function rowTooltip(row: Pick<SkillRow, "byHarness" | "byTrigger">): string[] {
   const harnesses = ranked(row.byHarness)
@@ -38,11 +30,6 @@ function rowTooltip(row: Pick<SkillRow, "byHarness" | "byTrigger">): string[] {
     .map(([id, n]) => `${triggerLabel(id)} ${formatCount(n)}`)
     .join(" · ");
   return [harnesses, triggers];
-}
-
-/** True when the rows' uses come from two or more agents, so per-row agent marks tell them apart. */
-export function manyAgents(rows: SkillUse[]): boolean {
-  return new Set(rows.flatMap((row) => row.harnesses)).size > 1;
 }
 
 /** A row's count drawn against the list's largest, in the data color. */

@@ -11,7 +11,6 @@
 
 import { useEffect, useReducer, useRef, useState } from "react";
 import type { Dispatch, RefObject } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
 import { Folder, FolderPlus } from "lucide-react";
 import {
   Button,
@@ -32,8 +31,8 @@ import { SkillStore } from "../SkillStore/SkillStore";
 import { CheckboxControl } from "../ui/CheckboxControl";
 import { availableAddSkillMethods, isAddSkillFormValid } from "./add-skill-form";
 import { PasteSkillTab } from "./PasteSkillTab";
+import { useAddMethodDefaults, useBrowseProjectFolder } from "./useAddSkillMachine";
 import { TrustConfirmFooter } from "./TrustConfirmFooter";
-import { invokeErrorMessage } from "../../lib/skill-command-error";
 import {
   applyAddSkillOperationEvent,
   listenForAddSkillOperation,
@@ -1149,9 +1148,6 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
   const openSkill = useAppStore((state) => state.openSkill);
   const addToast = useAppStore((state) => state.addToast);
   const userAddedProjects = useAppStore((state) => state.userAddedProjects);
-  const setTrackedProjects = useAppStore((state) => state.setTrackedProjects);
-  const getAddMethodDefaults = useAppStore((state) => state.getAddMethodDefaults);
-  const registerSkillProjects = useAppStore((state) => state.registerSkillProjects);
 
   const [form, dispatch] = useReducer(formReducer, undefined, initialFormState);
   const {
@@ -1169,11 +1165,6 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
 
   const sourceInputRef = useRef<HTMLInputElement>(null);
 
-  // What dotagents/skills.sh/the Universal folder look like on this machine -
-  // fetched when the sheet opens and again when the install scope changes, so
-  // the Method and Harnesses defaults below reflect this machine instead of a
-  // generic guess.
-  const [defaults, setDefaults] = useState<AddMethodDefaults | null>(null);
   const shownHarnesses = useClientIds();
 
   // Only `isOpen`/`prefill` should re-run the reset below - a project added
@@ -1196,21 +1187,7 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
     });
   }, [isOpen, prefill]);
 
-  const defaultsProject = scope === "project" ? projectPath : null;
-  useEffect(() => {
-    if (!isOpen) return;
-    let cancelled = false;
-    getAddMethodDefaults(defaultsProject)
-      .then((next) => {
-        if (!cancelled) setDefaults(next);
-      })
-      .catch(() => {
-        if (!cancelled) setDefaults(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [isOpen, defaultsProject, getAddMethodDefaults]);
+  const defaults = useAddMethodDefaults(isOpen, scope === "project" ? projectPath : null);
 
   const closeSheet = () => {
     closeAddSkillSheet();
@@ -1296,22 +1273,9 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
     void handleSubmit();
   };
 
-  const handleBrowseProject = async () => {
-    const selected = await open({ directory: true, multiple: false, title: "Select Project" });
-    if (!selected) return;
-    // Installing into the folder does not depend on tracking it, so the pick
-    // stands even when the saved list cannot be written.
-    dispatch({ type: "set_project_path", path: selected });
-    try {
-      setTrackedProjects(await registerSkillProjects([selected]));
-    } catch (err) {
-      addToast({
-        type: "error",
-        title: "Couldn't save project folder",
-        message: invokeErrorMessage(err),
-      });
-    }
-  };
+  const handleBrowseProject = useBrowseProjectFolder((path) =>
+    dispatch({ type: "set_project_path", path }),
+  );
 
   return (
     <Drawer

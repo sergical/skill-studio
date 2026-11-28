@@ -329,8 +329,9 @@ export function ProjectFoldersCard({ snapshot, discovery }: ProjectFoldersCardPr
   // History is read only from agents whose skills are shown (see `activity_sources` in
   // skill_refresh.rs), so the empty state names only those.
   const agents = useClientIds();
+  const agentSet = agents && new Set(agents);
   const shownSources =
-    sources && agents ? sources.filter((s) => agents.includes(s.harness)) : sources;
+    sources && agentSet ? sources.filter((s) => agentSet.has(s.harness)) : sources;
   const [foldersOpen, setFoldersOpen] = useState(false);
   const [addFormOpen, setAddFormOpen] = useState(false);
   const foldersTriggerRef = useRef<HTMLButtonElement>(null);

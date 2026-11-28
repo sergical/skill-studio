@@ -28,8 +28,12 @@ const ALL = ["claude-code", "codex", "opencode", "pi", "cursor", "grok-build"];
 function estate(count: number, edit: (skill: InstalledSkill, index: number) => InstalledSkill) {
   const base = buildHarnessSnapshot(count + 60);
   const skills = base.skills
-    .filter((skill) => !skill.parked && !skill.update_owner_ids.length)
-    .filter((skill) => collectDashboardIssues([skill]).length === 0)
+    .filter(
+      (skill) =>
+        !skill.parked &&
+        !skill.update_owner_ids.length &&
+        collectDashboardIssues([skill]).length === 0,
+    )
     .slice(0, count)
     .map(edit);
   return { ...base, skills, update_check: { ...base.update_check, updates_available: 0 } };
@@ -62,15 +66,12 @@ function withUses(
     const agent = agents[index % agents.length];
     const uses = pattern.dominant && index === 0 ? perSkill * 20 : perSkill;
     const hours = Array.from({ length: span }, (_, day) => now - (from + day) * 24 - (index % 12));
-    const by_hour = hours
-      .map((hour, day) => ({
-        hour,
-        harness: agent,
-        trigger: "agent" as const,
-        project_path: null,
-        count: Math.floor(uses / span) + (day < uses % span ? 1 : 0),
-      }))
-      .filter((hour) => hour.count > 0);
+    const by_hour = hours.flatMap((hour, day) => {
+      const count = Math.floor(uses / span) + (day < uses % span ? 1 : 0);
+      return count > 0
+        ? [{ hour, harness: agent, trigger: "agent" as const, project_path: null, count }]
+        : [];
+    });
     const total = by_hour.reduce((sum, hour) => sum + hour.count, 0);
     const within = (days: number) =>
       by_hour.filter((hour) => now - hour.hour < days * 24).reduce((t, h) => t + h.count, 0);
@@ -281,8 +282,11 @@ export const PERSONAS = {
       // Described skills whose one copy is in the shared folder, so each moves whole into one
       // agent's folder.
       const skills = base.skills
-        .filter((s) => s.description)
-        .filter((s) => s.deployments.every((d) => d.agent === "shared" && d.scope === "global"))
+        .filter(
+          (s) =>
+            s.description &&
+            s.deployments.every((d) => d.agent === "shared" && d.scope === "global"),
+        )
         .slice(0, 15)
         .map((s, i) => (i === 14 ? inCursor(s) : inClaudeCode(s)));
       return withUses({ ...base, skills }, 5);
