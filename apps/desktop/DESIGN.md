@@ -85,6 +85,8 @@ tabs: What it sees (`kind: "listing"`) and What it used
 (`kind: "sessions"`); both keep the `harness` in the view, so a tab switch
 keeps the chosen agent. Home rows link to the page that answers in full: a day
 opens Activity, an agent opens its What it sees tab, an issue opens the skill.
+The command palette opens on Needs attention, in the Skills table's order; its
+Go to list shows the same places as the sidebar.
 
 ## Color
 
@@ -104,8 +106,17 @@ opens Activity, an agent opens its What it sees tab, an issue opens the skill.
   "Area: tokens · Brightness: uses".
 - Every mark is reachable: hover or focus shows the skill, click opens it.
 
+## Missing data
+
+An agent that is turned on but has no records Skill Studio could read says
+"No readable history", never "0 uses", "No uses" or "unused". "No uses" is
+only for an agent whose history was read and holds no use of that skill. An
+agent with no budget estimate says "No estimate", never "no limit".
+
 ## Action weight
 
 One row leads with one action. The action that takes skills away (Remove)
 is `ghost`, the one that keeps them current (Update) is `outline`. Anything
-destructive opens a plan or a confirmation before it runs.
+destructive opens a plan or a confirmation before it runs. A row with
+nothing to do shows its actions on hover or keyboard focus; Update shows
+outright, as `outline`, once a check finds the item behind.

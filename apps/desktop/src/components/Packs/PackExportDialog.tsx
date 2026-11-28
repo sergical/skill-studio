@@ -19,7 +19,7 @@ import {
 } from "@skill-studio/ui";
 import type { PackExportReport } from "@skill-studio/lib";
 import { useAppStore } from "../../store/appStore";
-import { CopyTextButton } from "./CopyTextButton";
+import { CopyTextButton } from "../ui/CopyTextButton";
 import { advancePlanPhase } from "./pack-plan-phase";
 import type { PackPlanEvent, PackPlanState } from "./pack-plan-phase";
 
@@ -157,7 +157,12 @@ export function PackExportDialog({ skills, dir, projectPath, onClose }: PackExpo
               >
                 {state.result.install_command}
               </code>
-              <CopyTextButton text={state.result.install_command} label="Copy" />
+              <CopyTextButton
+                text={state.result.install_command}
+                label="Copy"
+                namesText
+                className="rounded-sm px-2 text-text-secondary"
+              />
             </div>
           </div>
         )}

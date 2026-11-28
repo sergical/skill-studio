@@ -4,7 +4,7 @@
 // filter on Home's own list, or an agent's What it sees tab.
 // ============================================================================
 
-import { deploymentLabelFromAgentId } from "@skill-studio/lib";
+import { deploymentLabelFromAgentId, joinNames } from "@skill-studio/lib";
 import type { HarnessListing } from "@skill-studio/lib";
 import type { HomeFilter, HomeGroups } from "./home-inbox-data";
 
@@ -23,12 +23,6 @@ export interface HomeTodo {
 
 const plural = (count: number, one: string, many = `${one}s`) =>
   `${count} ${count === 1 ? one : many}`;
-
-/** Agents whose history Skill Studio could read uses from, in catalog order. */
-export function joinNames(names: string[]): string {
-  if (names.length <= 1) return names.join("");
-  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-}
 
 export function homeTodos(
   groups: Pick<HomeGroups, "broken" | "warnings" | "updates" | "unused">,

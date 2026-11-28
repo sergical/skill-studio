@@ -14,6 +14,7 @@ import {
   HEALTH_ISSUE_KIND_ORDER,
   HEALTH_ISSUE_SEVERITY,
   LISTING_STATE_LABEL,
+  joinNames,
   TRIGGERS,
 } from "@skill-studio/lib";
 import { Button } from "@skill-studio/ui";
@@ -70,11 +71,6 @@ const BUDGETED_AGENTS = HARNESS_CATALOG.filter((row) =>
   row.verifiedVisibility.some((source) => source.exposure.startsWith("Budgeted")),
 );
 const USAGE_READERS = HARNESS_CATALOG.filter((row) => row.usageReader);
-
-function joinNames(names: readonly string[]): string {
-  if (names.length < 2) return names.join("");
-  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-}
 
 function capitalize(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);

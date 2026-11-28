@@ -8,7 +8,13 @@
 // ============================================================================
 
 import type { ComponentProps, ReactNode } from "react";
-import { deploymentLabelFromAgentId, formatCount, ranked, TRIGGERS } from "@skill-studio/lib";
+import {
+  deploymentLabelFromAgentId,
+  formatCount,
+  joinNames,
+  ranked,
+  TRIGGERS,
+} from "@skill-studio/lib";
 import type {
   AgentId,
   Counts,
@@ -17,7 +23,6 @@ import type {
   TriggerFilter,
 } from "@skill-studio/lib";
 import { Button } from "@skill-studio/ui";
-import { joinNames } from "../Home/home-todos";
 import { HarnessIcon } from "../ui/HarnessIcon";
 import { TooltipControl } from "../ui/TooltipControl";
 

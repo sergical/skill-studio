@@ -1,7 +1,7 @@
 // ============================================================================
 // CopyTextButton - Copies a command, says "Copied" for a moment, and shows a
-// toast when the clipboard refuses. Packs uses it for an agent's update
-// command and for a new pack's install line.
+// toast when the clipboard refuses. Packs and Settings copy commands and
+// prompts with it.
 // ============================================================================
 
 import { useEffect, useRef, useState } from "react";
@@ -14,6 +14,8 @@ interface CopyTextButtonProps {
   label: string;
   variant?: "outline" | "ghost";
   className?: string;
+  /** Name the button with the text it copies, for rows that each copy something different. */
+  namesText?: boolean;
 }
 
 export function CopyTextButton({
@@ -21,6 +23,7 @@ export function CopyTextButton({
   label,
   variant = "outline",
   className = "",
+  namesText = false,
 }: CopyTextButtonProps) {
   const [copied, setCopied] = useState(false);
   const timer = useRef(0);
@@ -39,8 +42,8 @@ export function CopyTextButton({
     <Button
       variant={variant}
       size="sm"
-      className={`rounded-sm px-2 text-text-secondary ${className}`}
-      aria-label={`${label}: ${text}`}
+      className={className}
+      aria-label={namesText ? `${label}: ${text}` : undefined}
       onClick={copy}
     >
       {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}

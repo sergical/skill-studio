@@ -16,7 +16,7 @@ import { PageShell } from "../Shell/PageShell";
 import { ROW_CLASS } from "../SkillList/skill-row-format";
 import { useAppStore } from "../../store/appStore";
 import type { PackIntent } from "../../store/appStore";
-import { CopyTextButton } from "./CopyTextButton";
+import { CopyTextButton } from "../ui/CopyTextButton";
 import { PackPlanDialog } from "./PackPlanDialog";
 
 /** Groups in page order: the tools Skill Studio runs first, then the ones that change elsewhere. */
@@ -137,7 +137,8 @@ function PackActions({ pack, onAct }: { pack: Pack; onAct: (intent: PackIntent) 
           text={command}
           label="Copy update command"
           variant="ghost"
-          className="-mr-2"
+          namesText
+          className="-mr-2 rounded-sm px-2 text-text-secondary"
         />
       </span>
     ) : null;

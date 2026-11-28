@@ -6,7 +6,12 @@
 // the skills or the day right under the calendar.
 // ============================================================================
 
-import { deploymentLabelFromAgentId, heatmapDateRangeLocal, statsInRange } from "@skill-studio/lib";
+import {
+  deploymentLabelFromAgentId,
+  heatmapDateRangeLocal,
+  joinNames,
+  statsInRange,
+} from "@skill-studio/lib";
 import type { SkillInvocationStats, SkillSnapshot } from "@skill-studio/lib";
 import { FirstScanState, type FirstScanStateProps } from "../SkillList/FirstScanState";
 import { ActivityBySkill } from "./ActivityBySkill";
@@ -16,7 +21,6 @@ import { ActivityHistory, ActivitySources } from "./ActivityHistory";
 import { ActivityProjects } from "./ActivityProjects";
 import { SkillHistorySection } from "./SkillHistorySection";
 import { useActivityEscape } from "./useActivityEscape";
-import { joinNames } from "../Home/home-todos";
 import { PageShell } from "../Shell/PageShell";
 import { useAppStore } from "../../store/appStore";
 

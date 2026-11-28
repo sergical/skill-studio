@@ -270,7 +270,7 @@ interface AppState {
   /** Starts from the default filter, so no earlier `attention`/`usage`/`issue` survives. */
   replaceSkillListFilter: (patch: Partial<SkillListFilter>) => void;
   resetSkillListFilter: () => void;
-  /** Bumped by the sidebar's search icon so the filter bar's search input can focus itself. */
+  /** Bumped by the `/` shortcut and the palette's Filter skills action so the filter bar's search input can focus itself. */
   skillSearchFocusRequest: number;
   requestSkillSearchFocus: () => void;
   /** Whether the Skills view shows the coverage matrix instead of the table. */

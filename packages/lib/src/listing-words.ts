@@ -37,3 +37,9 @@ export const ATTENTION_LABEL = {
 
 /** All three attention categories at once, in their order of priority. */
 export const ATTENTION_ANY_LABEL = "Needs attention";
+
+/** "Claude Code", "Claude Code and Codex", "Claude Code, Codex and pi". */
+export function joinNames(names: readonly string[]): string {
+  if (names.length < 2) return names.join("");
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}

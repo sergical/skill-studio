@@ -11,6 +11,7 @@ import {
   deploymentLabelFromAgentId,
   formatCount,
   skillRows,
+  joinNames,
 } from "@skill-studio/lib";
 import type { HarnessListing, SkillSnapshot } from "@skill-studio/lib";
 import { Button } from "@skill-studio/ui";
@@ -18,7 +19,7 @@ import { PageSection } from "../Shell/PageSection";
 import { HarnessIcon, harnessIdFromLabel } from "../ui/HarnessIcon";
 import { useClientIds } from "../../hooks/useClientRows";
 import { useAppStore } from "../../store/appStore";
-import { homeTodos, joinNames } from "./home-todos";
+import { homeTodos } from "./home-todos";
 import type { HomeTodo } from "./home-todos";
 import type { HomeFilter, HomeGroups } from "./home-inbox-data";
 import { useHomeListing } from "./useHomeListing";

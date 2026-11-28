@@ -68,10 +68,9 @@ export function SkillsView({
   // list is always the user's own skills.
   const baseSkills = ownSkillsView(allSkills);
   const issues = collectDashboardIssues(baseSkills);
-  // Home counts plugin-only skills with an update, so the Updates filter lists them too.
+  // Home counts plugin-only skills with an update, so every Updates count here lists them too.
   const withPluginUpdates = ownSkillsWithPluginUpdates(allSkills);
-  const listedSkills =
-    filter.attention === "update" || filter.attention === "any" ? withPluginUpdates : baseSkills;
+  const listedSkills = withPluginUpdates;
   const attention = attentionBySkill(withPluginUpdates, issues);
   const matches = applySkillListFilter(listedSkills, filter, issues, snapshot?.invocations);
   // Each category's count under every other filter, so a pick says how many it will list.

@@ -169,6 +169,10 @@ describe("unusedSkills", () => {
     const result = unusedSkills(skills, invocations);
     expect(result.map((s) => s.name)).toEqual(["apple", "mango", "zebra"]);
   });
+
+  it("calls nothing unused when no history could be read", () => {
+    expect(unusedSkills([fixtureSkill({ name: "apple" })], [])).toEqual([]);
+  });
 });
 
 describe("attentionGroups", () => {

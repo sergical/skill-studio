@@ -150,6 +150,8 @@ export function unusedSkills(
   skills: InstalledSkill[],
   invocations: SkillInvocationStats[],
 ): InstalledSkill[] {
+  // With no readable history at all, a zero is the absence of evidence, not of use.
+  if (invocations.length === 0) return [];
   const last30DaysBySkill = new Map(invocations.map((stat) => [stat.skill, stat.last_30_days]));
   const own = ownSkillsView(skills).filter(
     (skill) => (last30DaysBySkill.get(skill.name) ?? 0) === 0,

@@ -24,7 +24,8 @@ import { useMcpConnections, type McpConnections } from "../../hooks/useMcpConnec
 import { PageSection } from "../Shell/PageSection";
 import { HarnessIcon } from "../ui/HarnessIcon";
 import { SwitchControl } from "../ui/SwitchControl";
-import { CopyButton, SettingsError } from "./SettingsCard";
+import { CopyTextButton } from "../ui/CopyTextButton";
+import { SettingsError } from "./SettingsCard";
 
 const CATALOG_IDS = new Set<string>(HARNESS_CATALOG.map((row) => row.id));
 
@@ -57,7 +58,7 @@ export function AgentsSection({ sources, onToggleSource }: AgentsSectionProps) {
   return (
     <PageSection
       title="Agents"
-      meta={<CopyButton text={AGENT_SETUP_PROMPT} label="Copy setup prompt" />}
+      meta={<CopyTextButton text={AGENT_SETUP_PROMPT} label="Copy setup prompt" />}
     >
       <div className="flex flex-col gap-3">
         {error && <SettingsError message={error} />}
@@ -203,7 +204,7 @@ function McpCell({
       )}
       {waitingForCursor && <span className="text-small text-text-tertiary">Confirm in Cursor</span>}
       {offPath && command ? (
-        <CopyButton text={command} label="Copy command" />
+        <CopyTextButton text={command} label="Copy command" />
       ) : (
         <Button
           variant={added ? "ghost" : "outline"}
