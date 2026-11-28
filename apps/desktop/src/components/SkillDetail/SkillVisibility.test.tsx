@@ -225,6 +225,52 @@ it("does not claim an agent with recent uses is missing from a list that failed 
   expect(row.textContent).not.toContain("Not in its list");
 });
 
+it("says the list was not read when a refresh fails after an earlier report", async () => {
+  const snapshot = buildHarnessSnapshot();
+  const skill = snapshot.skills[0]!;
+  const cached = mockListingReport(snapshot, {});
+  const paths = new Set(skill.deployments.map((copy) => copy.path));
+  for (const row of cached.listings)
+    row.entries = row.entries.filter((entry) => !entry.path || !paths.has(entry.path));
+  let read = false;
+  useAppStore.setState({
+    listingReports: {
+      [listingReportKey(currentListingRequest(null))]: { data: cached, refreshing: false },
+    },
+    readListing: async () => {
+      read = true;
+      throw new Error("Skill list read failed");
+    },
+  });
+  render(
+    <SkillVisibility
+      skill={skill}
+      deployment={skill.deployments[0]!}
+      invocations={[
+        {
+          skill: skill.name,
+          last_24_hours: 0,
+          last_7_days: 3,
+          last_14_days: 3,
+          last_30_days: 3,
+          last_used: null,
+          by_project_30_days: {},
+          by_day: {},
+          by_harness_30_days: { codex: 3 },
+          by_trigger_30_days: { user: 0, agent: 3, file_read: 0 },
+          by_hour: [],
+        },
+      ]}
+      listingScope="global"
+    />,
+  );
+  await vi.waitFor(() => expect(read).toBe(true));
+  await screen.findByText("Skill list read failed");
+  const row = await codexRow();
+  expect(row.textContent).toContain("List not read");
+  expect(row.textContent).not.toContain("Not in its list");
+});
+
 function onlyCopy(name: string, copy: InstalledSkill["deployments"][number]) {
   const snapshot = buildHarnessSnapshot();
   const skill = snapshot.skills.find((item) => item.name === name)!;

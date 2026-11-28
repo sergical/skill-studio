@@ -22,7 +22,14 @@ export function agentUses(snapshot: SkillSnapshot, harness: string) {
   return rows.length ? rows : null;
 }
 
-export function AgentUses({ snapshot, harness }: { snapshot: SkillSnapshot; harness: string }) {
+interface AgentUsesProps {
+  snapshot: SkillSnapshot;
+  harness: string;
+  /** Sessions the sessions report read for `harness`: any read means its history is readable. */
+  sessionsRead: number;
+}
+
+export function AgentUses({ snapshot, harness, sessionsRead }: AgentUsesProps) {
   const [all, setAll] = useState(false);
   const openSkill = useAppStore((s) => s.openSkill);
   const rows = agentUses(snapshot, harness);
@@ -36,7 +43,9 @@ export function AgentUses({ snapshot, harness }: { snapshot: SkillSnapshot; harn
       meta={rows ? `${total.toLocaleString()} across ${rows.length} skills` : undefined}
     >
       {!rows ? (
-        <p className="m-0 text-small text-text-secondary">No readable history.</p>
+        <p className="m-0 text-small text-text-secondary">
+          {sessionsRead > 0 ? "No uses in 30 days." : "No readable history."}
+        </p>
       ) : (
         <>
           <ul aria-label="Uses by skill" className="m-0 flex list-none flex-col p-0">

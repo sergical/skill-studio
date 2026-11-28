@@ -16,6 +16,8 @@ interface CopyTextButtonProps {
   className?: string;
   /** Name the button with the text it copies, for rows that each copy something different. */
   namesText?: boolean;
+  /** Hover text, for a button whose label does not show what it copies. */
+  title?: string;
 }
 
 export function CopyTextButton({
@@ -24,6 +26,7 @@ export function CopyTextButton({
   variant = "outline",
   className = "",
   namesText = false,
+  title,
 }: CopyTextButtonProps) {
   const [copied, setCopied] = useState(false);
   const timer = useRef(0);
@@ -44,6 +47,7 @@ export function CopyTextButton({
       size="sm"
       className={className}
       aria-label={namesText ? `${label}: ${text}` : undefined}
+      title={title}
       onClick={copy}
     >
       {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}

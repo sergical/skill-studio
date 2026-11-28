@@ -346,6 +346,10 @@ export function DontFit({
   if (uses) out.sort((a, b) => (uses.get(a.name) ?? 0) - (uses.get(b.name) ?? 0));
   if (!out.length || !hasBudgetEstimate(row)) return null;
   const shown = all ? out : out.slice(0, 8);
+  const prompt = parkPrompt(
+    deploymentLabelFromAgentId(row.harness),
+    out.map((entry) => entry.name),
+  );
   return (
     <PageSection
       title={`Don’t fit · ${out.length}`}
@@ -356,10 +360,8 @@ export function DontFit({
             variant="ghost"
             className="-mr-2.5"
             label="Copy agent prompt"
-            text={parkPrompt(
-              deploymentLabelFromAgentId(row.harness),
-              out.map((entry) => entry.name),
-            )}
+            text={prompt}
+            title={prompt}
           />
         </>
       }

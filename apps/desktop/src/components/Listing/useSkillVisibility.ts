@@ -34,7 +34,8 @@ export function useSkillVisibility(projectPath: string | null, contentHash: stri
     ) ?? [];
   return {
     listings,
-    hasListing: Boolean(listing?.data),
+    // An earlier report kept after a failed read is not a read of the current list.
+    hasListing: Boolean(listing?.data) && !listing?.error,
     error: listing?.error,
   };
 }

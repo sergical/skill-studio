@@ -54,9 +54,9 @@ const FINDINGS: Finding[] = [
   },
   {
     flag: "listed_never_used",
-    label: "Unused in these sessions",
+    label: "Unused in the sessions with a skill list",
     advice:
-      "listed in nearly every one of these sessions and used in none. Park it if you no longer need it.",
+      "in the skill list of nearly every one of these sessions, and no session read used it. Park it if you no longer need it.",
   },
   NOT_REACHABLE,
   {
@@ -66,10 +66,13 @@ const FINDINGS: Finding[] = [
   },
 ];
 
-/** `FINDINGS` for an agent whose newest `sessionsRead` sessions were read: Unused names how many. */
-function findingsFor(sessionsRead: number): Finding[] {
+/** `FINDINGS` for an agent whose sessions read include `withListing` that recorded a skill list:
+ * Unused names those, the only sessions the core checks it against. */
+function findingsFor(withListing: number): Finding[] {
   const these =
-    sessionsRead === 1 ? "this session" : `these ${sessionsRead.toLocaleString()} sessions`;
+    withListing === 1
+      ? "the one session with a skill list"
+      : `these ${withListing.toLocaleString()} sessions with a skill list`;
   return FINDINGS.map((finding) =>
     finding.flag === "listed_never_used" ? { ...finding, label: `Unused in ${these}` } : finding,
   );
@@ -392,7 +395,7 @@ export function SessionsView({ initialHarness, snapshot }: SessionsViewProps) {
     report?.skills.filter((s) => s.harness === harness) ?? [],
     snapshot,
   );
-  const findings = findingsFor(agent?.sessions_read ?? 0);
+  const findings = findingsFor(agent?.sessions_with_listing ?? 0);
   const sessions = (report?.sessions.filter((s) => s.harness === harness) ?? []).sort((a, b) =>
     (b.at ?? "").localeCompare(a.at ?? ""),
   );
@@ -480,7 +483,9 @@ export function SessionsView({ initialHarness, snapshot }: SessionsViewProps) {
                 </Button>
               </div>
             )}
-            {snapshot && <AgentUses snapshot={snapshot} harness={harness} />}
+            {snapshot && (
+              <AgentUses snapshot={snapshot} harness={harness} sessionsRead={agent.sessions_read} />
+            )}
             {agent.records === "listing_and_uses" && (
               <Findings findings={findings} skills={skills} />
             )}

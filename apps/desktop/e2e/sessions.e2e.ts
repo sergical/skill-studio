@@ -73,6 +73,30 @@ test("Unused names the sessions read and leaves out a skill the 30-day history s
     });
   });
   await expect(findings.getByRole("listitem", { name: "code-review" })).toContainText(
-    "Unused in these 3 sessions",
+    "Unused in these 3 sessions with a skill list",
   );
+});
+
+test("Uses in 30 days says no uses, not no readable history, for an agent whose sessions were read", async ({
+  page,
+}) => {
+  // Claude Code's 3 sessions were read, Cursor's none; drop both agents' uses from the history.
+  await page.evaluate(async () => {
+    const harness = window.__harness!;
+    const snapshot = harness.snapshot();
+    await harness.publish({
+      ...snapshot,
+      invocations: snapshot.invocations.map((stats) => ({
+        ...stats,
+        by_harness_30_days: { ...stats.by_harness_30_days, "claude-code": 0, cursor: 0 },
+      })),
+    });
+  });
+  const uses = page.getByRole("region", { name: "Uses in 30 days" });
+  await expect(uses).toContainText("No uses in 30 days");
+  await expect(uses).not.toContainText("No readable history");
+
+  await page.getByRole("combobox", { name: "Agent" }).click();
+  await page.getByRole("option", { name: "Cursor" }).click();
+  await expect(uses).toContainText("No readable history");
 });
