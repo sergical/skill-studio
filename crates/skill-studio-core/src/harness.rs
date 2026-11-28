@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::identity::AgentId;
+use crate::identity::{AgentId, RootKind};
 use crate::ports::{CancelToken, NeverCancel, ProcessSpawner, ProcessSpec, ScopeFs, ToolLookup};
 
 mod registration;
@@ -1615,6 +1615,21 @@ pub fn read_claude_skill_overrides(
 /// [`HarnessCatalog::builtin`].
 pub fn builtin_adapters() -> impl Iterator<Item = &'static dyn HarnessAdapter> {
     BUILTIN_HARNESSES.iter().map(|row| row.adapter)
+}
+
+/// Whether `facts`'s harness reads `deployment`'s root: its own root, the
+/// shared root when it reads it, and for Cursor the Claude Code and Codex
+/// roots. Parked and disabled copies still count; callers decide what
+/// those mean.
+pub(crate) fn deployment_visible_to(
+    deployment: &crate::dto::DeploymentDto,
+    facts: &HarnessFacts,
+) -> bool {
+    deployment.harness.as_ref() == Some(&facts.id)
+        || deployment.root.kind == RootKind::Universal && facts.reads_universal_root.is_yes()
+        || facts.id.as_str() == AgentId::CURSOR
+            && matches!(&deployment.root.kind, RootKind::Harness(id)
+                if id.as_str() == AgentId::CLAUDE_CODE || id.as_str() == AgentId::CODEX)
 }
 
 #[cfg(test)]

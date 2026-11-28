@@ -1986,6 +1986,80 @@
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
+        "agent": {
+          "anyOf": [
+            {
+              "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Only this agent's view."
+        },
+        "count_by": {
+          "default": null,
+          "description": "Count the rows of the whole main list by this field. A list field\ncounts each item.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cursor": {
+          "default": null,
+          "description": "Continue one list with its opaque `next_cursor`. Repeat the same scope\nand filters. If the cursor is invalid or the list changed, retry\nwithout a cursor.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fields": {
+          "default": [],
+          "description": "Row fields to keep. Empty keeps every field.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "include_unverified": {
+          "default": false,
+          "description": "Show unmatched text candidates. An exact lookup for a target also shows its literal matches.",
+          "type": "boolean"
+        },
+        "limit": {
+          "default": null,
+          "description": "Rows to return from the main list. `0` returns only `page` (totals\nand `counts`). Without it, rows until the answer is 32 KB.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "missing_only": {
+          "default": false,
+          "description": "Only Needs and Hands off links that do not work for some agent.",
+          "type": "boolean"
+        },
+        "skill": {
+          "default": null,
+          "description": "Only links from or to this skill.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "skill_links"
+  },
+  {
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
         "count_by": {
           "default": null,
           "description": "Count the rows of the whole main list by this field. A list field\ncounts each item.",

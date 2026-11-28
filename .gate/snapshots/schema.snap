@@ -7297,6 +7297,306 @@
     "title": "ScanRequest",
     "type": "object"
   },
+  "crates/skill-studio-core/schema/skill_links_report.schema.json": {
+    "$defs": {
+      "AgentIdentity": {
+        "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
+        "type": "string"
+      },
+      "AgentLinkState": {
+        "description": "One agent's view of a link.",
+        "properties": {
+          "agent": {
+            "$ref": "#/$defs/AgentIdentity",
+            "description": "The agent with a working copy of the linking skill."
+          },
+          "scope": {
+            "$ref": "#/$defs/RootScope",
+            "description": "The working scope in which the agent uses the skill."
+          },
+          "state": {
+            "$ref": "#/$defs/LinkState",
+            "description": "Whether the link works for it."
+          }
+        },
+        "required": [
+          "agent",
+          "scope",
+          "state"
+        ],
+        "type": "object"
+      },
+      "LinkEvidence": {
+        "description": "The line that made a link.",
+        "properties": {
+          "file": {
+            "description": "File inside the linking skill's folder, with `/` separators.",
+            "type": "string"
+          },
+          "line": {
+            "description": "1-based line number.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "text": {
+            "description": "The line, trimmed and cut to at most 200 characters.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file",
+          "line",
+          "text"
+        ],
+        "type": "object"
+      },
+      "LinkState": {
+        "description": "Whether a link works for one agent.",
+        "oneOf": [
+          {
+            "const": "ok",
+            "description": "The agent can open the path or run the skill by name.",
+            "type": "string"
+          },
+          {
+            "const": "missing",
+            "description": "No copy of the target anywhere in the scope.",
+            "type": "string"
+          },
+          {
+            "const": "renamed",
+            "description": "Not found by the name the link uses, but a copy installed under a\nprefixed name (`matt-grilling` for `grilling`) is.",
+            "type": "string"
+          },
+          {
+            "const": "off",
+            "description": "The agent has a copy, but it is parked or turned off for it.",
+            "type": "string"
+          },
+          {
+            "const": "elsewhere",
+            "description": "A copy exists only where this agent does not read it.",
+            "type": "string"
+          },
+          {
+            "const": "not_known",
+            "description": "The available evidence cannot establish which file the agent reads.",
+            "type": "string"
+          }
+        ]
+      },
+      "LinkStrength": {
+        "description": "How much a skill depends on the skill it names. Declared strongest first,\nso the smaller value wins when one skill names another more than once.",
+        "oneOf": [
+          {
+            "const": "needs",
+            "description": "Reads the other skill's files, or loads it before it starts.",
+            "type": "string"
+          },
+          {
+            "const": "hands_off",
+            "description": "Runs the other skill for a step, or sends the user to it.",
+            "type": "string"
+          },
+          {
+            "const": "mentions",
+            "description": "Names it as related, optional or see-also.",
+            "type": "string"
+          },
+          {
+            "const": "lists",
+            "description": "An index skill lists it as one of its entries.",
+            "type": "string"
+          }
+        ]
+      },
+      "ProjectRef": {
+        "description": "Absolute path of a tracked project directory.\n\nInvariant: the path is canonical inside a [`crate::scope::NormalizedScope`].\nWire values are the lexical path the caller gave.",
+        "type": "string",
+        "x-untrusted": true
+      },
+      "ResolvedLink": {
+        "description": "A link with its state for each agent that loads the linking skill.",
+        "properties": {
+          "agents": {
+            "description": "Global states and differing project states per agent. The global state is the default for covered projects.",
+            "items": {
+              "$ref": "#/$defs/AgentLinkState"
+            },
+            "type": "array"
+          },
+          "evidence": {
+            "$ref": "#/$defs/LinkEvidence",
+            "description": "The line behind the link.",
+            "x-untrusted": true
+          },
+          "from": {
+            "description": "The skill whose text names the other.",
+            "type": "string"
+          },
+          "path": {
+            "description": "For a path link, the path as written.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "strength": {
+            "$ref": "#/$defs/LinkStrength",
+            "description": "How much `from` depends on `to`."
+          },
+          "to": {
+            "description": "The skill it names.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "strength",
+          "evidence",
+          "agents"
+        ],
+        "type": "object"
+      },
+      "RootScope": {
+        "description": "Where a root lives.",
+        "oneOf": [
+          {
+            "description": "Under the scope home.",
+            "properties": {
+              "scope": {
+                "const": "global",
+                "type": "string"
+              }
+            },
+            "required": [
+              "scope"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Under one tracked project.",
+            "properties": {
+              "project": {
+                "$ref": "#/$defs/ProjectRef"
+              },
+              "scope": {
+                "const": "project",
+                "type": "string"
+              }
+            },
+            "required": [
+              "scope",
+              "project"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Links between installed skills.",
+    "properties": {
+      "broken": {
+        "description": "Needs and Hands off links that do not work, counted once per agent.",
+        "format": "uint",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "indexes": {
+        "description": "Skills that list most of their pack. Their list entries never alert.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "links": {
+        "description": "Links, sorted by `from` then `to`.",
+        "items": {
+          "$ref": "#/$defs/ResolvedLink"
+        },
+        "type": "array"
+      },
+      "not_known": {
+        "description": "Skills whose folder could not be read: their links are not known,\nwhich is not the same as having none.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "scopes": {
+        "description": "Global and project contexts covered by this lookup.",
+        "items": {
+          "$ref": "#/$defs/RootScope"
+        },
+        "type": "array"
+      },
+      "unverified": {
+        "description": "Literal command or bold name with no target record. Excluded from link and warning counts.",
+        "items": {
+          "$ref": "#/$defs/ResolvedLink"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "scopes",
+      "links",
+      "unverified",
+      "indexes",
+      "broken",
+      "not_known"
+    ],
+    "title": "SkillLinksReport",
+    "type": "object"
+  },
+  "crates/skill-studio-core/schema/skill_links_request.schema.json": {
+    "$defs": {
+      "AgentIdentity": {
+        "description": "Kebab-case harness identifier, for example `claude-code` or `opencode`.\n\nLegacy spellings are normalized at input boundaries.",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "description": "What to report.",
+    "properties": {
+      "agent": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/AgentIdentity"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Only this agent's view."
+      },
+      "include_unverified": {
+        "default": false,
+        "description": "Show unmatched text candidates. An exact lookup for a target also shows its literal matches.",
+        "type": "boolean"
+      },
+      "missing_only": {
+        "default": false,
+        "description": "Only Needs and Hands off links that do not work for some agent.",
+        "type": "boolean"
+      },
+      "skill": {
+        "default": null,
+        "description": "Only links from or to this skill.",
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "title": "SkillLinksRequest",
+    "type": "object"
+  },
   "crates/skill-studio-core/schema/skill_sessions_report.schema.json": {
     "$defs": {
       "AgentIdentity": {

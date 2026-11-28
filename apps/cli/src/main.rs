@@ -477,6 +477,27 @@ enum Command {
     },
     /// Start the MCP server so an agent can tidy your skills.
     Mcp,
+    /// Show which skills read, run or mention other skills, and whether each
+    /// link works for every agent that loads the skill. Writes nothing.
+    Links {
+        /// Only links from or to this skill.
+        skill: Option<String>,
+        /// Only this agent's view, for example `claude-code`.
+        #[arg(long)]
+        agent: Option<String>,
+        /// Only links that need or run a skill an agent cannot reach.
+        #[arg(long)]
+        missing: bool,
+        /// Include unmatched text from skill instructions.
+        #[arg(long)]
+        unverified: bool,
+        #[command(flatten)]
+        scope: ScopeArgs,
+        #[command(flatten)]
+        view: ViewArgs,
+        #[arg(long)]
+        json: bool,
+    },
     /// List hook events, MCP server names, and instruction file paths. Writes nothing.
     Extras {
         #[command(flatten)]
@@ -1095,6 +1116,27 @@ fn main() -> ExitCode {
             run_diagnose_conflict(&scope, &view.into(), json, time)
         }
         Command::Extras { scope, view, json } => run_extras(&scope, &view.into(), json, time),
+        Command::Links {
+            skill,
+            agent,
+            missing,
+            unverified,
+            scope,
+            view,
+            json,
+        } => run_links(
+            &scope,
+            skill_studio_core::ops_skill_links::SkillLinksRequest {
+                skill,
+                agent: None,
+                missing_only: missing,
+                include_unverified: unverified,
+            },
+            agent.as_deref(),
+            &view.into(),
+            json,
+            time,
+        ),
         Command::Sessions {
             scope,
             view,
@@ -2980,6 +3022,41 @@ fn run_extras(scope: &ScopeArgs, view: &ViewRequest, json: bool, time: bool) -> 
     );
     let envelope = ResultEnvelope::from_result(Operation::Extras, &rt.scope, &ctx, result);
     finish_view(&envelope, view, &(), json, time, output::print_extras_table)
+}
+
+fn run_links(
+    scope: &ScopeArgs,
+    mut request: skill_studio_core::ops_skill_links::SkillLinksRequest,
+    agent: Option<&str>,
+    view: &ViewRequest,
+    json: bool,
+    time: bool,
+) -> ExitCode {
+    let rt = match build_runtime::<skill_studio_core::ops_skill_links::SkillLinksReport>(
+        scope,
+        Operation::SkillLinks,
+        json,
+    ) {
+        Ok(rt) => rt,
+        Err(code) => return code,
+    };
+    let ctx = OpContext::uncancellable(CorrelationId(ulid::Ulid::generate().to_string()));
+    let result = agent
+        .map(AgentId::parse_harness)
+        .transpose()
+        .and_then(|agent| {
+            request.agent = agent;
+            skill_studio_core::ops_skill_links::skill_links(&rt, &ctx, &request)
+        });
+    let envelope = ResultEnvelope::from_result(Operation::SkillLinks, &rt.scope, &ctx, result);
+    finish_view(
+        &envelope,
+        view,
+        &request,
+        json,
+        time,
+        output::print_links_table,
+    )
 }
 
 fn run_skill_sessions(

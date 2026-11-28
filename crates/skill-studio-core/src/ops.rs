@@ -145,6 +145,8 @@ pub enum Operation {
     Library,
     /// Names and paths of non-skill agent configuration.
     Extras,
+    /// Links between installed skills, resolved for each agent.
+    SkillLinks,
     /// Per-skill model listing state for each harness.
     Listing,
     /// Per-session listing state and uses, rolled up per skill.
@@ -255,6 +257,10 @@ impl Outcome for Diagnosis {
     }
 }
 
+impl Outcome for crate::ops_skill_links::SkillLinksReport {
+    const LISTS: &'static [ViewList<'static>] =
+        &[ViewList::new("/links", &["/from", "/to", "/strength"])];
+}
 impl Outcome for crate::extras::ExtrasReport {
     const LISTS: &'static [ViewList<'static>] = &[ViewList::new(
         "/entries",
@@ -8882,6 +8888,7 @@ mod tests {
                     Operation::SkillUsage => "skill_usage",
                     Operation::Library => "library",
                     Operation::Extras => "extras",
+                    Operation::SkillLinks => "skill_links",
                     Operation::Listing => "listing",
                     Operation::SkillSessions => "skill_sessions",
                     Operation::Invocation => "invocation",
