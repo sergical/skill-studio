@@ -25,8 +25,9 @@ export function InstallProgressModal({ progress, onClose }: InstallProgressModal
 
         <div className="flex flex-col items-center p-8 py-8">
           <span className="mb-4 size-8 animate-spin rounded-full border-[3px] border-border border-t-accent" />
-          <p className="m-0 mb-1 text-body font-medium text-text-primary">{progress.stage}</p>
-          <p className="m-0 text-small text-text-tertiary">{progress.message}</p>
+          <p className="m-0 text-small text-text-secondary" role="status">
+            {progress.message}
+          </p>
 
           {progress.percent !== undefined && <Progress value={progress.percent} className="mt-5" />}
 

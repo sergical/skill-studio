@@ -101,9 +101,9 @@ const METHOD_LABELS = {
 } satisfies Record<AddMethod, string>;
 
 const METHOD_TOOLTIPS = {
-  dotagents: "Tracked in agents.toml. Installs to Universal and updates with dotagents.",
-  "skills-sh": "Tracked in .skill-lock.json. Installs to Universal.",
-  copy: "Untracked. Installs to Universal.",
+  dotagents: "Tracked in agents.toml. Updates with dotagents.",
+  "skills-sh": "Tracked in .skill-lock.json. Updates with skills.sh.",
+  copy: "Not tracked, so it gets no updates.",
 } satisfies Record<AddMethod, string>;
 
 /** One-line parse feedback shown beneath the Source field. */
@@ -257,9 +257,9 @@ function SourceField({
       />
       <p
         id="add-skill-source-summary"
-        className={`m-0 text-small ${showError ? "text-error" : "text-text-tertiary"}`}
+        className={`m-0 min-h-lh truncate text-small ${showError ? "text-error" : "text-text-tertiary"}`}
       >
-        {source.trim() ? parseSummary(parsed) : "Paste a repo, URL, or path to get started."}
+        {source.trim() ? parseSummary(parsed) : null}
       </p>
     </div>
   );
@@ -435,12 +435,11 @@ function useGithubSkillListing(
 
 /** One picker row: name, then its repo-relative path as a caption. */
 function SkillRow({ entry, trailing }: { entry: GithubSkillEntry; trailing?: string }) {
+  const caption = trailing ?? (entry.path === entry.name ? null : entry.path || "repo root");
   return (
     <span className="flex min-w-0 flex-1 items-baseline gap-2">
       <span className="truncate text-body text-text-primary">{entry.name}</span>
-      <span className="truncate text-caption text-text-tertiary">
-        {trailing ?? (entry.path || "repo root")}
-      </span>
+      {caption && <span className="truncate text-caption text-text-tertiary">{caption}</span>}
     </span>
   );
 }
@@ -936,6 +935,7 @@ function ManualTabFields({
         claudeReadsShared={claudeReadsShared}
         scope={scope}
         lockedReason={method === "dotagents" ? DOTAGENTS_HARNESS_REASON : undefined}
+        copyNote={false}
       />
 
       {submitError && (
@@ -1358,7 +1358,7 @@ export function AddSkillSheet({ skills }: { skills: readonly InstalledSkill[] })
           </TabsList>
 
           <TabsContent value="browse" className="flex flex-1 overflow-hidden">
-            <SkillStore compact />
+            <SkillStore />
           </TabsContent>
 
           <TabsContent value="paste" keepMounted className="flex flex-1 overflow-hidden">

@@ -39,7 +39,7 @@ export function installDestinationError(
   universal: boolean,
   chosen: readonly AgentId[],
 ): string | null {
-  return !universal && chosen.length === 0 ? "Select at least one harness." : null;
+  return !universal && chosen.length === 0 ? "Pick at least one agent." : null;
 }
 
 /** Harnesses the picker shows: Claude Code, plus every harness detected on

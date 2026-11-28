@@ -2,7 +2,7 @@
 // SkillBrowser - Grid/list of skills from search results
 // ============================================================================
 
-import { Download, Check, ArrowUp, Link2, FileCheck2, AlertTriangle } from "lucide-react";
+import { Check, ArrowUp, Link2, FileCheck2, AlertTriangle } from "lucide-react";
 import { Button } from "@skill-studio/ui";
 import type { SkillWithStatus } from "@skill-studio/lib";
 import { SOURCE_KIND_LABELS, specViolationSeverity } from "@skill-studio/lib";
@@ -62,20 +62,21 @@ export function SkillBrowser({
   }
 
   return (
-    <div className="flex-1 overflow-y-scroll py-5 pl-7 gutter-pr-7">
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
+    <div className="flex-1 overflow-y-scroll">
+      <ul className="m-0 flex list-none flex-col p-0">
         {skills.map((skill) => (
-          <SkillCard
-            key={mode.kind === "installed" ? skill.name : skill.id}
-            skill={skill}
-            isSelected={selectedSkill?.id === skill.id}
-            onClick={() => onSelectSkill(skill)}
-            hideInstalledIndicator={hideInstalledIndicator}
-          />
+          <li key={mode.kind === "installed" ? skill.name : skill.id}>
+            <SkillCard
+              skill={skill}
+              isSelected={selectedSkill?.id === skill.id}
+              onClick={() => onSelectSkill(skill)}
+              hideInstalledIndicator={hideInstalledIndicator}
+            />
+          </li>
         ))}
-      </div>
+      </ul>
       {mode.kind === "browse" && mode.hasMore && (
-        <div className="flex justify-center pt-6 pb-2">
+        <div className="flex justify-center py-4">
           <Button
             variant="outline"
             className="h-auto rounded-md border-border bg-bg-secondary px-6 py-2.5 text-body font-medium text-text-secondary hover:border-border-focus hover:bg-bg-tertiary hover:text-text-primary"
@@ -180,31 +181,28 @@ function InstalledSkillTags({
 
 function SkillCard({ skill, isSelected, onClick, hideInstalledIndicator }: SkillCardProps) {
   const isInstalledMarked = skill.is_installed && !hideInstalledIndicator;
-  // Mirrors the old cascade: an installed border always wins over selected,
-  // but a selected background always wins over the plain hover background.
-  const borderClass = isInstalledMarked
-    ? "border-success"
-    : isSelected
-      ? "border-accent"
-      : "border-border hover:border-border-focus";
-  const bgClass = isSelected ? "bg-accent-softer" : "bg-bg-secondary hover:bg-bg-tertiary";
   const description = skill.description || skill.installed_info?.description;
 
   return (
     <Button
       variant="ghost"
-      className={`h-auto flex-col items-stretch gap-2 rounded-md border bg-clip-border p-4 justify-start text-left ${borderClass} ${bgClass}`}
+      className={`h-auto w-full flex-col items-stretch justify-start gap-1 rounded-none border-0 border-b border-border px-5 py-3 text-left whitespace-normal ${isSelected ? "bg-accent-softer" : "hover:bg-bg-hover"}`}
       onClick={onClick}
     >
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="m-0 truncate text-emphasis font-semibold text-text-primary">{skill.name}</h3>
-        <div className="flex items-center gap-1">
-          {isInstalledMarked && <InstalledBadge skill={skill} />}
-        </div>
-      </div>
+      <span className="flex min-w-0 items-center gap-2">
+        <span className="truncate text-body font-medium text-text-primary">{skill.name}</span>
+        {isInstalledMarked && <InstalledBadge skill={skill} />}
+        {hasInstallCount(skill) && (
+          <span className="ml-auto shrink-0 text-caption font-normal tabular-nums text-text-tertiary">
+            {formatInstalls(skill.installs)} installs
+          </span>
+        )}
+      </span>
 
       {skill.top_source && (
-        <div className="font-mono text-caption text-text-tertiary">{skill.top_source}</div>
+        <span className="truncate font-mono text-caption font-normal text-text-tertiary">
+          {skill.top_source}
+        </span>
       )}
 
       {hideInstalledIndicator && skill.installed_info && (
@@ -212,37 +210,20 @@ function SkillCard({ skill, isSelected, onClick, hideInstalledIndicator }: Skill
       )}
 
       {description && (
-        <p
-          className="m-0 line-clamp-2 select-text text-pretty text-small text-text-secondary"
+        <span
+          className="line-clamp-2 text-pretty text-small font-normal text-text-secondary"
           title={description}
         >
           {description}
-        </p>
-      )}
-
-      <div className="mt-auto flex items-center justify-between gap-2 pt-2">
-        <span
-          className="flex items-center gap-1 text-caption tabular-nums text-text-tertiary"
-          title="Install count"
-        >
-          <Download size={12} />
-          {formatInstalls(skill.installs)}
         </span>
-        {skill.tags && skill.tags.length > 0 && (
-          <div className="flex gap-1">
-            {skill.tags.slice(0, 2).map((tag) => (
-              <span
-                key={tag}
-                className="rounded-xs bg-bg-tertiary px-1.5 py-0.5 text-caption text-text-secondary"
-              >
-                {tag}
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
+      )}
     </Button>
   );
+}
+
+/** skills.sh counts installs only for skills it lists; a local skill has no count. */
+function hasInstallCount(skill: SkillWithStatus): boolean {
+  return Number.isFinite(skill.installs);
 }
 
 /** skills.sh: accent; dotagents: info; plugin: warning; in-repo/manual: tertiary; fork: success. */

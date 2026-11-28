@@ -66,24 +66,24 @@ function mergeWithInstalledStatus(
   });
 }
 
+/** A search returns at most `LIMIT` skills, so a full page may not be all of them. */
+function searchResultCount(count: number): string {
+  if (count >= LIMIT) return `First ${LIMIT} results`;
+  return `${count} result${count === 1 ? "" : "s"}`;
+}
+
 const TAB_TRIGGER_CLASS =
   "text-body font-medium text-text-tertiary after:bg-accent data-active:text-accent hover:text-text-secondary";
 
 /** Tab strip (Browse/Installed): a bare `TabsList` - each tab's toolbar row and results live in that tab's own `TabsContent`, below. */
-function SkillStoreTabList({
-  installedCount,
-  tabsPadding,
-}: {
-  installedCount: number | null;
-  tabsPadding: string;
-}) {
+function SkillStoreTabList() {
   return (
-    <TabsList variant="line" className={`${tabsPadding} bg-bg-secondary`}>
+    <TabsList variant="line" className="bg-bg-secondary px-5">
       <TabsTrigger value="browse" className={TAB_TRIGGER_CLASS}>
         Browse
       </TabsTrigger>
       <TabsTrigger value="installed" className={TAB_TRIGGER_CLASS}>
-        {installedCount === null ? "Installed" : `Installed (${installedCount})`}
+        Installed
       </TabsTrigger>
     </TabsList>
   );
@@ -256,13 +256,8 @@ function useSkillStoreData(
   };
 }
 
-interface SkillStoreProps {
-  /** Embedded inside `AddSkillSheet`'s "Browse skills.sh" tab: drops this
-   * view's own header, since the sheet already has one. */
-  compact?: boolean;
-}
-
-export function SkillStore({ compact = false }: SkillStoreProps = {}) {
+/** The Add skill sheet's skills.sh tab: browse or search the catalog, and the skills installed here. */
+export function SkillStore() {
   const [activeTab, setActiveTab] = useState<"browse" | "installed">("browse");
   const [selection, setSelection] = useState<string | null>(null);
   const [installProgress, setInstallProgress] = useState<InstallProgressState | null>(null);
@@ -301,7 +296,7 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
       isInstalling: true,
       skillName,
       stage: "starting",
-      message: "Starting installation…",
+      message: "Starting…",
     });
   };
 
@@ -318,25 +313,19 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
     skillName?: string;
     warning?: string;
   }) => {
+    const name = result.skillName || "the skill";
     if (result.success) {
       addToast({
-        type: "success",
-        title: "Skill Installed",
-        message: `Successfully installed ${result.skillName || "skill"}`,
+        type: result.warning ? "warning" : "success",
+        title: `Installed ${name}`,
+        message: result.warning,
       });
-      if (result.warning) {
-        addToast({
-          type: "warning",
-          title: `Installed ${result.skillName || "skill"}`,
-          message: result.warning,
-        });
-      }
       // Refresh installed skills - `searchResultsWithStatus` re-derives from it.
       void loadInstalledSkills();
     } else {
       addToast({
         type: "error",
-        title: "Installation Failed",
+        title: `Couldn’t install ${name}`,
         message: result.error || "Unknown error",
       });
     }
@@ -344,11 +333,7 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
   };
 
   const handleRemoveComplete = () => {
-    addToast({
-      type: "success",
-      title: "Skill Removed",
-      message: "Successfully removed skill",
-    });
+    addToast({ type: "success", title: `Removed ${selectedSkill?.name ?? "the skill"}` });
     // Refresh installed skills - `installedSkillsWithStatus`/`searchResultsWithStatus` re-derive from it.
     void loadInstalledSkills();
     setSelection(null);
@@ -369,10 +354,11 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
     return {
       id: topSource ? `${topSource}/${skill.name}` : skill.name,
       name: skill.name,
-      installs: 0,
       author: null,
       description: null,
       tags: null,
+      // skills.sh has no install count for a skill it did not list.
+      installs: Number.NaN,
       is_installed: true,
       installed_info: skill,
       top_source: topSource ?? null,
@@ -384,28 +370,8 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
       ? installedSkillsWithStatus.find((skill) => skill.name === selection)
       : searchResultsWithStatus.find((skill) => skill.id === selection)) ?? null;
 
-  const tabsPadding = compact ? "px-5" : "px-7";
-
   return (
     <div className="flex flex-1 flex-col overflow-hidden bg-bg-primary">
-      {!compact && (
-        <div className="border-b border-border px-7 pt-6 pb-4">
-          <h2 className="m-0 mb-1 text-pretty text-balance text-title font-semibold text-text-primary">
-            skills.sh
-          </h2>
-          <p className="m-0 text-pretty text-body text-text-tertiary">
-            <a
-              href="https://skills.sh"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-text-tertiary no-underline transition-colors hover:text-accent hover:underline"
-            >
-              Discover and install skills
-            </a>
-          </p>
-        </div>
-      )}
-
       <Tabs
         value={activeTab}
         onValueChange={(tab) => {
@@ -414,26 +380,20 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
         }}
         className="flex flex-1 flex-col gap-0 overflow-hidden"
       >
-        <SkillStoreTabList
-          installedCount={inventory.kind === "ready" ? installedSkills.length : null}
-          tabsPadding={tabsPadding}
-        />
+        <SkillStoreTabList />
 
         <TabsContent value="browse" className="flex flex-1 flex-col overflow-hidden">
-          <div className={`flex items-center gap-4 border-b border-border py-4 ${tabsPadding}`}>
+          <div className="flex items-center gap-4 border-b border-border px-5 py-3">
             <SkillSearchBar
               value={searchQuery}
               onChange={setSearchQuery}
               onSearch={handleSearch}
               isLoading={isLoading}
             />
-            {!browseError && !isLoading && (
-              <div className="ml-auto flex items-center gap-4">
-                <span className="text-small tabular-nums text-text-tertiary">
-                  {searchResultsWithStatus.length} skill
-                  {searchResultsWithStatus.length !== 1 ? "s" : ""}
-                </span>
-              </div>
+            {!browseError && !isLoading && isSearchQuery(searchQuery) && (
+              <span className="ml-auto shrink-0 text-small tabular-nums text-text-tertiary">
+                {searchResultCount(searchResultsWithStatus.length)}
+              </span>
             )}
           </div>
 
@@ -444,14 +404,16 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
               onRetry={retry}
             />
           ) : (
-            <div className={`flex flex-1 overflow-hidden ${compact ? "flex-col" : ""}`}>
+            <div className="flex flex-1 flex-col overflow-hidden">
               <SkillBrowser
                 skills={searchResultsWithStatus}
                 selectedSkill={selectedSkill}
                 onSelectSkill={(skill) => setSelection(skill.id)}
                 mode={{ kind: "browse", isLoading, isLoadingMore, hasMore, onLoadMore: loadMore }}
                 emptyMessage={
-                  searchQuery ? "No skills found matching your search" : "Loading popular skills…"
+                  isSearchQuery(searchQuery)
+                    ? `No skills.sh skill matches “${searchQuery.trim()}”`
+                    : "skills.sh listed no skills"
                 }
               />
             </div>
@@ -461,13 +423,7 @@ export function SkillStore({ compact = false }: SkillStoreProps = {}) {
         <TabsContent value="installed" className="flex flex-1 flex-col overflow-hidden">
           {inventoryNotice ?? (
             <>
-              <div className={`flex items-center gap-4 border-b border-border py-4 ${tabsPadding}`}>
-                <span className="text-small tabular-nums text-text-tertiary">
-                  {installedSkills.length} installed skill{installedSkills.length !== 1 ? "s" : ""}
-                </span>
-              </div>
-
-              <div className={`flex flex-1 overflow-hidden ${compact ? "flex-col" : ""}`}>
+              <div className="flex flex-1 flex-col overflow-hidden">
                 <SkillBrowser
                   skills={installedSkillsWithStatus}
                   selectedSkill={selectedSkill}

@@ -152,8 +152,11 @@ it("tracking a project refreshes Installed and keeps the current search until th
     useAppStore.getState().setTrackedProjects({ added: ["/project"], excluded: [] }),
   );
   expect(await screen.findByText("git-guide")).toBeTruthy();
-  expect(await screen.findByRole("tab", { name: "Installed (1)" })).toBeTruthy();
-  await user.clear(box);
+  await user.click(screen.getByRole("tab", { name: "Installed" }));
+  expect(await screen.findByText("project-skill")).toBeTruthy();
+  await user.click(screen.getByRole("tab", { name: "Browse" }));
+  expect(screen.getByRole("textbox", { name: "Search skills.sh" })).toHaveProperty("value", "git");
+  await user.clear(screen.getByRole("textbox", { name: "Search skills.sh" }));
   await act(() => vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS));
   expect(await screen.findByText("popular-skill")).toBeTruthy();
 });

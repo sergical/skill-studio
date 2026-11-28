@@ -16,7 +16,7 @@ async function startUntrustedAdd(page: Page, method = "dotagents"): Promise<Loca
     .click();
   await sheet.getByRole("button", { name: "Add skill", exact: true }).click();
   await expect(sheet.getByRole("button", { name: "Trust repository and retry" })).toBeVisible();
-  await expect(sheet.getByRole("listitem").filter({ hasText: REPO })).toBeVisible();
+  await expect(sheet.getByText(REPO, { exact: true })).toBeVisible();
   return sheet;
 }
 
@@ -67,4 +67,24 @@ test("pasting a SKILL.md adds a new skill and opens its page", async ({ page }) 
   await expect(skillPageTitle(page, "pasted-review")).toBeVisible();
   await openSkillsPage(page, "Skills", "pasted-review");
   await expect(skillRow(page, "pasted-review")).toHaveCount(1);
+});
+
+test("clicking the Universal row switches to a Copy for each agent's own folder", async ({
+  page,
+}) => {
+  await page.getByRole("navigation").getByRole("button", { name: "Add skill" }).click();
+  const sheet = page.getByRole("dialog", { name: "Add skill" });
+  await sheet.getByRole("textbox", { name: "Source" }).fill(`${REPO}/${SKILL}`);
+  await expect(sheet.getByRole("button", { name: "Add skill", exact: true })).toBeEnabled();
+  const universal = sheet.getByRole("checkbox", { name: "Install for Universal" });
+  // Agents that read the shared folder are not separate choices while Universal is ticked.
+  await expect(sheet.getByRole("checkbox", { name: "Install for Codex" })).toHaveCount(0);
+
+  await sheet.getByText("Universal", { exact: true }).click();
+
+  await expect(universal).not.toBeChecked();
+  await expect(
+    sheet.getByRole("group", { name: "Install method" }).getByRole("button", { name: "Copy" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(sheet.getByRole("checkbox", { name: "Install for Codex" })).not.toBeChecked();
 });

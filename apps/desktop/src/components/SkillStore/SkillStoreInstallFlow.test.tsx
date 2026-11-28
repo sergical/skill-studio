@@ -53,7 +53,7 @@ it("reports failed defaults and still starts an install with the Universal desti
       expect.objectContaining({ description: "Defaults unavailable" }),
     ),
   );
-  await user.click(screen.getByRole("button", { name: "Install Skill" }));
+  await user.click(screen.getByRole("button", { name: "Install" }));
   await waitFor(() => expect(requests).toHaveLength(1));
   expect(requests[0]).toEqual(
     expect.objectContaining({

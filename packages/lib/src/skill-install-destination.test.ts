@@ -120,7 +120,7 @@ describe("Universal unticked: ticks", () => {
   });
 
   it("add skill: requires one ticked harness, else the install writes nothing", () => {
-    expect(installDestinationError(false, [])).toBe("Select at least one harness.");
+    expect(installDestinationError(false, [])).toBe("Pick at least one agent.");
     expect(installDestinationError(false, ["codex"])).toBeNull();
     expect(installDestinationError(true, [])).toBeNull();
   });

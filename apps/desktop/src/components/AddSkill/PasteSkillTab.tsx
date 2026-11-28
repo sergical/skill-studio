@@ -57,17 +57,6 @@ function useDraftCheck(draft: PastedSkillDraft) {
   return { check: checked.result, current: checked.draft === draft, error: checked.error };
 }
 
-function ParsedField({ label, value }: { label: string; value: string | null }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <dt className={LABEL_CLASS}>{label}</dt>
-      <dd className={`m-0 text-body ${value ? "text-text-primary" : "text-text-tertiary"}`}>
-        {value ?? "None"}
-      </dd>
-    </div>
-  );
-}
-
 export function PasteSkillTab({ skills, onCancel, onAdded }: PasteSkillTabProps) {
   const addToast = useAppStore((state) => state.addToast);
   const createPastedSkill = useAppStore((state) => state.createPastedSkill);
@@ -179,13 +168,6 @@ export function PasteSkillTab({ skills, onCancel, onAdded }: PasteSkillTabProps)
           </>
         )}
 
-        {check?.has_frontmatter && (
-          <dl className="m-0 flex flex-col gap-3">
-            <ParsedField label="Name" value={check.name} />
-            <ParsedField label="Description" value={check.description} />
-          </dl>
-        )}
-
         <div className="flex flex-col gap-1 empty:hidden" role="status">
           {checkError && <p className="m-0 text-small text-error">{checkError}</p>}
           {taken && (
@@ -202,7 +184,7 @@ export function PasteSkillTab({ skills, onCancel, onAdded }: PasteSkillTabProps)
 
         {name && check?.can_save && !taken && (
           <p className="m-0 text-small text-text-tertiary">
-            Adds a Global skill at ~/.agents/skills/{name}.
+            Adds {name} as a Global skill in <span className="font-mono">~/.agents/skills</span>
           </p>
         )}
       </div>
