@@ -33,12 +33,7 @@ import {
   type ProjectFolder,
   type SkillSnapshot,
 } from "@skill-studio/lib";
-import {
-  getDiscoverySources,
-  invokeErrorMessage,
-  listProjectFolders,
-  setDiscoverySource,
-} from "../../lib/skill-api";
+import { invokeErrorMessage } from "../../lib/skill-command-error";
 import { useAppStore } from "../../store/appStore";
 import { useProjectFolderActions } from "../../hooks/useProjectFolderActions";
 import { MenuControl, MenuItem } from "../ui/MenuControl";
@@ -272,6 +267,9 @@ function FolderList({
 
 export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
   const addToast = useAppStore((state) => state.addToast);
+  const getDiscoverySources = useAppStore((state) => state.getDiscoverySources);
+  const listProjectFolders = useAppStore((state) => state.listProjectFolders);
+  const setDiscoverySource = useAppStore((state) => state.setDiscoverySource);
   const { addProject, addTypedPath, stopTracking, removeProject } = useProjectFolderActions();
   const [pendingRemoval, setPendingRemoval] = useState<{
     path: string;
@@ -316,7 +314,7 @@ export function ProjectFoldersCard({ snapshot }: ProjectFoldersCardProps) {
           message: invokeErrorMessage(err),
         });
       });
-  }, [addToast]);
+  }, [addToast, getDiscoverySources]);
 
   const projectsKey = (snapshot?.projects ?? []).join("\n");
   useEffect(() => {

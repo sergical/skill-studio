@@ -9,13 +9,14 @@
 
 import { useEffect, useState } from "react";
 import { Bug } from "lucide-react";
-import { getTelemetryEnabled, setTelemetryEnabled } from "../../lib/skill-api";
 import { useAppStore } from "../../store/appStore";
 import { SwitchControl } from "../ui/SwitchControl";
 import { SettingsCard } from "./SettingsCard";
 
 export function TelemetryCard() {
   const addToast = useAppStore((state) => state.addToast);
+  const getTelemetryEnabled = useAppStore((state) => state.getTelemetryEnabled);
+  const setTelemetryEnabled = useAppStore((state) => state.setTelemetryEnabled);
   const [enabled, setEnabled] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -38,7 +39,7 @@ export function TelemetryCard() {
     return () => {
       cancelled = true;
     };
-  }, [addToast]);
+  }, [addToast, getTelemetryEnabled]);
 
   const toggle = async (next: boolean) => {
     const previous = enabled;

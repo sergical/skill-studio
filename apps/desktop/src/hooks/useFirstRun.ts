@@ -8,12 +8,8 @@
 
 import { useEffect, useState } from "react";
 import type { HarnessDetection, HarnessesChoice, HarnessReport } from "@skill-studio/lib";
-import {
-  detectHarnesses,
-  getHarnessesChoice,
-  invokeErrorMessage,
-  saveHarnessesChoice,
-} from "../lib/skill-api";
+import { detectHarnesses, getHarnessesChoice, saveHarnessesChoice } from "../lib/skill-api";
+import { invokeErrorMessage } from "../lib/skill-command-error";
 
 import { setHarnessDetection } from "./useDetectedHarnesses";
 

@@ -27,7 +27,6 @@ import type {
   TriggerFilter,
 } from "@skill-studio/lib";
 import { Button } from "@skill-studio/ui";
-import { getDiscoverySources } from "../../lib/skill-api";
 import { HarnessIcon } from "../ui/HarnessIcon";
 import { MenuControl, MenuRadioGroup, MenuRadioItem, MenuSeparator } from "../ui/MenuControl";
 import { useAppStore } from "../../store/appStore";
@@ -45,6 +44,7 @@ const ITEM = "pr-8";
 export function useActivityLens(stats: SkillInvocationStats[], now: Date) {
   const filter = useAppStore((state) => state.activityFilter);
   const setFilter = useAppStore((state) => state.setActivityFilter);
+  const getDiscoverySources = useAppStore((state) => state.getDiscoverySources);
   const { harness, trigger } = filter;
   const setHarness = (next: HarnessFilter) => setFilter({ harness: next, trigger });
   const setTrigger = (next: TriggerFilter) => setFilter({ harness, trigger: next });
@@ -67,7 +67,7 @@ export function useActivityLens(stats: SkillInvocationStats[], now: Date) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [getDiscoverySources]);
 
   // If the selected harness gets turned off in Settings underneath this page, the filter can't
   // keep pointing at it. Goes through `setFilter` (stable, from the store) rather than
