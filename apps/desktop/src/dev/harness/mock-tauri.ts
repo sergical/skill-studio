@@ -1150,40 +1150,73 @@ export function installMockTauri(
             .parse(payload.targets);
           const batchId = z.string().nullish().parse(payload.batchId);
           const skillsByName = new Map(currentSnapshot.skills.map((s) => [s.name, s]));
-          const names = targets.map(skillNameForTarget);
-          // One command per run, as the real updater sends: consecutive skills.sh skills of one
-          // scope share one `npx skills update`, and one `dotagents install` refreshes every
-          // dotagents skill of its scope. Stop lets the running command finish and starts no other.
-          const methodOf = (name: string) => skillsByName.get(name)?.source_kind;
-          const scopeOf = (name: string) =>
-            skillsByName.get(name)?.deployments[0]?.project_path ?? "global";
-          const commandFrom = (start: number, done: ReadonlySet<string>): string[] => {
-            const first = names[start];
-            const method = methodOf(first);
-            const sameScope = (name: string) => scopeOf(name) === scopeOf(first);
-            if (method === "dotagents")
-              return [
-                ...new Set(
-                  names
-                    .slice(start)
-                    .filter((n) => !done.has(n) && methodOf(n) === method && sameScope(n)),
-                ),
-              ];
-            if (method !== "skills-sh") return [first];
-            const run = [first];
-            for (const next of names.slice(start + 1)) {
-              if (methodOf(next) !== method || !sameScope(next) || run.includes(next)) break;
-              run.push(next);
+          // One run per target owner, as the real updater resolves each target to its owner's
+          // copy. A manual install has no owner to update from, so it is refused before any
+          // command starts (commands.rs `build_update_request`).
+          interface UpdateRun {
+            name: string;
+            ownerId: string | null;
+            method: string | undefined;
+            scope: string;
+            path: string;
+          }
+          const items: { skill: string; outcome: Record<string, string> | null }[] = [];
+          const errors: Record<string, string> = {};
+          const runs: UpdateRun[] = [];
+          let finished = 0;
+          const progress = (skillName: string) =>
+            emit("skills://update-all-progress", {
+              done: ++finished,
+              total: targets.length,
+              skill_name: skillName,
+            });
+          for (const target of targets) {
+            const name = skillNameForTarget(target);
+            const skillItem = skillsByName.get(name);
+            const copy =
+              skillItem?.deployments.find((d) =>
+                target.deployment_id
+                  ? d.id === target.deployment_id
+                  : d.owner_id === target.owner_id,
+              ) ?? skillItem?.deployments[0];
+            const method = skillItem?.source_kind;
+            if (method !== "skills-sh" && method !== "dotagents" && method !== "plugin") {
+              errors[name] = "Update is not available for this deployment owner";
+              items.push({ skill: name, outcome: null });
+              // react-doctor-disable-next-line react-doctor/async-await-in-loop -- refusals report in target order, as the real op does
+              await progress(name);
+              continue;
             }
-            return run;
+            runs.push({
+              name,
+              ownerId: target.owner_id ?? copy?.owner_id ?? null,
+              method,
+              scope: copy?.project_path ?? "global",
+              path: copy?.path ?? `${HARNESS_HOME}/.agents/skills/${name}`,
+            });
+          }
+          // One command per run, as the real updater sends: consecutive skills.sh owners of one
+          // scope share one `npx skills update`, and one `dotagents install` refreshes every
+          // dotagents owner of its scope. Stop lets the running command finish and starts no other.
+          const commandFrom = (start: number, done: ReadonlySet<UpdateRun>): UpdateRun[] => {
+            const first = runs[start];
+            const fits = (run: UpdateRun) =>
+              !done.has(run) && run.method === first.method && run.scope === first.scope;
+            if (first.method === "dotagents") return runs.slice(start).filter(fits);
+            if (first.method !== "skills-sh") return [first];
+            const command = [first];
+            for (const next of runs.slice(start + 1)) {
+              if (!fits(next)) break;
+              command.push(next);
+            }
+            return command;
           };
-          const items = [];
           const notRun: string[] = [];
-          const done = new Set<string>();
-          for (const [index, name] of names.entries()) {
-            if (done.has(name)) continue;
+          const done = new Set<UpdateRun>();
+          for (const [index, run] of runs.entries()) {
+            if (done.has(run)) continue;
             if (batchId && stoppedBatches.has(batchId)) {
-              notRun.push(name);
+              notRun.push(run.name);
               continue;
             }
             const command = commandFrom(index, done);
@@ -1193,35 +1226,36 @@ export function installMockTauri(
             if (latency > 0) await new Promise((resolve) => setTimeout(resolve, latency));
             for (const updated of command) {
               done.add(updated);
-              const deployment = skillsByName.get(updated)?.deployments[0];
+              // Clears only this owner's badge, as `clear_update_flag` does.
               // react-doctor-disable-next-line react-doctor/async-await-in-loop -- as above
-              await updateSkill(updated, (item) => ({
-                ...item,
-                has_update: false,
-                update_owner_ids: [],
-                update_owners: [],
-                update_commit: null,
-                update_commit_at: null,
-              }));
+              await updateSkill(updated.name, (item) => {
+                const owners = item.update_owner_ids.filter((id) => id !== updated.ownerId);
+                return {
+                  ...item,
+                  has_update: owners.length > 0,
+                  update_owner_ids: owners,
+                  update_owners: item.update_owners.filter(
+                    (owner) => owner.owner_id !== updated.ownerId,
+                  ),
+                  update_commit: owners.length > 0 ? item.update_commit : null,
+                  update_commit_at: owners.length > 0 ? item.update_commit_at : null,
+                };
+              });
               items.push({
-                skill: updated,
+                skill: updated.name,
                 outcome: {
-                  event_id: `fixture-update-${updated}`,
-                  skill: updated,
-                  deployment_path: deployment?.path ?? `${HARNESS_HOME}/.agents/skills/${updated}`,
+                  event_id: `fixture-update-${updated.name}-${updated.scope}`,
+                  skill: updated.name,
+                  deployment_path: updated.path,
                   tree_hash_before: "fixture-before",
                   tree_hash_after: "fixture-after",
                 },
               });
               // react-doctor-disable-next-line react-doctor/async-await-in-loop -- as above
-              await emit("skills://update-all-progress", {
-                done: items.length,
-                total: targets.length,
-                skill_name: updated,
-              });
+              await progress(updated.name);
             }
           }
-          return { items, errors: {}, not_run: notRun };
+          return { items, errors, not_run: notRun };
         }
 
         case "cancel_update_all":

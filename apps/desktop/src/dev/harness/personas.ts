@@ -106,8 +106,10 @@ const broken = (skill: InstalledSkill): InstalledSkill => ({
 });
 
 const updateTemplate = buildHarnessSnapshot().skills.find((skill) => skill.update_owner_ids.length);
-/** Each skill gets its own owner, so updating one clears that skill and no other. */
+/** Each skill gets its own owner, so updating one clears that skill and no other. A manual
+ * install has no source to update from, so it stays as it is. */
 const outdated = (skill: InstalledSkill): InstalledSkill => {
+  if (skill.source_kind === "manual") return skill;
   const ownerId = `owner:v1/dotagents/${skill.name}`;
   const template = updateTemplate?.update_owners[0];
   return {

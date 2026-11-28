@@ -11,8 +11,10 @@ import { attentionBySkill, attentionCategoryOf } from "./skill-attention";
 import type { AttentionFilter } from "./skill-attention";
 import type { HealthIssueKind } from "./skill-health";
 import { agentsCoveredByDeployment, collectDashboardIssues } from "./skill-health";
+import { agentIdFromDeploymentLabel, skillReadByAgent } from "./skill-coverage";
 import { pluginDeployments } from "./skill-plugin-partition";
 import type {
+  AgentId,
   Deployment,
   InstalledSkill,
   SkillInvocationStats,
@@ -90,6 +92,11 @@ export function deploymentMatchesHarness(deployment: Deployment, harness: string
   return agentsCoveredByDeployment(deployment.agent).includes(harness);
 }
 
+/** `agent` is the filter's agent id; `null` or `shared` for a label no agent has, which lists nothing. */
+function readsSkill(skill: InstalledSkill, agent: AgentId | "shared" | null): boolean {
+  return agent !== null && agent !== "shared" && skillReadByAgent(skill, agent) !== "none";
+}
+
 /** Hyphens, underscores, slashes, dots, and spaces all count as one word break. */
 const WORD_BREAK = /[\s\-_/.]+/;
 
@@ -124,7 +131,8 @@ function matchesQuery(skill: InstalledSkill, query: string): boolean {
  * recomputed here so a caller filtering a large list repeatedly doesn't pay
  * for it more than once per render. `invocations` is `SkillSnapshot.invocations`
  * (or equivalent), needed only when `filter.usage` is set; `agents` are the agents the user keeps,
- * so the unused list matches Home's count (see `skillUsageIn30Days`).
+ * so the unused list matches Home's count (see `skillUsageIn30Days`). `readerOf` gives a skill with
+ * its plugin copies, so the agent filter lists what the row's agent icons show (`skillReadByAgent`).
  */
 export function applySkillListFilter(
   skills: InstalledSkill[],
@@ -132,21 +140,20 @@ export function applySkillListFilter(
   issues = collectDashboardIssues(skills),
   invocations?: SkillInvocationStats[],
   agents?: readonly string[],
+  readerOf: (skill: InstalledSkill) => InstalledSkill = (skill) => skill,
 ): InstalledSkill[] {
   const skillsWithIssue = filter.issue
     ? new Set(issues.filter((i) => i.kind === filter.issue).map((i) => i.skill.name))
     : null;
   const attention = filter.attention ? attentionBySkill(skills, issues) : null;
   const usage = filter.usage ? skillUsageIn30Days(invocations ?? [], agents) : null;
+  const harness = filter.harness ? agentIdFromDeploymentLabel(filter.harness) : undefined;
 
   return skills.filter((skill) => {
     if (!matchesScope(skill, filter.scope)) return false;
-    const harness = filter.harness;
     if (
-      harness &&
-      !skillForCoverageScope(skill, filter.scope).deployments.some((d) =>
-        deploymentMatchesHarness(d, harness),
-      )
+      harness !== undefined &&
+      !readsSkill(skillForCoverageScope(readerOf(skill), filter.scope), harness)
     ) {
       return false;
     }

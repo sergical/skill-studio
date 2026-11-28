@@ -3,6 +3,8 @@
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import type { ListingReport } from "@skill-studio/lib";
+import { mockListingReport } from "../dev/harness/mock-listing";
+import { buildHarnessSnapshot } from "../dev/harness/skill-fixture";
 import { useAppStore } from "../store/appStore";
 import { useListingReport } from "./useStoreReports";
 
@@ -14,9 +16,10 @@ it("a new snapshot revision during a slow listing read reads again, so Home show
     listingReports: {},
     readListing: () => new Promise<ListingReport>((resolve) => reads.push(resolve)),
   });
-  // Two reports told apart by identity: the one read from revision 1, then from revision 2.
-  const fromRevision1: ListingReport = { listings: [] };
-  const fromRevision2: ListingReport = { listings: [] };
+  // Revision 1 lists Claude Code; revision 2 lists Codex.
+  const [claude, codex] = mockListingReport(buildHarnessSnapshot(), {}).listings;
+  const fromRevision1: ListingReport = { listings: [claude] };
+  const fromRevision2: ListingReport = { listings: [codex] };
 
   const { result, rerender } = renderHook(({ hash }) => useListingReport(null, hash), {
     initialProps: { hash: "1" },
@@ -27,5 +30,7 @@ it("a new snapshot revision during a slow listing read reads again, so Home show
 
   await waitFor(() => expect(reads).toHaveLength(2));
   reads[1](fromRevision2);
-  await waitFor(() => expect(result.current?.data).toBe(fromRevision2));
+  await waitFor(() =>
+    expect(result.current?.data?.listings.map((listing) => listing.harness)).toEqual(["codex"]),
+  );
 });

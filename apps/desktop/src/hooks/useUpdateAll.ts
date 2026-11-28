@@ -94,6 +94,27 @@ export function useUpdateAll(updates: readonly InstalledSkill[]) {
   const forkNames = editedChoices.forkable.map((skill) => skill.name);
   const unforkableNames = editedChoices.unforkable.map((skill) => skill.name);
 
+  /**
+   * Runs the confirmed batch on what is true now: only the checked skills that
+   * still have an update, and only if no other one gained edits while the
+   * dialog was open. A skill with edits the user did not approve asks again.
+   */
+  const confirm = async (choice: { fork?: ReadonlySet<string>; skip?: ReadonlySet<string> }) => {
+    closeEditsDialog();
+    const approved = new Set(editedSkills.map((skill) => skill.name));
+    const latest = new Map(updates.map((skill) => [skill.name, skill]));
+    const targets = checkedUpdates.flatMap((skill) => latest.get(skill.name) ?? []);
+    setIsCheckingEdits(true);
+    const edited = await skillsWithLocalEdits(targets, skillLocalEdits);
+    setIsCheckingEdits(false);
+    if (edited.some((skill) => !approved.has(skill.name))) {
+      setCheckedUpdates(targets);
+      setEditedSkills(edited);
+      return;
+    }
+    await runUpdateAll(targets, choice.fork, choice.skip);
+  };
+
   return {
     activeBatch,
     isCheckingEdits,
@@ -104,18 +125,12 @@ export function useUpdateAll(updates: readonly InstalledSkill[]) {
       skillNames: editedSkills.map((skill) => skill.name),
       canFork: forkNames.length > 0,
       unforkableSkillNames: unforkableNames,
-      fork: (choice: "skip" | "overwrite") => {
-        closeEditsDialog();
-        void runUpdateAll(
-          checkedUpdates,
-          new Set(forkNames),
-          choice === "skip" ? new Set(unforkableNames) : undefined,
-        );
-      },
-      overwrite: () => {
-        closeEditsDialog();
-        void runUpdateAll(checkedUpdates);
-      },
+      fork: (choice: "skip" | "overwrite") =>
+        void confirm({
+          fork: new Set(forkNames),
+          skip: choice === "skip" ? new Set(unforkableNames) : undefined,
+        }),
+      overwrite: () => void confirm({}),
       cancel: closeEditsDialog,
     },
   };

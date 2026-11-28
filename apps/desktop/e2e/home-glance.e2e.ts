@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
+import { openSkillsPage } from "./app-harness";
 
 /** The clipboard keeps what was copied on the page, where the test can read it. */
 async function catchClipboard(page: Page) {
@@ -225,4 +226,61 @@ test("with Cursor turned off, an unused skill's row shows no uses Cursor made", 
     .filter({ has: page.getByRole("gridcell", { name: idle, exact: true }) });
   await expect(row).toHaveCount(1);
   await expect(row.getByTitle(/uses? in the last 30 days/)).toHaveCount(0);
+});
+
+// Code review round 5: Most used must rank by the kept agents' uses too. With Cursor turned off,
+// a skill Cursor used 20 times ranks below one Claude Code used 5 times.
+test("with Cursor turned off, Most used ranks a skill by Claude Code's uses, not Cursor's", async ({
+  page,
+}) => {
+  await page.goto("/?persona=claude-history-cursor-skill");
+  await page.getByRole("checkbox", { name: "Cursor", exact: true }).press("Space");
+  await page.getByRole("button", { name: "Continue" }).click();
+  const [byCursor, byClaude] = await page.evaluate(() => {
+    const harness = window.__harness;
+    if (!harness) throw new Error("dev harness missing");
+    const snapshot = harness.snapshot();
+    const used = new Set(snapshot.invocations.map((stat) => stat.skill));
+    const [cursorSkill, claudeSkill] = snapshot.skills
+      .filter((s) => !used.has(s.name) && s.deployments.every((d) => d.agent === "Claude Code"))
+      .map((s) => s.name);
+    if (!claudeSkill) throw new Error("need two idle Claude Code skills");
+    const template = snapshot.invocations[0];
+    const stat = (skill: string, harnessId: string, uses: number) => ({
+      ...template,
+      skill,
+      last_24_hours: 0,
+      last_7_days: uses,
+      last_14_days: uses,
+      last_30_days: uses,
+      by_project_30_days: {},
+      by_day: {},
+      by_harness_30_days: { [harnessId]: uses },
+      by_hour: [],
+    });
+    // One shared description, so a filter lists just these two.
+    const probe = (skill: (typeof snapshot.skills)[number]) =>
+      skill.name === cursorSkill || skill.name === claudeSkill
+        ? { ...skill, description: "Most used sort probe" }
+        : skill;
+    void harness.publish({
+      ...snapshot,
+      skills: snapshot.skills.map(probe),
+      invocations: [
+        ...snapshot.invocations,
+        stat(cursorSkill, "cursor", 20),
+        stat(claudeSkill, "claude-code", 5),
+      ],
+    });
+    return [cursorSkill, claudeSkill];
+  });
+
+  await openSkillsPage(page, "Skills", "Most used sort probe");
+  await page.getByRole("combobox", { name: "Sort" }).click();
+  await page.getByRole("option", { name: "Most used" }).click();
+
+  const rows = page.getByRole("grid", { name: "Skills" }).locator('[role="row"][aria-selected]');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0).getByRole("gridcell", { name: byClaude, exact: true })).toBeVisible();
+  await expect(rows.nth(1).getByRole("gridcell", { name: byCursor, exact: true })).toBeVisible();
 });

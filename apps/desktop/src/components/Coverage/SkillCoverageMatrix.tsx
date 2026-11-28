@@ -17,14 +17,16 @@ interface SkillCoverageMatrixProps {
   deploymentPathForSkill?: (skill: InstalledSkill) => string | undefined;
 }
 
+const CELL_TITLE_BY_STATE = {
+  own: "In the agent's folder",
+  shared: "Via the Universal folder",
+  plugin: "From a plugin",
+  none: "Not deployed",
+} satisfies Record<AgentMatrixCell["state"], string>;
+
 /** Tooltip / cell title text, shared by the header-adjacent legend and each cell. */
 function cellTitle(cell: AgentMatrixCell): string {
-  const base =
-    cell.state === "own"
-      ? "In the agent's folder"
-      : cell.state === "shared"
-        ? "Via the Universal folder"
-        : "Not deployed";
+  const base = CELL_TITLE_BY_STATE[cell.state];
   // A broken own-directory link doesn't hide effective visibility (e.g. a
   // healthy shared fallback), so the tooltip states both facts rather than
   // just "Broken link".
@@ -41,6 +43,7 @@ const MARKER_BY_STATE = {
   own: "bg-accent",
   shared:
     "border-[1.5px] border-accent/60 after:absolute after:top-1/2 after:left-1/2 after:size-[3px] after:-translate-x-1/2 after:-translate-y-1/2 after:rounded-full after:bg-accent/60 after:content-['']",
+  plugin: "bg-accent/60",
   none: "border border-border-subtle",
 } satisfies Record<AgentMatrixCell["state"], string>;
 

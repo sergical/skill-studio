@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { afterEach, expect, it } from "vitest";
 import { Toaster, toast } from "sonner";
+import { z } from "zod";
 import { deployment, skill } from "../../dev/harness/skill-fixture";
 import { UpdateAllButton } from "./UpdateAllButton";
 
@@ -78,4 +79,61 @@ it("Update all overwrites only the edited skills the user confirmed, not one tha
     { owner_id: "owner:v1/global/alpha" },
     { owner_id: "owner:v1/global/beta" },
   ]);
+});
+
+const TARGETS = z.object({ targets: z.array(z.object({ owner_id: z.string() })).default([]) });
+
+/** IPC where `skill_local_edits` answers from `edited` at call time, and `update_all_skills` records its targets. */
+function mockEditsAndUpdates(edited: Set<string>) {
+  const updateTargets: unknown[] = [];
+  mockIPC((command, args) => {
+    const { targets } = TARGETS.parse(args);
+    if (command === "skill_local_edits")
+      return targets.map(({ owner_id }) => ({ checked: true, edited: edited.has(owner_id) }));
+    if (command === "update_all_skills") {
+      updateTargets.push(...targets);
+      return { items: [], errors: {}, not_run: [] };
+    }
+    if (command === "plugin:event|listen") return 1;
+    if (command === "plugin:event|unlisten") return;
+    throw new Error(`unexpected ${command}`);
+  });
+  return updateTargets;
+}
+
+it("Update all leaves out a skill edited while the edits dialog was open and runs the rest", async () => {
+  const edited = new Set(["owner:v1/global/alpha"]);
+  const updateTargets = mockEditsAndUpdates(edited);
+  const user = userEvent.setup();
+  const { rerender } = render(
+    <UpdateAllButton updates={[outdated("alpha"), outdated("beta"), outdated("gamma")]} />,
+  );
+  await user.click(screen.getByRole("button", { name: "Update all" }));
+  expect((await screen.findByRole("alertdialog")).textContent).not.toContain("beta");
+
+  // beta is edited now: the list moves it to Warnings, so it leaves Updates.
+  edited.add("owner:v1/global/beta");
+  rerender(<UpdateAllButton updates={[outdated("alpha"), outdated("gamma")]} />);
+  await user.click(screen.getByRole("button", { name: "Overwrite all" }));
+
+  await waitFor(() => expect(updateTargets).toHaveLength(2));
+  expect(updateTargets).toEqual([
+    { owner_id: "owner:v1/global/alpha" },
+    { owner_id: "owner:v1/global/gamma" },
+  ]);
+});
+
+it("Update all asks again when a skill still in Updates gained edits while the dialog was open", async () => {
+  const edited = new Set(["owner:v1/global/alpha"]);
+  const updateTargets = mockEditsAndUpdates(edited);
+  const user = userEvent.setup();
+  render(<UpdateAllButton updates={[outdated("alpha"), outdated("beta"), outdated("gamma")]} />);
+  await user.click(screen.getByRole("button", { name: "Update all" }));
+  await screen.findByRole("alertdialog");
+
+  edited.add("owner:v1/global/beta");
+  await user.click(screen.getByRole("button", { name: "Overwrite all" }));
+
+  await waitFor(() => expect(screen.getByRole("alertdialog").textContent).toContain("beta"));
+  expect(updateTargets).toEqual([]);
 });

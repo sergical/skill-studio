@@ -9,7 +9,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { clearMocks } from "@tauri-apps/api/mocks";
 import { afterEach, expect, it } from "vitest";
 import { installMockTauri } from "./mock-tauri";
-import { buildHarnessSnapshot } from "./skill-fixture";
+import {
+  buildHarnessSnapshot,
+  deployment,
+  HARNESS_HOME,
+  HARNESS_PROJECT,
+  skill,
+} from "./skill-fixture";
 
 afterEach(() => {
   clearMocks();
@@ -35,4 +41,49 @@ it("parking commit's global and project copies keeps them apart, and unpark puts
 
   const ids = (list: { id: string }[]) => list.map((d) => d.id).sort();
   expect(ids(commit().deployments)).toEqual(ids(before));
+});
+
+// The real updater runs and clears each owner on its own (commands.rs `owners_to_clear`), so a
+// skill installed globally and in a project takes one command per scope.
+it("Update all of a skill installed globally and in a project runs each install and clears both badges", async () => {
+  const name = "sample";
+  const globalOwner = `owner:v1/global/${name}`;
+  const projectOwner = `owner:v1/project/${encodeURIComponent(HARNESS_PROJECT)}/${name}`;
+  const copy = (owner: string, projectPath: string | null) => ({
+    ...deployment({
+      agent: "shared",
+      scope: projectPath ? "project" : "global",
+      project_path: projectPath,
+      path: `${projectPath ?? HARNESS_HOME}/.agents/skills/${name}`,
+      owner_kind: "skills-sh",
+    }),
+    owner_id: owner,
+  });
+  const base = buildHarnessSnapshot();
+  const sample = skill({
+    name,
+    source_kind: "skills-sh",
+    has_update: true,
+    deployments: [copy(globalOwner, null), copy(projectOwner, HARNESS_PROJECT)],
+    update_owner_ids: [globalOwner, projectOwner],
+    update_owners: [globalOwner, projectOwner].map((owner_id) => ({
+      owner_id,
+      latest_commit: "new",
+      latest_commit_at: null,
+    })),
+  });
+  const harness = installMockTauri({ ...base, skills: [...base.skills, sample] });
+
+  const outcome = await invoke<{ items: { outcome: { deployment_path: string } | null }[] }>(
+    "update_all_skills",
+    { targets: [{ owner_id: globalOwner }, { owner_id: projectOwner }] },
+  );
+
+  expect(harness.updateCommandsStarted()).toBe(2);
+  expect(outcome.items.map((item) => item.outcome?.deployment_path)).toEqual([
+    `${HARNESS_HOME}/.agents/skills/${name}`,
+    `${HARNESS_PROJECT}/.agents/skills/${name}`,
+  ]);
+  const after = harness.snapshot().skills.find((s) => s.name === name)!;
+  expect(after.update_owner_ids).toEqual([]);
 });

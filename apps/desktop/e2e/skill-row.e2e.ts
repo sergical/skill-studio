@@ -123,8 +123,9 @@ test("a plugin skill with an update shows Claude Code, which loads the plugin, a
 });
 
 // Code review round 4: a skill with a personal Codex copy and a Claude Code plugin copy showed
-// only Codex, because the list drops plugin copies from the user's own skills.
-test("a skill with a personal Codex copy and a Claude Code plugin copy shows both agents as reading it", async ({
+// only Codex, because the list drops plugin copies from the user's own skills. Round 5: the row
+// showed both, but the Claude Code filter hid it and the coverage grid said Not deployed.
+test("a skill with a personal Codex copy and a Claude Code plugin copy shows Claude Code reading it in the row, the agent filter and the coverage grid", async ({
   page,
 }) => {
   const name = "pdf-processing";
@@ -158,6 +159,22 @@ test("a skill with a personal Codex copy and a Claude Code plugin copy shows bot
 
   await expect(row.getByRole("img", { name: /^Codex · / })).toBeVisible();
   await expect(row.getByRole("img", { name: /^Claude Code · / })).toBeVisible();
+
+  await page.getByRole("button", { name: /^Filter,/ }).click();
+  await page.getByRole("menuitemradio", { name: "Claude Code" }).click();
+  await expect(row).toHaveCount(1);
+
+  await page.getByRole("button", { name: "Coverage matrix view" }).click();
+  const matrixRow = page
+    .getByRole("row")
+    .filter({ has: page.getByRole("button", { name, exact: true }) });
+  const claudeColumn = await page
+    .getByRole("columnheader", { name: "Claude Code" })
+    .evaluate((header) => header.closest("th")!.cellIndex);
+  await expect(matrixRow.getByRole("cell").nth(claudeColumn)).toHaveAttribute(
+    "title",
+    "From a plugin",
+  );
 });
 
 test("a skill installed only globally shows the globe alone in Where, and a project install shows its project", async ({

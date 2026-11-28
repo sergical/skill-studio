@@ -73,7 +73,18 @@ export function SkillsView({
   const withPluginUpdates = ownSkillsWithPluginUpdates(allSkills);
   const listedSkills = withPluginUpdates;
   const attention = attentionBySkill(withPluginUpdates, issues);
-  const matches = applySkillListFilter(listedSkills, filter, issues, snapshot?.invocations, kept);
+  const allByName = new Map(allSkills.map((skill) => [skill.name, skill]));
+  // The skill with its plugin copies: the row's agent icons, the agent filter and the coverage grid
+  // all read it, so they agree on which agents read a skill.
+  const readerOf = (skill: InstalledSkill) => allByName.get(skill.name) ?? skill;
+  const matches = applySkillListFilter(
+    listedSkills,
+    filter,
+    issues,
+    snapshot?.invocations,
+    kept,
+    readerOf,
+  );
   // Each category's count under every other filter, so a pick says how many it will list.
   const attentionTotals = attentionCounts(
     attention,
@@ -83,10 +94,10 @@ export function SkillsView({
       issues,
       snapshot?.invocations,
       kept,
+      readerOf,
     ),
   );
   const listedByName = new Map(listedSkills.map((skill) => [skill.name, skill]));
-  const allByName = new Map(allSkills.map((skill) => [skill.name, skill]));
   const deploymentPathForSkill = ({ name }: InstalledSkill) => {
     const skill = listedByName.get(name);
     return skill && deploymentForScope(skill, filter.scope, filter.harness);
@@ -141,7 +152,7 @@ export function SkillsView({
       )}
       {showCoverage ? (
         <SkillCoverageMatrix
-          skills={matches.map((skill) => skillForCoverageScope(skill, filter.scope))}
+          skills={matches.map((skill) => skillForCoverageScope(readerOf(skill), filter.scope))}
           onSelectSkill={onSelectSkill}
           deploymentPathForSkill={deploymentPathForSkill}
         />

@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
+import { HARNESS_PROJECT } from "../src/dev/harness/skill-fixture";
 import { setLatency } from "./app-harness";
 
 const UPDATES_COUNT = /^\d+ updates?$/;
@@ -54,25 +55,37 @@ test("Update all on Skills filtered to Updates updates every row, and Home then 
 // The real updater refreshes every dotagents skill of a scope with one `dotagents install`, and
 // Stop lets the running command finish (crates/skill-studio-core/tests/update.rs,
 // `update_all_finishes_the_running_call_...`). Here the Updates group holds the global dotagents
-// skills, one command, and a skill of another kind, a second command.
+// skills, one command, and a dotagents skill installed only in a project, a second command.
 test("Stop while Update all runs lets the running command finish and starts no other", async ({
   page,
 }) => {
   test.slow();
   const shown = await openUpdatesFromHome(page);
-  const { firstCommand, other } = await page.evaluate(() => {
-    const outdated = window
-      .__harness!.snapshot()
-      .skills.filter(
-        (skill) => skill.update_owner_ids.length > 0 && skill.source_kind !== "plugin",
-      );
-    const dotagents = outdated.filter((skill) => skill.source_kind === "dotagents");
-    return {
-      firstCommand: dotagents.length,
-      other: outdated.find((skill) => skill.source_kind !== "dotagents")?.name,
-    };
-  });
-  if (!other) throw new Error("fixture has no second command");
+  const { firstCommand, inProject } = await page.evaluate(
+    async ([projectPath]) => {
+      const dotagents = window
+        .__harness!.snapshot()
+        .skills.filter(
+          (skill) => skill.update_owner_ids.length > 0 && skill.source_kind === "dotagents",
+        )
+        .map((skill) => skill.name)
+        .sort();
+      // The last by name, so the global command runs first.
+      const name = dotagents[dotagents.length - 1];
+      await window.__harness!.updateSkill(name, (skill) => ({
+        ...skill,
+        deployments: skill.deployments.slice(0, 1).map((copy) => ({
+          ...copy,
+          id: `${copy.id}-project`,
+          scope: "project" as const,
+          project_path: projectPath,
+          path: `${projectPath}/.agents/skills/${name}`,
+        })),
+      }));
+      return { firstCommand: dotagents.length - 1, inProject: name };
+    },
+    [HARNESS_PROJECT] as const,
+  );
   // Each command then takes 400 ms, so the first is still running when Stop lands.
   await setLatency(page, 400);
 
@@ -89,11 +102,12 @@ test("Stop while Update all runs lets the running command finish and starts no o
   await expect(
     page.getByText(`Stopped. Updated ${firstCommand} of ${shown} skills.`, { exact: true }),
   ).toBeVisible();
+  expect(await page.evaluate(() => window.__harness!.updateCommandsStarted())).toBe(1);
   await expect(grid(page).getByRole("button", { name: "Update all" })).toBeVisible();
   await expect(
     grid(page)
       .locator(SKILL_ROW)
-      .filter({ has: page.getByRole("gridcell", { name: other, exact: true }) })
+      .filter({ has: page.getByRole("gridcell", { name: inProject, exact: true }) })
       .getByRole("button", { name: "Update", exact: true }),
   ).toBeVisible();
 

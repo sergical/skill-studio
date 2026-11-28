@@ -5,11 +5,7 @@
 // ============================================================================
 
 import type { ReactNode } from "react";
-import {
-  agentIdFromDeploymentLabel,
-  isUnresolvedDeployment,
-  skillVisibleToAgent,
-} from "@skill-studio/lib";
+import { skillReadByAgent } from "@skill-studio/lib";
 import type { InstalledSkill } from "@skill-studio/lib";
 import { useClientIds } from "../../hooks/useClientRows";
 import { RichTooltip } from "../ui/RichTooltip";
@@ -67,28 +63,16 @@ function readingHarnesses(
   const shownSet = shown && new Set(shown);
   return harnesses.flatMap((reach): HarnessReach[] => {
     if (shownSet && !shownSet.has(reach.harness)) return [];
-    switch (skillVisibleToAgent(skill, reach.harness)) {
+    switch (skillReadByAgent(skill, reach.harness)) {
       case "own":
+      case "plugin":
         return [reach];
       case "shared":
         return [{ ...reach, reached: true, how: "universal", disabled: false }];
       case "none":
-        return readsThroughPlugin(skill, reach.harness) ? [reach] : [];
+        return [];
     }
   });
-}
-
-/** A plugin copy the agent loads: `skillVisibleToAgent` counts only the skill's own global and
- * project deployments. A plugin cache copy can come without its plugin's details. */
-function readsThroughPlugin(skill: InstalledSkill, harness: HarnessReach["harness"]): boolean {
-  if (skill.parked) return false;
-  return skill.deployments.some(
-    (d) =>
-      (d.plugin || d.scope === "plugin") &&
-      agentIdFromDeploymentLabel(d.agent) === harness &&
-      !d.disabled &&
-      !isUnresolvedDeployment(d),
-  );
 }
 
 /** One disc per agent that reads the skill, up to `MAX_DISCS`, then a "+N" overflow disc. */
